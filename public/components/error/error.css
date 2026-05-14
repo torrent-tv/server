@@ -1,0 +1,30 @@
+#error {
+  border: none;
+  box-sizing: border-box;
+  padding: 2rem;
+  font-family: sans-serif;
+  max-inline-size: fit-content;
+  inset: 0;
+
+  &::backdrop {
+    background-color: #fff;
+  }
+
+  & #error__title {
+    font-size: clamp(1.5rem, 15vmin, 15rem);
+    max-inline-size: 38em;
+    line-height: 1;
+    font-weight: bold;
+    text-box-edge: text;
+    margin-block-end: 1rem;
+  }
+
+  & #error__description {
+    font-size: clamp(1.125rem, 3.5vmin, 2.5rem);
+    max-inline-size: 38em;
+    line-height: 1.44;
+    color: color-mix(in srgb, #000 75%, #fff 25%);
+    text-wrap-style: pretty;
+    margin-block-end: 1.5vmin;
+  }
+}

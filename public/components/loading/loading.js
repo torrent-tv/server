@@ -1,0 +1,1188 @@
+import { createHlsPlayer } from "../../domain/hls-player.js";
+import { getDebugState } from "../../shared/debug-state.js";
+import { TorrentSession } from "../../domain/torrent-session.js";
+import { ProxySelector } from "../proxy-selector/proxy-selector.js";
+import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+
+/**
+ * Loading view.
+ *
+ * Responsibilities:
+ * - Show progress/status while processing torrent playback pipeline.
+ * - Execute playback preparation pipeline on `LOADING:PROCESS_PLAYBACK`.
+ * - Hide itself when player or error views are shown.
+ */
+export class Loading {
+  static SELECTOR = {
+    dialog: "#loading",
+    fileName: "#loading__filename",
+    status: "#loading__status",
+    progress: "#loading__progress"
+  };
+
+  static MESSAGES = {
+    missingDomNodes: "Loading component DOM nodes are missing.",
+    readingTorrentFile: (fileName) => fileName,
+    readingMetadata: "Reading torrent metadata...",
+    selectingProxy: "Selecting best proxy by available load metrics...",
+    checkingCompatibility: "Checking playback compatibility...",
+    preparingHls: "Preparing HLS transcode...",
+    preparingHlsAudio: "Audio codec requires transcode. Preparing HLS...",
+    preparingHlsVideo: "Video codec requires transcode. Preparing HLS...",
+    startingDirectPlayback: "Starting direct playback...",
+    probingDirectPlayback: "Verifying direct playback before transcoding...",
+    noVideoFile: "No video file found in this torrent.",
+    noProxyAndNoWebseed: "No proxy is available and this torrent has no webseed video source.",
+    alreadyProcessing: "Already processing another .torrent file.",
+    selectedFileNotFound: "Selected video file was not found in torrent metadata.",
+    selectedFileUnsupported: "Selected video file format is not supported by the browser.",
+    fallingBackToTranscode: "Direct playback unsupported. Falling back to on-the-fly transcode...",
+    fallingBackToVideoTranscode: "Video track unsupported. Falling back to on-the-fly video transcode...",
+    playerNotReady: "Player is not ready.",
+    startingTorrentProcessing: "Starting torrent processing...",
+    switchingToSelectedFile: "Starting selected video...",
+    chooseVideoFile: "Choose a video file from playlist."
+  };
+
+  #dialog;
+  #fileName;
+  #status;
+  #progress;
+  #videoElement = null;
+  #session;
+  #proxySelector;
+  #hlsPlayer;
+  #isProcessing = false;
+  #directPlaybackUnsupportedCache = new Set();
+  #directPlaybackHints = new Map();
+
+  /** @param {CustomEvent} event */
+  #onShow = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    this.visible = true;
+    if (typeof payload?.fileName === "string") {
+      this.setFileName(payload.fileName);
+    }
+    if (typeof payload?.status === "string") {
+      this.setStatus(payload.status);
+    }
+    if (typeof payload?.progress === "number") {
+      this.setProgress(payload.progress);
+    }
+  };
+
+  /** @param {CustomEvent} event */
+  #onSetFileName = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    this.setFileName(typeof payload?.value === "string" ? payload.value : "");
+  };
+
+  /** @param {CustomEvent} event */
+  #onSetStatus = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    this.setStatus(typeof payload?.value === "string" ? payload.value : "");
+  };
+
+  /** @param {CustomEvent} event */
+  #onSetProgress = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    const value = typeof payload?.value === "number" ? payload.value : 0;
+    this.setProgress(value);
+  };
+
+  /** @param {CustomEvent} event */
+  #onProcessPlayback = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    void this.#processPlayback(payload).catch((error) => {
+      if (this.#isAbortError(error)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      document.dispatchEvent(
+        new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+          detail: {
+            description: message
+          }
+        })
+      );
+    });
+  };
+
+  /** @param {CustomEvent} event */
+  #onPlayerReady = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    const videoElement = payload?.videoElement;
+    if (videoElement instanceof HTMLVideoElement) {
+      this.#videoElement = videoElement;
+    }
+  };
+
+  #onPlayerShow = () => {
+    this.visible = false;
+  };
+
+  /** @param {CustomEvent} event */
+  #onSelectMediaFile = (event) => {
+    const payload = event instanceof CustomEvent ? event.detail : null;
+    const fileIndex = Number(payload?.fileIndex);
+    if (!Number.isInteger(fileIndex)) {
+      return;
+    }
+    if (!this.#session.current) {
+      return;
+    }
+    if (this.#isProcessing) {
+      return;
+    }
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.SHOW, {
+        detail: {
+          status: Loading.MESSAGES.switchingToSelectedFile,
+          progress: 0
+        }
+      })
+    );
+    void this.#switchToVideoFile(fileIndex).catch((error) => {
+      if (this.#isAbortError(error)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      document.dispatchEvent(
+        new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+          detail: {
+            description: message
+          }
+        })
+      );
+    });
+  };
+
+  #onErrorShow = () => {
+    this.#stopPlayback();
+    this.visible = false;
+  };
+
+  #onPageHide = () => {
+    this.#stopPlayback({ preferBeacon: true, reason: "pagehide" });
+  };
+
+  #onBeforeUnload = () => {
+    this.#stopPlayback({ preferBeacon: true, reason: "beforeunload" });
+  };
+
+  #onAppReset = () => {
+    this.#stopPlayback();
+    this.visible = false;
+    this.setProgress(0);
+    this.setStatus("");
+    this.setFileName("Waiting for a .torrent file...");
+    this.#directPlaybackUnsupportedCache.clear();
+  };
+
+  #stopPlayback(options = {}) {
+    this.#isProcessing = false;
+    this.#session.clear({
+      preferBeacon: options?.preferBeacon === true,
+      reason: typeof options?.reason === "string" ? options.reason : ""
+    });
+    this.#hlsPlayer.clear();
+    if (this.#videoElement instanceof HTMLVideoElement) {
+      this.#videoElement.pause();
+      this.#videoElement.removeAttribute("src");
+      this.#videoElement.load();
+    }
+  };
+
+  constructor() {
+    this.#dialog = document.querySelector(Loading.SELECTOR.dialog);
+    this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
+    this.#status = document.querySelector(Loading.SELECTOR.status);
+    this.#progress = document.querySelector(Loading.SELECTOR.progress);
+
+    if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress) {
+      throw new Error(Loading.MESSAGES.missingDomNodes);
+    }
+    this.#dialog.inert = true;
+
+    this.#session = new TorrentSession(() => undefined);
+    this.#proxySelector = new ProxySelector();
+    this.#hlsPlayer = createHlsPlayer((message) => {
+      this.setStatus(message);
+    });
+    this.#loadDirectPlaybackHints();
+    this.#setupEventHandlers();
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.REQUEST_READY));
+  }
+
+  #setupEventHandlers() {
+    document.addEventListener(LOADING_EVENTS.SHOW, this.#onShow);
+    document.addEventListener(LOADING_EVENTS.SET_FILE_NAME, this.#onSetFileName);
+    document.addEventListener(LOADING_EVENTS.SET_STATUS, this.#onSetStatus);
+    document.addEventListener(LOADING_EVENTS.SET_PROGRESS, this.#onSetProgress);
+    document.addEventListener(LOADING_EVENTS.PROCESS_PLAYBACK, this.#onProcessPlayback);
+    document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
+    document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
+    document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
+    document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
+    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
+    window.addEventListener("pagehide", this.#onPageHide);
+    window.addEventListener("beforeunload", this.#onBeforeUnload);
+  }
+
+  /** @param {boolean} value */
+  set visible(value) {
+    if (value) {
+      this.#dialog.inert = false;
+      if (!this.#dialog.open) {
+        this.#dialog.showModal();
+      }
+      return;
+    }
+    if (this.#dialog.open) {
+      this.#dialog.close();
+    }
+    this.#dialog.inert = true;
+  }
+
+  /** @param {string} value */
+  setFileName(value) {
+    this.#fileName.textContent = value;
+  }
+
+  /** @param {string} value */
+  setStatus(value) {
+    this.#status.textContent = value;
+  }
+
+  /** @param {number} value */
+  setProgress(value) {
+    const safeValue = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    this.#progress.value = safeValue;
+  }
+
+  /**
+   * @param {{ file?: File, torrentBytes?: Uint8Array, meta?: object, mediaFiles?: { video?: Array<object>, audio?: Array<object>, subtitles?: Array<object> } } | null} payload
+   * @returns {Promise<void>}
+   */
+  async #processPlayback(payload) {
+    const file = payload?.file;
+    const torrentBytes = payload?.torrentBytes;
+    const meta = payload?.meta;
+    if (!(file instanceof File) || !(torrentBytes instanceof Uint8Array) || !meta || typeof meta !== "object") {
+      return;
+    }
+    if (!(this.#videoElement instanceof HTMLVideoElement)) {
+      throw new Error(Loading.MESSAGES.playerNotReady);
+    }
+    if (this.#isProcessing) {
+      throw new Error(Loading.MESSAGES.alreadyProcessing);
+    }
+
+    this.#isProcessing = true;
+
+    try {
+      this.#hlsPlayer.clear();
+      this.#session.clear();
+      const parsed = this.#session.openParsedTorrentDetails({
+        fileName: file.name,
+        torrentBytes,
+        meta
+      });
+      const mediaFiles = this.#normalizeMediaFiles(payload.mediaFiles, parsed.files);
+      const debugState = getDebugState();
+      debugState.torrent = {
+        fileName: file.name,
+        name: typeof parsed.name === "string" ? parsed.name : "",
+        infoHashHex: typeof parsed.infoHashHex === "string" ? parsed.infoHashHex : "",
+        isMultiFile: Boolean(parsed.isMultiFile),
+        files: Array.isArray(parsed.files)
+          ? parsed.files.map((entry) => ({
+              index: entry.index,
+              name: entry.name,
+              path: entry.path,
+              relativePath: entry.relativePath,
+              isVideo: Boolean(entry.isVideo),
+              length: entry.length
+            }))
+          : [],
+        media: {
+          video: mediaFiles.video,
+          audio: mediaFiles.audio,
+          subtitles: mediaFiles.subtitles
+        }
+      };
+
+      document.dispatchEvent(
+        new CustomEvent(PLAYER_EVENTS.SET_MEDIA_FILES, {
+          detail: mediaFiles
+        })
+      );
+
+      this.visible = true;
+      this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
+      this.setStatus(Loading.MESSAGES.startingTorrentProcessing);
+      this.setProgress(0);
+      this.setStatus(Loading.MESSAGES.readingMetadata);
+      this.setProgress(15);
+
+      const videoCount = mediaFiles.video.length;
+      if (videoCount <= 0) {
+        throw new Error(Loading.MESSAGES.noVideoFile);
+      }
+      if (videoCount === 1) {
+        const videoFileIndex = mediaFiles.video[0].index;
+        await this.#playVideoFile(videoFileIndex);
+      } else {
+        this.setStatus(Loading.MESSAGES.chooseVideoFile);
+        this.setProgress(100);
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+        document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
+        return;
+      }
+
+      this.setProgress(100);
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+    } finally {
+      this.#isProcessing = false;
+    }
+  }
+
+  /**
+   * @param {{ video?: Array<object>, audio?: Array<object>, subtitles?: Array<object> } | undefined} mediaFiles
+   * @param {Array<object>} parsedFiles
+   * @returns {{ video: Array<object>, audio: Array<object>, subtitles: Array<object> }}
+   */
+  #normalizeMediaFiles(mediaFiles, parsedFiles) {
+    const video = Array.isArray(mediaFiles?.video) ? mediaFiles.video : parsedFiles.filter((entry) => entry.isVideo);
+    const audio = Array.isArray(mediaFiles?.audio) ? mediaFiles.audio : [];
+    const subtitles = Array.isArray(mediaFiles?.subtitles) ? mediaFiles.subtitles : [];
+    return { video, audio, subtitles };
+  }
+
+  /**
+   * @param {number} fileIndex
+   * @returns {Promise<void>}
+   */
+  async #switchToVideoFile(fileIndex) {
+    if (!(this.#videoElement instanceof HTMLVideoElement)) {
+      throw new Error(Loading.MESSAGES.playerNotReady);
+    }
+    this.#isProcessing = true;
+    try {
+      this.#hlsPlayer.clear();
+      this.setStatus(Loading.MESSAGES.switchingToSelectedFile);
+      await this.#playVideoFile(fileIndex);
+      this.setProgress(100);
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+    } finally {
+      this.#isProcessing = false;
+    }
+  }
+
+  /**
+   * @param {number} fileIndex
+   * @returns {Promise<void>}
+   */
+  async #playVideoFile(fileIndex) {
+    if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+      throw new Error(Loading.MESSAGES.noVideoFile);
+    }
+    const current = this.#session.current;
+    const file = Array.isArray(current?.files) ? current.files[fileIndex] : null;
+    if (!file || file.isVideo !== true) {
+      throw new Error(Loading.MESSAGES.selectedFileNotFound);
+    }
+
+    const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
+
+    if (hasWebseed) {
+      this.setStatus(Loading.MESSAGES.startingDirectPlayback);
+      this.setProgress(70);
+      await this.#session.streamFileToVideo(fileIndex, this.#videoElement);
+      try {
+        await this.#ensureVideoReady();
+        this.#setActiveMediaFile(fileIndex);
+      } catch (error) {
+        if (!this.#isUnsupportedError(error)) {
+          throw error;
+        }
+        this.setStatus(Loading.MESSAGES.fallingBackToTranscode);
+        try {
+          await this.#playWithProxyTranscode(fileIndex, { transcodeAudio: false });
+          this.#setActiveMediaFile(fileIndex);
+        } catch (transcodeError) {
+          if (!this.#isUnsupportedError(transcodeError)) {
+            throw transcodeError;
+          }
+          this.setStatus(Loading.MESSAGES.fallingBackToVideoTranscode);
+          await this.#playWithProxyTranscode(fileIndex, { transcodeVideo: true, transcodeAudio: false });
+          this.#setActiveMediaFile(fileIndex);
+        }
+      }
+      return;
+    }
+
+    this.setStatus(Loading.MESSAGES.selectingProxy);
+    this.setProgress(30);
+    const proxyBaseUrl = await this.#proxySelector.chooseBestBaseUrl();
+    if (!proxyBaseUrl) {
+      throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+    }
+
+    const prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, proxyBaseUrl);
+    this.setStatus(Loading.MESSAGES.checkingCompatibility);
+    this.setProgress(45);
+
+    const codecSupport = await this.#predictCodecSupport({
+      audioCodec: prepared.audioCodec,
+      videoCodec: prepared.videoCodec
+    });
+    const shouldTranscodeVideo = codecSupport.videoSupported === false;
+    const shouldTranscodeAudio = prepared.mode === "hls" || codecSupport.audioSupported === false;
+    const directRetryKey = this.#buildDirectRetryCacheKey(fileIndex, prepared);
+    const directHintKey = this.#buildDirectPlaybackHintKey(prepared);
+    const directHint = this.#getDirectPlaybackHint(directHintKey);
+
+    if (
+      shouldTranscodeVideo &&
+      !shouldTranscodeAudio &&
+      !this.#directPlaybackUnsupportedCache.has(directRetryKey) &&
+      directHint !== "unsupported"
+    ) {
+      const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
+        statusMessage: Loading.MESSAGES.probingDirectPlayback,
+        progress: 58
+      });
+      if (directSucceeded) {
+        this.#setDirectPlaybackHint(directHintKey, true);
+        this.#directPlaybackUnsupportedCache.delete(directRetryKey);
+        this.#setActiveMediaFile(fileIndex);
+        return;
+      }
+      this.#setDirectPlaybackHint(directHintKey, false);
+      this.#directPlaybackUnsupportedCache.add(directRetryKey);
+    }
+
+    if (shouldTranscodeAudio || shouldTranscodeVideo) {
+      if (
+        shouldTranscodeAudio &&
+        !this.#directPlaybackUnsupportedCache.has(directRetryKey) &&
+        directHint !== "unsupported"
+      ) {
+        const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
+          statusMessage: Loading.MESSAGES.probingDirectPlayback,
+          progress: 58
+        });
+        if (directSucceeded) {
+          this.#setDirectPlaybackHint(directHintKey, true);
+          this.#directPlaybackUnsupportedCache.delete(directRetryKey);
+          this.#setActiveMediaFile(fileIndex);
+          return;
+        }
+        this.#setDirectPlaybackHint(directHintKey, false);
+        this.#directPlaybackUnsupportedCache.add(directRetryKey);
+      }
+
+      const transcodeReason = this.#buildTranscodeReason({
+        audioCodec: prepared.audioCodec,
+        videoCodec: prepared.videoCodec,
+        audioSupported: codecSupport.audioSupported,
+        videoSupported: codecSupport.videoSupported,
+        plannerMode: prepared.mode,
+        shouldTranscodeAudio,
+        shouldTranscodeVideo
+      });
+      const statusMessage = shouldTranscodeVideo
+        ? Loading.MESSAGES.preparingHlsVideo
+        : Loading.MESSAGES.preparingHlsAudio;
+      this.setStatus(`${statusMessage}\n${transcodeReason}`);
+      await this.#playWithProxyTranscode(fileIndex, {
+        proxyBaseUrl,
+        sourceKey: prepared.sourceKey,
+        transcodeVideo: shouldTranscodeVideo,
+        transcodeAudio: shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec),
+        statusMessage: `${statusMessage}\n${transcodeReason}`
+      });
+      this.#setActiveMediaFile(fileIndex);
+      return;
+    }
+
+    const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
+      statusMessage: Loading.MESSAGES.startingDirectPlayback,
+      progress: 70
+    });
+    if (directSucceeded) {
+      this.#setDirectPlaybackHint(directHintKey, true);
+      this.#directPlaybackUnsupportedCache.delete(directRetryKey);
+      this.#setActiveMediaFile(fileIndex);
+      return;
+    }
+    this.#setDirectPlaybackHint(directHintKey, false);
+    this.#directPlaybackUnsupportedCache.add(directRetryKey);
+    this.setStatus(Loading.MESSAGES.fallingBackToTranscode);
+    try {
+      await this.#playWithProxyTranscode(fileIndex, {
+        proxyBaseUrl,
+        sourceKey: prepared.sourceKey,
+        transcodeAudio: false
+      });
+      this.#setActiveMediaFile(fileIndex);
+    } catch (transcodeError) {
+      if (!this.#isUnsupportedError(transcodeError)) {
+        throw transcodeError;
+      }
+      this.setStatus(Loading.MESSAGES.fallingBackToVideoTranscode);
+      try {
+        await this.#playWithProxyTranscode(fileIndex, {
+          proxyBaseUrl,
+          sourceKey: prepared.sourceKey,
+          transcodeVideo: true,
+          transcodeAudio: false
+        });
+        this.#setActiveMediaFile(fileIndex);
+      } catch (fullTranscodeError) {
+        if (!this.#isUnsupportedError(fullTranscodeError)) {
+          throw fullTranscodeError;
+        }
+        this.setStatus(Loading.MESSAGES.preparingHlsVideo);
+        await this.#playWithProxyTranscode(fileIndex, {
+          proxyBaseUrl,
+          sourceKey: prepared.sourceKey,
+          transcodeVideo: true,
+          transcodeAudio: true
+        });
+        this.#setActiveMediaFile(fileIndex);
+      }
+    }
+  }
+
+  /**
+   * @param {number} fileIndex
+   * @param {{ sourceKey?: string, audioCodec?: string, videoCodec?: string }} prepared
+   * @returns {string}
+   */
+  #buildDirectRetryCacheKey(fileIndex, prepared) {
+    const sourceKey = typeof prepared?.sourceKey === "string" ? prepared.sourceKey : "";
+    const audioCodec = typeof prepared?.audioCodec === "string" ? prepared.audioCodec : "";
+    const videoCodec = typeof prepared?.videoCodec === "string" ? prepared.videoCodec : "";
+    return `${sourceKey}:${fileIndex}:${audioCodec}:${videoCodec}`;
+  }
+
+  /**
+   * @param {{ audioCodec?: string, videoCodec?: string, mode?: string }} prepared
+   * @returns {string}
+   */
+  #buildDirectPlaybackHintKey(prepared) {
+    const audioCodec = typeof prepared?.audioCodec === "string" ? prepared.audioCodec : "";
+    const videoCodec = typeof prepared?.videoCodec === "string" ? prepared.videoCodec : "";
+    const mode = typeof prepared?.mode === "string" ? prepared.mode : "";
+    return `${this.#getBrowserProfileKey()}:${audioCodec}:${videoCodec}:${mode}`;
+  }
+
+  /**
+   * @returns {string}
+   */
+  #getBrowserProfileKey() {
+    const ua = typeof navigator?.userAgent === "string" ? navigator.userAgent : "";
+    const platform = typeof navigator?.platform === "string" ? navigator.platform : "unknown-platform";
+    const browser = this.#extractBrowserMajor(ua);
+    return `${browser}:${platform}`;
+  }
+
+  /**
+   * @param {string} userAgent
+   * @returns {string}
+   */
+  #extractBrowserMajor(userAgent) {
+    const ua = typeof userAgent === "string" ? userAgent : "";
+    const patterns = [
+      { name: "Edge", regex: /Edg\/(\d+)/ },
+      { name: "Chrome", regex: /Chrome\/(\d+)/ },
+      { name: "Firefox", regex: /Firefox\/(\d+)/ },
+      { name: "Safari", regex: /Version\/(\d+).+Safari/ }
+    ];
+    for (const pattern of patterns) {
+      const match = ua.match(pattern.regex);
+      if (match) {
+        return `${pattern.name}-${match[1]}`;
+      }
+    }
+    return "Unknown";
+  }
+
+  /**
+   * @param {string} key
+   * @returns {"supported" | "unsupported" | "unknown"}
+   */
+  #getDirectPlaybackHint(key) {
+    const entry = this.#directPlaybackHints.get(key);
+    if (!entry || typeof entry !== "object") {
+      return "unknown";
+    }
+    if (Date.now() - entry.updatedAt > DIRECT_PLAYBACK_HINT_TTL_MS) {
+      this.#directPlaybackHints.delete(key);
+      this.#persistDirectPlaybackHints();
+      return "unknown";
+    }
+    return entry.directSupported === true ? "supported" : "unsupported";
+  }
+
+  /**
+   * @param {string} key
+   * @param {boolean} supported
+   */
+  #setDirectPlaybackHint(key, supported) {
+    this.#directPlaybackHints.set(key, {
+      directSupported: supported,
+      updatedAt: Date.now()
+    });
+    this.#trimDirectPlaybackHints();
+    this.#persistDirectPlaybackHints();
+  }
+
+  #trimDirectPlaybackHints() {
+    if (this.#directPlaybackHints.size <= DIRECT_PLAYBACK_HINTS_MAX_ENTRIES) {
+      return;
+    }
+    const sortedEntries = Array.from(this.#directPlaybackHints.entries()).sort(
+      (left, right) => left[1].updatedAt - right[1].updatedAt
+    );
+    const removeCount = sortedEntries.length - DIRECT_PLAYBACK_HINTS_MAX_ENTRIES;
+    for (let index = 0; index < removeCount; index += 1) {
+      this.#directPlaybackHints.delete(sortedEntries[index][0]);
+    }
+  }
+
+  #loadDirectPlaybackHints() {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(DIRECT_PLAYBACK_HINTS_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const payload = JSON.parse(raw);
+      if (!Array.isArray(payload)) {
+        return;
+      }
+      for (const item of payload) {
+        if (!Array.isArray(item) || item.length !== 2) {
+          continue;
+        }
+        const [key, value] = item;
+        if (typeof key !== "string" || !value || typeof value !== "object") {
+          continue;
+        }
+        const updatedAt = Number(value.updatedAt);
+        const directSupported = value.directSupported === true;
+        if (!Number.isFinite(updatedAt) || updatedAt <= 0) {
+          continue;
+        }
+        this.#directPlaybackHints.set(key, { updatedAt, directSupported });
+      }
+      this.#trimDirectPlaybackHints();
+    } catch (_error) {
+      // Best effort cache; ignore malformed storage.
+    }
+  }
+
+  #persistDirectPlaybackHints() {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+    try {
+      const payload = JSON.stringify(Array.from(this.#directPlaybackHints.entries()));
+      window.localStorage.setItem(DIRECT_PLAYBACK_HINTS_STORAGE_KEY, payload);
+    } catch (_error) {
+      // Best effort cache; ignore storage issues.
+    }
+  }
+
+  /**
+   * @param {string} directUrl
+   * @param {{ statusMessage: string, progress: number }} options
+   * @returns {Promise<boolean>}
+   */
+  async #tryPlayDirectUrl(directUrl, options) {
+    this.setStatus(options.statusMessage);
+    this.setProgress(options.progress);
+    await this.#session.playFromUrl(this.#videoElement, directUrl);
+    try {
+      await this.#ensureVideoReady();
+      return true;
+    } catch (error) {
+      if (!this.#isUnsupportedError(error)) {
+        throw error;
+      }
+      return false;
+    }
+  }
+
+  /**
+   * @param {number} fileIndex
+   */
+  #setActiveMediaFile(fileIndex) {
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, {
+        detail: { fileIndex }
+      })
+    );
+  }
+
+  /**
+   * @param {number} fileIndex
+   * @param {{ proxyBaseUrl?: string, sourceKey?: string, transcodeVideo?: boolean, transcodeAudio?: boolean, statusMessage?: string }} [options]
+   * @returns {Promise<void>}
+   */
+  async #playWithProxyTranscode(fileIndex, options = {}) {
+    let proxyBaseUrl = typeof options.proxyBaseUrl === "string" ? options.proxyBaseUrl : "";
+    if (!proxyBaseUrl) {
+      proxyBaseUrl = await this.#proxySelector.chooseBestBaseUrl();
+    }
+    if (!proxyBaseUrl) {
+      throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+    }
+    this.setStatus(
+      typeof options.statusMessage === "string" && options.statusMessage.trim().length > 0
+        ? options.statusMessage
+        : Loading.MESSAGES.preparingHls
+    );
+    this.setProgress(55);
+    await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
+      proxyBaseUrl,
+      sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
+      transcodeVideo: options.transcodeVideo === true,
+      transcodeAudio: options.transcodeAudio === true,
+      ...this.#buildVideoTargetConfig(options.transcodeVideo === true),
+      playHls: (videoElement, manifestUrl) => this.#hlsPlayer.play(videoElement, manifestUrl),
+      onTranscodeProgress: (progress) => {
+        const value = typeof progress?.percent === "number" ? progress.percent : NaN;
+        const warmupPercent =
+          typeof progress?.warmupPercent === "number" ? progress.warmupPercent : NaN;
+        const warmupRemainingSeconds =
+          typeof progress?.warmupRemainingSeconds === "number"
+            ? progress.warmupRemainingSeconds
+            : NaN;
+        if (Number.isFinite(value)) {
+          this.setProgress(value);
+        } else if (Number.isFinite(warmupPercent)) {
+          // Keep warmup visualization in a narrow pre-transcode range.
+          const warmupProgress = Math.max(45, Math.min(55, 45 + warmupPercent * 0.1));
+          this.setProgress(warmupProgress);
+        }
+        const totalSeconds = typeof progress?.totalSeconds === "number" ? progress.totalSeconds : NaN;
+        const remainingSeconds =
+          typeof progress?.remainingSeconds === "number" ? progress.remainingSeconds : NaN;
+        if (Number.isFinite(totalSeconds) && totalSeconds > 0) {
+          const durationText = this.#formatDuration(totalSeconds);
+          const etaText = Number.isFinite(remainingSeconds) ? this.#formatDuration(remainingSeconds) : "n/a";
+          const speedText =
+            typeof progress?.speed === "string" && progress.speed.trim().length > 0
+              ? progress.speed.trim()
+              : "n/a";
+          this.setStatus(
+            `Transcoding video... ${Math.round(Number.isFinite(value) ? value : 0)}%\n` +
+              `Duration: ${durationText}\n` +
+              `ETA (dynamic): ${etaText}\n` +
+              `Speed: ${speedText}`
+          );
+          return;
+        }
+        if (Number.isFinite(warmupPercent)) {
+          const etaText = Number.isFinite(warmupRemainingSeconds)
+            ? this.#formatDuration(warmupRemainingSeconds)
+            : "n/a";
+          this.setStatus(
+            `Warming up HLS... ${Math.round(warmupPercent)}%\n` +
+              `ETA (dynamic): ${etaText}`
+          );
+        }
+      }
+    });
+    await this.#ensureVideoReady();
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async #ensureVideoReady() {
+    const videoElement = this.#videoElement;
+    if (!(videoElement instanceof HTMLVideoElement)) {
+      throw new Error(Loading.MESSAGES.playerNotReady);
+    }
+    if (videoElement.error) {
+      throw new Error(Loading.MESSAGES.selectedFileUnsupported);
+    }
+    if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+        throw new Error(Loading.MESSAGES.selectedFileUnsupported);
+      }
+      await this.#waitForDecodedVideoFrame(videoElement);
+      return;
+    }
+    await new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        if (videoElement.error) {
+          reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
+          return;
+        }
+        resolve(undefined);
+      }, 1500);
+
+      const onLoadedMetadata = () => {
+        cleanup();
+        resolve(undefined);
+      };
+      const onError = () => {
+        cleanup();
+        reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
+      };
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        videoElement.removeEventListener("loadedmetadata", onLoadedMetadata);
+        videoElement.removeEventListener("error", onError);
+      };
+
+      videoElement.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
+      videoElement.addEventListener("error", onError, { once: true });
+    });
+    if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+      throw new Error(Loading.MESSAGES.selectedFileUnsupported);
+    }
+    await this.#waitForDecodedVideoFrame(videoElement);
+  }
+
+  /**
+   * @param {HTMLVideoElement} videoElement
+   * @returns {Promise<void>}
+   */
+  async #waitForDecodedVideoFrame(videoElement) {
+    if (typeof videoElement.requestVideoFrameCallback === "function") {
+      await new Promise((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
+        }, 4000);
+        videoElement.requestVideoFrameCallback(() => {
+          window.clearTimeout(timeoutId);
+          resolve(undefined);
+        });
+      });
+      return;
+    }
+
+    if (typeof videoElement.webkitDecodedFrameCount === "number") {
+      const initialCount = videoElement.webkitDecodedFrameCount;
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 4000) {
+        if (videoElement.webkitDecodedFrameCount > initialCount) {
+          return;
+        }
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 100);
+        });
+      }
+      throw new Error(Loading.MESSAGES.selectedFileUnsupported);
+    }
+  }
+
+  /**
+   * @param {unknown} error
+   * @returns {boolean}
+   */
+  #isUnsupportedError(error) {
+    return error instanceof Error && error.message === Loading.MESSAGES.selectedFileUnsupported;
+  }
+
+  /**
+   * @param {unknown} error
+   * @returns {boolean}
+   */
+  #isAbortError(error) {
+    if (error instanceof DOMException) {
+      return error.name === "AbortError";
+    }
+    return error instanceof Error && error.name === "AbortError";
+  }
+
+  /**
+   * @param {{ audioCodec?: string, videoCodec?: string }} codecs
+   * @returns {Promise<{ audioSupported: boolean, videoSupported: boolean }>}
+   */
+  async #predictCodecSupport(codecs) {
+    const [audioSupported, videoSupported] = await Promise.all([
+      this.#isAudioCodecLikelySupported(codecs.audioCodec),
+      this.#isVideoCodecLikelySupported(codecs.videoCodec)
+    ]);
+    return { audioSupported, videoSupported };
+  }
+
+  /**
+   * @param {string | undefined} codec
+   * @returns {Promise<boolean>}
+   */
+  async #isAudioCodecLikelySupported(codec) {
+    const normalized = typeof codec === "string" ? codec.trim().toLowerCase() : "";
+    if (!normalized) {
+      return true;
+    }
+    const mediaCapabilities = await this.#checkMediaCapabilitiesAudioSupport(normalized);
+    if (mediaCapabilities != null) {
+      return mediaCapabilities;
+    }
+    const audio = document.createElement("audio");
+    const mimeCandidates = AUDIO_CODEC_MIME_CANDIDATES[normalized] ?? [];
+    if (mimeCandidates.length === 0) {
+      return false;
+    }
+    for (const mime of mimeCandidates) {
+      const support = audio.canPlayType(mime);
+      if (support === "probably" || support === "maybe") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @param {string | undefined} codec
+   * @returns {Promise<boolean>}
+   */
+  async #isVideoCodecLikelySupported(codec) {
+    const normalized = typeof codec === "string" ? codec.trim().toLowerCase() : "";
+    if (!normalized) {
+      return true;
+    }
+    const mediaCapabilities = await this.#checkMediaCapabilitiesVideoSupport(normalized);
+    if (mediaCapabilities != null) {
+      return mediaCapabilities;
+    }
+    const video = document.createElement("video");
+    const mimeCandidates = VIDEO_CODEC_MIME_CANDIDATES[normalized] ?? [];
+    if (mimeCandidates.length === 0) {
+      return false;
+    }
+    for (const mime of mimeCandidates) {
+      const support = video.canPlayType(mime);
+      if (support === "probably" || support === "maybe") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @param {number} seconds
+   * @returns {string}
+   */
+  #formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return "00:00";
+    }
+    const total = Math.floor(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const rest = total % 60;
+    if (hours > 0) {
+      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+    }
+    return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  }
+
+  /**
+   * @param {{
+   *  audioCodec: string,
+   *  videoCodec: string,
+   *  audioSupported: boolean,
+   *  videoSupported: boolean,
+   *  plannerMode: string,
+   *  shouldTranscodeAudio: boolean,
+   *  shouldTranscodeVideo: boolean
+   * }} details
+   * @returns {string}
+   */
+  #buildTranscodeReason(details) {
+    const reasons = [];
+    if (details.shouldTranscodeVideo) {
+      reasons.push(
+        `video codec ${this.#formatCodecName(details.videoCodec)} is not supported by this browser`
+      );
+    }
+    if (details.shouldTranscodeAudio) {
+      if (details.plannerMode === "hls") {
+        reasons.push(
+          `proxy planner requires HLS for audio codec ${this.#formatCodecName(details.audioCodec)}`
+        );
+      } else if (!details.audioSupported) {
+        reasons.push(
+          `audio codec ${this.#formatCodecName(details.audioCodec)} is not supported by this browser`
+        );
+      } else {
+        reasons.push("audio transcode was requested by playback planner");
+      }
+    }
+    if (reasons.length === 0) {
+      return "Reason: transcode path selected by compatibility checks.";
+    }
+    return `Reason: ${reasons.join("; ")}.`;
+  }
+
+  /**
+   * @param {string | undefined} codec
+   * @returns {string}
+   */
+  #formatCodecName(codec) {
+    const value = typeof codec === "string" ? codec.trim() : "";
+    return value.length > 0 ? value : "unknown";
+  }
+
+  /**
+   * @param {boolean} shouldTranscodeVideo
+   * @returns {{ targetWidth?: number, targetHeight?: number }}
+   */
+  #buildVideoTargetConfig(shouldTranscodeVideo) {
+    if (!shouldTranscodeVideo || !(this.#videoElement instanceof HTMLVideoElement)) {
+      return {};
+    }
+    const rect = this.#videoElement.getBoundingClientRect();
+    const viewportWidth = Number.isFinite(rect.width) && rect.width > 0 ? rect.width : window.innerWidth;
+    const viewportHeight = Number.isFinite(rect.height) && rect.height > 0 ? rect.height : window.innerHeight;
+    const dpr = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+      ? window.devicePixelRatio
+      : 1;
+    const scaleFactor = 0.95;
+    const targetWidth = this.#toEvenDimension(Math.round(viewportWidth * dpr * scaleFactor));
+    const targetHeight = this.#toEvenDimension(Math.round(viewportHeight * dpr * scaleFactor));
+    if (targetWidth <= 0 || targetHeight <= 0) {
+      return {};
+    }
+    return { targetWidth, targetHeight };
+  }
+
+  /**
+   * @param {number} value
+   * @returns {number}
+   */
+  #toEvenDimension(value) {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    const safe = Math.max(2, Math.floor(value));
+    return safe % 2 === 0 ? safe : safe - 1;
+  }
+
+  /**
+   * @param {string} codec
+   * @returns {boolean}
+   */
+  #canCopyAudioCodecForHls(codec) {
+    return HLS_AUDIO_COPY_COMPATIBLE_CODECS.has(codec);
+  }
+
+  /**
+   * @param {string} codec
+   * @returns {Promise<boolean | null>}
+   */
+  async #checkMediaCapabilitiesAudioSupport(codec) {
+    if (
+      typeof navigator !== "object" ||
+      !navigator ||
+      typeof navigator.mediaCapabilities !== "object" ||
+      typeof navigator.mediaCapabilities.decodingInfo !== "function"
+    ) {
+      return null;
+    }
+    const mimeCandidates = AUDIO_CODEC_MIME_CANDIDATES[codec] ?? [];
+    for (const contentType of mimeCandidates) {
+      try {
+        const result = await navigator.mediaCapabilities.decodingInfo({
+          type: "file",
+          audio: {
+            contentType,
+            channels: "2",
+            bitrate: 160000,
+            samplerate: 48000
+          }
+        });
+        if (result && typeof result.supported === "boolean") {
+          return result.supported;
+        }
+      } catch (_error) {
+        // Ignore and fall back to canPlayType path.
+      }
+    }
+    return null;
+  }
+
+  /**
+   * @param {string} codec
+   * @returns {Promise<boolean | null>}
+   */
+  async #checkMediaCapabilitiesVideoSupport(codec) {
+    if (
+      typeof navigator !== "object" ||
+      !navigator ||
+      typeof navigator.mediaCapabilities !== "object" ||
+      typeof navigator.mediaCapabilities.decodingInfo !== "function"
+    ) {
+      return null;
+    }
+    const mimeCandidates = VIDEO_CODEC_MIME_CANDIDATES[codec] ?? [];
+    for (const contentType of mimeCandidates) {
+      try {
+        const result = await navigator.mediaCapabilities.decodingInfo({
+          type: "file",
+          video: {
+            contentType,
+            width: 1920,
+            height: 1080,
+            bitrate: 5_000_000,
+            framerate: 30
+          }
+        });
+        if (result && typeof result.supported === "boolean") {
+          return result.supported;
+        }
+      } catch (_error) {
+        // Ignore and fall back to canPlayType path.
+      }
+    }
+    return null;
+  }
+}
+
+const AUDIO_CODEC_MIME_CANDIDATES = {
+  aac: ['audio/mp4; codecs="mp4a.40.2"'],
+  mp3: ['audio/mpeg; codecs="mp3"', 'audio/mpeg'],
+  opus: ['audio/webm; codecs="opus"', 'audio/ogg; codecs="opus"'],
+  vorbis: ['audio/webm; codecs="vorbis"', 'audio/ogg; codecs="vorbis"'],
+  flac: ['audio/flac', 'audio/mp4; codecs="flac"'],
+  ac3: ['audio/mp4; codecs="ac-3"'],
+  eac3: ['audio/mp4; codecs="ec-3"']
+};
+
+const VIDEO_CODEC_MIME_CANDIDATES = {
+  h264: ['video/mp4; codecs="avc1.42E01E"'],
+  hevc: ['video/mp4; codecs="hvc1.1.6.L93.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"'],
+  av1: ['video/mp4; codecs="av01.0.08M.08"', 'video/webm; codecs="av01.0.08M.08"'],
+  vp9: ['video/webm; codecs="vp9"', 'video/mp4; codecs="vp09.00.10.08"'],
+  vp8: ['video/webm; codecs="vp8"'],
+  mpeg4: ['video/mp4; codecs="mp4v.20.8"'],
+  mpeg2video: ['video/mp2t; codecs="mp2v"']
+};
+
+const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);
+const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
+const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
+const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function bootstrapLoading() {
+  new Loading();
+}
+
+if (document.readyState !== "loading") {
+  bootstrapLoading();
+} else {
+  document.addEventListener("DOMContentLoaded", bootstrapLoading, { once: true });
+}

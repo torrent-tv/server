@@ -1,0 +1,49 @@
+#loading {
+  border: none;
+  font-family: sans-serif;
+  inset: 0;
+  line-height: 1.44;
+  font-size: 1rem;
+
+  &::backdrop {
+    background-color: #fff;
+  }
+
+  & #loading__filename {
+    text-align: center;
+    margin-block-end: 1rem;
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+  }
+
+  & #loading__status {
+    text-align: center;
+    color: color-mix(#fff, #000 35%);
+    white-space: pre-line;
+  }
+
+  & #loading__progress {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    position: fixed;
+    inset: 0 0 auto;
+    block-size: .25rem;
+    inline-size: 100%;
+    border: none;
+    background-color: transparent;
+
+    &::-webkit-progress-bar {
+      background-color: #0001;
+    }
+
+    &::-webkit-progress-value {
+      background-color: #c00;
+    }
+
+    &::-moz-progress-bar {
+      background-color: #c00;
+    }
+  }
+}

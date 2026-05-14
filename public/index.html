@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Torrent TV</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="css/reset.css" layer="base">
+    <link rel="stylesheet" href="css/layout.css" layer="base">
+    <link rel="stylesheet" href="components/error/error.css" layer="components">
+    <link rel="stylesheet" href="components/torrent/torrent.css" layer="components">
+    <link rel="stylesheet" href="components/loading/loading.css" layer="components">
+    <link rel="stylesheet" href="components/player/player.css" layer="components" >
+    <link rel="stylesheet" href="components/playlist/playlist.css" layer="components" >
+  </head>
+  <body>
+
+    <dialog id="torrent" >
+      <form method="post" action="">
+        <header id="torrent__header">
+          <label id="torrent__label">
+            <h1 id="torrent__title">.torrent</h1>
+            <input id="torrent__input" name="filename" type="file" accept=".torrent,application/x-bittorrent" />
+          </label>
+          <p id="torrent__abstract">Drop or paste a .torrent file, or click .torrent above to choose one. The video starts automatically as soon as it is ready.</p>
+        </header>
+        <button id="torrent__submit" type="submit">Open</button>
+      </form>
+    </dialog>
+
+    <dialog id="loading" aria-live="polite" aria-busy="true">
+      <progress id="loading__progress" max="100" value="0"></progress>
+      <p id="loading__filename">Waiting for a .torrent file...</p>
+      <p id="loading__status">Idle.</p>
+    </dialog>
+
+    <dialog id="error" aria-live="assertive">
+      <h1 id="error__title">.torrent</h1>
+      <p id="error__description">Playback failed.</p>
+    </dialog>
+
+    <main id="player" class="player--pause">
+      <video id="player__video" controls preload="metadata"></video>
+      <ul 
+        id="playlist" 
+        aria-label="Video playlist" 
+        data-open="false" 
+        inert>
+      </ul>
+      
+      <menu
+        id="player__menu"
+        aria-label="Player menu">
+        <ul id="player__menu-list">
+          <li>
+            <button 
+              id="player__reset" 
+              type="button" 
+              aria-label="Stop playback and choose another torrent file"></button>
+          </li>
+          <li>
+            <button
+              id="player__playlist-toggle"
+              type="button"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-controls="playlist"
+              aria-label="Playlist"
+            ></button>
+          </li>
+        </ul>
+      </menu>
+    </main>
+
+
+    <script src="/vendor/hls.min.js"></script>
+    <script type="module" src="./components/torrent/torrent.js"></script>
+    <script type="module" src="./components/loading/loading.js"></script>
+    <script type="module" src="./components/error/error.js"></script>
+    <script type="module" src="./components/player/player.js"></script>
+    <script type="module" src="./components/playlist/playlist.js"></script>
+    <script type="module" src="./components/torrent-tv/torrent-tv.js"></script>
+  </body>
+</html>

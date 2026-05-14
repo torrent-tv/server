@@ -1,0 +1,149 @@
+#player {
+  margin: 0;
+  padding: 0;
+  overflow: clip;
+  background: #000;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: nowrap;
+  block-size: 100dvh;
+
+  &.player--animated {
+    will-change: translate;
+    transition: translate 1.25s;
+  }
+
+  & + nav {
+    display: none;
+  }
+
+  &:not([hidden]) + nav {
+    display: block;
+  }
+  
+  
+  inline-size: calc(100dvw + min(80dvw, 48rem));
+  @media (min-width: 1024px) {
+    inline-size: calc(100dvw + min(50dvw, 48rem));
+  }
+  @media (min-width: 1440px) {
+    inline-size: calc(100dvw + min(33dvw, 52rem));
+  }
+  
+  &:is(.player--playlist) {
+    translate: max(-80vw, -48rem) 0;
+
+    @media (min-width: 1024px) {
+      translate: max(-50vw, -48rem) 0;
+    }
+    
+    @media (min-width: 1440px) {
+      translate: max(-33vw, -52rem) 0;
+    }
+  }
+
+  #player__menu {
+    display: flow-root;
+    position: absolute;
+    inset-block: 0 auto;
+    inset-inline-start: 0;
+    inline-size: 100dvw;
+
+    .player--pause &,
+    &:hover,
+    &:focus,
+    &:focus-visible {
+      button {
+        opacity: 1;
+        transition: background-color .25s, opacity .25s;
+      }
+    }
+
+    button {
+      all: unset;
+      display: block;
+      cursor: pointer;
+      margin: 6px;
+      inline-size: 36px;
+      block-size: 36px;
+      background-color: rgba(32, 33, 36, 0);
+      position: relative;
+      border-radius: 100%;
+      opacity: 0;
+      transition: background-color .25s .5s, opacity .25s .5s;
+
+      &:hover,
+      &:focus,
+      &:focus-visible {
+        background-color: rgba(32, 33, 36, 0.71);
+        transition: background-color .25s, opacity .25s;
+      }
+    }
+
+    #player__playlist-toggle {
+      float: right;
+
+      &::before {
+        content: "";
+        display: block;
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        inline-size: 13px;
+        block-size: 8px;
+        border-top: 2px solid #fff;
+        border-bottom: 2px solid #fff;
+      }
+
+      &::after {
+        content: "";
+        display: block;
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        inline-size: 13px;
+        block-size: 0;
+        border-bottom: 2px solid #fff;
+        background-color: pink;
+      }
+    }
+
+    #player__reset {
+      float: left;
+
+      &::before {
+        content: "";
+        display: block;
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        inline-size: 13px;
+        block-size: 0;
+        border-bottom: 2px solid #fff;
+        transform-origin: 50%;
+        rotate: 45deg;
+      }
+
+      &::after {
+        content: "";
+        display: block;
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        inline-size: 13px;
+        block-size: 0;
+        border-bottom: 2px solid #fff;
+        transform-origin: 50%;
+        rotate: -45deg;
+      }
+    }
+  }
+
+  #player__video {
+    block-size: 100dvh;
+    inline-size: 100dvw;
+    flex-shrink: 0;
+    flex-grow: 0;
+  }
+
+}
