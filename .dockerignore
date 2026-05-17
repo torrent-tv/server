@@ -9,3 +9,6 @@ terminals
 .DS_Store
 Thumbs.db
 coverage
+public/*.mp4
+public/*.mkv
+public/*.avi
