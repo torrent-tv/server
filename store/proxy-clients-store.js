@@ -2,21 +2,31 @@ import { nowIso } from "../utils/time.js";
 
 /**
  * @typedef {Object} ProxyClientRecord
- * @property {string} id          - Stable unique identifier for the proxy client.
- * @property {string} name        - Human-readable display name.
- * @property {string} baseUrl     - Reachable base URL of the proxy HTTP server.
- * @property {string} createdAt   - ISO timestamp of first registration.
- * @property {string} lastSeenAt  - ISO timestamp of last registration or heartbeat.
+ * @property {string}  id         - Stable unique identifier for the proxy client.
+ * @property {string}  name       - Human-readable display name.
+ * @property {string}  baseUrl    - Base URL advertised by the proxy (used for display only).
+ * @property {string}  createdAt  - ISO timestamp of first registration.
+ * @property {string}  lastSeenAt - ISO timestamp of last registration.
+ */
+
+/**
+ * Public API of the proxy client store.
+ *
+ * @typedef {Object} ProxyClientsStore
+ * @property {(params: { id: string, name: string, baseUrl: string }) => ProxyClientRecord} upsertClient
+ *   Insert or update a proxy client record.
+ * @property {() => ProxyClientRecord[]} listClients
+ *   Return all registered proxy clients.
  */
 
 /**
  * Create an in-memory store for registered proxy clients.
  *
- * @returns {{
- *   upsertClient: (params: { id: string, name: string, baseUrl: string }) => ProxyClientRecord,
- *   touchClient:  (id: string) => ProxyClientRecord | null,
- *   listClients:  () => ProxyClientRecord[]
- * }}
+ * Liveness is determined by whether the proxy has an active WebSocket tunnel
+ * connection — not by any field stored here.  Use `tunnelServer.isConnected(id)`
+ * at query time instead of caching a boolean in the record.
+ *
+ * @returns {ProxyClientsStore}
  */
 export function createProxyClientsStore() {
   /** @type {Map<string, ProxyClientRecord>} */
@@ -43,22 +53,6 @@ export function createProxyClientsStore() {
       };
       clients.set(trimmedId, record);
       return record;
-    },
-
-    /**
-     * Update `lastSeenAt` for an existing client (heartbeat).
-     * Returns `null` if no client with the given ID exists.
-     *
-     * @param {string} id
-     * @returns {ProxyClientRecord | null}
-     */
-    touchClient(id) {
-      const client = clients.get(id);
-      if (!client) {
-        return null;
-      }
-      client.lastSeenAt = nowIso();
-      return client;
     },
 
     /**

@@ -100,6 +100,9 @@ function toClientSummary(client) {
  * Register a proxy client with the server.
  * If a client with the same ID already exists it is updated in place.
  *
+ * The proxy's liveness is tracked via its WebSocket tunnel connection —
+ * no HTTP health probe is performed here.
+ *
  * POST /api/proxy-clients/register
  *
  * @param {import("fastify").FastifyRequest} req

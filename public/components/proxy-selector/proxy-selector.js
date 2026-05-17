@@ -1,140 +1,123 @@
+/** @import { WebRtcProxy } from '../../domain/webrtc-proxy.js' */
+/** @import { HealthMetrics } from '../../../../proxy/services/health-collector.js' */
+
 import { getDebugState } from "../../shared/debug-state.js";
+import { WebRtcProxy } from "../../domain/webrtc-proxy.js";
+
+/**
+ * A proxy client candidate as returned by `GET /api/proxy-clients/health`,
+ * enriched with computed score and post-connect RTT.
+ *
+ * @typedef {Object} ProxyCandidate
+ * @property {string}          id           - Stable proxy identifier.
+ * @property {string}          name         - Human-readable display name.
+ * @property {string}          baseUrl      - Advertised HTTP base URL (informational).
+ * @property {HealthMetrics | null} metrics - Server-collected health metrics, or `null` on timeout.
+ * @property {number | null}   tunnelRttMs  - Server ↔ proxy tunnel round-trip time in ms.
+ * @property {number | null}   channelRttMs - Browser ↔ proxy data-channel RTT measured after connect.
+ */
 
 /**
  * Proxy selection helper.
  *
- * Responsibilities:
- * - Fetch proxy clients list from registry API.
- * - Probe proxy health via server-side relay (no direct browser→proxy connection).
- * - Score and pick the best proxy, returning a relay base URL.
+ * On-demand flow (called once at playback start):
+ *   1. GET /api/proxy-clients/health  – server polls all connected proxies and
+ *      returns metrics + tunnel RTT.
+ *   2. Score each candidate using server-side data.
+ *   3. Connect WebRTC to the best candidate.
+ *   4. Measure data-channel RTT for the debug state record.
+ *   5. Return the open WebRtcProxy instance ready to use.
  */
 export class ProxySelector {
-  async chooseBestBaseUrl() {
-    const response = await fetch("/api/proxy-clients");
+  /**
+   * Poll health from all connected proxies, score them, connect via WebRTC
+   * to the best candidate, and measure the actual data-channel RTT.
+   *
+   * Throws when no proxies are available or the WebRTC connection fails.
+   *
+   * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
+   */
+  async chooseBestProxy() {
+    const response = await fetch("/api/proxy-clients/health");
     if (!response.ok) {
-      throw new Error(`Proxy list request failed (${response.status}).`);
+      throw new Error(`Proxy health request failed (${response.status}).`);
     }
 
     const payload = await response.json();
-    const clients = Array.isArray(payload.clients) ? payload.clients : [];
-    const scored = [];
+    const raw = Array.isArray(payload.clients) ? payload.clients : [];
 
-    for (const client of clients) {
-      const id = typeof client.id === "string" ? client.id.trim() : "";
-      if (!id) {
-        continue;
-      }
-      const relayBaseUrl = `${window.location.origin}/api/proxy-relay/${encodeURIComponent(id)}`;
-      const probe = await this.#probeProxy(relayBaseUrl);
-      if (!probe.reachable) {
-        continue;
-      }
-      scored.push({
-        baseUrl: relayBaseUrl,
-        score: this.#computeProxyScore(probe),
-        probe
-      });
-    }
+    /** @type {Array<ProxyCandidate & { score: number }>} */
+    const scored = raw
+      .filter((c) => typeof c.id === "string" && c.id.trim().length > 0)
+      .map((c) => ({
+        id: c.id.trim(),
+        name: typeof c.name === "string" ? c.name : c.id,
+        baseUrl: typeof c.baseUrl === "string" ? c.baseUrl.trim() : "",
+        metrics: c.metrics ?? null,
+        tunnelRttMs: typeof c.rttMs === "number" ? c.rttMs : null,
+        channelRttMs: null,
+        score: this.#scoreProxy(c.metrics, c.rttMs)
+      }))
+      .sort((a, b) => b.score - a.score);
 
     const debugState = getDebugState();
     debugState.proxies = {
       fetchedAt: new Date().toISOString(),
-      clients,
-      scored: scored.map((item) => ({
-        baseUrl: item.baseUrl,
-        score: item.score,
-        probe: item.probe
+      candidates: scored.map(({ id, name, score, metrics, tunnelRttMs }) => ({
+        id, name, score, metrics, tunnelRttMs
       })),
-      selectedBaseUrl: ""
+      selectedId: ""
     };
 
     if (scored.length === 0) {
-      return "";
+      throw new Error("No proxy clients are available.");
     }
-    scored.sort((left, right) => right.score - left.score);
-    debugState.proxies.selectedBaseUrl = scored[0].baseUrl;
-    return scored[0].baseUrl;
-  }
 
-  async #probeProxy(relayBaseUrl) {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
-    const startedAt = performance.now();
+    const best = scored[0];
+    debugState.proxies.selectedId = best.id;
+
+    const proxy = new WebRtcProxy(best.id);
+    await proxy.connect();
+
+    // Measure actual browser ↔ proxy RTT now that the channel is open.
     try {
-      const response = await fetch(`${relayBaseUrl}/health`, {
-        method: "GET",
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        return { reachable: false, latencyMs: performance.now() - startedAt, cpuFree: null, bandwidthFree: null };
-      }
-
-      let payload = {};
-      try {
-        payload = await response.json();
-      } catch (_error) {
-        payload = {};
-      }
-
-      return {
-        reachable: true,
-        latencyMs: performance.now() - startedAt,
-        cpuFree: this.#pickMetric(payload, ["cpuFree", "metrics.cpuFree", "system.cpuFree"]),
-        bandwidthFree: this.#pickMetric(payload, ["bandwidthFree", "metrics.bandwidthFree", "network.bandwidthFree"])
-      };
-    } catch (_error) {
-      return { reachable: false, latencyMs: performance.now() - startedAt, cpuFree: null, bandwidthFree: null };
-    } finally {
-      window.clearTimeout(timeoutId);
+      best.channelRttMs = await proxy.ping();
+      debugState.proxies.channelRttMs = best.channelRttMs;
+    } catch {
+      // Non-fatal — proxy is usable even without the RTT measurement.
     }
+
+    return proxy;
   }
 
-  #pickMetric(payload, paths) {
-    for (const path of paths) {
-      const value = this.#getNestedValue(payload, path);
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-      }
-    }
-    return null;
-  }
+  /**
+   * Score a proxy candidate using server-collected metrics and tunnel RTT.
+   * Higher is better.
+   *
+   * Weights:
+   *   - Free memory (0–1):  40 %  — `memFree * 0.4`
+   *   - CPU availability:   40 %  — `(1 - clamp(cpuLoad, 0, 1)) * 0.4`
+   *   - Tunnel RTT penalty: 20 %  — `-(rttMs / 2000) * 0.2`
+   *
+   * When metrics are unavailable the proxy scores `0.1 - rttPenalty` so it
+   * remains eligible as a fallback rather than being excluded.
+   *
+   * @param {HealthMetrics | null} metrics
+   * @param {number | null} tunnelRttMs
+   * @returns {number}
+   */
+  #scoreProxy(metrics, tunnelRttMs) {
+    // Normalise tunnel RTT to a 0–1 penalty (1 = worst, 0 = 0 ms).
+    const rttPenalty = tunnelRttMs != null ? Math.min(1, tunnelRttMs / 2000) : 0.5;
 
-  #getNestedValue(source, path) {
-    const parts = path.split(".");
-    let current = source;
-    for (const part of parts) {
-      if (!current || typeof current !== "object" || !(part in current)) {
-        return undefined;
-      }
-      current = current[part];
+    if (!metrics) {
+      return 0.1 - rttPenalty * 0.2;
     }
-    return current;
-  }
 
-  #normalizePercent(value) {
-    if (value == null) {
-      return null;
-    }
-    if (value <= 1) {
-      return Math.max(0, Math.min(1, value));
-    }
-    return Math.max(0, Math.min(1, value / 100));
-  }
+    // cpuLoad is load-avg / cpu-count; clamp to 0–1 (>1 means overloaded).
+    const cpuScore = Math.max(0, 1 - Math.min(1, metrics.cpuLoad));
+    const memScore = Math.max(0, Math.min(1, metrics.memFree));
 
-  #computeProxyScore(probe) {
-    const cpuNorm = this.#normalizePercent(probe.cpuFree);
-    const bwNorm = this.#normalizePercent(probe.bandwidthFree);
-    const latencyPenalty = Math.min(1, probe.latencyMs / 5000);
-
-    if (cpuNorm != null && bwNorm != null) {
-      return bwNorm * 0.6 + cpuNorm * 0.4 - latencyPenalty * 0.2;
-    }
-    if (cpuNorm != null) {
-      return cpuNorm - latencyPenalty * 0.2;
-    }
-    if (bwNorm != null) {
-      return bwNorm - latencyPenalty * 0.2;
-    }
-    return 0.2 - latencyPenalty;
+    return memScore * 0.4 + cpuScore * 0.4 - rttPenalty * 0.2;
   }
 }

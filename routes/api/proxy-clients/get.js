@@ -16,16 +16,20 @@ function toClientSummary(client) {
 }
 
 /**
- * Return the list of all registered proxy clients.
+ * Return the list of proxy clients that currently have an active tunnel connection.
+ * Proxies whose WebSocket tunnel is closed are excluded — they cannot serve video.
  *
  * GET /api/proxy-clients
  *
  * @param {import("fastify").FastifyRequest} _req
  * @param {import("fastify").FastifyReply} reply
- * @param {{ clientsStore: import("../../../store/proxy-clients-store.js").ProxyClientsStore }} deps
+ * @param {{ clientsStore: import("../../../store/proxy-clients-store.js").ProxyClientsStore, tunnelServer: import("../../../services/proxy-tunnel-server.js").ProxyTunnelServer }} deps
  * @returns {Promise<void>}
  */
-export async function handleApiProxyClientsGet(_req, reply, { clientsStore }) {
-  const clients = clientsStore.listClients().map(toClientSummary);
+export async function handleApiProxyClientsGet(_req, reply, { clientsStore, tunnelServer }) {
+  const clients = clientsStore
+    .listClients()
+    .filter((client) => tunnelServer.isConnected(client.id))
+    .map(toClientSummary);
   return reply.send({ clients });
 }

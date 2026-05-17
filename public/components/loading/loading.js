@@ -2,6 +2,8 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
+import { ProxyTransport } from "../../domain/proxy-transport.js";
+import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
 /**
@@ -55,6 +57,10 @@ export class Loading {
   #isProcessing = false;
   #directPlaybackUnsupportedCache = new Set();
   #directPlaybackHints = new Map();
+  /** @type {import("../../domain/webrtc-proxy.js").WebRtcProxy | null} */
+  #proxy = null;
+  /** @type {import("../../domain/proxy-transport.js").ProxyTransport | null} */
+  #transport = null;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -186,6 +192,11 @@ export class Loading {
       reason: typeof options?.reason === "string" ? options.reason : ""
     });
     this.#hlsPlayer.clear();
+    if (this.#proxy) {
+      this.#proxy.close();
+      this.#proxy = null;
+      this.#transport = null;
+    }
     if (this.#videoElement instanceof HTMLVideoElement) {
       this.#videoElement.pause();
       this.#videoElement.removeAttribute("src");
@@ -424,12 +435,12 @@ export class Loading {
 
     this.setStatus(Loading.MESSAGES.selectingProxy);
     this.setProgress(30);
-    const proxyBaseUrl = await this.#proxySelector.chooseBestBaseUrl();
-    if (!proxyBaseUrl) {
+    const transport = await this.#acquireTransport();
+    if (!transport) {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
     }
 
-    const prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, proxyBaseUrl);
+    const prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.setProgress(45);
 
@@ -443,7 +454,11 @@ export class Loading {
     const directHintKey = this.#buildDirectPlaybackHintKey(prepared);
     const directHint = this.#getDirectPlaybackHint(directHintKey);
 
+    // Direct URL probing only works for HTTP transports — WebRTC uses fake URLs.
+    const canProbeDirectUrl = transport.isHttp;
+
     if (
+      canProbeDirectUrl &&
       shouldTranscodeVideo &&
       !shouldTranscodeAudio &&
       !this.#directPlaybackUnsupportedCache.has(directRetryKey) &&
@@ -465,6 +480,7 @@ export class Loading {
 
     if (shouldTranscodeAudio || shouldTranscodeVideo) {
       if (
+        canProbeDirectUrl &&
         shouldTranscodeAudio &&
         !this.#directPlaybackUnsupportedCache.has(directRetryKey) &&
         directHint !== "unsupported"
@@ -497,7 +513,7 @@ export class Loading {
         : Loading.MESSAGES.preparingHlsAudio;
       this.setStatus(`${statusMessage}\n${transcodeReason}`);
       await this.#playWithProxyTranscode(fileIndex, {
-        proxyBaseUrl,
+        transport,
         sourceKey: prepared.sourceKey,
         transcodeVideo: shouldTranscodeVideo,
         transcodeAudio: shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec),
@@ -507,53 +523,87 @@ export class Loading {
       return;
     }
 
-    const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
-      statusMessage: Loading.MESSAGES.startingDirectPlayback,
-      progress: 70
-    });
-    if (directSucceeded) {
-      this.#setDirectPlaybackHint(directHintKey, true);
-      this.#directPlaybackUnsupportedCache.delete(directRetryKey);
-      this.#setActiveMediaFile(fileIndex);
-      return;
-    }
-    this.#setDirectPlaybackHint(directHintKey, false);
-    this.#directPlaybackUnsupportedCache.add(directRetryKey);
-    this.setStatus(Loading.MESSAGES.fallingBackToTranscode);
-    try {
-      await this.#playWithProxyTranscode(fileIndex, {
-        proxyBaseUrl,
-        sourceKey: prepared.sourceKey,
-        transcodeAudio: false
+    if (canProbeDirectUrl) {
+      const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
+        statusMessage: Loading.MESSAGES.startingDirectPlayback,
+        progress: 70
       });
-      this.#setActiveMediaFile(fileIndex);
-    } catch (transcodeError) {
-      if (!this.#isUnsupportedError(transcodeError)) {
-        throw transcodeError;
+      if (directSucceeded) {
+        this.#setDirectPlaybackHint(directHintKey, true);
+        this.#directPlaybackUnsupportedCache.delete(directRetryKey);
+        this.#setActiveMediaFile(fileIndex);
+        return;
       }
-      this.setStatus(Loading.MESSAGES.fallingBackToVideoTranscode);
+      this.#setDirectPlaybackHint(directHintKey, false);
+      this.#directPlaybackUnsupportedCache.add(directRetryKey);
+      this.setStatus(Loading.MESSAGES.fallingBackToTranscode);
       try {
         await this.#playWithProxyTranscode(fileIndex, {
-          proxyBaseUrl,
+          transport,
           sourceKey: prepared.sourceKey,
-          transcodeVideo: true,
           transcodeAudio: false
         });
         this.#setActiveMediaFile(fileIndex);
-      } catch (fullTranscodeError) {
-        if (!this.#isUnsupportedError(fullTranscodeError)) {
-          throw fullTranscodeError;
+      } catch (transcodeError) {
+        if (!this.#isUnsupportedError(transcodeError)) {
+          throw transcodeError;
         }
-        this.setStatus(Loading.MESSAGES.preparingHlsVideo);
-        await this.#playWithProxyTranscode(fileIndex, {
-          proxyBaseUrl,
-          sourceKey: prepared.sourceKey,
-          transcodeVideo: true,
-          transcodeAudio: true
-        });
-        this.#setActiveMediaFile(fileIndex);
+        this.setStatus(Loading.MESSAGES.fallingBackToVideoTranscode);
+        try {
+          await this.#playWithProxyTranscode(fileIndex, {
+            transport,
+            sourceKey: prepared.sourceKey,
+            transcodeVideo: true,
+            transcodeAudio: false
+          });
+          this.#setActiveMediaFile(fileIndex);
+        } catch (fullTranscodeError) {
+          if (!this.#isUnsupportedError(fullTranscodeError)) {
+            throw fullTranscodeError;
+          }
+          this.setStatus(Loading.MESSAGES.preparingHlsVideo);
+          await this.#playWithProxyTranscode(fileIndex, {
+            transport,
+            sourceKey: prepared.sourceKey,
+            transcodeVideo: true,
+            transcodeAudio: true
+          });
+          this.#setActiveMediaFile(fileIndex);
+        }
       }
+      return;
     }
+
+    // WebRTC transport: no direct URL probing possible — go straight to HLS transcode.
+    await this.#playWithProxyTranscode(fileIndex, {
+      transport,
+      sourceKey: prepared.sourceKey,
+      transcodeVideo: shouldTranscodeVideo,
+      transcodeAudio: shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec)
+    });
+    this.#setActiveMediaFile(fileIndex);
+  }
+
+  /**
+   * Return the current open transport, or connect a new proxy and create one.
+   * Stores the result in `#proxy` / `#transport` for reuse within the same session.
+   *
+   * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
+   */
+  async #acquireTransport() {
+    if (this.#transport && (!this.#proxy || this.#proxy.isOpen)) {
+      return this.#transport;
+    }
+    // Close stale proxy if present.
+    if (this.#proxy) {
+      this.#proxy.close();
+      this.#proxy = null;
+      this.#transport = null;
+    }
+    const proxy = await this.#proxySelector.chooseBestProxy();
+    this.#proxy = proxy;
+    this.#transport = ProxyTransport.fromWebRtc(proxy);
+    return this.#transport;
   }
 
   /**
@@ -732,15 +782,21 @@ export class Loading {
 
   /**
    * @param {number} fileIndex
-   * @param {{ proxyBaseUrl?: string, sourceKey?: string, transcodeVideo?: boolean, transcodeAudio?: boolean, statusMessage?: string }} [options]
+   * @param {{
+   *   transport?: import("../../domain/proxy-transport.js").ProxyTransport,
+   *   sourceKey?: string,
+   *   transcodeVideo?: boolean,
+   *   transcodeAudio?: boolean,
+   *   statusMessage?: string
+   * }} [options]
    * @returns {Promise<void>}
    */
   async #playWithProxyTranscode(fileIndex, options = {}) {
-    let proxyBaseUrl = typeof options.proxyBaseUrl === "string" ? options.proxyBaseUrl : "";
-    if (!proxyBaseUrl) {
-      proxyBaseUrl = await this.#proxySelector.chooseBestBaseUrl();
+    let transport = options.transport ?? this.#transport ?? null;
+    if (!transport) {
+      transport = await this.#acquireTransport();
     }
-    if (!proxyBaseUrl) {
+    if (!transport) {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
     }
     this.setStatus(
@@ -749,13 +805,20 @@ export class Loading {
         : Loading.MESSAGES.preparingHls
     );
     this.setProgress(55);
+
+    // For WebRTC transport, HLS.js must route all requests through the data channel.
+    const hlsLoader = !transport.isHttp && this.#proxy
+      ? createWebRtcHlsLoader(this.#proxy)
+      : undefined;
+
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
-      proxyBaseUrl,
+      transport,
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
       transcodeVideo: options.transcodeVideo === true,
       transcodeAudio: options.transcodeAudio === true,
       ...this.#buildVideoTargetConfig(options.transcodeVideo === true),
-      playHls: (videoElement, manifestUrl) => this.#hlsPlayer.play(videoElement, manifestUrl),
+      playHls: (videoElement, manifestUrl) =>
+        this.#hlsPlayer.play(videoElement, manifestUrl, hlsLoader ? { loader: hlsLoader } : {}),
       onTranscodeProgress: (progress) => {
         const value = typeof progress?.percent === "number" ? progress.percent : NaN;
         const warmupPercent =

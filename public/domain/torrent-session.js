@@ -1,3 +1,5 @@
+/** @import { ProxyTransport } from './proxy-transport.js' */
+
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 
 export class TorrentSession {
@@ -7,6 +9,10 @@ export class TorrentSession {
     this.proxySourceKeyCache = new Map();
     this.consumerId = buildConsumerId();
     this.abortController = new AbortController();
+    /**
+     * Maps transcode sessionId → ProxyTransport that owns the session.
+     * @type {Map<string, import("./proxy-transport.js").ProxyTransport>}
+     */
     this.activeTranscodeSessions = new Map();
   }
 
@@ -32,10 +38,24 @@ export class TorrentSession {
     }
     const sessions = Array.from(this.activeTranscodeSessions.entries());
     this.activeTranscodeSessions.clear();
-    for (const [sessionId, proxyBaseUrl] of sessions) {
+    for (const [sessionId, transport] of sessions) {
+      // WebRTC transport: fire-and-forget is unreliable on unload events,
+      // and the proxy session expires when the data channel closes anyway.
+      if (!transport.isHttp) {
+        void transport.fetch(
+          `/api/transcode-sessions/${encodeURIComponent(sessionId)}/release`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ consumerId: this.consumerId, reason })
+          }
+        ).catch(() => undefined);
+        continue;
+      }
+
       const endpoint = new URL(
         `api/transcode-sessions/${encodeURIComponent(sessionId)}/release`,
-        ensureTrailingSlash(proxyBaseUrl)
+        ensureTrailingSlash(transport.baseUrl)
       );
       const payload = JSON.stringify({
         consumerId: this.consumerId,
@@ -78,6 +98,17 @@ export class TorrentSession {
     return this.current;
   }
 
+  /**
+   * Start playback of a torrent file.
+   *
+   * Prefers direct webseed playback when a webseed URL is available.
+   * Falls back to proxy direct streaming when a transport is supplied.
+   *
+   * @param {number} fileIndex
+   * @param {HTMLVideoElement} videoElement
+   * @param {{ transport?: ProxyTransport }} [options]
+   * @returns {Promise<{ mode: "webseed" } | { mode: "proxy-direct", sourceKey: string }>}
+   */
   async streamFileToVideo(fileIndex, videoElement, options = {}) {
     if (!this.current || this.current.type !== "torrent") {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
@@ -92,8 +123,7 @@ export class TorrentSession {
     }
 
     const fileUrl = pickWebSeedUrl(file, this.current.webSeeds, this.current.isMultiFile);
-    const proxyBaseUrl =
-      typeof options.proxyBaseUrl === "string" ? options.proxyBaseUrl.trim() : "";
+    const transport = options.transport ?? null;
 
     if (fileUrl) {
       const probe = await probeWebSeed(fileUrl, { signal: this.abortController.signal });
@@ -109,17 +139,37 @@ export class TorrentSession {
       return { mode: "webseed" };
     }
 
-    if (!proxyBaseUrl) {
+    if (!transport) {
       throw new Error("No webseed and no selected proxy client.");
     }
 
-    const sourceKey = await this.registerSourceOnProxy(proxyBaseUrl);
-    const directProxyUrl = this.buildDirectProxyUrl(proxyBaseUrl, sourceKey, fileIndex);
-    this.onLog(`Streaming from proxy client: ${directProxyUrl.origin}`);
-    await this.playFromUrl(videoElement, directProxyUrl.toString());
+    const sourceKey = await this.registerSourceOnProxy(transport);
+    const directProxyUrl = this.buildDirectProxyUrl(transport, sourceKey, fileIndex);
+    this.onLog(`Streaming from proxy client: ${new URL(directProxyUrl).origin}`);
+    await this.playFromUrl(videoElement, directProxyUrl);
     return { mode: "proxy-direct", sourceKey };
   }
 
+  /**
+   * Start HLS transcode playback.
+   *
+   * Registers the torrent source on the proxy, creates a transcode session,
+   * waits for the HLS playlist to be ready, then delegates to `playHls`.
+   *
+   * @param {number} fileIndex
+   * @param {HTMLVideoElement} videoElement
+   * @param {{
+   *   transport: ProxyTransport,
+   *   sourceKey?: string,
+   *   playHls: (videoElement: HTMLVideoElement, manifestUrl: string) => Promise<void>,
+   *   onTranscodeProgress?: (progress: object) => void,
+   *   transcodeVideo?: boolean,
+   *   transcodeAudio?: boolean,
+   *   targetWidth?: number,
+   *   targetHeight?: number
+   * }} options
+   * @returns {Promise<{ mode: "proxy-hls" }>}
+   */
   async streamFileToVideoWithAudioTranscode(fileIndex, videoElement, options = {}) {
     if (!this.current || this.current.type !== "torrent") {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
@@ -129,10 +179,9 @@ export class TorrentSession {
       throw new Error("Selected file is not a video.");
     }
 
-    const proxyBaseUrl =
-      typeof options.proxyBaseUrl === "string" ? options.proxyBaseUrl.trim() : "";
-    if (!proxyBaseUrl) {
-      throw new Error("Proxy client is required for audio transcode.");
+    const transport = options.transport ?? null;
+    if (!transport) {
+      throw new Error("Proxy transport is required for audio transcode.");
     }
     const playHls = typeof options.playHls === "function" ? options.playHls : null;
     if (!playHls) {
@@ -149,9 +198,9 @@ export class TorrentSession {
     const sourceKey =
       typeof options.sourceKey === "string" && options.sourceKey.length > 0
         ? options.sourceKey
-        : await this.registerSourceOnProxy(proxyBaseUrl);
+        : await this.registerSourceOnProxy(transport);
     const playlistUrl = await this.tryCreateTranscodeSession(
-      proxyBaseUrl,
+      transport,
       sourceKey,
       fileIndex,
       onTranscodeProgress,
@@ -166,12 +215,22 @@ export class TorrentSession {
       throw new Error("Proxy audio transcode is unavailable.");
     }
 
-    this.onLog(`Streaming via HLS audio transcode from proxy: ${new URL(playlistUrl).origin}`);
+    this.onLog(`Streaming via HLS audio transcode from proxy: ${new URL(transport.baseUrl).origin}`);
     await playHls(videoElement, playlistUrl);
     return { mode: "proxy-hls" };
   }
 
-  async prepareProxyPlaybackPlan(fileIndex, proxyBaseUrl) {
+  /**
+   * Register the torrent source on the proxy and query the playback plan.
+   *
+   * Returns the source key, the proxy's recommended playback mode (`"direct"` or
+   * `"hls"`), the detected codec names, and a direct stream URL.
+   *
+   * @param {number} fileIndex
+   * @param {ProxyTransport} transport
+   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string }>}
+   */
+  async prepareProxyPlaybackPlan(fileIndex, transport) {
     if (!this.current || this.current.type !== "torrent") {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
     }
@@ -179,18 +238,17 @@ export class TorrentSession {
     if (!file || !file.isVideo) {
       throw new Error("Selected file is not a video.");
     }
-    if (!proxyBaseUrl) {
+    if (!transport) {
       throw new Error("No selected proxy client.");
     }
 
-    const sourceKey = await this.registerSourceOnProxy(proxyBaseUrl);
-    const directProxyUrl = this.buildDirectProxyUrl(proxyBaseUrl, sourceKey, fileIndex);
-    const endpoint = new URL("api/playback-plan", ensureTrailingSlash(proxyBaseUrl));
+    const sourceKey = await this.registerSourceOnProxy(transport);
+    const directProxyUrl = this.buildDirectProxyUrl(transport, sourceKey, fileIndex);
     const userAgent =
       typeof navigator === "object" && typeof navigator.userAgent === "string"
         ? navigator.userAgent
         : "";
-    const response = await fetch(endpoint, {
+    const response = await transport.fetch("/api/playback-plan", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -220,7 +278,7 @@ export class TorrentSession {
     const directUrl =
       typeof payload?.directUrl === "string" && payload.directUrl.trim().length > 0
         ? payload.directUrl.trim()
-        : directProxyUrl.toString();
+        : directProxyUrl;
     const audioCodec = typeof payload?.audioCodec === "string" ? payload.audioCodec.trim().toLowerCase() : "";
     const videoCodec = typeof payload?.videoCodec === "string" ? payload.videoCodec.trim().toLowerCase() : "";
 
@@ -240,27 +298,44 @@ export class TorrentSession {
     await videoElement.play().catch(() => undefined);
   }
 
-  buildDirectProxyUrl(proxyBaseUrl, sourceKey, fileIndex) {
-    const directProxyUrl = new URL("stream", ensureTrailingSlash(proxyBaseUrl));
-    directProxyUrl.searchParams.set("sourceKey", sourceKey);
-    directProxyUrl.searchParams.set("fileIndex", String(fileIndex));
-    return directProxyUrl;
+  /**
+   * Build a direct stream URL string for this transport.
+   *
+   * @param {import("./proxy-transport.js").ProxyTransport} transport
+   * @param {string} sourceKey
+   * @param {number} fileIndex
+   * @returns {string}
+   */
+  buildDirectProxyUrl(transport, sourceKey, fileIndex) {
+    const base = transport.url("/stream");
+    const url = new URL(base);
+    url.searchParams.set("sourceKey", sourceKey);
+    url.searchParams.set("fileIndex", String(fileIndex));
+    return url.toString();
   }
 
+  /**
+   * @param {import("./proxy-transport.js").ProxyTransport} transport
+   * @param {string} sourceKey
+   * @param {number} fileIndex
+   * @param {((progress: object) => void) | null} onTranscodeProgress
+   * @param {boolean} transcodeVideo
+   * @param {{ transcodeAudio?: boolean, targetWidth?: number, targetHeight?: number }} options
+   * @returns {Promise<string>} HLS playlist URL
+   */
   async tryCreateTranscodeSession(
-    proxyBaseUrl,
+    transport,
     sourceKey,
     fileIndex,
     onTranscodeProgress,
     transcodeVideo = false,
     options = {}
   ) {
-    const endpoint = new URL("api/transcode-sessions", ensureTrailingSlash(proxyBaseUrl));
     const createDeadlineMs = Date.now() + 90_000;
     let attempt = 0;
     let response = null;
     while (Date.now() < createDeadlineMs) {
-      response = await fetch(endpoint, {
+      response = await transport.fetch("/api/transcode-sessions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -314,40 +389,48 @@ export class TorrentSession {
     if (!playlistPath) {
       throw new Error("Proxy did not return transcode playlist path.");
     }
-    const playlistUrl = new URL(
-      playlistPath.replace(/^\/+/, ""),
-      ensureTrailingSlash(proxyBaseUrl)
-    ).toString();
-    const progressUrl = sessionId
-      ? new URL(
-          `api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`,
-          ensureTrailingSlash(proxyBaseUrl)
-        ).toString()
+    const playlistUrl = transport.url(playlistPath);
+    const progressPath = sessionId
+      ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`
       : "";
+    const progressUrl = progressPath ? transport.url(progressPath) : "";
+
     if (sessionId) {
-      this.activeTranscodeSessions.set(sessionId, proxyBaseUrl);
+      this.activeTranscodeSessions.set(sessionId, transport);
     }
+
+    // Build a fetchFn that routes through this transport (required for WebRTC,
+    // harmless for HTTP where it just normalises the URL construction).
+    const fetchFn = (url, fetchOptions) => {
+      const parsed = new URL(url);
+      return transport.fetch(parsed.pathname + parsed.search, fetchOptions);
+    };
+
     await waitForHlsPlaylist(playlistUrl, 15 * 60_000, {
       progressUrl,
+      fetchFn,
       onProgress: onTranscodeProgress,
       signal: this.abortController.signal
     });
     return playlistUrl;
   }
 
-  async registerSourceOnProxy(proxyBaseUrl) {
+  /**
+   * @param {import("./proxy-transport.js").ProxyTransport} transport
+   * @returns {Promise<string>} sourceKey
+   */
+  async registerSourceOnProxy(transport) {
     if (!this.current) {
       throw new Error("Torrent source is not loaded.");
     }
 
-    const cacheKey = `${proxyBaseUrl}|${this.current.sourceType}|${this.current.sourceValue}`;
+    const cacheKey = `${transport.baseUrl}|${this.current.sourceType}|${this.current.sourceValue}`;
     const existing = this.proxySourceKeyCache.get(cacheKey);
     if (existing) {
       return existing;
     }
 
-    const endpoint = new URL("api/sources", ensureTrailingSlash(proxyBaseUrl));
-    const response = await fetch(endpoint, {
+    const response = await transport.fetch("/api/sources", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -400,6 +483,16 @@ function ensureTrailingSlash(url) {
   return url.endsWith("/") ? url : `${url}/`;
 }
 
+/**
+ * @param {string} playlistUrl
+ * @param {number} timeoutMs
+ * @param {{
+ *   progressUrl?: string,
+ *   fetchFn?: (url: string, options?: object) => Promise<Response>,
+ *   onProgress?: ((progress: object) => void) | null,
+ *   signal?: AbortSignal | null
+ * }} telemetry
+ */
 async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
   const startedAt = Date.now();
   let attempt = 0;
@@ -408,6 +501,11 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
     typeof telemetry.progressUrl === "string" ? telemetry.progressUrl.trim() : "";
   const onProgress = typeof telemetry.onProgress === "function" ? telemetry.onProgress : null;
   const signal = telemetry.signal instanceof AbortSignal ? telemetry.signal : null;
+  // Allow callers to supply a custom fetch (e.g. WebRTC transport).
+  const fetchFn =
+    typeof telemetry.fetchFn === "function"
+      ? telemetry.fetchFn
+      : (url, options) => fetch(url, options);
 
   while (Date.now() - startedAt < timeoutMs) {
     if (signal?.aborted) {
@@ -415,7 +513,7 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
     }
     const now = Date.now();
     if (progressUrl && onProgress && now - lastProgressPollMs >= 1000) {
-      const progress = await fetchTranscodeProgress(progressUrl, signal);
+      const progress = await fetchTranscodeProgress(progressUrl, signal, fetchFn);
       if (progress) {
         onProgress(progress);
       }
@@ -423,7 +521,7 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
     }
 
     try {
-      const response = await fetch(playlistUrl, { cache: "no-store", signal: signal ?? undefined });
+      const response = await fetchFn(playlistUrl, { cache: "no-store", signal: signal ?? undefined });
       if (response.status === 202 || response.status === 404) {
         const retryAfterHeader = response.headers.get("Retry-After");
         const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
@@ -465,9 +563,14 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
   throw new Error("Timed out waiting for generated HLS playlist.");
 }
 
-async function fetchTranscodeProgress(progressUrl, signal) {
+/**
+ * @param {string} progressUrl
+ * @param {AbortSignal | null} signal
+ * @param {(url: string, options?: object) => Promise<Response>} fetchFn
+ */
+async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
   try {
-    const response = await fetch(progressUrl, { cache: "no-store", signal: signal ?? undefined });
+    const response = await fetchFn(progressUrl, { cache: "no-store", signal: signal ?? undefined });
     if (!response.ok) {
       return null;
     }

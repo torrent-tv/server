@@ -1,24 +1,62 @@
+/**
+ * @file HLS player wrapper.
+ *
+ * Wraps the global HLS.js instance (loaded via a `<script>` tag) and falls
+ * back to native HLS support on Safari.  Accepts an optional custom `loader`
+ * class so that manifest and segment fetches can be routed through an
+ * alternative transport — e.g. a WebRTC data channel instead of XHR/Fetch.
+ */
+
+/** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
+
+/**
+ * @param {HTMLVideoElement} videoElement
+ * @returns {boolean}
+ */
 function isNativeHlsSupported(videoElement) {
   return videoElement.canPlayType("application/vnd.apple.mpegurl") !== "";
 }
 
+/**
+ * Create a stateful HLS player instance.
+ *
+ * @param {(message: string) => void} onLog - Called with status/error messages
+ *   emitted by the HLS.js event handler.
+ * @returns {{ clear: () => void, play: (videoElement: HTMLVideoElement, manifestUrl: string, options?: { loader?: HlsLoaderClass }) => Promise<void> }}
+ */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
 
   return {
+    /** Destroy any active HLS.js instance and release its resources. */
     clear() {
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
       }
     },
-    async play(videoElement, manifestUrl) {
+    /**
+     * Start HLS playback on `videoElement`.
+     *
+     * Uses HLS.js when available (Chrome / Firefox / Edge).  Falls back to
+     * native HLS (`<video src="…m3u8">`) on Safari.  Resolves once the
+     * manifest has been parsed and the video element has started playing.
+     *
+     * @param {HTMLVideoElement} videoElement
+     * @param {string} manifestUrl
+     * @param {{ loader?: HlsLoaderClass }} [options]
+     *   Pass `{ loader: createWebRtcHlsLoader(proxy) }` when segments and
+     *   manifests must be fetched through a WebRTC data channel.
+     * @returns {Promise<void>}
+     */
+    async play(videoElement, manifestUrl, options = {}) {
       this.clear();
 
       const HlsClass = globalThis.Hls;
       // Prefer hls.js where available (Chrome/Firefox). Native HLS fallback is for Safari.
       if (HlsClass && typeof HlsClass.isSupported === "function" && HlsClass.isSupported()) {
-        const instance = new HlsClass();
+        const hlsConfig = options.loader ? { loader: options.loader } : {};
+        const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
         instance.attachMedia(videoElement);
         instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {

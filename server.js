@@ -9,11 +9,11 @@ import { fileURLToPath } from "node:url";
 import { createProxyClientsStore } from "./store/proxy-clients-store.js";
 import { createProxyTunnelServer } from "./services/proxy-tunnel-server.js";
 import { handleApiProxyClientsRegisterPost } from "./routes/api/proxy-clients/register/post.js";
-import { handleApiProxyClientsHeartbeatPost } from "./routes/api/proxy-clients/heartbeat/post.js";
 import { handleApiProxyClientsGet } from "./routes/api/proxy-clients/get.js";
-import { handleProxyRelayGet } from "./routes/api/proxy-clients/relay/get.js";
-import { handleProxyRelayPost } from "./routes/api/proxy-clients/relay/post.js";
+import { handleApiProxyClientsHealthGet } from "./routes/api/proxy-clients/health/get.js";
 import { handleWsProxyTunnel } from "./routes/ws/proxy-tunnel/get.js";
+import { handleWsBrowserSignal } from "./routes/ws/browser-signal/get.js";
+import { createSignalHub } from "./services/signal-hub.js";
 import { handleHealthGet } from "./routes/health/get.js";
 import { handleHealthzGet } from "./routes/healthz/get.js";
 
@@ -35,6 +35,12 @@ const shutdownState = {
 
 const clientsStore = createProxyClientsStore();
 const tunnelServer = createProxyTunnelServer();
+const signalHub = createSignalHub();
+
+// Wire up signal routing: proxy → tunnelServer → signalHub → browser
+tunnelServer.setSignalHandler((sessionId, signal) => {
+  signalHub.forwardToBrowser(sessionId, signal);
+});
 
 await app.register(fastifyWebsocket);
 
@@ -58,21 +64,18 @@ app.get("/ws/proxy-tunnel", { websocket: true }, (socket, req) =>
   handleWsProxyTunnel(socket, req, { tunnelServer, serverToken })
 );
 
+app.get("/ws/browser-signal", { websocket: true }, (socket, req) =>
+  handleWsBrowserSignal(socket, req, { signalHub, tunnelServer })
+);
+
 app.post("/api/proxy-clients/register", async (req, reply) =>
   handleApiProxyClientsRegisterPost(req, reply, { clientsStore, serverToken })
 );
-app.post("/api/proxy-clients/heartbeat", async (req, reply) =>
-  handleApiProxyClientsHeartbeatPost(req, reply, { clientsStore, serverToken })
-);
 app.get("/api/proxy-clients", async (req, reply) =>
-  handleApiProxyClientsGet(req, reply, { clientsStore })
+  handleApiProxyClientsGet(req, reply, { clientsStore, tunnelServer })
 );
-
-app.get("/api/proxy-relay/:id/*", async (req, reply) =>
-  handleProxyRelayGet(req, reply, { clientsStore, tunnelServer })
-);
-app.post("/api/proxy-relay/:id/*", async (req, reply) =>
-  handleProxyRelayPost(req, reply, { clientsStore, tunnelServer })
+app.get("/api/proxy-clients/health", async (req, reply) =>
+  handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer })
 );
 
 app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState }));

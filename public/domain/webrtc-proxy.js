@@ -1,0 +1,375 @@
+/**
+ * @file WebRTC data channel transport to a proxy.
+ *
+ * Establishes a peer-to-peer connection through the server's signalling
+ * endpoint (`/ws/browser-signal`) and exposes a fetch-like API so that all
+ * proxy calls — API requests and HLS video segments — travel over the data
+ * channel without passing through the server.
+ *
+ * ## Connection flow
+ *
+ * 1. `connect()` opens a signalling WebSocket to the server.
+ * 2. The server responds with `{ type: "session", sessionId }`.
+ * 3. The browser creates an `RTCPeerConnection` with an ordered data channel,
+ *    generates an SDP offer, and sends it through the WebSocket.
+ * 4. The server forwards the offer to the proxy via the proxy tunnel.
+ * 5. The proxy generates an SDP answer; the server forwards it back.
+ * 6. ICE candidates are exchanged the same way until the P2P path is found.
+ * 7. Once the data channel opens, `connect()` resolves.
+ * 8. All subsequent communication uses `fetch()` / `ping()` on the channel.
+ */
+
+/**
+ * A minimal `Response`-like object assembled from data channel chunks.
+ *
+ * @typedef {Object} DataChannelResponse
+ * @property {boolean} ok     - `true` when `status` is in the 2xx range.
+ * @property {number}  status - HTTP status code forwarded from the proxy.
+ * @property {{ get: (name: string) => string | null }} headers
+ *   Header accessor; names are lower-cased.
+ * @property {() => Promise<ArrayBuffer>} arrayBuffer
+ * @property {() => Promise<string>}      text
+ * @property {() => Promise<any>}         json
+ */
+
+/**
+ * A pending fetch or ping entry tracked in `#pending`.
+ *
+ * @typedef {Object} PendingEntry
+ * @property {(result: any) => void}   resolve
+ * @property {(error: Error) => void}  reject
+ * @property {string[]}  chunks  - Accumulated base64 response chunks.
+ * @property {number}    status  - HTTP status received in `response-start`.
+ * @property {object}    headers - Headers received in `response-start`.
+ */
+
+/** @type {Array<{ urls: string }>} */
+const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+const CONNECT_TIMEOUT_MS = 30_000;
+const REQUEST_TIMEOUT_MS = 60_000;
+const PING_TIMEOUT_MS = 5_000;
+
+export class WebRtcProxy {
+  /** @type {string} */
+  #proxyId;
+  /** @type {RTCPeerConnection | null} */
+  #pc = null;
+  /** @type {RTCDataChannel | null} */
+  #channel = null;
+  /** @type {WebSocket | null} */
+  #ws = null;
+  /**
+   * Pending fetch and ping entries keyed by requestId (or `ping:{id}`).
+   * @type {Map<string, PendingEntry>}
+   */
+  #pending = new Map();
+
+  /** @param {string} proxyId */
+  constructor(proxyId) {
+    this.#proxyId = proxyId;
+  }
+
+  /** @returns {boolean} */
+  get isOpen() {
+    return this.#channel?.readyState === "open";
+  }
+
+  /**
+   * Open the signalling WebSocket, complete the SDP handshake, and wait for
+   * the data channel to become open.
+   *
+   * @returns {Promise<void>}
+   */
+  async connect() {
+    const wsUrl = `${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`;
+    this.#ws = new WebSocket(wsUrl);
+
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#ws?.close();
+        reject(new Error("WebRTC connection timed out."));
+      }, CONNECT_TIMEOUT_MS);
+
+      // Store settler so the data channel open / error events can resolve/reject the outer promise.
+      let settled = false;
+      const settle = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (err) reject(err); else resolve();
+      };
+
+      this.#ws.addEventListener("message", (event) => {
+        this.#onSignalMessage(event.data, settle);
+      });
+
+      this.#ws.addEventListener("error", () => {
+        settle(new Error("WebSocket error during WebRTC signalling."));
+      });
+
+      this.#ws.addEventListener("close", () => {
+        if (!settled) {
+          settle(new Error("WebSocket closed before data channel was established."));
+        }
+      });
+    });
+  }
+
+  /**
+   * Handle a single message arriving on the signalling WebSocket.
+   *
+   * @param {string} raw
+   * @param {(err?: Error) => void} settle
+   */
+  async #onSignalMessage(raw, settle) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+
+    if (msg.type === "session") {
+      try {
+        await this.#createPeerConnection(msg.sessionId, settle);
+      } catch (err) {
+        settle(err instanceof Error ? err : new Error(String(err)));
+      }
+      return;
+    }
+
+    if (msg.type === "answer" && this.#pc) {
+      try {
+        await this.#pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+      } catch (err) {
+        settle(err instanceof Error ? err : new Error(String(err)));
+      }
+      return;
+    }
+
+    if (msg.type === "candidate" && this.#pc) {
+      try {
+        await this.#pc.addIceCandidate({
+          candidate: msg.candidate,
+          sdpMid: msg.mid ?? "0",
+          sdpMLineIndex: 0
+        });
+      } catch {
+        // Stale or duplicate candidate — safe to ignore.
+      }
+    }
+  }
+
+  /**
+   * Create the RTCPeerConnection, attach the data channel, and send the offer.
+   *
+   * @param {string} _sessionId - Assigned by the server (unused in browser, included for clarity).
+   * @param {(err?: Error) => void} settle
+   */
+  async #createPeerConnection(_sessionId, settle) {
+    this.#pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.#channel = this.#pc.createDataChannel("proxy", { ordered: true });
+
+    this.#channel.addEventListener("open", () => settle());
+
+    this.#channel.addEventListener("error", (event) => {
+      settle(new Error(`Data channel error: ${event.message ?? "unknown"}`));
+    });
+
+    this.#channel.addEventListener("message", (event) => {
+      this.#onChannelMessage(event.data);
+    });
+
+    this.#channel.addEventListener("close", () => {
+      for (const entry of this.#pending.values()) {
+        entry.reject(new Error("Data channel closed."));
+      }
+      this.#pending.clear();
+    });
+
+    this.#pc.addEventListener("icecandidate", (event) => {
+      if (event.candidate && this.#ws?.readyState === WebSocket.OPEN) {
+        this.#ws.send(JSON.stringify({
+          type: "candidate",
+          proxyId: this.#proxyId,
+          candidate: event.candidate.candidate,
+          mid: event.candidate.sdpMid ?? "0"
+        }));
+      }
+    });
+
+    this.#pc.addEventListener("connectionstatechange", () => {
+      if (this.#pc?.connectionState === "failed") {
+        settle(new Error("WebRTC connection failed."));
+      }
+    });
+
+    const offer = await this.#pc.createOffer();
+    await this.#pc.setLocalDescription(offer);
+
+    this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: offer.sdp }));
+  }
+
+  /**
+   * Handle an incoming data channel message.
+   *
+   * @param {string} raw
+   */
+  #onChannelMessage(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+
+    // Ping/pong RTT measurement.
+    if (msg.type === "pong") {
+      const entry = this.#pending.get(`ping:${msg.id}`);
+      if (entry) {
+        this.#pending.delete(`ping:${msg.id}`);
+        entry.resolve(null);
+      }
+      return;
+    }
+
+    const entry = this.#pending.get(msg.requestId);
+    if (!entry) return;
+
+    if (msg.type === "response-start") {
+      entry.status = msg.status ?? 200;
+      entry.headers = msg.headers ?? {};
+      return;
+    }
+
+    if (msg.type === "response-chunk") {
+      if (msg.data) {
+        entry.chunks.push(msg.data);
+      }
+      if (msg.done) {
+        this.#pending.delete(msg.requestId);
+        entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks));
+      }
+      return;
+    }
+
+    if (msg.type === "response-error") {
+      this.#pending.delete(msg.requestId);
+      entry.reject(new Error(msg.error ?? "Proxy data channel error."));
+    }
+  }
+
+  /**
+   * Decode base64 chunks and build a minimal Response-like object.
+   *
+   * @param {number} status
+   * @param {object} headers
+   * @param {string[]} chunks
+   */
+  #buildResponse(status, headers, chunks) {
+    const assemble = () => {
+      const parts = chunks.map((b64) => {
+        const binary = atob(b64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes;
+      });
+      const total = parts.reduce((n, p) => n + p.length, 0);
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const p of parts) { out.set(p, offset); offset += p.length; }
+      return out;
+    };
+
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+      arrayBuffer: async () => assemble().buffer,
+      text: async () => new TextDecoder().decode(assemble()),
+      json: async () => JSON.parse(new TextDecoder().decode(assemble()))
+    };
+  }
+
+  /**
+   * Send a request over the data channel and return a `Response`-like object.
+   *
+   * @param {string} path - Absolute path on the proxy, e.g. `"/api/sources"`.
+   * @param {{ method?: string, headers?: object, body?: string | null, signal?: AbortSignal }} [options]
+   *   Fetch options.  `signal` is accepted but currently not propagated to
+   *   the data channel — the request will time out via `REQUEST_TIMEOUT_MS`
+   *   if the channel does not respond.
+   * @returns {Promise<DataChannelResponse>}
+   */
+  fetch(path, options = {}) {
+    if (!this.isOpen) {
+      return Promise.reject(new Error("Data channel is not open."));
+    }
+
+    const requestId = crypto.randomUUID();
+    const url = new URL(path, "http://proxy");
+
+    const responsePromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(requestId);
+        reject(new Error("Data channel request timed out."));
+      }, REQUEST_TIMEOUT_MS);
+
+      this.#pending.set(requestId, {
+        resolve: (result) => { clearTimeout(timer); resolve(result); },
+        reject: (err) => { clearTimeout(timer); reject(err); },
+        chunks: [],
+        status: 200,
+        headers: {}
+      });
+    });
+
+    this.#channel.send(JSON.stringify({
+      type: "request",
+      requestId,
+      method: options.method ?? "GET",
+      path: url.pathname,
+      query: url.search.slice(1),
+      headers: options.headers ?? {},
+      body: options.body ?? null
+    }));
+
+    return responsePromise;
+  }
+
+  /**
+   * Measure the round-trip time to the proxy over the data channel.
+   *
+   * @returns {Promise<number>} RTT in milliseconds.
+   */
+  ping() {
+    if (!this.isOpen) {
+      return Promise.reject(new Error("Data channel is not open."));
+    }
+
+    const id = crypto.randomUUID();
+    const sentAt = performance.now();
+
+    const rttPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(`ping:${id}`);
+        reject(new Error("Ping timed out."));
+      }, PING_TIMEOUT_MS);
+
+      this.#pending.set(`ping:${id}`, {
+        resolve: () => { clearTimeout(timer); resolve(Math.round(performance.now() - sentAt)); },
+        reject: (err) => { clearTimeout(timer); reject(err); },
+        chunks: [],
+        status: 0,
+        headers: {}
+      });
+    });
+
+    this.#channel.send(JSON.stringify({ type: "ping", id }));
+    return rttPromise;
+  }
+
+  /**
+   * Close the data channel, peer connection, and signalling WebSocket.
+   */
+  close() {
+    this.#ws?.close();
+    this.#channel?.close();
+    this.#pc?.close();
+    this.#ws = null;
+    this.#channel = null;
+    this.#pc = null;
+  }
+}

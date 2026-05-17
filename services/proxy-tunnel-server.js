@@ -22,10 +22,29 @@ const REQUEST_TIMEOUT_MS = 60_000;
  */
 
 /**
+ * A WebRTC signal object forwarded between browser and proxy.
+ *
+ * @typedef {{ type: string, sdp?: string, candidate?: string, mid?: string }} WebRtcSignal
+ */
+
+/**
+ * Public API of the server-side tunnel manager.
+ *
  * @typedef {Object} ProxyTunnelServer
  * @property {(proxyId: string, socket: import("ws").WebSocket) => void} registerConnection
+ *   Register (or replace) the WebSocket connection for a proxy.
  * @property {(proxyId: string) => boolean} isConnected
+ *   Return true when the proxy has an open tunnel connection.
+ * @property {(handler: (sessionId: string, signal: WebRtcSignal) => void) => void} setSignalHandler
+ *   Wire up the callback that receives WebRTC signals from proxies.
+ *   Called once during server bootstrap.
+ * @property {(proxyId: string, timeoutMs?: number) => Promise<{ metrics: import("../../../proxy/services/health-collector.js").HealthMetrics, rttMs: number }>} requestHealth
+ *   Send a `health-request` to a proxy and resolve with the response.
+ *   `rttMs` is the full tunnel round-trip time.
+ * @property {(proxyId: string, sessionId: string, signal: WebRtcSignal) => void} sendSignal
+ *   Forward a WebRTC signal from the browser to a proxy.
  * @property {(proxyId: string, payload: RelayPayload, reply: import("fastify").FastifyReply) => Promise<void>} relay
+ *   Relay a browser HTTP request to a proxy and stream the response back.
  */
 
 /**
@@ -46,8 +65,27 @@ export function createProxyTunnelServer() {
   const pendingRequests = new Map();
 
   /**
+   * @typedef {Object} PendingHealthRequest
+   * @property {(result: { metrics: object, rttMs: number }) => void} resolve
+   * @property {(error: Error) => void} reject
+   * @property {number} sentAt - `Date.now()` at the time the request was sent.
+   */
+
+  /** @type {Map<string, PendingHealthRequest>} */
+  const pendingHealthRequests = new Map();
+
+  /**
+   * Called when a signal arrives from the proxy side.
+   * Set this from the outside (e.g. server.js) to wire up the signal hub.
+   *
+   * @type {((sessionId: string, signal: object) => void) | null}
+   */
+  let onSignalFromProxy = null;
+
+  /**
    * Process a single WebSocket message received from a proxy.
-   * Routes the message to the correct pending request by requestId.
+   * Routes the message to the correct pending request by requestId,
+   * or forwards WebRTC signal messages to the signal hub.
    *
    * @param {Buffer | string} rawData
    * @returns {void}
@@ -57,6 +95,24 @@ export function createProxyTunnelServer() {
     try {
       message = JSON.parse(rawData.toString());
     } catch {
+      return;
+    }
+
+    // Health response from proxy.
+    if (message.type === "health-response") {
+      const pending = pendingHealthRequests.get(message.requestId);
+      if (pending) {
+        pendingHealthRequests.delete(message.requestId);
+        pending.resolve({ metrics: message.metrics ?? {}, rttMs: Date.now() - pending.sentAt });
+      }
+      return;
+    }
+
+    // WebRTC signalling: forward proxy → browser via signal hub.
+    if (message.type === "signal") {
+      if (typeof message.sessionId === "string" && message.signal && onSignalFromProxy) {
+        onSignalFromProxy(message.sessionId, message.signal);
+      }
       return;
     }
 
@@ -140,6 +196,66 @@ export function createProxyTunnelServer() {
     isConnected(proxyId) {
       const socket = connections.get(proxyId);
       return socket != null && socket.readyState === 1 /* OPEN */;
+    },
+
+    /**
+     * Wire up the callback that receives WebRTC signals from proxies.
+     * Called once during server bootstrap.
+     *
+     * @param {(sessionId: string, signal: object) => void} handler
+     * @returns {void}
+     */
+    setSignalHandler(handler) {
+      onSignalFromProxy = handler;
+    },
+
+    /**
+     * Request current health metrics from a proxy via its tunnel connection.
+     * The returned `rttMs` measures the full tunnel round-trip time.
+     *
+     * @param {string} proxyId
+     * @param {number} [timeoutMs=2000]
+     * @returns {Promise<{ metrics: object, rttMs: number }>}
+     */
+    requestHealth(proxyId, timeoutMs = 2_000) {
+      const socket = connections.get(proxyId);
+      if (!socket || socket.readyState !== 1 /* OPEN */) {
+        return Promise.reject(new Error("Proxy tunnel is not connected."));
+      }
+
+      const requestId = randomUUID();
+      const sentAt = Date.now();
+
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingHealthRequests.delete(requestId);
+          reject(new Error("Health request timed out."));
+        }, timeoutMs);
+
+        pendingHealthRequests.set(requestId, {
+          resolve: (result) => { clearTimeout(timer); resolve(result); },
+          reject: (err) => { clearTimeout(timer); reject(err); },
+          sentAt
+        });
+
+        socket.send(JSON.stringify({ type: "health-request", requestId }));
+      });
+    },
+
+    /**
+     * Send a WebRTC signal to a proxy via its tunnel connection.
+     * Used to forward SDP offers and ICE candidates from the browser.
+     *
+     * @param {string} proxyId
+     * @param {string} sessionId
+     * @param {object} signal
+     * @returns {void}
+     */
+    sendSignal(proxyId, sessionId, signal) {
+      const socket = connections.get(proxyId);
+      if (socket && socket.readyState === 1 /* OPEN */) {
+        socket.send(JSON.stringify({ type: "signal", sessionId, signal }));
+      }
     },
 
     /**
