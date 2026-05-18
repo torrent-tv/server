@@ -16,7 +16,12 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Copy application sources.
 COPY --chown=app:app . .
 
+# Create the volume mount point owned by app so the entrypoint can write to it.
+RUN mkdir -p /app/public-volume && chown app:app /app/public-volume
+
 USER app
+
+ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
 
 EXPOSE 8080
 
