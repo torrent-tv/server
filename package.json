@@ -9,7 +9,12 @@
   "scripts": {
     "start": "node ./server.js",
     "dev": "node --inspect --experimental-network-inspection ./server.js",
-    "docker:publish": "docker build -t ghcr.io/torrent-tv/server:latest . && docker push ghcr.io/torrent-tv/server:latest"
+    "patch": "npm version patch && npm run docker:publish && git push --follow-tags",
+    "minor": "npm version minor && npm run docker:publish && git push --follow-tags",
+    "major": "npm version major && npm run docker:publish && git push --follow-tags",
+    "docker:build": "docker build -t ghcr.io/torrent-tv/server:$npm_package_version -t ghcr.io/torrent-tv/server:latest .",
+    "docker:push": "docker push ghcr.io/torrent-tv/server:$npm_package_version && docker push ghcr.io/torrent-tv/server:latest",
+    "docker:publish": "npm run docker:build && npm run docker:push"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
