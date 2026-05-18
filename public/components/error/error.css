@@ -25,6 +25,20 @@
     line-height: 1.44;
     color: color-mix(in srgb, #000 75%, #fff 25%);
     text-wrap-style: pretty;
-    margin-block-end: 1.5vmin;
+    margin-block-end: 1.5rem;
+  }
+
+  & #error__back {
+    font-size: clamp(1rem, 2.5vmin, 1.75rem);
+    padding: 0.5em 1.25em;
+    border: 2px solid currentColor;
+    border-radius: 0.375em;
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+
+    &:hover {
+      background: color-mix(in srgb, #000 8%, transparent);
+    }
   }
 }

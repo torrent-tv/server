@@ -32,6 +32,8 @@ class TorrentTV {
 
   #state = TorrentTV.STATE.IDLE;
   #isBusy = false;
+  /** @type {number} Number of video files in the currently loaded torrent. */
+  #videoCount = 0;
 
   /** @param {CustomEvent} event */
   #onTorrentFileDetailsReady = (event) => {
@@ -47,6 +49,7 @@ class TorrentTV {
       this.#showError(TorrentTV.MESSAGES.alreadyProcessing);
       return;
     }
+    this.#videoCount = Array.isArray(mediaFiles?.video) ? mediaFiles.video.length : 0;
 
     this.#transitionTo(TorrentTV.STATE.PROCESSING);
     this.#isBusy = true;
@@ -87,6 +90,7 @@ class TorrentTV {
 
   #onAppReset = () => {
     this.#isBusy = false;
+    this.#videoCount = 0;
     this.#transitionTo(TorrentTV.STATE.IDLE);
   };
 
@@ -99,6 +103,10 @@ class TorrentTV {
     document.addEventListener(LOADING_EVENTS.PLAYBACK_READY, this.#onPlaybackReady);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_FAILED, this.#onPlaybackFailed);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
+    document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, () => {
+      this.#isBusy = false;
+      this.#transitionTo(TorrentTV.STATE.PLAYING);
+    });
   };
 
   /**
@@ -127,11 +135,13 @@ class TorrentTV {
   /** @param {string} description */
   #showError(description) {
     this.#transitionTo(TorrentTV.STATE.ERROR);
+    const backEvent = this.#videoCount > 1 ? APP_EVENTS.BACK_TO_PLAYLIST : APP_EVENTS.RESET_TO_PICKER;
     document.dispatchEvent(
       new CustomEvent(ERROR_EVENTS.SHOW, {
         detail: {
           title: TorrentTV.MESSAGES.errorTitle,
-          description
+          description,
+          backEvent
         }
       })
     );

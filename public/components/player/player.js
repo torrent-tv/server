@@ -59,6 +59,13 @@ export class Player {
     this.visible = false;
   };
 
+  #onBackToPlaylist = () => {
+    this.visible = true;
+    this.#root.classList.add(Player.CLASSES.isAnimated);
+    this.#root.classList.add(Player.CLASSES.isPlaylistOpen);
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
+  };
+
   constructor() {
     this.#root = document.querySelector(Player.SELECTOR.root);
     this.#video = document.querySelector(Player.SELECTOR.video);
@@ -79,6 +86,7 @@ export class Player {
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
+    document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onBackToPlaylist);
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);

@@ -5,13 +5,15 @@ import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../s
  *
  * Responsibilities:
  * - Render title/description on `ERROR:SHOW`.
- * - Hide on `LOADING:SHOW` and `PLAYER:SHOW`.
+ * - Show an optional "Back" button when the `ERROR:SHOW` payload includes a `backEvent`.
+ * - Hide on `LOADING:SHOW`, `PLAYER:SHOW`, `APP:RESET_TO_PICKER`, and `APP:BACK_TO_PLAYLIST`.
  */
 export class ErrorDialog {
   static SELECTOR = {
     dialog: "#error",
     title: "#error__title",
-    description: "#error__description"
+    description: "#error__description",
+    backButton: "#error__back"
   };
 
   static MESSAGES = {
@@ -26,12 +28,19 @@ export class ErrorDialog {
   #dialog;
   #title;
   #description;
+  #backButton;
+
+  /** The event name to dispatch when the back button is clicked, or null. @type {string | null} */
+  #backEvent = null;
 
   /** @param {CustomEvent} event */
   #onErrorShow = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
     const title = typeof payload?.title === "string" ? payload.title : "";
     const description = typeof payload?.description === "string" ? payload.description : "";
+    const backEvent = typeof payload?.backEvent === "string" ? payload.backEvent : null;
+    this.#backEvent = backEvent;
+    this.#backButton.hidden = backEvent === null;
     this.#showError({ title, description });
     this.visible = true;
   };
@@ -48,12 +57,21 @@ export class ErrorDialog {
     this.visible = false;
   };
 
+  #onBackClick = () => {
+    if (!this.#backEvent) {
+      return;
+    }
+    this.visible = false;
+    document.dispatchEvent(new CustomEvent(this.#backEvent));
+  };
+
   constructor() {
     this.#dialog = document.querySelector(ErrorDialog.SELECTOR.dialog);
     this.#title = document.querySelector(ErrorDialog.SELECTOR.title);
     this.#description = document.querySelector(ErrorDialog.SELECTOR.description);
+    this.#backButton = document.querySelector(ErrorDialog.SELECTOR.backButton);
 
-    if (!this.#dialog || !this.#title || !this.#description) {
+    if (!this.#dialog || !this.#title || !this.#description || !this.#backButton) {
       throw new Error(ErrorDialog.MESSAGES.missingDomNodes);
     }
     this.#dialog.inert = true;
@@ -66,6 +84,8 @@ export class ErrorDialog {
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
     document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
+    document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onAppReset);
+    this.#backButton.addEventListener("click", this.#onBackClick);
   }
 
   /** @param {boolean} value */

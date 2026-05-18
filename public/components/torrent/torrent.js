@@ -131,6 +131,39 @@ export class Torrent {
     this.#setupEventHandlers();
     this.#setupViewEventHandlers();
     this.visible = true;
+    void this.#loadFromUrl();
+  }
+
+  async #loadFromUrl() {
+    const params = new URLSearchParams(location.search);
+    const b64 = params.get("torrent");
+    if (!b64) {
+      return;
+    }
+
+    // Remove the parameter from the URL immediately, before any async work.
+    params.delete("torrent");
+    const newSearch = params.toString();
+    history.replaceState(null, "", newSearch ? `?${newSearch}` : location.pathname);
+
+    let bytes;
+    try {
+      const binary = atob(b64);
+      bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+    } catch {
+      document.dispatchEvent(
+        new CustomEvent(ERROR_EVENTS.SHOW, {
+          detail: { title: "Error", description: "Could not decode torrent from URL.", backEvent: APP_EVENTS.RESET_TO_PICKER }
+        })
+      );
+      return;
+    }
+
+    const file = new File([bytes], "from-url.torrent", { type: "application/x-bittorrent" });
+    await this.#processIncomingFiles([file]);
   }
 
   #setupElements() {
@@ -192,7 +225,8 @@ export class Torrent {
         new CustomEvent(ERROR_EVENTS.SHOW, {
           detail: {
             title: "Error",
-            description: Torrent.MESSAGES.wrongFileType
+            description: Torrent.MESSAGES.wrongFileType,
+            backEvent: APP_EVENTS.RESET_TO_PICKER
           }
         })
       );
@@ -219,7 +253,8 @@ export class Torrent {
         new CustomEvent(ERROR_EVENTS.SHOW, {
           detail: {
             title: "Error",
-            description: Torrent.MESSAGES.parseFailed
+            description: Torrent.MESSAGES.parseFailed,
+            backEvent: APP_EVENTS.RESET_TO_PICKER
           }
         })
       );
