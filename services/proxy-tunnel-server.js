@@ -98,6 +98,11 @@ export function createProxyTunnelServer() {
       return;
     }
 
+    // Keepalive ping from proxy — respond with pong and ignore otherwise.
+    if (message.type === "ping") {
+      return;
+    }
+
     // Health response from proxy.
     if (message.type === "health-response") {
       const pending = pendingHealthRequests.get(message.requestId);
