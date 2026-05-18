@@ -34,5 +34,6 @@ export const PLAYER_EVENTS = {
 
 /** Application-wide events. */
 export const APP_EVENTS = {
-  RESET_TO_PICKER: "APP:RESET_TO_PICKER"
+  RESET_TO_PICKER: "APP:RESET_TO_PICKER",
+  BACK_TO_PLAYLIST: "APP:BACK_TO_PLAYLIST"
 };
