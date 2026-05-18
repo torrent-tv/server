@@ -63,6 +63,14 @@ export class WebRtcProxy {
    * @type {Map<string, PendingEntry>}
    */
   #pending = new Map();
+  /**
+   * ICE candidates received before the remote description was set.
+   * Drained immediately after setRemoteDescription completes.
+   * @type {Array<{candidate: string, sdpMid: string, sdpMLineIndex: number}>}
+   */
+  #pendingCandidates = [];
+  /** @type {boolean} */
+  #remoteDescriptionSet = false;
 
   /** @param {string} proxyId */
   constructor(proxyId) {
@@ -137,6 +145,12 @@ export class WebRtcProxy {
     if (msg.type === "answer" && this.#pc) {
       try {
         await this.#pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        this.#remoteDescriptionSet = true;
+        // Drain candidates that arrived before the remote description was set.
+        for (const c of this.#pendingCandidates) {
+          await this.#pc.addIceCandidate(c).catch(() => {});
+        }
+        this.#pendingCandidates = [];
       } catch (err) {
         settle(err instanceof Error ? err : new Error(String(err)));
       }
@@ -144,12 +158,18 @@ export class WebRtcProxy {
     }
 
     if (msg.type === "candidate" && this.#pc) {
+      const c = {
+        candidate: msg.candidate,
+        sdpMid: msg.mid ?? "0",
+        sdpMLineIndex: 0
+      };
+      if (!this.#remoteDescriptionSet) {
+        // Buffer until the answer is applied.
+        this.#pendingCandidates.push(c);
+        return;
+      }
       try {
-        await this.#pc.addIceCandidate({
-          candidate: msg.candidate,
-          sdpMid: msg.mid ?? "0",
-          sdpMLineIndex: 0
-        });
+        await this.#pc.addIceCandidate(c);
       } catch {
         // Stale or duplicate candidate — safe to ignore.
       }
