@@ -52,6 +52,8 @@ const PING_TIMEOUT_MS = 5_000;
 export class WebRtcProxy {
   /** @type {string} */
   #proxyId;
+  /** @type {number | null} */
+  #proxyLocalPort;
   /** @type {RTCPeerConnection | null} */
   #pc = null;
   /** @type {RTCDataChannel | null} */
@@ -71,10 +73,25 @@ export class WebRtcProxy {
   #pendingCandidates = [];
   /** @type {boolean} */
   #remoteDescriptionSet = false;
+  /**
+   * Resolves once a Private Network Access preflight to the proxy's LAN
+   * address completes (success or failure). Awaited before draining candidates
+   * so that the PNA permission is established before addIceCandidate runs.
+   * @type {Promise<void> | null}
+   */
+  #pnaFetchPromise = null;
 
-  /** @param {string} proxyId */
-  constructor(proxyId) {
+  /**
+   * @param {string} proxyId
+   * @param {number | null} [proxyLocalPort] - HTTP port of the proxy's local
+   *   server (extracted from the baseUrl returned by the health API).  Used to
+   *   issue a Private Network Access preflight fetch before ICE negotiation so
+   *   the browser grants permission before addIceCandidate is called for
+   *   private-network candidates.
+   */
+  constructor(proxyId, proxyLocalPort = null) {
     this.#proxyId = proxyId;
+    this.#proxyLocalPort = proxyLocalPort ?? null;
   }
 
   /** @returns {boolean} */
@@ -146,6 +163,12 @@ export class WebRtcProxy {
       try {
         await this.#pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
         this.#remoteDescriptionSet = true;
+        // Wait for the PNA preflight to complete before applying private
+        // candidates — ensures the browser has granted local-network-access
+        // permission before addIceCandidate runs.
+        if (this.#pnaFetchPromise) {
+          await this.#pnaFetchPromise;
+        }
         // Drain candidates that arrived before the remote description was set.
         for (const c of this.#pendingCandidates) {
           await this.#pc.addIceCandidate(c).catch(() => {});
@@ -164,6 +187,20 @@ export class WebRtcProxy {
         sdpMLineIndex: 0
       };
       if (!this.#remoteDescriptionSet) {
+        // If this is a private IPv4 host candidate and we haven't started a
+        // PNA preflight yet, fire one now.  The fetch triggers Chromium's
+        // Private Network Access permission flow (OPTIONS preflight →
+        // Access-Control-Allow-Private-Network: true from the proxy) so that
+        // addIceCandidate succeeds when the buffer is drained after the answer.
+        if (!this.#pnaFetchPromise && this.#proxyLocalPort) {
+          const ip = WebRtcProxy.#extractCandidateIp(c.candidate);
+          if (ip && WebRtcProxy.#isPrivateIpv4(ip)) {
+            this.#pnaFetchPromise = fetch(
+              `http://${ip}:${this.#proxyLocalPort}/healthz`,
+              { mode: "cors", signal: AbortSignal.timeout(8000) }
+            ).then(() => {}).catch(() => {});
+          }
+        }
         // Buffer until the answer is applied.
         this.#pendingCandidates.push(c);
         return;
@@ -379,6 +416,30 @@ export class WebRtcProxy {
 
     this.#channel.send(JSON.stringify({ type: "ping", id }));
     return rttPromise;
+  }
+
+  /**
+   * Extract the host address from a raw ICE candidate string.
+   * Handles both "candidate:..." and "a=candidate:..." prefixes.
+   * Format: <prefix> <component> <transport> <priority> <address> <port> typ <type>
+   *
+   * @param {string} candidate
+   * @returns {string | null}
+   */
+  static #extractCandidateIp(candidate) {
+    const parts = candidate.split(" ");
+    return parts.length >= 6 ? parts[4] : null;
+  }
+
+  /**
+   * Return true for private IPv4 addresses (RFC 1918).
+   * Used to decide whether to attempt a PNA preflight fetch.
+   *
+   * @param {string} ip
+   * @returns {boolean}
+   */
+  static #isPrivateIpv4(ip) {
+    return /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(ip);
   }
 
   /**
