@@ -40,7 +40,9 @@ export class ErrorDialog {
     const description = typeof payload?.description === "string" ? payload.description : "";
     const canGoBackToPlaylist = payload?.canGoBackToPlaylist === true;
 
-    this.#resetButton.hidden = false;
+    // Only one button is shown at a time: "Choose File" for multi-file torrents
+    // (where the user can pick a different file), "New Torrent" for everything else.
+    this.#resetButton.hidden = canGoBackToPlaylist;
     this.#playlistButton.hidden = !canGoBackToPlaylist;
 
     this.#showError({ title, description });
