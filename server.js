@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import Fastify from "fastify";
 import fastifyCors from "@fastify/cors";
 import fastifyHelmet from "@fastify/helmet";
@@ -19,6 +20,8 @@ import { handleHealthzGet } from "./routes/healthz/get.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
+const { version } = require("./package.json");
 const publicRoot = path.resolve(__dirname, "./public");
 const vendorRoot = path.resolve(__dirname, "./node_modules/hls.js/dist");
 
@@ -78,8 +81,8 @@ app.get("/api/proxy-clients/health", async (req, reply) =>
   handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer })
 );
 
-app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState }));
-app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState }));
+app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
+app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
 
 await app.register(fastifyStatic, {
   root: publicRoot,
@@ -140,7 +143,4 @@ try {
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`[server] Listening on http://localhost:${port}`);
   console.log(`[server] Token validation: ${serverToken ? "enabled" : "disabled (PROXY_TOKEN not set)"}`);
-} catch (error) {
-  app.log.error(error);
-  process.exit(1);
-}
+} 
