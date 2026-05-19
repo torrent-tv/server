@@ -27,6 +27,7 @@ export class Loading {
     readingTorrentFile: (fileName) => fileName,
     readingMetadata: "Reading torrent metadata...",
     selectingProxy: "Selecting best proxy by available load metrics...",
+    fetchingMetadata: "Fetching file metadata...",
     checkingCompatibility: "Checking playback compatibility...",
     preparingHls: "Preparing HLS transcode...",
     preparingHlsAudio: "Audio codec requires transcode. Preparing HLS...",
@@ -440,7 +441,21 @@ export class Loading {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
     }
 
-    const prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
+    // Register the torrent source early so we can poll live stats while
+    // the proxy pre-fetches file metadata (MOOV atom / EBML headers).
+    // prepareProxyPlaybackPlan will reuse the cached sourceKey.
+    this.setStatus(Loading.MESSAGES.fetchingMetadata);
+    this.setProgress(38);
+    const earlySourceKey = await this.#session.registerSourceOnProxy(transport);
+    const stopStatsPoll = this.#startTorrentStatsPoll(transport, earlySourceKey, fileIndex);
+
+    let prepared;
+    try {
+      prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
+    } finally {
+      stopStatsPoll();
+    }
+
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.setProgress(45);
 
@@ -817,8 +832,11 @@ export class Loading {
       transcodeVideo: options.transcodeVideo === true,
       transcodeAudio: options.transcodeAudio === true,
       ...this.#buildVideoTargetConfig(options.transcodeVideo === true),
-      playHls: (videoElement, manifestUrl) =>
-        this.#hlsPlayer.play(videoElement, manifestUrl, hlsLoader ? { loader: hlsLoader } : {}),
+      playHls: (videoElement, manifestUrl, playOptions = {}) =>
+        this.#hlsPlayer.play(videoElement, manifestUrl, {
+          ...(hlsLoader ? { loader: hlsLoader } : {}),
+          ...playOptions
+        }),
       onTranscodeProgress: (progress) => {
         const value = typeof progress?.percent === "number" ? progress.percent : NaN;
         const warmupPercent =
@@ -1033,6 +1051,93 @@ export class Loading {
       }
     }
     return false;
+  }
+
+  /**
+   * Start polling `/api/sources/:sourceKey/stats` every 2 s and update the
+   * loading status with peer count, speed, and file download progress.
+   *
+   * Returns a stop function — call it when the metadata wait is over.
+   *
+   * @param {import("../../domain/proxy-transport.js").ProxyTransport} transport
+   * @param {string} sourceKey
+   * @param {number} fileIndex
+   * @returns {() => void} Stop polling.
+   */
+  #startTorrentStatsPoll(transport, sourceKey, fileIndex) {
+    let stopped = false;
+
+    const poll = async () => {
+      while (!stopped) {
+        try {
+          const resp = await transport.fetch(
+            `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${fileIndex}`,
+            { cache: "no-store" }
+          );
+          if (!stopped && resp.ok) {
+            const stats = await resp.json();
+            if (!stopped) {
+              this.#updateMetadataStatus(stats);
+            }
+          }
+        } catch (_error) {
+          // Ignore transient errors — proxy may not be ready yet.
+        }
+        if (!stopped) {
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+        }
+      }
+    };
+
+    void poll();
+    return () => {
+      stopped = true;
+    };
+  }
+
+  /**
+   * Render the "Fetching file metadata" status line with live torrent stats.
+   *
+   * @param {{ numPeers?: number, downloadSpeed?: number, fileProgress?: number, fileDownloaded?: number, fileLength?: number }} stats
+   */
+  #updateMetadataStatus(stats) {
+    const peers = typeof stats?.numPeers === "number" ? stats.numPeers : 0;
+    const speed = this.#formatBytes(stats?.downloadSpeed ?? 0);
+    const fileProgress = typeof stats?.fileProgress === "number" ? stats.fileProgress : null;
+    const fileDownloaded = typeof stats?.fileDownloaded === "number" ? stats.fileDownloaded : null;
+    const fileLength = typeof stats?.fileLength === "number" ? stats.fileLength : null;
+
+    const peersLine = `Peers: ${peers}`;
+    const speedLine = `Speed: ${speed}/s`;
+
+    let fileLine = "";
+    if (fileProgress !== null && fileLength !== null && fileLength > 0) {
+      const pct = (fileProgress * 100).toFixed(1);
+      const downloaded = this.#formatBytes(fileDownloaded ?? 0);
+      const total = this.#formatBytes(fileLength);
+      fileLine = `\nFile: ${pct}% (${downloaded} / ${total})`;
+    }
+
+    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${peersLine} • ${speedLine}${fileLine}`);
+  }
+
+  /**
+   * Format a byte count as a human-readable string (e.g. "1.2 MB").
+   *
+   * @param {number} bytes
+   * @returns {string}
+   */
+  #formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      return "0 B";
+    }
+    if (bytes === 0) {
+      return "0 B";
+    }
+    const units = ["B", "KB", "MB", "GB"];
+    const index = Math.min(Math.floor(Math.log2(bytes) / 10), units.length - 1);
+    const value = bytes / Math.pow(1024, index);
+    return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
   }
 
   /**
