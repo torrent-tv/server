@@ -77,7 +77,26 @@ export function createWebRtcHlsLoader(proxy) {
       const parsed = new URL(context.url);
       const path = parsed.pathname + parsed.search;
 
-      proxy.fetch(path)
+      // proxy.fetch() is expected to return a Promise, but wrap the call in
+      // try-catch for defense-in-depth: if it somehow throws synchronously
+      // (e.g. before the channel.send() guard in WebRtcProxy), propagate the
+      // error via callbacks.onError so HLS.js handles it gracefully instead of
+      // the exception escaping the loader and causing an internalException.
+      let fetchPromise;
+      try {
+        fetchPromise = proxy.fetch(path);
+      } catch (syncErr) {
+        if (!this.#aborted) {
+          callbacks.onError(
+            { code: 0, text: syncErr?.message ?? String(syncErr) },
+            context,
+            null
+          );
+        }
+        return;
+      }
+
+      fetchPromise
         .then(async (response) => {
           if (this.#aborted) return;
 

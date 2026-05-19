@@ -358,30 +358,46 @@ export class WebRtcProxy {
     const requestId = crypto.randomUUID();
     const url = new URL(path, "http://proxy");
 
+    // Hoist resolve/reject so we can cancel the timeout if channel.send() throws.
+    let pendingResolve;
+    let pendingReject;
     const responsePromise = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#pending.delete(requestId);
-        reject(new Error("Data channel request timed out."));
-      }, REQUEST_TIMEOUT_MS);
-
-      this.#pending.set(requestId, {
-        resolve: (result) => { clearTimeout(timer); resolve(result); },
-        reject: (err) => { clearTimeout(timer); reject(err); },
-        chunks: [],
-        status: 200,
-        headers: {}
-      });
+      pendingResolve = resolve;
+      pendingReject = reject;
     });
 
-    this.#channel.send(JSON.stringify({
-      type: "request",
-      requestId,
-      method: options.method ?? "GET",
-      path: url.pathname,
-      query: url.search.slice(1),
-      headers: options.headers ?? {},
-      body: options.body ?? null
-    }));
+    const timer = setTimeout(() => {
+      this.#pending.delete(requestId);
+      pendingReject(new Error("Data channel request timed out."));
+    }, REQUEST_TIMEOUT_MS);
+
+    this.#pending.set(requestId, {
+      resolve: (result) => { clearTimeout(timer); pendingResolve(result); },
+      reject: (err) => { clearTimeout(timer); pendingReject(err); },
+      chunks: [],
+      status: 200,
+      headers: {}
+    });
+
+    try {
+      this.#channel.send(JSON.stringify({
+        type: "request",
+        requestId,
+        method: options.method ?? "GET",
+        path: url.pathname,
+        query: url.search.slice(1),
+        headers: options.headers ?? {},
+        body: options.body ?? null
+      }));
+    } catch (err) {
+      // channel.send() can throw if the channel transitions to closing/closed
+      // between the isOpen check and the send.  Remove the pending entry, cancel
+      // the timer, and convert to a rejected promise so callers always receive a
+      // Promise, never a synchronous exception.
+      this.#pending.delete(requestId);
+      clearTimeout(timer);
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
 
     return responsePromise;
   }
