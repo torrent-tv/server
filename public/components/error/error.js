@@ -5,7 +5,8 @@ import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../s
  *
  * Responsibilities:
  * - Render title/description on `ERROR:SHOW`.
- * - Show an optional "Back" button when the `ERROR:SHOW` payload includes a `backEvent`.
+ * - Always show a "New Torrent" button that resets to the torrent picker.
+ * - Show a "Choose File" button when the payload includes `canGoBackToPlaylist: true`.
  * - Hide on `LOADING:SHOW`, `PLAYER:SHOW`, `APP:RESET_TO_PICKER`, and `APP:BACK_TO_PLAYLIST`.
  */
 export class ErrorDialog {
@@ -13,7 +14,8 @@ export class ErrorDialog {
     dialog: "#error",
     title: "#error__title",
     description: "#error__description",
-    backButton: "#error__back"
+    resetButton: "#error__back",
+    playlistButton: "#error__playlist"
   };
 
   static MESSAGES = {
@@ -28,19 +30,19 @@ export class ErrorDialog {
   #dialog;
   #title;
   #description;
-  #backButton;
-
-  /** The event name to dispatch when the back button is clicked, or null. @type {string | null} */
-  #backEvent = null;
+  #resetButton;
+  #playlistButton;
 
   /** @param {CustomEvent} event */
   #onErrorShow = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
     const title = typeof payload?.title === "string" ? payload.title : "";
     const description = typeof payload?.description === "string" ? payload.description : "";
-    const backEvent = typeof payload?.backEvent === "string" ? payload.backEvent : null;
-    this.#backEvent = backEvent;
-    this.#backButton.hidden = backEvent === null;
+    const canGoBackToPlaylist = payload?.canGoBackToPlaylist === true;
+
+    this.#resetButton.hidden = false;
+    this.#playlistButton.hidden = !canGoBackToPlaylist;
+
     this.#showError({ title, description });
     this.visible = true;
   };
@@ -53,25 +55,28 @@ export class ErrorDialog {
     this.visible = false;
   };
 
-  #onAppReset = () => {
+  #onHide = () => {
     this.visible = false;
   };
 
-  #onBackClick = () => {
-    if (!this.#backEvent) {
-      return;
-    }
+  #onResetClick = () => {
     this.visible = false;
-    document.dispatchEvent(new CustomEvent(this.#backEvent));
+    document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
+  };
+
+  #onPlaylistClick = () => {
+    this.visible = false;
+    document.dispatchEvent(new CustomEvent(APP_EVENTS.BACK_TO_PLAYLIST));
   };
 
   constructor() {
     this.#dialog = document.querySelector(ErrorDialog.SELECTOR.dialog);
     this.#title = document.querySelector(ErrorDialog.SELECTOR.title);
     this.#description = document.querySelector(ErrorDialog.SELECTOR.description);
-    this.#backButton = document.querySelector(ErrorDialog.SELECTOR.backButton);
+    this.#resetButton = document.querySelector(ErrorDialog.SELECTOR.resetButton);
+    this.#playlistButton = document.querySelector(ErrorDialog.SELECTOR.playlistButton);
 
-    if (!this.#dialog || !this.#title || !this.#description || !this.#backButton) {
+    if (!this.#dialog || !this.#title || !this.#description || !this.#resetButton || !this.#playlistButton) {
       throw new Error(ErrorDialog.MESSAGES.missingDomNodes);
     }
     this.#dialog.inert = true;
@@ -83,9 +88,10 @@ export class ErrorDialog {
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
     document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
-    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
-    document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onAppReset);
-    this.#backButton.addEventListener("click", this.#onBackClick);
+    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onHide);
+    document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onHide);
+    this.#resetButton.addEventListener("click", this.#onResetClick);
+    this.#playlistButton.addEventListener("click", this.#onPlaylistClick);
   }
 
   /** @param {boolean} value */

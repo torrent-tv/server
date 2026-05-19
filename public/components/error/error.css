@@ -28,7 +28,8 @@
     margin-block-end: 1.5rem;
   }
 
-  & #error__back {
+  & .error__action {
+    display: inline-flex;
     font-size: clamp(1rem, 2.5vmin, 1.75rem);
     padding: 0.5em 1.25em;
     border: 2px solid currentColor;
@@ -39,6 +40,10 @@
 
     &:hover {
       background: color-mix(in srgb, #000 8%, transparent);
+    }
+
+    & + & {
+      margin-inline-start: 0.75em;
     }
   }
 }

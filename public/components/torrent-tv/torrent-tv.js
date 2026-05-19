@@ -135,13 +135,14 @@ class TorrentTV {
   /** @param {string} description */
   #showError(description) {
     this.#transitionTo(TorrentTV.STATE.ERROR);
-    const backEvent = this.#videoCount > 1 ? APP_EVENTS.BACK_TO_PLAYLIST : APP_EVENTS.RESET_TO_PICKER;
     document.dispatchEvent(
       new CustomEvent(ERROR_EVENTS.SHOW, {
         detail: {
           title: TorrentTV.MESSAGES.errorTitle,
           description,
-          backEvent
+          // Show "Choose File" only when the torrent has multiple video files
+          // so the user can pick a different one without re-uploading the torrent.
+          canGoBackToPlaylist: this.#videoCount > 1
         }
       })
     );

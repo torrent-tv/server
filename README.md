@@ -156,11 +156,11 @@ Pure ES Modules — no build step, no bundler.
 | `bencode.js` | Bencode encoder / decoder |
 | `torrent-parser.js` | Parses `.torrent` binary into structured metadata |
 | `webseed.js` | Builds playback URLs from webseed entries |
-| `torrent-session.js` | Source registration on proxy, stream URL building, HLS session lifecycle |
+| `torrent-session.js` | Source registration on proxy, stream URL building, HLS session lifecycle, seek-to-position handler |
 | `proxy-transport.js` | Unified `fetch(path)` abstraction over HTTP or WebRTC data channel |
 | `webrtc-proxy.js` | WebRTC peer connection + data channel to proxy (signalling, ping, fetch) |
 | `webrtc-hls-loader.js` | Custom HLS.js loader class that routes all requests through the data channel |
-| `hls-player.js` | Thin HLS.js wrapper; accepts optional custom loader for WebRTC transport |
+| `hls-player.js` | Thin HLS.js wrapper; accepts optional custom loader and `startPosition` for seek restarts |
 
 ### ProxyTransport abstraction
 
@@ -207,11 +207,11 @@ Components are **weakly coupled** — they never import each other. All cross-co
 |-----------|----------------|
 | `torrent-tv` | App orchestrator / FSM |
 | `torrent` | File picker, torrent parsing trigger |
-| `loading` | Full playback pipeline: proxy selection, WebRTC setup, codec checks, direct or HLS start |
+| `loading` | Full playback pipeline: proxy selection, WebRTC setup, codec checks, live torrent stats polling, direct or HLS start |
 | `proxy-selector` | Polls `/api/proxy-clients/health`, scores proxies, connects WebRTC to the best one |
 | `player` | Video element wrapper; playlist mode handling |
 | `playlist` | Playlist rendering and media-file selection events |
-| `error` | Error display dialog |
+| `error` | Error display with two action buttons: **"New Torrent"** (always) and **"Choose File"** (multi-file torrents only) |
 
 ### Application FSM
 
@@ -318,6 +318,8 @@ docker run -p 8080:8080 torrent-tv-server
 - **Event bus instead of component imports** — components can be developed or replaced independently without touching other parts. The FSM in `torrent-tv` is the only place that knows about the full application flow.
 - **In-memory proxy registry** — proxy clients are ephemeral; they re-register on the next heartbeat after a server restart. No database needed.
 - **WebRTC instead of server-side relay** — once the P2P data channel is established, media data travels directly between the browser and the proxy. The server carries no streaming load.
+- **Metadata prefetch before codec probe** — the proxy pre-fetches the first 256 KB and last 2 MB of the file (MOOV atom location for MP4) before running ffprobe. This ensures codec detection succeeds without waiting for the full download. The browser polls `/api/sources/:key/stats` to show peer count, speed, and progress during this wait.
+- **Seek-to-position HLS** — when the user scrubs beyond the already-transcoded portion, the client creates a new transcode session from the seek position (`startPositionSeconds`) with shifted output timestamps (`-output_ts_offset`), so `video.currentTime` stays consistent with the original timeline.
 - **Alpine Docker base** — keeps the image small (~40 MB) and reduces the attack surface.
 
 ## License

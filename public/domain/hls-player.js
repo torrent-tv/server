@@ -58,6 +58,13 @@ export function createHlsPlayer(onLog) {
         const hlsConfig = options.loader ? { loader: options.loader } : {};
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
+
+        // When seeking to a non-zero position (seek-restart), instruct HLS.js
+        // to begin buffering from that offset instead of from t=0.
+        if (typeof options.startPosition === "number" && Number.isFinite(options.startPosition) && options.startPosition > 0) {
+          instance.startPosition = options.startPosition;
+        }
+
         instance.attachMedia(videoElement);
         instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
           instance.loadSource(manifestUrl);
