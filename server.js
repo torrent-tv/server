@@ -143,4 +143,7 @@ try {
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`[server] Listening on http://localhost:${port}`);
   console.log(`[server] Token validation: ${serverToken ? "enabled" : "disabled (PROXY_TOKEN not set)"}`);
-} 
+} catch (error) {
+  console.error(error);
+  process.exit(1);
+}
