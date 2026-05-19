@@ -65,15 +65,6 @@ export function createHlsPlayer(onLog) {
           instance.startPosition = options.startPosition;
         }
 
-        instance.attachMedia(videoElement);
-        instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
-          instance.loadSource(manifestUrl);
-        });
-        instance.on(HlsClass.Events.ERROR, (_event, data) => {
-          const details = typeof data?.details === "string" ? data.details : "unknown";
-          onLog(`HLS error: ${details}`);
-        });
-
         await new Promise((resolve, reject) => {
           const timeoutId = window.setTimeout(() => {
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
@@ -97,8 +88,23 @@ export function createHlsPlayer(onLog) {
             const details = typeof data?.details === "string" ? data.details : "unknown";
             reject(new Error(`Fatal HLS error: ${details}`));
           };
+
+          // Register ALL listeners before attachMedia() so we never miss events
+          // that HLS.js fires synchronously inside attachMedia() (e.g. MEDIA_ATTACHED
+          // fires synchronously in HLS.js v1+, meaning a listener registered after
+          // attachMedia() would be called too late and loadSource() would never run).
+          instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
+            instance.loadSource(manifestUrl);
+          });
+          instance.on(HlsClass.Events.ERROR, (_event, data) => {
+            const details = typeof data?.details === "string" ? data.details : "unknown";
+            onLog(`HLS error: ${details}`);
+          });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
           instance.on(HlsClass.Events.ERROR, onError);
+
+          // Attach media last — may synchronously fire MEDIA_ATTACHED in HLS.js v1+.
+          instance.attachMedia(videoElement);
         });
 
         await videoElement.play();
