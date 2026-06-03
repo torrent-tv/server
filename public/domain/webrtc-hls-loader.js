@@ -132,9 +132,15 @@ export function createWebRtcHlsLoader(proxy) {
           callbacks.onSuccess(
             { data, url: context.url },
             {
-              loading: { start: startedAt, first: startedAt, end: endedAt },
+              aborted: false,
+              retry: 0,
+              chunkCount: 0,
+              bwEstimate: 0,
               loaded: byteLength,
-              total: byteLength
+              total: byteLength,
+              loading: { start: startedAt, first: startedAt, end: endedAt },
+              parsing: { start: 0, end: 0 },
+              buffering: { start: 0, first: 0, end: 0 }
             },
             context,
             null
