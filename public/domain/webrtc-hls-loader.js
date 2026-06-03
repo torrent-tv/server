@@ -96,6 +96,14 @@ export function createWebRtcHlsLoader(proxy) {
         return;
       }
 
+      // Track whether onSuccess was called so the .catch() below does not
+      // mistakenly turn an exception thrown *inside* callbacks.onSuccess() into
+      // a callbacks.onError() call.  HLS.js wraps its own event handlers in a
+      // try-catch and reports internal exceptions via its own error pipeline
+      // (ErrorDetails.INTERNAL_EXCEPTION); converting them to onError here
+      // would produce a spurious manifestLoadError instead.
+      let successCalled = false;
+
       fetchPromise
         .then(async (response) => {
           if (this.#aborted) return;
@@ -120,6 +128,7 @@ export function createWebRtcHlsLoader(proxy) {
 
           const endedAt = performance.now();
           const byteLength = typeof data === "string" ? data.length : data.byteLength;
+          successCalled = true;
           callbacks.onSuccess(
             { data, url: context.url },
             {
@@ -133,6 +142,10 @@ export function createWebRtcHlsLoader(proxy) {
         })
         .catch((error) => {
           if (this.#aborted) return;
+          // If onSuccess was already called, the exception originated inside
+          // HLS.js internals — do not report it as a load error; HLS.js handles
+          // it through its own error pipeline.
+          if (successCalled) return;
           callbacks.onError(
             { code: 0, text: error?.message ?? String(error) },
             context,
