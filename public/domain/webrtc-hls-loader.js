@@ -67,6 +67,31 @@ export function createWebRtcHlsLoader(proxy) {
     #aborted = false;
 
     /**
+     * Public stats object required by HLS.js internals (e.g. ABR controller).
+     * Must be initialised before load() is called and kept current throughout
+     * the request so that HLS.js can inspect loading timings at any point.
+     *
+     * @type {{
+     *   aborted: boolean, retry: number, total: number, loaded: number,
+     *   chunkCount: number, bwEstimate: number,
+     *   loading:   { start: number, first: number, end: number },
+     *   parsing:   { start: number, end: number },
+     *   buffering: { start: number, first: number, end: number }
+     * }}
+     */
+    stats = {
+      aborted: false,
+      retry: 0,
+      total: 0,
+      loaded: 0,
+      chunkCount: 0,
+      bwEstimate: 0,
+      loading:   { start: 0, first: 0, end: 0 },
+      parsing:   { start: 0, end: 0 },
+      buffering: { start: 0, first: 0, end: 0 }
+    };
+
+    /**
      * @param {object} context - HLS.js loader context ({ url, responseType, … }).
      * @param {object} _config  - HLS.js loader config (unused).
      * @param {{ onSuccess: Function, onError: Function, onTimeout: Function }} callbacks
@@ -74,6 +99,8 @@ export function createWebRtcHlsLoader(proxy) {
     load(context, _config, callbacks) {
       this.#aborted = false;
       const startedAt = performance.now();
+      this.stats.loading.start = startedAt;
+      this.stats.loading.first = startedAt;
       const parsed = new URL(context.url);
       const path = parsed.pathname + parsed.search;
 
@@ -128,6 +155,13 @@ export function createWebRtcHlsLoader(proxy) {
 
           const endedAt = performance.now();
           const byteLength = typeof data === "string" ? data.length : data.byteLength;
+
+          // Update the public stats so ABR controller sees accurate timings.
+          this.stats.loaded = byteLength;
+          this.stats.total = byteLength;
+          this.stats.loading.first = startedAt;
+          this.stats.loading.end = endedAt;
+
           successCalled = true;
           callbacks.onSuccess(
             { data, url: context.url },
