@@ -80,8 +80,10 @@ export function createHlsPlayer(onLog) {
           };
           const onError = (_event, data) => {
             if (!data?.fatal) {
+              console.debug("[torrent-tv][hls] non-fatal error", data?.details, data);
               return;
             }
+            console.error("[torrent-tv][hls] fatal error", data?.details, data);
             window.clearTimeout(timeoutId);
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);

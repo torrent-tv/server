@@ -223,25 +223,19 @@ export class TorrentSession {
     }
 
     this.onLog(`Streaming via HLS audio transcode from proxy: ${new URL(transport.baseUrl).origin}`);
+    console.debug("[torrent-tv] HLS transcode playback", {
+      fileIndex,
+      transcodeVideo,
+      transcodeAudio,
+      playlistUrl
+    });
     await playHls(videoElement, playlistUrl);
 
-    // After playback starts, wire up seek-to-position support.  When the user
-    // scrubs beyond the already-transcoded portion the handler restarts the
-    // ffmpeg session from the new position.
-    const activeSessionId = Array.from(this.activeTranscodeSessions.keys()).at(-1) ?? "";
-    if (activeSessionId) {
-      this.#attachHlsSeekHandler(videoElement, {
-        sessionId: activeSessionId,
-        transport,
-        sourceKey,
-        fileIndex,
-        transcodeVideo,
-        transcodeAudio,
-        targetWidth,
-        targetHeight,
-        playHls
-      });
-    }
+    // Seeking is handled entirely server-side: the proxy serves a complete VOD
+    // playlist (full duration, #EXT-X-ENDLIST) and produces segments on demand,
+    // restarting ffmpeg at the requested position when the player seeks past
+    // the encoded range.  No client-side session restart is required, which
+    // also avoids playlist-swap glitches during scrubbing.
 
     return { mode: "proxy-hls" };
   }
@@ -483,144 +477,6 @@ export class TorrentSession {
     }
     this.proxySourceKeyCache.set(cacheKey, sourceKey);
     return sourceKey;
-  }
-
-  /**
-   * Attach a debounced seek handler to `videoElement` that restarts the HLS
-   * transcode session when the user scrubs beyond the already-encoded portion.
-   *
-   * The handler is debounced by 600 ms so rapid scrubbing only triggers one
-   * restart.  While a restart is in progress additional seeks are queued and
-   * processed once the current one completes.
-   *
-   * @param {HTMLVideoElement} videoElement
-   * @param {{
-   *   sessionId: string,
-   *   transport: import("./proxy-transport.js").ProxyTransport,
-   *   sourceKey: string,
-   *   fileIndex: number,
-   *   transcodeVideo: boolean,
-   *   transcodeAudio: boolean,
-   *   targetWidth: number,
-   *   targetHeight: number,
-   *   playHls: (videoElement: HTMLVideoElement, manifestUrl: string, options?: object) => Promise<void>
-   * }} params
-   */
-  #attachHlsSeekHandler(videoElement, params) {
-    // Remove any previous handler before attaching a new one.
-    if (this.#seekCleanup) {
-      this.#seekCleanup();
-      this.#seekCleanup = null;
-    }
-
-    let currentSessionId = params.sessionId;
-    // processedSeconds from the progress API; accounts for -output_ts_offset.
-    let latestProcessedSeconds = 0;
-    let currentStartPosition = 0;
-    let debounceTimer = null;
-    let seekInFlight = false;
-    // Pending seek time queued while a restart is in flight.
-    let pendingSeekTime = null;
-
-    // Poll progress every 2 s to track how far ffmpeg has transcoded.
-    const progressIntervalId = setInterval(async () => {
-      try {
-        const resp = await params.transport.fetch(
-          `/api/transcode-sessions/${encodeURIComponent(currentSessionId)}/progress`,
-          { cache: "no-store", signal: this.abortController.signal }
-        );
-        if (resp.ok) {
-          const data = await resp.json();
-          if (typeof data?.processedSeconds === "number") {
-            latestProcessedSeconds = data.processedSeconds;
-          }
-        }
-      } catch (_error) {
-        // Ignore transient fetch errors.
-      }
-    }, 2_000);
-
-    const doSeek = async (seekTime) => {
-      if (seekInFlight) {
-        pendingSeekTime = seekTime;
-        return;
-      }
-
-      // Allow a 30 s buffer: if the target is within the already-encoded range
-      // HLS.js can handle it via its own segment management.
-      const encodedEnd = latestProcessedSeconds > 0
-        ? latestProcessedSeconds
-        : currentStartPosition;
-      if (seekTime >= currentStartPosition && seekTime <= encodedEnd - 30) {
-        return;
-      }
-
-      seekInFlight = true;
-      const oldSessionId = currentSessionId;
-      try {
-        const newStartPosition = Math.max(0, Math.floor(seekTime));
-        this.onLog(`Seek to ${newStartPosition}s — restarting transcode session.`);
-
-        const newPlaylistUrl = await this.tryCreateTranscodeSession(
-          params.transport,
-          params.sourceKey,
-          params.fileIndex,
-          null,
-          params.transcodeVideo,
-          {
-            transcodeAudio: params.transcodeAudio,
-            targetWidth: params.targetWidth,
-            targetHeight: params.targetHeight,
-            startPositionSeconds: newStartPosition
-          }
-        );
-
-        // Switch HLS.js to the new playlist before releasing the old session
-        // so there is no gap in streaming.
-        await params.playHls(videoElement, newPlaylistUrl, { startPosition: newStartPosition });
-
-        // Release the old session after switching.
-        if (oldSessionId && oldSessionId !== currentSessionId) {
-          void params.transport
-            .fetch(`/api/transcode-sessions/${encodeURIComponent(oldSessionId)}/release`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ consumerId: this.consumerId, reason: "seek" })
-            })
-            .catch(() => undefined);
-          this.activeTranscodeSessions.delete(oldSessionId);
-        }
-
-        // Update tracking state.
-        currentSessionId = Array.from(this.activeTranscodeSessions.keys()).at(-1) ?? currentSessionId;
-        currentStartPosition = newStartPosition;
-        latestProcessedSeconds = newStartPosition;
-      } catch (_error) {
-        // Seek restart failed; leave the current session running.
-      } finally {
-        seekInFlight = false;
-        if (pendingSeekTime !== null) {
-          const next = pendingSeekTime;
-          pendingSeekTime = null;
-          await doSeek(next);
-        }
-      }
-    };
-
-    const onSeeking = () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        void doSeek(videoElement.currentTime);
-      }, 600);
-    };
-
-    videoElement.addEventListener("seeking", onSeeking);
-
-    this.#seekCleanup = () => {
-      clearTimeout(debounceTimer);
-      clearInterval(progressIntervalId);
-      videoElement.removeEventListener("seeking", onSeeking);
-    };
   }
 
   /**
