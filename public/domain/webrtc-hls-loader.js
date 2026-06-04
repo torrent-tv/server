@@ -63,33 +63,27 @@
  */
 export function createWebRtcHlsLoader(proxy) {
   return class WebRtcHlsLoader {
-    /** @type {boolean} */
-    #aborted = false;
-
-    /**
-     * Public stats object required by HLS.js internals (e.g. ABR controller).
-     * Must be initialised before load() is called and kept current throughout
-     * the request so that HLS.js can inspect loading timings at any point.
-     *
-     * @type {{
-     *   aborted: boolean, retry: number, total: number, loaded: number,
-     *   chunkCount: number, bwEstimate: number,
-     *   loading:   { start: number, first: number, end: number },
-     *   parsing:   { start: number, end: number },
-     *   buffering: { start: number, first: number, end: number }
-     * }}
-     */
-    stats = {
-      aborted: false,
-      retry: 0,
-      total: 0,
-      loaded: 0,
-      chunkCount: 0,
-      bwEstimate: 0,
-      loading:   { start: 0, first: 0, end: 0 },
-      parsing:   { start: 0, end: 0 },
-      buffering: { start: 0, first: 0, end: 0 }
-    };
+    constructor() {
+      this._aborted = false;
+      /**
+       * Public stats object required by HLS.js internals (e.g. ABR controller
+       * `_abandonRulesCheck`). HLS.js assigns `frag.stats = loader.stats` before
+       * calling `load()`, so this must be a plain object with the full
+       * LoaderStats shape (not a class field, to avoid initialisation ordering
+       * issues with class-in-function patterns).
+       */
+      this.stats = {
+        aborted: false,
+        retry: 0,
+        total: 0,
+        loaded: 0,
+        chunkCount: 0,
+        bwEstimate: 0,
+        loading:   { start: 0, first: 0, end: 0 },
+        parsing:   { start: 0, end: 0 },
+        buffering: { start: 0, first: 0, end: 0 }
+      };
+    }
 
     /**
      * @param {object} context - HLS.js loader context ({ url, responseType, … }).
@@ -97,7 +91,7 @@ export function createWebRtcHlsLoader(proxy) {
      * @param {{ onSuccess: Function, onError: Function, onTimeout: Function }} callbacks
      */
     load(context, _config, callbacks) {
-      this.#aborted = false;
+      this._aborted = false;
       const startedAt = performance.now();
       this.stats.loading.start = startedAt;
       this.stats.loading.first = startedAt;
@@ -113,7 +107,7 @@ export function createWebRtcHlsLoader(proxy) {
       try {
         fetchPromise = proxy.fetch(path);
       } catch (syncErr) {
-        if (!this.#aborted) {
+        if (!this._aborted) {
           callbacks.onError(
             { code: 0, text: syncErr?.message ?? String(syncErr) },
             context,
@@ -133,7 +127,7 @@ export function createWebRtcHlsLoader(proxy) {
 
       fetchPromise
         .then(async (response) => {
-          if (this.#aborted) return;
+          if (this._aborted) return;
 
           if (!response.ok) {
             callbacks.onError(
@@ -151,7 +145,7 @@ export function createWebRtcHlsLoader(proxy) {
             data = await response.text();
           }
 
-          if (this.#aborted) return;
+          if (this._aborted) return;
 
           const endedAt = performance.now();
           const byteLength = typeof data === "string" ? data.length : data.byteLength;
@@ -181,7 +175,7 @@ export function createWebRtcHlsLoader(proxy) {
           );
         })
         .catch((error) => {
-          if (this.#aborted) return;
+          if (this._aborted) return;
           // If onSuccess was already called, the exception originated inside
           // HLS.js internals — do not report it as a load error; HLS.js handles
           // it through its own error pipeline.
@@ -195,11 +189,11 @@ export function createWebRtcHlsLoader(proxy) {
     }
 
     abort() {
-      this.#aborted = true;
+      this._aborted = true;
     }
 
     destroy() {
-      this.#aborted = true;
+      this._aborted = true;
     }
   };
 }
