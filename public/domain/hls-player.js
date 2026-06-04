@@ -100,7 +100,15 @@ export function createHlsPlayer(onLog) {
           });
           instance.on(HlsClass.Events.ERROR, (_event, data) => {
             const details = typeof data?.details === "string" ? data.details : "unknown";
-            onLog(`HLS error: ${details}`);
+            // Console only — never surface to the on-screen status. Non-fatal
+            // errors (e.g. bufferStalledError while the transcode warms up the
+            // first segments) are transient and recover on their own; showing
+            // them would cause a visible glitch before playback starts.
+            if (data?.fatal) {
+              console.warn(`[torrent-tv][hls] fatal: ${details}`, data);
+            } else {
+              console.debug(`[torrent-tv][hls] non-fatal: ${details}`);
+            }
           });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
           instance.on(HlsClass.Events.ERROR, onError);

@@ -301,13 +301,20 @@ export class TorrentSession {
         : directProxyUrl;
     const audioCodec = typeof payload?.audioCodec === "string" ? payload.audioCodec.trim().toLowerCase() : "";
     const videoCodec = typeof payload?.videoCodec === "string" ? payload.videoCodec.trim().toLowerCase() : "";
+    const container = typeof payload?.container === "string" ? payload.container.trim().toLowerCase() : "";
+    const durationSeconds =
+      typeof payload?.durationSeconds === "number" && Number.isFinite(payload.durationSeconds)
+        ? payload.durationSeconds
+        : 0;
 
     return {
       sourceKey,
       directUrl,
       mode,
       audioCodec,
-      videoCodec
+      videoCodec,
+      container,
+      durationSeconds
     };
   }
 
