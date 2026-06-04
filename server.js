@@ -17,6 +17,7 @@ import { handleWsBrowserSignal } from "./routes/ws/browser-signal/get.js";
 import { createSignalHub } from "./services/signal-hub.js";
 import { handleHealthGet } from "./routes/health/get.js";
 import { handleHealthzGet } from "./routes/healthz/get.js";
+import { handleEnvGet } from "./routes/env/get.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,6 +84,8 @@ app.get("/api/proxy-clients/health", async (req, reply) =>
 
 app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
 app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
+
+app.get("/env.js", async (req, reply) => handleEnvGet(req, reply, { version }));
 
 await app.register(fastifyStatic, {
   root: publicRoot,

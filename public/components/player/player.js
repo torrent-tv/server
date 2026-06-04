@@ -66,6 +66,19 @@ export class Player {
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
   };
 
+  /** @param {CustomEvent} event */
+  #onSetMediaFiles = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const count =
+      (Array.isArray(detail?.video) ? detail.video.length : 0) +
+      (Array.isArray(detail?.audio) ? detail.audio.length : 0) +
+      (Array.isArray(detail?.subtitles) ? detail.subtitles.length : 0);
+    // With a single media file there is nothing to switch between, so hide the
+    // playlist button entirely.
+    const target = this.#playlistToggle.closest("li") ?? this.#playlistToggle;
+    target.hidden = count <= 1;
+  };
+
   constructor() {
     this.#root = document.querySelector(Player.SELECTOR.root);
     this.#video = document.querySelector(Player.SELECTOR.video);
@@ -90,6 +103,7 @@ export class Player {
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);
+    document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
 
     this.#root.addEventListener('transitionend', (event) => {
       if (event.target !== this.#root || event.propertyName !== 'translate') return;
