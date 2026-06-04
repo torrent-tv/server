@@ -105,6 +105,7 @@ export class Loading {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
+      console.error("[torrent-tv] playback failed:", message, error);
       document.dispatchEvent(
         new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
           detail: {
@@ -154,6 +155,7 @@ export class Loading {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
+      console.error("[torrent-tv] playback failed:", message, error);
       document.dispatchEvent(
         new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
           detail: {
@@ -219,6 +221,7 @@ export class Loading {
     this.#session = new TorrentSession(() => undefined);
     this.#proxySelector = new ProxySelector();
     this.#hlsPlayer = createHlsPlayer((message) => {
+      console.debug("[torrent-tv][hls]", message);
       this.setStatus(message);
     });
     this.#loadDirectPlaybackHints();
@@ -463,8 +466,24 @@ export class Loading {
       audioCodec: prepared.audioCodec,
       videoCodec: prepared.videoCodec
     });
+    // Decide per stream, independently: transcode the video track only if the
+    // browser cannot decode the video codec, and the audio track only if it
+    // cannot decode the audio codec.  The proxy's advisory `mode` is NOT used
+    // to force audio transcoding — we transcode strictly what is unsupported.
     const shouldTranscodeVideo = codecSupport.videoSupported === false;
-    const shouldTranscodeAudio = prepared.mode === "hls" || codecSupport.audioSupported === false;
+    const shouldTranscodeAudio = codecSupport.audioSupported === false;
+    this.#debug("playback decision", {
+      fileIndex,
+      container: prepared.container,
+      audioCodec: prepared.audioCodec,
+      videoCodec: prepared.videoCodec,
+      audioSupported: codecSupport.audioSupported,
+      videoSupported: codecSupport.videoSupported,
+      plannerMode: prepared.mode,
+      shouldTranscodeVideo,
+      shouldTranscodeAudio,
+      transport: transport.isHttp ? "http" : "webrtc"
+    });
     const directRetryKey = this.#buildDirectRetryCacheKey(fileIndex, prepared);
     const directHintKey = this.#buildDirectPlaybackHintKey(prepared);
     const directHint = this.#getDirectPlaybackHint(directHintKey);
@@ -985,6 +1004,23 @@ export class Loading {
       return error.name === "AbortError";
     }
     return error instanceof Error && error.name === "AbortError";
+  }
+
+  /**
+   * Emit a debug line to the browser console.  All playback decisions,
+   * fallbacks and failures are mirrored here (in addition to the on-screen
+   * status) so issues can be diagnosed from the console.
+   *
+   * @param {string} message
+   * @param {unknown} [data]
+   * @returns {void}
+   */
+  #debug(message, data) {
+    if (data === undefined) {
+      console.debug(`[torrent-tv] ${message}`);
+      return;
+    }
+    console.debug(`[torrent-tv] ${message}`, data);
   }
 
   /**
