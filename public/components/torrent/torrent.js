@@ -174,6 +174,12 @@ export class Torrent {
     if (!this.#dialog || !this.#form || !this.#input) {
       throw new Error(Torrent.MESSAGES.missingDomNodes);
     }
+
+    // iOS don't allow to select torrent file by with accept=".torrent,application/x-bittorrent"
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIOS) {
+      this.#input.removeAttribute('accept');
+    }
   }
 
   #setupEventHandlers() {
