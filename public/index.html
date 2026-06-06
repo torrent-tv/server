@@ -13,35 +13,6 @@
     <link rel="stylesheet" href="components/player/player.css" layer="components" >
     <link rel="stylesheet" href="components/playlist/playlist.css" layer="components" >
     <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>
-      eruda.init();
-      // 1. Переносим eruda в собственный <dialog> и поднимаем в top layer
-      const erudaEl = document.querySelector('.eruda-container') || document.querySelector('eruda');
-      const erudaDlg = document.createElement('dialog');
-      erudaDlg.style.cssText = 'max-width:100vw;max-height:100vh;border:0;padding:0;background:transparent;';
-      document.body.appendChild(erudaDlg);
-      erudaDlg.appendChild(erudaEl);
-      erudaDlg.showModal();
-
-      // чтобы backdrop eruda не блокировал клики по сайту
-      const style = document.createElement('style');
-      style.textContent = `
-        dialog::backdrop { background: transparent; }
-      `;
-      document.head.appendChild(style);
-
-      // 2. Патчим showModal: после открытия любого чужого диалога
-      //    переоткрываем eruda, чтобы она снова оказалась самой верхней в top layer
-      const orig = HTMLDialogElement.prototype.showModal;
-      HTMLDialogElement.prototype.showModal = function (...args) {
-        const r = orig.apply(this, args);
-        if (this !== erudaDlg && erudaDlg.open) {
-          erudaDlg.close();
-          erudaDlg.showModal(); // re-assert: последний открытый top-layer рисуется поверх
-        }
-        return r;
-      };
-    </script>
   </head>
   <body>
 
@@ -103,6 +74,36 @@
         </ul>
       </menu>
     </main>
+
+    <script>
+      eruda.init();
+      // 1. Переносим eruda в собственный <dialog> и поднимаем в top layer
+      const erudaEl = document.querySelector('#eruda');
+      const erudaDlg = document.createElement('dialog');
+      erudaDlg.style.cssText = 'max-width:100vw;max-height:100vh;inset:auto 0 0 auto;border:0;padding:0;background:transparent;';
+      document.body.appendChild(erudaDlg);
+      erudaDlg.appendChild(erudaEl);
+      erudaDlg.showModal();
+
+      // чтобы backdrop eruda не блокировал клики по сайту
+      const style = document.createElement('style');
+      style.textContent = `
+        dialog::backdrop { background: transparent; }
+      `;
+      document.head.appendChild(style);
+
+      // 2. Патчим showModal: после открытия любого чужого диалога
+      //    переоткрываем eruda, чтобы она снова оказалась самой верхней в top layer
+      const orig = HTMLDialogElement.prototype.showModal;
+      HTMLDialogElement.prototype.showModal = function (...args) {
+        const r = orig.apply(this, args);
+        if (this !== erudaDlg && erudaDlg.open) {
+          erudaDlg.close();
+          erudaDlg.showModal(); // re-assert: последний открытый top-layer рисуется поверх
+        }
+        return r;
+      };
+    </script>
 
 
     <script src="/env.js"></script>
