@@ -53,6 +53,10 @@ await app.register(fastifyHelmet, {
     useDefaults: false,
     directives: {
       defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", "data:"],
       workerSrc: ["'self'", "blob:"],
       connectSrc: ["'self'", "http:", "https:"],
       mediaSrc: ["'self'", "http:", "https:", "blob:"]
