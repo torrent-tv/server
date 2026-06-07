@@ -76,8 +76,14 @@ export function createHlsPlayer(onLog) {
       this.clear();
 
       const HlsClass = globalThis.Hls;
+      const hlsSupported = !!(HlsClass && typeof HlsClass.isSupported === "function" && HlsClass.isSupported());
+      console.debug("[ios-debug] hls-player.play", {
+        hlsSupported,
+        nativeHls: isNativeHlsSupported(videoElement),
+        manifestUrl
+      });
       // Prefer hls.js where available (Chrome/Firefox). Native HLS fallback is for Safari.
-      if (HlsClass && typeof HlsClass.isSupported === "function" && HlsClass.isSupported()) {
+      if (hlsSupported) {
         const hlsConfig = options.loader ? { loader: options.loader } : {};
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
@@ -140,7 +146,14 @@ export function createHlsPlayer(onLog) {
           instance.attachMedia(videoElement);
         });
 
+        console.debug("[ios-debug] hls-player: manifest parsed (hls.js), calling play()", {
+          readyState: videoElement.readyState
+        });
         await startPlaybackToleratingAutoplayBlock(videoElement);
+        console.debug("[ios-debug] hls-player: play() settled (hls.js)", {
+          readyState: videoElement.readyState,
+          paused: videoElement.paused
+        });
         return;
       }
 
