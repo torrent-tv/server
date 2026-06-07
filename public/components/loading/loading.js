@@ -947,10 +947,14 @@ export class Loading {
     }
     if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
       console.debug("[ios-debug] ensureVideoReady:metadata-ready-branch");
-      if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
-        throw new Error(Loading.MESSAGES.selectedFileUnsupported);
-      }
+      // In lenient mode (transcode path) the stream is known-compatible. Skip the
+      // dimensions/decoded-frame checks: iOS does not populate videoWidth/Height
+      // nor present frames while the <video> is still occluded by the modal
+      // loading dialog, so those checks would spuriously report "unsupported".
       if (requireDecodedFrame) {
+        if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+          throw new Error(Loading.MESSAGES.selectedFileUnsupported);
+        }
         await this.#waitForDecodedVideoFrame(videoElement);
       }
       console.debug("[ios-debug] ensureVideoReady:resolve (metadata branch)");
@@ -984,10 +988,10 @@ export class Loading {
       videoElement.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
       videoElement.addEventListener("error", onError, { once: true });
     });
-    if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
-      throw new Error(Loading.MESSAGES.selectedFileUnsupported);
-    }
     if (requireDecodedFrame) {
+      if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
+        throw new Error(Loading.MESSAGES.selectedFileUnsupported);
+      }
       await this.#waitForDecodedVideoFrame(videoElement);
     }
     console.debug("[ios-debug] ensureVideoReady:resolve (loadedmetadata branch)");
