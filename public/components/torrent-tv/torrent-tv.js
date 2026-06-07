@@ -72,7 +72,6 @@ class TorrentTV {
 
   /** @param {CustomEvent} event */
   #onPlaybackReady = () => {
-    console.debug("[ios-debug] torrent-tv: PLAYBACK_READY received -> showPlayer");
     this.#transitionTo(TorrentTV.STATE.PLAYING);
     this.#isBusy = false;
     this.#showPlayer();

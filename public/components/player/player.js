@@ -31,10 +31,6 @@ export class Player {
   #resetButton;
 
   #onShow = () => {
-    console.debug("[ios-debug] player: PLAYER:SHOW -> visible=true", {
-      videoReadyState: this.#video?.readyState ?? null,
-      videoPaused: this.#video?.paused ?? null
-    });
     this.visible = true;
   };
 
