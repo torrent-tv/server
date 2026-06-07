@@ -126,7 +126,6 @@ export class Loading {
   };
 
   #onPlayerShow = () => {
-    console.debug("[ios-debug] loading: PLAYER:SHOW -> hide loading view");
     this.visible = false;
   };
 
@@ -357,7 +356,6 @@ export class Loading {
       }
 
       this.setProgress(100);
-      console.debug("[ios-debug] dispatch PLAYBACK_READY (processPlayback)");
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
     } finally {
       this.#isProcessing = false;
@@ -390,7 +388,6 @@ export class Loading {
       this.setStatus(Loading.MESSAGES.switchingToSelectedFile);
       await this.#playVideoFile(fileIndex);
       this.setProgress(100);
-      console.debug("[ios-debug] dispatch PLAYBACK_READY (switchToVideoFile)");
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
     } finally {
       this.#isProcessing = false;
@@ -907,9 +904,7 @@ export class Loading {
     // a codec-decodability check is unnecessary. More importantly, waiting for a
     // presented frame here deadlocks on iOS because the player view is still
     // occluded by the modal loading dialog (see #ensureVideoReady).
-    console.debug("[ios-debug] playWithProxyTranscode:before ensureVideoReady");
     await this.#ensureVideoReady({ requireDecodedFrame: false });
-    console.debug("[ios-debug] playWithProxyTranscode:after ensureVideoReady");
   }
 
   /**
@@ -928,17 +923,6 @@ export class Loading {
   async #ensureVideoReady(options = {}) {
     const requireDecodedFrame = options?.requireDecodedFrame !== false;
     const videoElement = this.#videoElement;
-    // [ios-debug] TEMPORARY logging to confirm the player-show deadlock theory.
-    console.debug("[ios-debug] ensureVideoReady:enter", {
-      requireDecodedFrame,
-      hasVideoEl: videoElement instanceof HTMLVideoElement,
-      readyState: videoElement instanceof HTMLVideoElement ? videoElement.readyState : null,
-      videoWidth: videoElement instanceof HTMLVideoElement ? videoElement.videoWidth : null,
-      videoHeight: videoElement instanceof HTMLVideoElement ? videoElement.videoHeight : null,
-      paused: videoElement instanceof HTMLVideoElement ? videoElement.paused : null,
-      error: videoElement instanceof HTMLVideoElement ? videoElement.error?.code ?? null : null,
-      hidden: this.#videoElement?.closest?.("#player")?.hidden ?? null
-    });
     if (!(videoElement instanceof HTMLVideoElement)) {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
@@ -946,7 +930,6 @@ export class Loading {
       throw new Error(Loading.MESSAGES.selectedFileUnsupported);
     }
     if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      console.debug("[ios-debug] ensureVideoReady:metadata-ready-branch");
       // In lenient mode (transcode path) the stream is known-compatible. Skip the
       // dimensions/decoded-frame checks: iOS does not populate videoWidth/Height
       // nor present frames while the <video> is still occluded by the modal
@@ -957,19 +940,11 @@ export class Loading {
         }
         await this.#waitForDecodedVideoFrame(videoElement);
       }
-      console.debug("[ios-debug] ensureVideoReady:resolve (metadata branch)");
       return;
     }
-    console.debug("[ios-debug] ensureVideoReady:wait-loadedmetadata-branch");
     await new Promise((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
         cleanup();
-        console.debug("[ios-debug] wait-loadedmetadata:timeout", {
-          readyState: videoElement.readyState,
-          networkState: videoElement.networkState,
-          videoErrorCode: videoElement.error?.code ?? null,
-          videoErrorMessage: videoElement.error?.message ?? null
-        });
         if (videoElement.error) {
           reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
           return;
@@ -979,18 +954,10 @@ export class Loading {
 
       const onLoadedMetadata = () => {
         cleanup();
-        console.debug("[ios-debug] wait-loadedmetadata:loadedmetadata event");
         resolve(undefined);
       };
       const onError = () => {
         cleanup();
-        console.debug("[ios-debug] wait-loadedmetadata:error event", {
-          readyState: videoElement.readyState,
-          networkState: videoElement.networkState,
-          videoErrorCode: videoElement.error?.code ?? null,
-          videoErrorMessage: videoElement.error?.message ?? null,
-          currentSrc: videoElement.currentSrc
-        });
         reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
       };
       const cleanup = () => {
@@ -1008,7 +975,6 @@ export class Loading {
       }
       await this.#waitForDecodedVideoFrame(videoElement);
     }
-    console.debug("[ios-debug] ensureVideoReady:resolve (loadedmetadata branch)");
   }
 
   /**
@@ -1016,20 +982,12 @@ export class Loading {
    * @returns {Promise<void>}
    */
   async #waitForDecodedVideoFrame(videoElement) {
-    // [ios-debug] TEMPORARY logging.
-    const startedAt = Date.now();
-    console.debug("[ios-debug] waitForDecodedVideoFrame:enter", {
-      hasRVFC: typeof videoElement.requestVideoFrameCallback === "function",
-      hasWebkitCount: typeof videoElement.webkitDecodedFrameCount === "number"
-    });
     if (typeof videoElement.requestVideoFrameCallback === "function") {
       await new Promise((resolve, reject) => {
         const timeoutId = window.setTimeout(() => {
-          console.debug("[ios-debug] waitForDecodedVideoFrame:rVFC TIMEOUT", { ms: Date.now() - startedAt });
           reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
         }, 4000);
         videoElement.requestVideoFrameCallback(() => {
-          console.debug("[ios-debug] waitForDecodedVideoFrame:rVFC fired", { ms: Date.now() - startedAt });
           window.clearTimeout(timeoutId);
           resolve(undefined);
         });
