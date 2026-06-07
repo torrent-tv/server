@@ -101,7 +101,7 @@ export class ErrorDialog {
     if (value) {
       this.#dialog.inert = false;
       if (!this.#dialog.open) {
-        this.#dialog.showModal();
+        this.#dialog.show();
       }
       return;
     }
