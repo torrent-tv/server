@@ -80,15 +80,18 @@
       // 1. Переносим eruda в собственный <dialog> и поднимаем в top layer
       const erudaEl = document.querySelector('#eruda');
       const erudaDlg = document.createElement('dialog');
+      erudaDlg.classList.add('eruda-host');
       erudaDlg.style.cssText = 'max-width:100vw;max-height:100vh;inset:auto 0 0 auto;border:0;padding:0;background:transparent;';
       document.body.appendChild(erudaDlg);
       erudaDlg.appendChild(erudaEl);
-      erudaDlg.showModal();
+      erudaDlg.show();
 
       // чтобы backdrop eruda не блокировал клики по сайту
       const style = document.createElement('style');
       style.textContent = `
-        dialog::backdrop { background: transparent; }
+        dialog.eruda-host::backdrop { background: transparent; pointer-events: none; }
+        dialog.eruda-host { pointer-events: none; background: transparent; }
+        dialog.eruda-host > * { pointer-events: auto; }
       `;
       document.head.appendChild(style);
 
@@ -99,7 +102,7 @@
         const r = orig.apply(this, args);
         if (this !== erudaDlg && erudaDlg.open) {
           erudaDlg.close();
-          erudaDlg.showModal(); // re-assert: последний открытый top-layer рисуется поверх
+          erudaDlg.show(); // re-assert: последний открытый top-layer рисуется поверх
         }
         return r;
       };
