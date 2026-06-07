@@ -94,7 +94,15 @@ app.get("/env.js", async (req, reply) => handleEnvGet(req, reply, { version }));
 await app.register(fastifyStatic, {
   root: publicRoot,
   prefix: "/",
-  serveDotFiles: true
+  serveDotFiles: true,
+  // Force browsers to revalidate cached assets on every request via
+  // ETag/If-None-Match (ETag is enabled by @fastify/static by default).
+  // Without this, ES modules were cached for hours, making deploys invisible
+  // on returning devices. Unchanged files still return a cheap 304.
+  cacheControl: false,
+  setHeaders: (res) => {
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  }
 });
 await app.register(fastifyStatic, {
   root: vendorRoot,

@@ -964,6 +964,12 @@ export class Loading {
     await new Promise((resolve, reject) => {
       const timeoutId = window.setTimeout(() => {
         cleanup();
+        console.debug("[ios-debug] wait-loadedmetadata:timeout", {
+          readyState: videoElement.readyState,
+          networkState: videoElement.networkState,
+          videoErrorCode: videoElement.error?.code ?? null,
+          videoErrorMessage: videoElement.error?.message ?? null
+        });
         if (videoElement.error) {
           reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
           return;
@@ -973,10 +979,18 @@ export class Loading {
 
       const onLoadedMetadata = () => {
         cleanup();
+        console.debug("[ios-debug] wait-loadedmetadata:loadedmetadata event");
         resolve(undefined);
       };
       const onError = () => {
         cleanup();
+        console.debug("[ios-debug] wait-loadedmetadata:error event", {
+          readyState: videoElement.readyState,
+          networkState: videoElement.networkState,
+          videoErrorCode: videoElement.error?.code ?? null,
+          videoErrorMessage: videoElement.error?.message ?? null,
+          currentSrc: videoElement.currentSrc
+        });
         reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
       };
       const cleanup = () => {
