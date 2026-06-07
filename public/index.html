@@ -77,32 +77,29 @@
 
     <script>
       eruda.init();
-      // 1. Переносим eruda в собственный <dialog> и поднимаем в top layer
       const erudaEl = document.querySelector('#eruda');
-      const erudaDlg = document.createElement('dialog');
-      erudaDlg.classList.add('eruda-host');
-      erudaDlg.style.cssText = 'max-width:100vw;max-height:100vh;inset:auto 0 0 auto;border:0;padding:0;background:transparent;';
-      document.body.appendChild(erudaDlg);
-      erudaDlg.appendChild(erudaEl);
-      erudaDlg.show();
 
-      // чтобы backdrop eruda не блокировал клики по сайту
-      const style = document.createElement('style');
-      style.textContent = `
-        dialog.eruda-host::backdrop { background: transparent; pointer-events: none; }
-        dialog.eruda-host { pointer-events: none; background: transparent; }
-        dialog.eruda-host > * { pointer-events: auto; }
-      `;
-      document.head.appendChild(style);
+      // Eruda must live inside whichever modal dialog is currently open,
+      // otherwise the open <dialog> makes the rest of the DOM (incl. eruda) inert.
+      // When no dialog is open, eruda lives in <body>.
+      function moveErudaInto(target) {
+        if (erudaEl && target && erudaEl.parentElement !== target) {
+          target.appendChild(erudaEl);
+        }
+      }
 
-      // 2. Патчим showModal: после открытия любого чужого диалога
-      //    переоткрываем eruda, чтобы она снова оказалась самой верхней в top layer
-      const orig = HTMLDialogElement.prototype.showModal;
+      const origShowModal = HTMLDialogElement.prototype.showModal;
       HTMLDialogElement.prototype.showModal = function (...args) {
-        const r = orig.apply(this, args);
-        if (this !== erudaDlg && erudaDlg.open) {
-          erudaDlg.close();
-          erudaDlg.show(); // re-assert: последний открытый top-layer рисуется поверх
+        const r = origShowModal.apply(this, args);
+        moveErudaInto(this); // follow the newly opened modal so eruda stays interactive
+        return r;
+      };
+
+      const origClose = HTMLDialogElement.prototype.close;
+      HTMLDialogElement.prototype.close = function (...args) {
+        const r = origClose.apply(this, args);
+        if (erudaEl && erudaEl.parentElement === this) {
+          document.body.appendChild(erudaEl); // no longer inside this dialog
         }
         return r;
       };

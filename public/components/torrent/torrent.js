@@ -319,7 +319,7 @@ export class Torrent {
     if (value) {
       this.#dialog.inert = false;
       if (!this.#dialog.open) {
-        this.#dialog.show();
+        this.#dialog.showModal();
       }
       return;
     }
