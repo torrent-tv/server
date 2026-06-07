@@ -18,6 +18,29 @@ function isNativeHlsSupported(videoElement) {
 }
 
 /**
+ * Start playback, tolerating the browser's autoplay policy.
+ *
+ * On iOS (and Chrome without sufficient media engagement) `play()` is rejected
+ * with `NotAllowedError` when called outside a user gesture. That is not a
+ * playback failure: the stream is ready and the user can start it from the
+ * native controls. Swallow only that case and rethrow any real error — this
+ * mirrors how the direct/webseed paths handle `play()` in torrent-session.js.
+ *
+ * @param {HTMLVideoElement} videoElement
+ * @returns {Promise<void>}
+ */
+async function startPlaybackToleratingAutoplayBlock(videoElement) {
+  try {
+    await videoElement.play();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotAllowedError") {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
  * Create a stateful HLS player instance.
  *
  * @param {(message: string) => void} onLog - Called with status/error messages
@@ -117,7 +140,7 @@ export function createHlsPlayer(onLog) {
           instance.attachMedia(videoElement);
         });
 
-        await videoElement.play();
+        await startPlaybackToleratingAutoplayBlock(videoElement);
         return;
       }
 
@@ -128,7 +151,7 @@ export function createHlsPlayer(onLog) {
       videoElement.pause();
       videoElement.src = manifestUrl;
       videoElement.load();
-      await videoElement.play();
+      await startPlaybackToleratingAutoplayBlock(videoElement);
     }
   };
 }
