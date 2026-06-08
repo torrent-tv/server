@@ -150,6 +150,18 @@ export function createWebRtcHlsLoader(proxy) {
           const endedAt = performance.now();
           const byteLength = typeof data === "string" ? data.length : data.byteLength;
 
+          // [net-debug] TEMPORARY: measure data-channel transfer time/throughput
+          // per resource to locate the slow-start bottleneck.
+          const ms = endedAt - startedAt;
+          const mbps = ms > 0 ? ((byteLength * 8) / (ms / 1000) / 1e6) : 0;
+          console.debug("[net-debug] dc-load", {
+            path,
+            type: context.responseType,
+            bytes: byteLength,
+            ms: Math.round(ms),
+            mbps: Number(mbps.toFixed(2))
+          });
+
           // Update the public stats so ABR controller sees accurate timings.
           this.stats.loaded = byteLength;
           this.stats.total = byteLength;
