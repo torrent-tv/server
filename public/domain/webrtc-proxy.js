@@ -38,10 +38,26 @@
  * @typedef {Object} PendingEntry
  * @property {(result: any) => void}   resolve
  * @property {(error: Error) => void}  reject
- * @property {string[]}  chunks  - Accumulated base64 response chunks.
+ * @property {Uint8Array[]}  chunks  - Accumulated response body byte chunks.
  * @property {number}    status  - HTTP status received in `response-start`.
  * @property {object}    headers - Headers received in `response-start`.
  */
+
+/** Reused decoder for ASCII requestIds in binary response frames. */
+const ASCII_DECODER = new TextDecoder();
+
+/**
+ * Decode a base64 string to bytes (legacy JSON body path only).
+ *
+ * @param {string} b64
+ * @returns {Uint8Array}
+ */
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 /** @type {Array<{ urls: string }>} */
 const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -222,6 +238,9 @@ export class WebRtcProxy {
   async #createPeerConnection(_sessionId, settle) {
     this.#pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this.#channel = this.#pc.createDataChannel("proxy", { ordered: true });
+    // Response bodies arrive as binary frames; receive them as ArrayBuffer
+    // rather than Blob so they can be parsed synchronously.
+    this.#channel.binaryType = "arraybuffer";
 
     this.#channel.addEventListener("open", () => settle());
 
@@ -269,6 +288,13 @@ export class WebRtcProxy {
    * @param {string} raw
    */
   #onChannelMessage(raw) {
+    // Binary messages carry response body frames (see wire protocol). Control
+    // messages (response-start/-error, pong) arrive as JSON strings.
+    if (raw instanceof ArrayBuffer) {
+      this.#onResponseBinaryChunk(new Uint8Array(raw));
+      return;
+    }
+
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
@@ -292,8 +318,11 @@ export class WebRtcProxy {
     }
 
     if (msg.type === "response-chunk") {
+      // Legacy base64+JSON body path. Kept for backward compatibility with an
+      // older proxy that has not yet switched to binary frames. Decode to bytes
+      // immediately so chunks are uniformly Uint8Array regardless of transport.
       if (msg.data) {
-        entry.chunks.push(msg.data);
+        entry.chunks.push(base64ToBytes(msg.data));
       }
       if (msg.done) {
         this.#pending.delete(msg.requestId);
@@ -309,24 +338,44 @@ export class WebRtcProxy {
   }
 
   /**
-   * Decode base64 chunks and build a minimal Response-like object.
+   * Handle a binary response body frame.
+   * Layout: [flags(1)][idLen(1)][requestId(ASCII)][payload].
+   *
+   * @param {Uint8Array} bytes
+   */
+  #onResponseBinaryChunk(bytes) {
+    if (bytes.length < 2) return;
+    const flags = bytes[0];
+    const idLen = bytes[1];
+    if (bytes.length < 2 + idLen) return;
+    const requestId = ASCII_DECODER.decode(bytes.subarray(2, 2 + idLen));
+    const payload = bytes.subarray(2 + idLen);
+
+    const entry = this.#pending.get(requestId);
+    if (!entry) return;
+
+    if (payload.length > 0) {
+      entry.chunks.push(payload);
+    }
+    if ((flags & 1) === 1) {
+      this.#pending.delete(requestId);
+      entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks));
+    }
+  }
+
+  /**
+   * Assemble body byte chunks into a minimal Response-like object.
    *
    * @param {number} status
    * @param {object} headers
-   * @param {string[]} chunks
+   * @param {Uint8Array[]} chunks
    */
   #buildResponse(status, headers, chunks) {
     const assemble = () => {
-      const parts = chunks.map((b64) => {
-        const binary = atob(b64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        return bytes;
-      });
-      const total = parts.reduce((n, p) => n + p.length, 0);
+      const total = chunks.reduce((n, p) => n + p.length, 0);
       const out = new Uint8Array(total);
       let offset = 0;
-      for (const p of parts) { out.set(p, offset); offset += p.length; }
+      for (const p of chunks) { out.set(p, offset); offset += p.length; }
       return out;
     };
 
