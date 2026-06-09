@@ -317,7 +317,9 @@ export class Loading {
     // Monotonic: the bar only moves forward, except an explicit reset to 0 (new
     // file / new playback). This keeps it stable across within-phase
     // fluctuations (header pieces, warmup→first-segment) and phase boundaries.
-    this.#progress.value = safeValue === 0 ? 0 : Math.max(safeValue, this.#progress.value);
+    const applied = safeValue === 0 ? 0 : Math.max(safeValue, this.#progress.value);
+    this.#progress.value = applied;
+    this.#logEvt(`progress bar=${applied.toFixed(1)}% req=${safeValue.toFixed(1)}%`);
   }
 
   /**
@@ -333,6 +335,7 @@ export class Loading {
   #setPhaseProgress(phaseIndex, phasePercent) {
     const span = 100 / 3;
     const pct = Number.isFinite(phasePercent) ? Math.max(0, Math.min(100, phasePercent)) : 0;
+    this.#logEvt(`progress phase=${phaseIndex} within=${pct.toFixed(1)}%`);
     this.setProgress(phaseIndex * span + (pct / 100) * span);
   }
 
@@ -399,7 +402,6 @@ export class Loading {
       this.setStatus(Loading.MESSAGES.startingTorrentProcessing);
       this.setProgress(0);
       this.setStatus(Loading.MESSAGES.readingMetadata);
-      this.setProgress(15);
 
       const videoCount = mediaFiles.video.length;
       if (videoCount <= 0) {
@@ -1136,7 +1138,7 @@ export class Loading {
     const segmentProcessed = Number.isFinite(processedSeconds)
       ? Math.max(0, processedSeconds - startPositionSeconds)
       : NaN;
-    if (Number.isFinite(segmentDurationSec) && Number.isFinite(segmentProcessed) && segmentProcessed > 0) {
+    if (Number.isFinite(segmentDurationSec) && Number.isFinite(segmentProcessed) && segmentProcessed >= 0) {
       const pct = Math.max(0, Math.min(100, (segmentProcessed / segmentDurationSec) * 100));
       const speedMultiplier = this.#parseSpeedMultiplier(speedText);
       const remainSeconds = Math.max(0, segmentDurationSec - segmentProcessed);
