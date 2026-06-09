@@ -32,6 +32,18 @@ export class Player {
 
   #onShow = () => {
     this.visible = true;
+    // Start playback only now, when the player is actually revealed — not during
+    // the loading / pre-buffer screen. This guarantees the first frame and the
+    // audio start together (previously hls.js auto-played under the loading
+    // overlay, so audio was heard while only the buffering UI was visible).
+    // On iOS autoplay is blocked outside a user gesture; play() rejects and the
+    // user starts it from the native controls — harmless, hence the catch.
+    if (this.#video instanceof HTMLVideoElement) {
+      const started = this.#video.play();
+      if (started && typeof started.catch === "function") {
+        started.catch(() => undefined);
+      }
+    }
   };
 
   #onRequestReady = () => {

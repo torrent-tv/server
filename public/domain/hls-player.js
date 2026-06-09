@@ -18,29 +18,6 @@ function isNativeHlsSupported(videoElement) {
 }
 
 /**
- * Start playback, tolerating the browser's autoplay policy.
- *
- * On iOS (and Chrome without sufficient media engagement) `play()` is rejected
- * with `NotAllowedError` when called outside a user gesture. That is not a
- * playback failure: the stream is ready and the user can start it from the
- * native controls. Swallow only that case and rethrow any real error — this
- * mirrors how the direct/webseed paths handle `play()` in torrent-session.js.
- *
- * @param {HTMLVideoElement} videoElement
- * @returns {Promise<void>}
- */
-async function startPlaybackToleratingAutoplayBlock(videoElement) {
-  try {
-    await videoElement.play();
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "NotAllowedError") {
-      return;
-    }
-    throw error;
-  }
-}
-
-/**
  * Create a stateful HLS player instance.
  *
  * @param {(message: string) => void} onLog - Called with status/error messages
@@ -138,10 +115,18 @@ export function createHlsPlayer(onLog) {
             // errors (e.g. bufferStalledError while the transcode warms up the
             // first segments) are transient and recover on their own; showing
             // them would cause a visible glitch before playback starts.
+            //
+            // [evt] TEMPORARY: timestamp + position + hole size so PTS-gap
+            // glitches can be correlated with the proxy's per-session branch
+            // (A re-encode vs B copy) and exact moment. `data.hole` is the gap
+            // size hls.js jumped over (bufferSeekOverHole).
+            const t = new Date().toISOString().slice(11, 23);
+            const currentTime = typeof videoElement?.currentTime === "number" ? videoElement.currentTime.toFixed(2) : "?";
+            const hole = typeof data?.hole === "number" ? ` hole=${data.hole.toFixed(3)}s` : "";
             if (data?.fatal) {
-              console.warn(`[torrent-tv][hls] fatal: ${details}`, data);
+              console.warn(`[torrent-tv][hls] ${t} fatal: ${details} currentTime=${currentTime}${hole}`, data);
             } else {
-              console.debug(`[torrent-tv][hls] non-fatal: ${details}`);
+              console.debug(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}`);
             }
           });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
@@ -151,7 +136,10 @@ export function createHlsPlayer(onLog) {
           instance.attachMedia(videoElement);
         });
 
-        await startPlaybackToleratingAutoplayBlock(videoElement);
+        // Do NOT start playback here. hls.js keeps filling the buffer while the
+        // element is paused; playback is started when the player view is
+        // revealed (PLAYER:SHOW), so audio never plays underneath the loading /
+        // pre-buffer screen and the first frame is shown together with sound.
         return;
       }
 
@@ -162,7 +150,7 @@ export function createHlsPlayer(onLog) {
       videoElement.pause();
       videoElement.src = manifestUrl;
       videoElement.load();
-      await startPlaybackToleratingAutoplayBlock(videoElement);
+      // Playback is started on player reveal (see above) — not here.
     }
   };
 }
