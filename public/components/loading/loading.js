@@ -1167,7 +1167,11 @@ export class Loading {
   async #isVideoCodecLikelySupported(codec) {
     const normalized = typeof codec === "string" ? codec.trim().toLowerCase() : "";
     if (!normalized) {
-      return true;
+      // Unknown video codec: do NOT assume it is playable. Copying an
+      // undecodable codec (e.g. xvid) yields a black screen, and the WebRTC
+      // transport has no direct-playback probe to fall back on. Treat unknown
+      // as unsupported so the video track is transcoded to H.264.
+      return false;
     }
     const mediaCapabilities = await this.#checkMediaCapabilitiesVideoSupport(normalized);
     if (mediaCapabilities != null) {
@@ -1469,9 +1473,11 @@ const VIDEO_CODEC_MIME_CANDIDATES = {
   hevc: ['video/mp4; codecs="hvc1.1.6.L93.B0"', 'video/mp4; codecs="hev1.1.6.L93.B0"'],
   av1: ['video/mp4; codecs="av01.0.08M.08"', 'video/webm; codecs="av01.0.08M.08"'],
   vp9: ['video/webm; codecs="vp9"', 'video/mp4; codecs="vp09.00.10.08"'],
-  vp8: ['video/webm; codecs="vp8"'],
-  mpeg4: ['video/mp4; codecs="mp4v.20.8"'],
-  mpeg2video: ['video/mp2t; codecs="mp2v"']
+  vp8: ['video/webm; codecs="vp8"']
+  // mpeg4 (MPEG-4 Part 2: xvid/divx) and mpeg2video are intentionally omitted:
+  // mainstream browsers cannot decode them, so an empty candidate list makes
+  // #isVideoCodecLikelySupported return false → the video track is transcoded
+  // to H.264 instead of being copied (which would play as a black screen).
 };
 
 const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);

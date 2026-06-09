@@ -33,5 +33,16 @@
     &:focus {
       background-color: #c00;
     }
+
+    /* Currently playing file. */
+    &[aria-current="true"] {
+      font-weight: 700;
+      color: #c00;
+    }
+
+    &[aria-current="true"]:hover,
+    &[aria-current="true"]:focus {
+      color: #fff;
+    }
   }
 }
