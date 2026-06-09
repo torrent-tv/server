@@ -67,6 +67,7 @@ export class Loading {
   /** @param {CustomEvent} event */
   #onShow = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
+    this.#logEvt(`view=loading shown cause=LOADING:SHOW`);
     this.visible = true;
     if (typeof payload?.fileName === "string") {
       this.setFileName(payload.fileName);
@@ -166,6 +167,7 @@ export class Loading {
   }
 
   #onPlayerShow = () => {
+    this.#logEvt(`view=loading hidden cause=PLAYER:SHOW`);
     this.visible = false;
   };
 
@@ -939,10 +941,23 @@ export class Loading {
     if (!(videoElement instanceof HTMLVideoElement) || targetSeconds <= 0) {
       return;
     }
+    // The player is hidden during pre-buffer, so the video MUST stay paused.
+    // If it plays here it drains the buffer (transcode runs ~1×), so `ahead`
+    // never reaches the target — the loading screen then sticks for the whole
+    // timeout, flickering "Buffering… N / target" while audio is heard. Keep it
+    // paused; the player starts playback in #onShow when revealed.
+    if (!videoElement.paused) {
+      this.#logEvt("player.pause reason=prebuffer");
+      videoElement.pause();
+    }
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
       if (videoElement.error) {
         return;
+      }
+      // Re-assert pause in case leftover play-intent resumed it.
+      if (!videoElement.paused) {
+        videoElement.pause();
       }
       const ahead = this.#bufferedAheadSeconds(videoElement);
       if (ahead >= targetSeconds) {
@@ -953,6 +968,17 @@ export class Loading {
       this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(targetSeconds)} s`);
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
+  }
+
+  /**
+   * Emit a timestamped `[evt]` diagnostic line (UTC, same zone as the proxy
+   * logger) for correlation. Temporary.
+   *
+   * @param {string} message
+   * @returns {void}
+   */
+  #logEvt(message) {
+    console.debug(`[evt] ${new Date().toISOString().slice(11, 23)} ${message}`);
   }
 
   /**

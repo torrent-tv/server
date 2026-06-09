@@ -31,6 +31,7 @@ export class Player {
   #resetButton;
 
   #onShow = () => {
+    this.#logEvt("view=player shown cause=PLAYER:SHOW");
     this.visible = true;
     // Start playback only now, when the player is actually revealed — not during
     // the loading / pre-buffer screen. This guarantees the first frame and the
@@ -39,12 +40,24 @@ export class Player {
     // On iOS autoplay is blocked outside a user gesture; play() rejects and the
     // user starts it from the native controls — harmless, hence the catch.
     if (this.#video instanceof HTMLVideoElement) {
+      this.#logEvt("player.play reason=show");
       const started = this.#video.play();
       if (started && typeof started.catch === "function") {
         started.catch(() => undefined);
       }
     }
   };
+
+  /**
+   * Emit a timestamped `[evt]` diagnostic line (UTC, same zone as the proxy
+   * logger). Temporary.
+   *
+   * @param {string} message
+   * @returns {void}
+   */
+  #logEvt(message) {
+    console.debug(`[evt] ${new Date().toISOString().slice(11, 23)} ${message}`);
+  }
 
   #onRequestReady = () => {
     this.#emitReady();
@@ -193,7 +206,11 @@ export class Player {
     // loading/pre-buffer screen, errors and reset. Playback is (re)started only
     // in #onShow when the player is actually revealed.
     if (!value && this.#video instanceof HTMLVideoElement && !this.#video.paused) {
+      this.#logEvt("player.pause reason=hidden");
       this.#video.pause();
+    }
+    if (!value) {
+      this.#logEvt("view=player hidden");
     }
     this.#root.hidden = !value;
     this.#root.inert = !value;
