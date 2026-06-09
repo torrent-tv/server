@@ -954,29 +954,41 @@ export class Loading {
   }
 
   /**
-   * Wait until at least `targetSeconds` of video is buffered ahead of the
-   * current position, or until `timeoutMs` elapses (start anyway — a slow
-   * encoder shouldn't block playback forever), or a media error occurs.
+   * Wait until enough video is buffered ahead before revealing the player.
+   *
+   * The cushion size is ADAPTIVE: it is derived from the measured fill rate
+   * `R` (media-seconds buffered per wall-second — the video is paused here, so
+   * this is the production+delivery rate). During playback the buffer drains at
+   * 1×, so the margin is `R − 1`. A comfortable margin needs only a small
+   * cushion (it refills quickly → start sooner); a margin near zero needs a
+   * large one (any dip drains it). Capped at `PREBUFFER_MAX_SECONDS`, which must
+   * stay under hls.js `maxBufferLength` and the proxy look-ahead window so we
+   * never buffer far enough ahead to trigger a seek-restart.
+   *
+   * Falls back to `defaultTargetSeconds` until the rate is measurable, and to
+   * an absolute `timeoutMs` so a slow encoder never blocks playback forever.
    *
    * @param {HTMLVideoElement} videoElement
-   * @param {number} targetSeconds
+   * @param {number} defaultTargetSeconds
    * @param {number} timeoutMs
    * @returns {Promise<void>}
    */
-  async #waitForPrebuffer(videoElement, targetSeconds, timeoutMs) {
-    if (!(videoElement instanceof HTMLVideoElement) || targetSeconds <= 0) {
+  async #waitForPrebuffer(videoElement, defaultTargetSeconds, timeoutMs) {
+    if (!(videoElement instanceof HTMLVideoElement)) {
       return;
     }
     // The player is hidden during pre-buffer, so the video MUST stay paused.
-    // If it plays here it drains the buffer (transcode runs ~1×), so `ahead`
-    // never reaches the target — the loading screen then sticks for the whole
-    // timeout, flickering "Buffering… N / target" while audio is heard. Keep it
-    // paused; the player starts playback in #onShow when revealed.
+    // If it plays here it drains the buffer, so `ahead` never reaches the
+    // target — the loading screen sticks while audio is heard. The player
+    // starts playback in #onShow when revealed.
     if (!videoElement.paused) {
       this.#logEvt("player.pause reason=prebuffer");
       videoElement.pause();
     }
     const startedAt = Date.now();
+    /** @type {Array<{ t: number, ahead: number }>} Rolling window for fill-rate. */
+    const samples = [];
+    let loggedTarget = -1;
     while (Date.now() - startedAt < timeoutMs) {
       if (videoElement.error) {
         return;
@@ -985,15 +997,47 @@ export class Loading {
       if (!videoElement.paused) {
         videoElement.pause();
       }
+      const now = Date.now();
       const ahead = this.#bufferedAheadSeconds(videoElement);
-      if (ahead >= targetSeconds) {
+
+      // Fill rate R over a short rolling window.
+      samples.push({ t: now, ahead });
+      while (samples.length > 1 && now - samples[0].t > PREBUFFER_RATE_WINDOW_MS) {
+        samples.shift();
+      }
+      const wallSpan = (now - samples[0].t) / 1000;
+      const fillRate = wallSpan >= 0.5 ? (ahead - samples[0].ahead) / wallSpan : NaN;
+
+      // Adaptive target from the margin over realtime (R − 1).
+      let target = defaultTargetSeconds;
+      if (Number.isFinite(fillRate)) {
+        const margin = fillRate - 1;
+        target = margin <= 0
+          ? PREBUFFER_MAX_SECONDS
+          : Math.min(PREBUFFER_MAX_SECONDS, Math.max(PREBUFFER_MIN_SECONDS, PREBUFFER_BASE_SECONDS / margin));
+      }
+      target = Math.min(target, PREBUFFER_MAX_SECONDS);
+
+      if (ahead >= target) {
+        this.#logEvt(
+          `prebuffer ready ahead=${ahead.toFixed(1)}s target=${target.toFixed(1)}s ` +
+            `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
+        );
         return;
       }
-      const pct = Math.max(0, Math.min(100, (ahead / targetSeconds) * 100));
+      if (Math.round(target) !== loggedTarget) {
+        loggedTarget = Math.round(target);
+        this.#logEvt(
+          `prebuffer target=${loggedTarget}s ahead=${ahead.toFixed(1)}s ` +
+            `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
+        );
+      }
+      const pct = Math.max(0, Math.min(100, (ahead / target) * 100));
       this.#setPhaseProgress(2, pct); // phase 2 (buffering) fills the final third
-      this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(targetSeconds)} s`);
+      this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(target)} s`);
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
+    this.#logEvt(`prebuffer timeout ahead=${this.#bufferedAheadSeconds(videoElement).toFixed(1)}s`);
   }
 
   /**
@@ -1653,8 +1697,18 @@ const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);
 // dip right after start does not immediately stall. Kept under the proxy's
 // look-ahead window (~32 s). The timeout starts playback anyway if a slow
 // encoder cannot fill the cushion in time.
+// Pre-buffer cushion. The target is adaptive (see #waitForPrebuffer): smaller
+// when production has comfortable margin over realtime, larger when it barely
+// keeps up. PREBUFFER_TARGET_SECONDS is the fallback before the fill rate is
+// measurable. PREBUFFER_MAX_SECONDS must stay under hls.js maxBufferLength (30)
+// and the proxy look-ahead window (~32 s), or buffering ahead triggers a
+// seek-restart.
 const PREBUFFER_TARGET_SECONDS = 15;
-const PREBUFFER_TIMEOUT_MS = 25_000;
+const PREBUFFER_MIN_SECONDS = 6;
+const PREBUFFER_MAX_SECONDS = 25;
+const PREBUFFER_BASE_SECONDS = 12;
+const PREBUFFER_RATE_WINDOW_MS = 1500;
+const PREBUFFER_TIMEOUT_MS = 30_000;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
