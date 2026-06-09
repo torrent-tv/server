@@ -79,7 +79,17 @@ export function createHlsPlayer(onLog) {
       const hlsSupported = !!(HlsClass && typeof HlsClass.isSupported === "function" && HlsClass.isSupported());
       // Prefer hls.js where available (Chrome/Firefox). Native HLS fallback is for Safari.
       if (hlsSupported) {
-        const hlsConfig = options.loader ? { loader: options.loader } : {};
+        const hlsConfig = {
+          ...(options.loader ? { loader: options.loader } : {}),
+          // Forward buffer cushion to ride out transient production/delivery
+          // dips. Keep maxBufferLength under the proxy's look-ahead window
+          // (MAX_LOOKAHEAD_SEGMENTS × segment duration ≈ 32 s): requesting
+          // further ahead than the encoder has produced is treated as a seek
+          // and restarts ffmpeg, so we must not over-buffer past that window.
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          backBufferLength: 30
+        };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
 

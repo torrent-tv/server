@@ -385,6 +385,11 @@ export class Loading {
     this.#isProcessing = true;
     try {
       this.#hlsPlayer.clear();
+      // Release the previous file's transcode session so the proxy stops its
+      // ffmpeg immediately. Otherwise switching episodes leaves the old encode
+      // running in parallel with the new one, splitting the (ARM) CPU and
+      // dropping both below realtime → stalls.
+      this.#session.releaseActiveTranscodeSessions({ reason: "switch-file" });
       this.setStatus(Loading.MESSAGES.switchingToSelectedFile);
       await this.#playVideoFile(fileIndex);
       this.setProgress(100);
@@ -870,9 +875,62 @@ export class Loading {
     const stopProgressPoll = this.#startTranscodeProgressPoll();
     try {
       await this.#ensureVideoReady({ requireDecodedFrame: false });
+      // Pre-buffer: don't reveal the player until a cushion of video is buffered
+      // ahead, so a transient production/delivery dip right after start doesn't
+      // immediately stall. hls.js keeps appending to the buffer while the video
+      // is still paused/occluded, so this fills during the loading screen.
+      await this.#waitForPrebuffer(this.#videoElement, PREBUFFER_TARGET_SECONDS, PREBUFFER_TIMEOUT_MS);
     } finally {
       stopProgressPoll();
     }
+  }
+
+  /**
+   * Wait until at least `targetSeconds` of video is buffered ahead of the
+   * current position, or until `timeoutMs` elapses (start anyway — a slow
+   * encoder shouldn't block playback forever), or a media error occurs.
+   *
+   * @param {HTMLVideoElement} videoElement
+   * @param {number} targetSeconds
+   * @param {number} timeoutMs
+   * @returns {Promise<void>}
+   */
+  async #waitForPrebuffer(videoElement, targetSeconds, timeoutMs) {
+    if (!(videoElement instanceof HTMLVideoElement) || targetSeconds <= 0) {
+      return;
+    }
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (videoElement.error) {
+        return;
+      }
+      const ahead = this.#bufferedAheadSeconds(videoElement);
+      if (ahead >= targetSeconds) {
+        return;
+      }
+      const pct = Math.max(0, Math.min(100, (ahead / targetSeconds) * 100));
+      this.setProgress(95 + pct * 0.05); // 95 → 100 as the cushion fills
+      this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(targetSeconds)} s`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  /**
+   * Seconds of contiguously buffered media ahead of the current playback
+   * position.
+   *
+   * @param {HTMLVideoElement} videoElement
+   * @returns {number}
+   */
+  #bufferedAheadSeconds(videoElement) {
+    const buffered = videoElement.buffered;
+    const currentTime = videoElement.currentTime;
+    for (let index = 0; index < buffered.length; index += 1) {
+      if (buffered.start(index) <= currentTime + 0.25 && currentTime < buffered.end(index)) {
+        return buffered.end(index) - currentTime;
+      }
+    }
+    return 0;
   }
 
   /**
@@ -1481,6 +1539,12 @@ const VIDEO_CODEC_MIME_CANDIDATES = {
 };
 
 const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);
+// Pre-buffer cushion accumulated before the player is revealed, so a transient
+// dip right after start does not immediately stall. Kept under the proxy's
+// look-ahead window (~32 s). The timeout starts playback anyway if a slow
+// encoder cannot fill the cushion in time.
+const PREBUFFER_TARGET_SECONDS = 15;
+const PREBUFFER_TIMEOUT_MS = 25_000;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
