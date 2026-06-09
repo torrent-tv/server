@@ -67,6 +67,8 @@ export class TorrentSession {
     const sessions = Array.from(this.activeTranscodeSessions.entries());
     this.activeTranscodeSessions.clear();
     for (const [sessionId, transport] of sessions) {
+      // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
+      console.debug(`[evt] ${nowHms()} transcode-session release id=${sessionId.slice(0, 8)} reason=${reason || "(none)"}`);
       // WebRTC transport: fire-and-forget is unreliable on unload events,
       // and the proxy session expires when the data channel closes anyway.
       if (!transport.isHttp) {
@@ -450,6 +452,8 @@ export class TorrentSession {
 
     if (sessionId) {
       this.activeTranscodeSessions.set(sessionId, transport);
+      // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
+      console.debug(`[evt] ${nowHms()} transcode-session create id=${sessionId.slice(0, 8)} fileIndex=${fileIndex}`);
     }
 
     // Build a fetchFn that routes through this transport (required for WebRTC,
@@ -653,6 +657,18 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+/**
+ * Local wall-clock `HH:MM:SS.mmm` for correlating browser logs with the proxy's
+ * timestamped logs. TEMPORARY diagnostic helper.
+ *
+ * @returns {string}
+ */
+function nowHms() {
+  // UTC HH:MM:SS.mmm — matches the proxy logger's timestamp format/zone exactly
+  // so browser and proxy logs line up.
+  return new Date().toISOString().slice(11, 23);
 }
 
 function buildConsumerId() {

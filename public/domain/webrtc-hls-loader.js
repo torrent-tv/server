@@ -155,6 +155,7 @@ export function createWebRtcHlsLoader(proxy) {
           const ms = endedAt - startedAt;
           const mbps = ms > 0 ? ((byteLength * 8) / (ms / 1000) / 1e6) : 0;
           console.debug("[net-debug] dc-load", {
+            t: new Date().toISOString().slice(11, 23), // UTC HH:MM:SS.mmm — matches proxy logs
             path,
             type: context.responseType,
             bytes: byteLength,

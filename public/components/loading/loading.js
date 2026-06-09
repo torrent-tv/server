@@ -56,6 +56,7 @@ export class Loading {
   #proxySelector;
   #hlsPlayer;
   #isProcessing = false;
+  #diagnosticsAttached = false;
   #directPlaybackUnsupportedCache = new Set();
   #directPlaybackHints = new Map();
   /** @type {import("../../domain/webrtc-proxy.js").WebRtcProxy | null} */
@@ -122,8 +123,34 @@ export class Loading {
     const videoElement = payload?.videoElement;
     if (videoElement instanceof HTMLVideoElement) {
       this.#videoElement = videoElement;
+      this.#attachPlaybackDiagnostics(videoElement);
     }
   };
+
+  /**
+   * [evt] TEMPORARY: timestamped playback diagnostics (seek/stall/play) for
+   * correlating the browser timeline with the proxy's segment/restart logs.
+   *
+   * @param {HTMLVideoElement} videoElement
+   * @returns {void}
+   */
+  #attachPlaybackDiagnostics(videoElement) {
+    if (this.#diagnosticsAttached) {
+      return;
+    }
+    this.#diagnosticsAttached = true;
+    const log = (name) => {
+      // UTC HH:MM:SS.mmm — matches the proxy logger's timestamp zone/format.
+      const t = new Date().toISOString().slice(11, 23);
+      console.debug(
+        `[evt] ${t} ${name} currentTime=${videoElement.currentTime.toFixed(1)} ` +
+          `bufferedAhead=${this.#bufferedAheadSeconds(videoElement).toFixed(1)}s`
+      );
+    };
+    for (const name of ["seeking", "seeked", "waiting", "playing", "pause", "ended", "stalled", "error"]) {
+      videoElement.addEventListener(name, () => log(name));
+    }
+  }
 
   #onPlayerShow = () => {
     this.visible = false;
