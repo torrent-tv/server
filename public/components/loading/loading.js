@@ -314,7 +314,26 @@ export class Loading {
   /** @param {number} value */
   setProgress(value) {
     const safeValue = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
-    this.#progress.value = safeValue;
+    // Monotonic: the bar only moves forward, except an explicit reset to 0 (new
+    // file / new playback). This keeps it stable across within-phase
+    // fluctuations (header pieces, warmup→first-segment) and phase boundaries.
+    this.#progress.value = safeValue === 0 ? 0 : Math.max(safeValue, this.#progress.value);
+  }
+
+  /**
+   * Set the progress bar from a single phase's own 0–100% progress, mapped onto
+   * that phase's third of the bar. The pre-playback pipeline has three equal
+   * phases: 0 = download (metadata/header), 1 = transcode first segment,
+   * 2 = buffering. So each phase fills its 33.33% band.
+   *
+   * @param {0 | 1 | 2} phaseIndex
+   * @param {number} phasePercent - Progress within the phase, 0–100.
+   * @returns {void}
+   */
+  #setPhaseProgress(phaseIndex, phasePercent) {
+    const span = 100 / 3;
+    const pct = Number.isFinite(phasePercent) ? Math.max(0, Math.min(100, phasePercent)) : 0;
+    this.setProgress(phaseIndex * span + (pct / 100) * span);
   }
 
   /**
@@ -485,7 +504,7 @@ export class Loading {
     }
 
     this.setStatus(Loading.MESSAGES.selectingProxy);
-    this.setProgress(30);
+    this.#setPhaseProgress(0, 10); // phase 0 (download) — small floor before stats arrive
     const transport = await this.#acquireTransport();
     if (!transport) {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
@@ -495,7 +514,7 @@ export class Loading {
     // the proxy pre-fetches file metadata (MOOV atom / EBML headers).
     // prepareProxyPlaybackPlan will reuse the cached sourceKey.
     this.setStatus(Loading.MESSAGES.fetchingMetadata);
-    this.setProgress(38);
+    this.#setPhaseProgress(0, 20); // phase 0 floor; header download % (stats poll) drives the rest
     const earlySourceKey = await this.#session.registerSourceOnProxy(transport);
     const stopStatsPoll = this.#startTorrentStatsPoll(transport, earlySourceKey, fileIndex);
 
@@ -507,7 +526,7 @@ export class Loading {
     }
 
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
-    this.setProgress(45);
+    this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 
     const codecSupport = await this.#predictCodecSupport({
       audioCodec: prepared.audioCodec,
@@ -885,7 +904,7 @@ export class Loading {
         ? options.statusMessage
         : Loading.MESSAGES.preparingHls
     );
-    this.setProgress(55);
+    this.#setPhaseProgress(1, 0); // entering phase 1 (transcode first segment)
 
     // For WebRTC transport, HLS.js must route all requests through the data channel.
     const hlsLoader = !transport.isHttp && this.#proxy
@@ -971,7 +990,7 @@ export class Loading {
         return;
       }
       const pct = Math.max(0, Math.min(100, (ahead / targetSeconds) * 100));
-      this.setProgress(95 + pct * 0.05); // 95 → 100 as the cushion fills
+      this.#setPhaseProgress(2, pct); // phase 2 (buffering) fills the final third
       this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(targetSeconds)} s`);
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -1079,8 +1098,8 @@ export class Loading {
       const remainSeconds = Math.max(0, segmentDurationSec - segmentProcessed);
       const etaSeconds = speedMultiplier > 0 ? remainSeconds / speedMultiplier : NaN;
       const etaText = Number.isFinite(etaSeconds) ? this.#formatDuration(etaSeconds) : "n/a";
-      // Map first-segment progress onto the 55 → 95 range of the loading bar.
-      this.setProgress(55 + pct * 0.4);
+      // Phase 1 (transcode first segment) fills its third by first-segment %.
+      this.#setPhaseProgress(1, pct);
       this.setStatus(
         `Preparing first segment... ${Math.round(pct)}%\n` +
           `ETA (dynamic): ${etaText}` +
@@ -1094,7 +1113,9 @@ export class Loading {
       const etaText = Number.isFinite(warmupRemainingSeconds)
         ? this.#formatDuration(warmupRemainingSeconds)
         : "n/a";
-      this.setProgress(Math.max(45, Math.min(55, 45 + warmupPercent * 0.1)));
+      // Warmup is the lead-in of phase 1 → fills only the first ~20% of its band
+      // so the first-segment progress (0–100%) that follows doesn't jump back.
+      this.#setPhaseProgress(1, warmupPercent * 0.2);
       this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nETA (dynamic): ${etaText}`);
     }
   }
@@ -1371,13 +1392,29 @@ export class Loading {
    */
   #updateMetadataStatus(stats) {
     const peers = typeof stats?.numPeers === "number" ? stats.numPeers : 0;
-    const speed = this.#formatBytes(stats?.downloadSpeed ?? 0);
+    const downloadSpeed = typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0;
+    const speed = this.#formatBytes(downloadSpeed);
     const fileProgress = typeof stats?.fileProgress === "number" ? stats.fileProgress : null;
     const fileDownloaded = typeof stats?.fileDownloaded === "number" ? stats.fileDownloaded : null;
     const fileLength = typeof stats?.fileLength === "number" ? stats.fileLength : null;
+    const headerBytes = typeof stats?.headerBytes === "number" ? stats.headerBytes : null;
+    const headerDownloadedBytes =
+      typeof stats?.headerDownloadedBytes === "number" ? stats.headerDownloadedBytes : null;
 
     const peersLine = `Peers: ${peers}`;
     const speedLine = `Speed: ${speed}/s`;
+
+    // Phase 1 → phase 2 (transcode): progress and ETA toward having the
+    // header/index downloaded so the codec probe can run. Coarse (whole pieces).
+    let phaseLine = "";
+    if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
+      const pct = Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100));
+      const remaining = Math.max(0, headerBytes - headerDownloadedBytes);
+      const etaText =
+        downloadSpeed > 0 ? `~${this.#formatDuration(remaining / downloadSpeed)}` : "n/a";
+      phaseLine = `\nTo next phase: ${Math.round(pct)}% • ETA ${etaText}`;
+      this.#setPhaseProgress(0, pct); // phase 0 (download) fills its third by header %
+    }
 
     let fileLine = "";
     if (fileProgress !== null && fileLength !== null && fileLength > 0) {
@@ -1387,7 +1424,7 @@ export class Loading {
       fileLine = `\nFile: ${pct}% (${downloaded} / ${total})`;
     }
 
-    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${peersLine} • ${speedLine}${fileLine}`);
+    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${peersLine} • ${speedLine}${phaseLine}${fileLine}`);
   }
 
   /**
