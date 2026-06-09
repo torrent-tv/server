@@ -188,6 +188,13 @@ export class Player {
 
   /** @param {boolean} value */
   set visible(value) {
+    // Invariant: nothing plays while the player is hidden. A hidden <video>
+    // (display:none) still emits audio, so pause whenever we hide — covers the
+    // loading/pre-buffer screen, errors and reset. Playback is (re)started only
+    // in #onShow when the player is actually revealed.
+    if (!value && this.#video instanceof HTMLVideoElement && !this.#video.paused) {
+      this.#video.pause();
+    }
     this.#root.hidden = !value;
     this.#root.inert = !value;
   }
