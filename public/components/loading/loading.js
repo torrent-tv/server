@@ -914,17 +914,24 @@ export class Loading {
     // waitForHlsPlaylist returns immediately for the synthetic VOD playlist, so
     // its progress polling stops here — poll the session directly until the
     // player is ready.
+    // Phase 1 — first segment production: the progress poll writes the loading
+    // status ("Preparing first segment… / ETA").
     const stopProgressPoll = this.#startTranscodeProgressPoll();
     try {
       await this.#ensureVideoReady({ requireDecodedFrame: false });
-      // Pre-buffer: don't reveal the player until a cushion of video is buffered
-      // ahead, so a transient production/delivery dip right after start doesn't
-      // immediately stall. hls.js keeps appending to the buffer while the video
-      // is still paused/occluded, so this fills during the loading screen.
-      await this.#waitForPrebuffer(this.#videoElement, PREBUFFER_TARGET_SECONDS, PREBUFFER_TIMEOUT_MS);
     } finally {
+      // Stop the poll BEFORE pre-buffering, so only #waitForPrebuffer writes the
+      // status during the cushion fill. Otherwise both write it (poll every ~1 s,
+      // pre-buffer every 250 ms) and the text flickers between "ETA…" and
+      // "Buffering…".
       stopProgressPoll();
     }
+    // Phase 2 — pre-buffer: don't reveal the player until a cushion of video is
+    // buffered ahead, so a transient production/delivery dip right after start
+    // doesn't immediately stall. The video stays paused (player hidden) so hls.js
+    // fills the buffer without draining it; #waitForPrebuffer is the only status
+    // writer here.
+    await this.#waitForPrebuffer(this.#videoElement, PREBUFFER_TARGET_SECONDS, PREBUFFER_TIMEOUT_MS);
   }
 
   /**
