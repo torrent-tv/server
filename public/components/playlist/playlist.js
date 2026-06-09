@@ -43,6 +43,7 @@ export class Playlist {
     const payload = event instanceof CustomEvent ? event.detail : null;
     const fileIndex = Number(payload?.fileIndex);
     this.#currentFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
+    this.#updateActiveHighlight();
   };
 
 
@@ -129,6 +130,23 @@ export class Playlist {
           : String(file?.name ?? "Video");
       item.append(button);
       this.#root.append(item);
+    }
+    this.#updateActiveHighlight();
+  }
+
+  /**
+   * Mark the button for the currently active file via `aria-current` so it is
+   * visually and semantically distinguishable in the playlist.
+   */
+  #updateActiveHighlight() {
+    const buttons = this.#root.querySelectorAll("button[data-file-index]");
+    for (const button of buttons) {
+      const fileIndex = Number(button.dataset.fileIndex);
+      if (Number.isInteger(fileIndex) && fileIndex === this.#currentFileIndex) {
+        button.setAttribute("aria-current", "true");
+      } else {
+        button.removeAttribute("aria-current");
+      }
     }
   }
 }
