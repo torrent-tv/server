@@ -34,10 +34,9 @@
       background-color: #c00;
     }
 
-    /* Currently playing file. */
     &[aria-current="true"] {
-      font-weight: 700;
-      color: #c00;
+      background-color: #c00;
+      background-color: color-mix(#c00 90%, #000 10%);
     }
 
     &[aria-current="true"]:hover,
