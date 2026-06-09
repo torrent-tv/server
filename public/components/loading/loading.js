@@ -856,55 +856,130 @@ export class Loading {
           ...(hlsLoader ? { loader: hlsLoader } : {}),
           ...playOptions
         }),
-      onTranscodeProgress: (progress) => {
-        const value = typeof progress?.percent === "number" ? progress.percent : NaN;
-        const warmupPercent =
-          typeof progress?.warmupPercent === "number" ? progress.warmupPercent : NaN;
-        const warmupRemainingSeconds =
-          typeof progress?.warmupRemainingSeconds === "number"
-            ? progress.warmupRemainingSeconds
-            : NaN;
-        if (Number.isFinite(value)) {
-          this.setProgress(value);
-        } else if (Number.isFinite(warmupPercent)) {
-          // Keep warmup visualization in a narrow pre-transcode range.
-          const warmupProgress = Math.max(45, Math.min(55, 45 + warmupPercent * 0.1));
-          this.setProgress(warmupProgress);
-        }
-        const totalSeconds = typeof progress?.totalSeconds === "number" ? progress.totalSeconds : NaN;
-        const remainingSeconds =
-          typeof progress?.remainingSeconds === "number" ? progress.remainingSeconds : NaN;
-        if (Number.isFinite(totalSeconds) && totalSeconds > 0) {
-          const durationText = this.#formatDuration(totalSeconds);
-          const etaText = Number.isFinite(remainingSeconds) ? this.#formatDuration(remainingSeconds) : "n/a";
-          const speedText =
-            typeof progress?.speed === "string" && progress.speed.trim().length > 0
-              ? progress.speed.trim()
-              : "n/a";
-          this.setStatus(
-            `Transcoding video... ${Math.round(Number.isFinite(value) ? value : 0)}%\n` +
-              `Duration: ${durationText}\n` +
-              `ETA (dynamic): ${etaText}\n` +
-              `Speed: ${speedText}`
-          );
-          return;
-        }
-        if (Number.isFinite(warmupPercent)) {
-          const etaText = Number.isFinite(warmupRemainingSeconds)
-            ? this.#formatDuration(warmupRemainingSeconds)
-            : "n/a";
-          this.setStatus(
-            `Warming up HLS... ${Math.round(warmupPercent)}%\n` +
-              `ETA (dynamic): ${etaText}`
-          );
-        }
-      }
+      onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
     });
     // Transcoded HLS is always browser-compatible (proxy outputs H.264/AAC), so
     // a codec-decodability check is unnecessary. More importantly, waiting for a
     // presented frame here deadlocks on iOS because the player view is still
     // occluded by the modal loading dialog (see #ensureVideoReady).
-    await this.#ensureVideoReady({ requireDecodedFrame: false });
+    //
+    // Keep the status moving while the FIRST segment is produced and buffered:
+    // waitForHlsPlaylist returns immediately for the synthetic VOD playlist, so
+    // its progress polling stops here — poll the session directly until the
+    // player is ready.
+    const stopProgressPoll = this.#startTranscodeProgressPoll();
+    try {
+      await this.#ensureVideoReady({ requireDecodedFrame: false });
+    } finally {
+      stopProgressPoll();
+    }
+  }
+
+  /**
+   * Poll the active transcode session's progress every second and render it,
+   * until the returned stop function is called. Used to keep the loading status
+   * moving while the first segment is produced/buffered after the playlist is
+   * already available.
+   *
+   * @returns {() => void} Stop function.
+   */
+  #startTranscodeProgressPoll() {
+    let stopped = false;
+    const tick = async () => {
+      while (!stopped) {
+        try {
+          const progress = await this.#session.fetchActiveTranscodeProgress();
+          if (!stopped && progress) {
+            this.#renderTranscodeProgress(progress);
+          }
+        } catch (_error) {
+          // Transient errors (session not ready yet) are ignored.
+        }
+        if (stopped) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    };
+    void tick();
+    return () => {
+      stopped = true;
+    };
+  }
+
+  /**
+   * Render loading status oriented to the FIRST segment — the only thing the
+   * player waits for before playback starts. Shows transcoder warmup while
+   * ffmpeg spins up, then progress toward producing the first segment with a
+   * dynamic ETA derived from the encode speed. Used both by the warmup polling
+   * inside the transcode session and by #startTranscodeProgressPoll.
+   *
+   * @param {object | null} progress
+   * @returns {void}
+   */
+  #renderTranscodeProgress(progress) {
+    if (!progress || typeof progress !== "object") {
+      return;
+    }
+    const segmentDurationSec =
+      typeof progress.segmentDurationSec === "number" && progress.segmentDurationSec > 0
+        ? progress.segmentDurationSec
+        : NaN;
+    const startPositionSeconds =
+      typeof progress.startPositionSeconds === "number" ? progress.startPositionSeconds : 0;
+    const processedSeconds =
+      typeof progress.processedSeconds === "number" ? progress.processedSeconds : NaN;
+    const warmupPercent =
+      typeof progress.warmupPercent === "number" ? progress.warmupPercent : NaN;
+    const warmupRemainingSeconds =
+      typeof progress.warmupRemainingSeconds === "number" ? progress.warmupRemainingSeconds : NaN;
+    const speedText =
+      typeof progress.speed === "string" && progress.speed.trim().length > 0
+        ? progress.speed.trim()
+        : "";
+
+    // First-segment progress: how much of the first segment ffmpeg has encoded.
+    const segmentProcessed = Number.isFinite(processedSeconds)
+      ? Math.max(0, processedSeconds - startPositionSeconds)
+      : NaN;
+    if (Number.isFinite(segmentDurationSec) && Number.isFinite(segmentProcessed) && segmentProcessed > 0) {
+      const pct = Math.max(0, Math.min(100, (segmentProcessed / segmentDurationSec) * 100));
+      const speedMultiplier = this.#parseSpeedMultiplier(speedText);
+      const remainSeconds = Math.max(0, segmentDurationSec - segmentProcessed);
+      const etaSeconds = speedMultiplier > 0 ? remainSeconds / speedMultiplier : NaN;
+      const etaText = Number.isFinite(etaSeconds) ? this.#formatDuration(etaSeconds) : "n/a";
+      // Map first-segment progress onto the 55 → 95 range of the loading bar.
+      this.setProgress(55 + pct * 0.4);
+      this.setStatus(
+        `Preparing first segment... ${Math.round(pct)}%\n` +
+          `ETA (dynamic): ${etaText}` +
+          (speedText ? `\nSpeed: ${speedText}` : "")
+      );
+      return;
+    }
+
+    // Warmup phase: ffmpeg is starting and has not produced segment data yet.
+    if (Number.isFinite(warmupPercent)) {
+      const etaText = Number.isFinite(warmupRemainingSeconds)
+        ? this.#formatDuration(warmupRemainingSeconds)
+        : "n/a";
+      this.setProgress(Math.max(45, Math.min(55, 45 + warmupPercent * 0.1)));
+      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nETA (dynamic): ${etaText}`);
+    }
+  }
+
+  /**
+   * Parse an ffmpeg speed string like "3.24x" into a numeric multiplier.
+   *
+   * @param {string} speed
+   * @returns {number} The multiplier, or NaN when not parseable.
+   */
+  #parseSpeedMultiplier(speed) {
+    if (typeof speed !== "string") {
+      return NaN;
+    }
+    const match = speed.match(/([\d.]+)\s*x/i);
+    return match ? Number(match[1]) : NaN;
   }
 
   /**

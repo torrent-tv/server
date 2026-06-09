@@ -17,6 +17,11 @@ export class TorrentSession {
      * @type {Map<string, import("./proxy-transport.js").ProxyTransport>}
      */
     this.activeTranscodeSessions = new Map();
+    /**
+     * How to poll the most recently created transcode session's progress.
+     * @type {{ progressUrl: string, fetchFn: (url: string, options?: object) => Promise<Response> } | null}
+     */
+    this.activeProgressPoll = null;
   }
 
   clear(options = {}) {
@@ -30,6 +35,22 @@ export class TorrentSession {
     this.releaseActiveTranscodeSessions({ preferBeacon, reason });
     this.current = null;
     this.proxySourceKeyCache.clear();
+    this.activeProgressPoll = null;
+  }
+
+  /**
+   * Fetch the latest progress snapshot for the most recently created transcode
+   * session. Lets callers keep updating the UI while the first segment is being
+   * produced/buffered, after `waitForHlsPlaylist` has already returned.
+   *
+   * @returns {Promise<object | null>}
+   */
+  async fetchActiveTranscodeProgress() {
+    const poll = this.activeProgressPoll;
+    if (!poll || typeof poll.progressUrl !== "string" || poll.progressUrl.length === 0) {
+      return null;
+    }
+    return fetchTranscodeProgress(poll.progressUrl, this.abortController.signal, poll.fetchFn);
   }
 
   abortPendingRequests() {
@@ -437,6 +458,12 @@ export class TorrentSession {
       const parsed = new URL(url);
       return transport.fetch(parsed.pathname + parsed.search, fetchOptions);
     };
+
+    // Remember how to poll this session's progress so callers can keep showing
+    // live status AFTER the playlist is ready, while the first segment is being
+    // produced and buffered (waitForHlsPlaylist returns immediately for the
+    // synthetic VOD playlist, so it cannot drive that part of the UI).
+    this.activeProgressPoll = progressUrl ? { progressUrl, fetchFn } : null;
 
     await waitForHlsPlaylist(playlistUrl, 15 * 60_000, {
       progressUrl,
