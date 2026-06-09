@@ -70,8 +70,13 @@ class TorrentTV {
     );
   };
 
+  #logEvt(message) {
+    console.debug(`[evt] ${new Date().toISOString().slice(11, 23)} ${message}`);
+  }
+
   /** @param {CustomEvent} event */
   #onPlaybackReady = () => {
+    this.#logEvt("transition→PLAYING cause=LOADING:PLAYBACK_READY (→PLAYER:SHOW)");
     this.#transitionTo(TorrentTV.STATE.PLAYING);
     this.#isBusy = false;
     this.#showPlayer();
@@ -83,6 +88,7 @@ class TorrentTV {
     const payload = event instanceof CustomEvent ? event.detail : null;
     const description =
       typeof payload?.description === "string" ? payload.description : TorrentTV.MESSAGES.playbackFailed("");
+    this.#logEvt(`transition→ERROR cause=LOADING:PLAYBACK_FAILED (→ERROR:SHOW) "${description}"`);
     this.#transitionTo(TorrentTV.STATE.ERROR);
     this.#isBusy = false;
     this.#showError(TorrentTV.MESSAGES.playbackFailed(description));
