@@ -140,7 +140,8 @@ export class Loading {
     }
     this.#diagnosticsAttached = true;
     const log = (name) => {
-      // UTC HH:MM:SS.mmm — matches the proxy logger's timestamp zone/format.
+      // UTC HH:MM:SS.mmm — same timezone as the proxy logger, so browser and
+      // proxy logs line up exactly when correlating them.
       const t = new Date().toISOString().slice(11, 23);
       console.debug(
         `[evt] ${t} ${name} currentTime=${videoElement.currentTime.toFixed(1)} ` +
@@ -150,6 +151,18 @@ export class Loading {
     for (const name of ["seeking", "seeked", "waiting", "playing", "pause", "ended", "stalled", "error"]) {
       videoElement.addEventListener(name, () => log(name));
     }
+    // [evt] TEMPORARY: periodic buffer-health tick while playing — surfaces a
+    // buffer draining/resetting mid-playback (#3) even when no other event fires.
+    window.setInterval(() => {
+      if (videoElement.paused || videoElement.ended || videoElement.readyState < 2) {
+        return;
+      }
+      const t = new Date().toISOString().slice(11, 23);
+      console.debug(
+        `[evt] ${t} buffer-health currentTime=${videoElement.currentTime.toFixed(1)} ` +
+          `bufferedAhead=${this.#bufferedAheadSeconds(videoElement).toFixed(1)}s ranges=${videoElement.buffered.length}`
+      );
+    }, 10_000);
   }
 
   #onPlayerShow = () => {

@@ -666,8 +666,8 @@ function delay(ms) {
  * @returns {string}
  */
 function nowHms() {
-  // UTC HH:MM:SS.mmm — matches the proxy logger's timestamp format/zone exactly
-  // so browser and proxy logs line up.
+  // UTC HH:MM:SS.mmm — same timezone as the proxy logger, so browser and proxy
+  // logs line up exactly when correlating them.
   return new Date().toISOString().slice(11, 23);
 }
 
