@@ -109,6 +109,7 @@ export class Playlist {
       return;
     }
     this.#currentFileIndex = fileIndex;
+    this.#updateActiveHighlight(); // immediate feedback; SET_ACTIVE_MEDIA_FILE confirms later
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SELECT_MEDIA_FILE, {
         detail: { fileIndex }
