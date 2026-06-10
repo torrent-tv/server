@@ -5,6 +5,12 @@ import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import {
+  detectSubtitleInfo,
+  buildSubtitleLabel,
+  matchSubtitlesForVideo,
+  convertSubtitleToVtt
+} from "../../domain/subtitle-utils.js";
 
 /**
  * Loading view.
@@ -63,6 +69,10 @@ export class Loading {
   #proxy = null;
   /** @type {import("../../domain/proxy-transport.js").ProxyTransport | null} */
   #transport = null;
+  /** @type {Array<object>} All subtitle files parsed from the current torrent. */
+  #subtitleFiles = [];
+  /** @type {string[]} Blob URLs created for active subtitle tracks; revoked on cleanup. */
+  #subtitleBlobUrls = [];
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -237,6 +247,7 @@ export class Loading {
       reason: typeof options?.reason === "string" ? options.reason : ""
     });
     this.#hlsPlayer.clear();
+    this.#clearSubtitleTracks();
     if (this.#proxy) {
       this.#proxy.close();
       this.#proxy = null;
@@ -361,6 +372,7 @@ export class Loading {
 
     try {
       this.#hlsPlayer.clear();
+      this.#clearSubtitleTracks();
       this.#session.clear();
       const parsed = this.#session.openParsedTorrentDetails({
         fileName: file.name,
@@ -410,6 +422,11 @@ export class Loading {
       if (videoCount === 1) {
         const videoFileIndex = mediaFiles.video[0].index;
         await this.#playVideoFile(videoFileIndex);
+        void this.#loadSubtitlesForVideo(videoFileIndex).catch((e) => {
+          if (!this.#isAbortError(e)) {
+            console.warn("[torrent-tv][subtitles] load failed:", e);
+          }
+        });
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
@@ -434,6 +451,7 @@ export class Loading {
     const video = Array.isArray(mediaFiles?.video) ? mediaFiles.video : parsedFiles.filter((entry) => entry.isVideo);
     const audio = Array.isArray(mediaFiles?.audio) ? mediaFiles.audio : [];
     const subtitles = Array.isArray(mediaFiles?.subtitles) ? mediaFiles.subtitles : [];
+    this.#subtitleFiles = subtitles;
     return { video, audio, subtitles };
   }
 
@@ -448,6 +466,7 @@ export class Loading {
     this.#isProcessing = true;
     try {
       this.#hlsPlayer.clear();
+      this.#clearSubtitleTracks();
       // Release the previous file's transcode session so the proxy stops its
       // ffmpeg immediately. Otherwise switching episodes leaves the old encode
       // running in parallel with the new one, splitting the (ARM) CPU and
@@ -455,6 +474,11 @@ export class Loading {
       this.#session.releaseActiveTranscodeSessions({ reason: "switch-file" });
       this.setStatus(Loading.MESSAGES.switchingToSelectedFile);
       await this.#playVideoFile(fileIndex);
+      void this.#loadSubtitlesForVideo(fileIndex).catch((e) => {
+        if (!this.#isAbortError(e)) {
+          console.warn("[torrent-tv][subtitles] load failed:", e);
+        }
+      });
       this.setProgress(100);
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
     } finally {
@@ -868,6 +892,131 @@ export class Loading {
         throw error;
       }
       return false;
+    }
+  }
+
+  /**
+   * Remove all subtitle `<track>` elements from the video element and revoke
+   * any Blob URLs that were created for them.
+   */
+  #clearSubtitleTracks() {
+    for (const url of this.#subtitleBlobUrls) {
+      URL.revokeObjectURL(url);
+    }
+    this.#subtitleBlobUrls = [];
+    if (this.#videoElement instanceof HTMLVideoElement) {
+      for (const track of Array.from(this.#videoElement.querySelectorAll("track"))) {
+        track.remove();
+      }
+    }
+  }
+
+  /**
+   * Find subtitle files that match `fileIndex`, download each one through the
+   * proxy transport, convert to WebVTT, and attach as `<track>` elements on the
+   * video element.
+   *
+   * Fire-and-forget — call with `void … .catch(…)`.  Silently skips individual
+   * subtitle files that fail to load; throws only on AbortError.
+   *
+   * No-op when:
+   * - No proxy transport is available (webseed-only playback).
+   * - No subtitle files were parsed for this torrent.
+   * - No subtitle files match the selected video.
+   *
+   * @param {number} fileIndex
+   * @returns {Promise<void>}
+   */
+  async #loadSubtitlesForVideo(fileIndex) {
+    this.#clearSubtitleTracks();
+
+    const transport = this.#transport;
+    if (!transport) {
+      return; // webseed-only — no proxy to fetch subtitles from
+    }
+    if (this.#subtitleFiles.length === 0) {
+      return;
+    }
+    if (!(this.#videoElement instanceof HTMLVideoElement)) {
+      return;
+    }
+
+    const files = this.#session.current?.files;
+    if (!Array.isArray(files)) {
+      return;
+    }
+    const videoFile = files[fileIndex];
+    if (!videoFile) {
+      return;
+    }
+
+    const matched = matchSubtitlesForVideo(videoFile, this.#subtitleFiles);
+    if (matched.length === 0) {
+      return;
+    }
+
+    let sourceKey;
+    try {
+      sourceKey = await this.#session.registerSourceOnProxy(transport);
+    } catch (e) {
+      console.warn("[torrent-tv][subtitles] could not obtain sourceKey:", e);
+      return;
+    }
+
+    let isFirst = true;
+    for (const sub of matched) {
+      try {
+        const ext = sub.name.slice(sub.name.lastIndexOf(".")).toLowerCase();
+        const response = await transport.fetch(
+          `/stream?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${sub.index}`,
+          { signal: this.#session.abortController.signal }
+        );
+        if (!response.ok) {
+          console.warn(
+            `[torrent-tv][subtitles] fetch failed (${response.status}) for`,
+            sub.relativePath ?? sub.name
+          );
+          continue;
+        }
+
+        const text = await response.text();
+        const vtt = convertSubtitleToVtt(text, ext);
+        if (!vtt) {
+          // Unsupported format (e.g. .sup image-based subtitles).
+          continue;
+        }
+
+        const blob = new Blob([vtt], { type: "text/vtt" });
+        const blobUrl = URL.createObjectURL(blob);
+        this.#subtitleBlobUrls.push(blobUrl);
+
+        const info = detectSubtitleInfo(sub);
+        const label = buildSubtitleLabel(info);
+
+        const track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = label;
+        track.srclang = info.code;
+        track.src = blobUrl;
+        if (isFirst) {
+          track.default = true;
+          isFirst = false;
+        }
+        this.#videoElement.appendChild(track);
+        console.debug(
+          `[torrent-tv][subtitles] loaded "${label}" (${info.code}) from`,
+          sub.relativePath ?? sub.name
+        );
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") {
+          throw e;
+        }
+        console.warn(
+          "[torrent-tv][subtitles] error loading",
+          sub.relativePath ?? sub.name,
+          e
+        );
+      }
     }
   }
 
