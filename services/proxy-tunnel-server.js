@@ -38,6 +38,9 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * @property {(handler: (sessionId: string, signal: WebRtcSignal) => void) => void} setSignalHandler
  *   Wire up the callback that receives WebRTC signals from proxies.
  *   Called once during server bootstrap.
+ * @property {(handler: (proxyId: string, endpoint: { externalIp: string | null, externalPort: number, protocol: string }) => void) => void} setEndpointHandler
+ *   Wire up the callback that receives `proxy-endpoint` reports (the UPnP-mapped
+ *   external endpoint). Called once during server bootstrap.
  * @property {(proxyId: string, timeoutMs?: number) => Promise<{ metrics: import("../../../proxy/services/health-collector.js").HealthMetrics, rttMs: number }>} requestHealth
  *   Send a `health-request` to a proxy and resolve with the response.
  *   `rttMs` is the full tunnel round-trip time.
@@ -83,14 +86,23 @@ export function createProxyTunnelServer() {
   let onSignalFromProxy = null;
 
   /**
+   * Called when a proxy reports its UPnP-mapped external endpoint.
+   * Set from the outside (server.js) to trigger the dial-back probe.
+   *
+   * @type {((proxyId: string, endpoint: { externalIp: string | null, externalPort: number, protocol: string }) => void) | null}
+   */
+  let onEndpointFromProxy = null;
+
+  /**
    * Process a single WebSocket message received from a proxy.
    * Routes the message to the correct pending request by requestId,
-   * or forwards WebRTC signal messages to the signal hub.
+   * or forwards WebRTC signal / endpoint messages to their handlers.
    *
    * @param {Buffer | string} rawData
+   * @param {string} proxyId - The proxy that owns this tunnel connection.
    * @returns {void}
    */
-  function onMessage(rawData) {
+  function onMessage(rawData, proxyId) {
     let message;
     try {
       message = JSON.parse(rawData.toString());
@@ -100,6 +112,14 @@ export function createProxyTunnelServer() {
 
     // Keepalive ping from proxy — respond with pong and ignore otherwise.
     if (message.type === "ping") {
+      return;
+    }
+
+    // Endpoint report from proxy (UPnP-mapped external endpoint).
+    if (message.type === "proxy-endpoint") {
+      if (message.endpoint && onEndpointFromProxy) {
+        onEndpointFromProxy(proxyId, message.endpoint);
+      }
       return;
     }
 
@@ -184,7 +204,7 @@ export function createProxyTunnelServer() {
         previousSocket.close(1000, "replaced");
       }
       connections.set(proxyId, socket);
-      socket.on("message", onMessage);
+      socket.on("message", (data) => onMessage(data, proxyId));
       socket.on("close", () => {
         if (connections.get(proxyId) === socket) {
           connections.delete(proxyId);
@@ -212,6 +232,17 @@ export function createProxyTunnelServer() {
      */
     setSignalHandler(handler) {
       onSignalFromProxy = handler;
+    },
+
+    /**
+     * Wire up the callback that receives `proxy-endpoint` reports.
+     * Called once during server bootstrap.
+     *
+     * @param {(proxyId: string, endpoint: { externalIp: string | null, externalPort: number, protocol: string }) => void} handler
+     * @returns {void}
+     */
+    setEndpointHandler(handler) {
+      onEndpointFromProxy = handler;
     },
 
     /**
