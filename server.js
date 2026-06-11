@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createProxyClientsStore } from "./store/proxy-clients-store.js";
 import { createProxyTunnelServer } from "./services/proxy-tunnel-server.js";
+import { createReachabilityProber } from "./services/reachability-prober.js";
 import { handleApiProxyClientsRegisterPost } from "./routes/api/proxy-clients/register/post.js";
 import { handleApiProxyClientsGet } from "./routes/api/proxy-clients/get.js";
 import { handleApiProxyClientsHealthGet } from "./routes/api/proxy-clients/health/get.js";
@@ -44,6 +45,17 @@ const signalHub = createSignalHub();
 // Wire up signal routing: proxy → tunnelServer → signalHub → browser
 tunnelServer.setSignalHandler((sessionId, signal) => {
   signalHub.forwardToBrowser(sessionId, signal);
+});
+
+// Dial-back reachability probe: when a proxy reports its UPnP-mapped endpoint,
+// connect to it from the droplet to verify it is reachable from the internet.
+const reachabilityProber = createReachabilityProber({ clientsStore, tunnelServer });
+tunnelServer.setEndpointHandler((proxyId, endpoint) => {
+  void reachabilityProber.probe(proxyId, endpoint);
+});
+reachabilityProber.start();
+app.addHook("onClose", async () => {
+  reachabilityProber.stop();
 });
 
 await app.register(fastifyWebsocket);
