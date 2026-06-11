@@ -271,7 +271,7 @@ export class TorrentSession {
    *
    * @param {number} fileIndex
    * @param {ProxyTransport} transport
-   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string }>}
+   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string, container: string, durationSeconds: number, pending: boolean }>}
    */
   async prepareProxyPlaybackPlan(fileIndex, transport) {
     if (!this.current || this.current.type !== "torrent") {
@@ -330,6 +330,11 @@ export class TorrentSession {
         ? payload.durationSeconds
         : 0;
 
+    // `pending` = the file header is still downloading and codecs could not be
+    // probed yet. The caller should poll again (the proxy keeps the header
+    // prioritised). Not a failure.
+    const pending = payload?.pending === true;
+
     return {
       sourceKey,
       directUrl,
@@ -337,7 +342,8 @@ export class TorrentSession {
       audioCodec,
       videoCodec,
       container,
-      durationSeconds
+      durationSeconds,
+      pending
     };
   }
 
