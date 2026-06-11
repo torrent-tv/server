@@ -108,6 +108,9 @@
 
     <script src="/env.js"></script>
     <script src="/vendor/hls.min.js"></script>
+    <!-- Forward browser console logs to the server (debugging aid). Loaded
+         first so it patches console before the component modules run. -->
+    <script type="module" src="./shared/client-logger.js"></script>
     <script type="module" src="./components/torrent/torrent.js"></script>
     <script type="module" src="./components/loading/loading.js"></script>
     <script type="module" src="./components/error/error.js"></script>
