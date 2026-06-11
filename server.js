@@ -13,6 +13,7 @@ import { createReachabilityProber } from "./services/reachability-prober.js";
 import { handleApiProxyClientsRegisterPost } from "./routes/api/proxy-clients/register/post.js";
 import { handleApiProxyClientsGet } from "./routes/api/proxy-clients/get.js";
 import { handleApiProxyClientsHealthGet } from "./routes/api/proxy-clients/health/get.js";
+import { handleApiClientLogsPost } from "./routes/api/client-logs/post.js";
 import { handleWsProxyTunnel } from "./routes/ws/proxy-tunnel/get.js";
 import { handleWsBrowserSignal } from "./routes/ws/browser-signal/get.js";
 import { createSignalHub } from "./services/signal-hub.js";
@@ -97,6 +98,10 @@ app.get("/api/proxy-clients", async (req, reply) =>
 app.get("/api/proxy-clients/health", async (req, reply) =>
   handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer })
 );
+
+// Browser console-log forwarder (debugging aid; writes client logs to the
+// server container log so iPhone/eruda logs need not be copy-pasted).
+app.post("/api/client-logs", async (req, reply) => handleApiClientLogsPost(req, reply));
 
 app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
 app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
