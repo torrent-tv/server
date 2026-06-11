@@ -50,8 +50,15 @@ export class Loading {
     playerNotReady: "Player is not ready.",
     startingTorrentProcessing: "Starting torrent processing...",
     switchingToSelectedFile: "Starting selected video...",
-    chooseVideoFile: "Choose a video file from playlist."
+    chooseVideoFile: "Choose a video file from playlist.",
+    headerDownloadStalled:
+      "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source."
   };
+
+  // How long to keep polling for the file header to download before giving up
+  // (cold torrent / peers connecting). The proxy returns `pending` quickly each
+  // poll, so this is a wall-clock budget, not a single blocking request.
+  static PLAN_WAIT_MS = 180_000;
 
   #dialog;
   #fileName;
@@ -546,7 +553,22 @@ export class Loading {
 
     let prepared;
     try {
-      prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
+      // Poll the playback plan until the file header has downloaded. On a cold
+      // torrent (peers still connecting) the proxy returns `pending` quickly
+      // instead of blocking — so a single request never races the transport's
+      // 60 s timeout. The stats poll above keeps showing live peers/speed/% the
+      // whole time. Bounded so a truly dead torrent (no peers) still fails.
+      const planDeadline = Date.now() + Loading.PLAN_WAIT_MS;
+      for (;;) {
+        prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
+        if (!prepared.pending) {
+          break;
+        }
+        if (Date.now() >= planDeadline) {
+          throw new Error(Loading.MESSAGES.headerDownloadStalled);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
     } finally {
       stopStatsPoll();
     }
