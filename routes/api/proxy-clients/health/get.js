@@ -12,12 +12,34 @@
  *
  * GET /api/proxy-clients/health
  *
- * @param {import("fastify").FastifyRequest} _req
+ * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
  * @param {{ clientsStore: import("../../../../store/proxy-clients-store.js").ProxyClientsStore, tunnelServer: import("../../../../services/proxy-tunnel-server.js").ProxyTunnelServer }} deps
  * @returns {Promise<void>}
  */
-export async function handleApiProxyClientsHealthGet(_req, reply, { clientsStore, tunnelServer }) {
+
+/**
+ * Public IP of the requesting browser. The site sits behind Cloudflare,
+ * which sets CF-Connecting-IP authoritatively; the X-Forwarded-For first
+ * entry and the socket address are dev-mode fallbacks.
+ *
+ * @param {import("fastify").FastifyRequest} req
+ * @returns {string | null}
+ */
+function getRequesterPublicIp(req) {
+  const cf = req.headers["cf-connecting-ip"];
+  if (typeof cf === "string" && cf.trim().length > 0) {
+    return cf.trim();
+  }
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff.trim().length > 0) {
+    return xff.split(",")[0].trim();
+  }
+  return typeof req.ip === "string" && req.ip.length > 0 ? req.ip : null;
+}
+
+export async function handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer }) {
+  const requesterIp = getRequesterPublicIp(req);
   const connected = clientsStore
     .listClients()
     .filter((client) => tunnelServer.isConnected(client.id));
@@ -42,7 +64,16 @@ export async function handleApiProxyClientsHealthGet(_req, reply, { clientsStore
         createdAt: client.createdAt,
         lastSeenAt: client.lastSeenAt,
         metrics,
-        rttMs
+        rttMs,
+        // Dial-back probe result (null = not probed yet). A false value means
+        // the inbound TCP probe failed — NOT that WebRTC cannot connect.
+        reachable: client.reachable ?? null,
+        // The viewer shares a public IP with the proxy → same network; such a
+        // proxy is usable via LAN ICE candidates even when not internet-reachable.
+        sameNetwork:
+          requesterIp !== null &&
+          typeof client.endpoint?.externalIp === "string" &&
+          client.endpoint.externalIp === requesterIp
       };
     })
   );

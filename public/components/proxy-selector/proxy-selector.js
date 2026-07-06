@@ -46,7 +46,7 @@ export class ProxySelector {
     const payload = await response.json();
     const raw = Array.isArray(payload.clients) ? payload.clients : [];
 
-    /** @type {Array<ProxyCandidate & { score: number }>} */
+    /** @type {Array<ProxyCandidate & { score: number, reachable: boolean | null, sameNetwork: boolean }>} */
     const scored = raw
       .filter((c) => typeof c.id === "string" && c.id.trim().length > 0)
       .map((c) => ({
@@ -56,6 +56,8 @@ export class ProxySelector {
         metrics: c.metrics ?? null,
         tunnelRttMs: typeof c.rttMs === "number" ? c.rttMs : null,
         channelRttMs: null,
+        reachable: typeof c.reachable === "boolean" ? c.reachable : null,
+        sameNetwork: c.sameNetwork === true,
         score: this.#scoreProxy(c.metrics, c.rttMs)
       }))
       .sort((a, b) => b.score - a.score);
@@ -63,8 +65,8 @@ export class ProxySelector {
     const debugState = getDebugState();
     debugState.proxies = {
       fetchedAt: new Date().toISOString(),
-      candidates: scored.map(({ id, name, score, metrics, tunnelRttMs }) => ({
-        id, name, score, metrics, tunnelRttMs
+      candidates: scored.map(({ id, name, score, metrics, tunnelRttMs, reachable, sameNetwork }) => ({
+        id, name, score, metrics, tunnelRttMs, reachable, sameNetwork
       })),
       selectedId: ""
     };
@@ -73,7 +75,17 @@ export class ProxySelector {
       throw new Error("No proxy clients are available.");
     }
 
-    const best = scored[0];
+    // Prefer proxies verified reachable from the internet or sitting on the
+    // viewer's own network. This is a PREFERENCE, not a filter: a failed
+    // inbound-TCP probe does not prove WebRTC cannot connect (hole punching),
+    // so when no candidate qualifies, everyone stays eligible.
+    const preferred = scored.filter((c) => c.reachable === true || c.sameNetwork === true);
+    const pool = preferred.length > 0 ? preferred : scored;
+    if (preferred.length === 0 && scored.length > 0) {
+      console.info("[proxy-selector] no reachable/same-network proxies; falling back to all candidates");
+    }
+
+    const best = pool[0];
     debugState.proxies.selectedId = best.id;
 
     // Extract the local HTTP port from the proxy's baseUrl so that

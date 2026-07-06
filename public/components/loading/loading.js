@@ -52,7 +52,9 @@ export class Loading {
     switchingToSelectedFile: "Starting selected video...",
     chooseVideoFile: "Choose a video file from playlist.",
     headerDownloadStalled:
-      "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source."
+      "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
+    connectionLost: "Connection to the proxy was lost.",
+    reconnecting: "Reconnecting..."
   };
 
   // How long to keep polling for the file header to download before giving up
@@ -80,6 +82,16 @@ export class Loading {
   #subtitleFiles = [];
   /** @type {string[]} Blob URLs created for active subtitle tracks; revoked on cleanup. */
   #subtitleBlobUrls = [];
+  /** @type {number} Index of the file currently playing (-1 = none). */
+  #activeFileIndex = -1;
+  /**
+   * Snapshot taken at the moment the proxy connection was lost, consumed by
+   * the Retry action. Captured BEFORE the error flow runs, because the error
+   * screen's #stopPlayback() clears `session.current`.
+   *
+   * @type {{ fileIndex: number, positionSeconds: number, sessionCurrent: object } | null}
+   */
+  #resumeState = null;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -245,6 +257,8 @@ export class Loading {
     this.setStatus("");
     this.setFileName("Waiting for a .torrent file...");
     this.#directPlaybackUnsupportedCache.clear();
+    this.#activeFileIndex = -1;
+    this.#resumeState = null;
   };
 
   #stopPlayback(options = {}) {
@@ -296,6 +310,7 @@ export class Loading {
     document.addEventListener(LOADING_EVENTS.SET_PROGRESS, this.#onSetProgress);
     document.addEventListener(LOADING_EVENTS.PROCESS_PLAYBACK, this.#onProcessPlayback);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
+    document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
     document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
@@ -375,6 +390,9 @@ export class Loading {
       throw new Error(Loading.MESSAGES.alreadyProcessing);
     }
 
+    // A fresh torrent invalidates any pending resume state.
+    this.#activeFileIndex = -1;
+    this.#resumeState = null;
     this.#isProcessing = true;
 
     try {
@@ -749,6 +767,9 @@ export class Loading {
       this.#transport = null;
     }
     const proxy = await this.#proxySelector.chooseBestProxy();
+    // Surface a mid-playback loss of this connection (Retry flow). A close()
+    // by #stopPlayback never fires this.
+    proxy.onConnectionLost = () => this.#onTransportLost();
     this.#proxy = proxy;
     this.#transport = ProxyTransport.fromWebRtc(proxy);
     return this.#transport;
@@ -1046,12 +1067,84 @@ export class Loading {
    * @param {number} fileIndex
    */
   #setActiveMediaFile(fileIndex) {
+    this.#activeFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, {
         detail: { fileIndex }
       })
     );
   }
+
+  /**
+   * The proxy connection died after being established (not closed by us).
+   * With a file playing, capture everything Retry needs BEFORE the error
+   * flow clears the session, then surface a recoverable error. While a
+   * loading flow is in flight its own failure path reports instead.
+   *
+   * @returns {void}
+   */
+  #onTransportLost() {
+    this.#logEvt("transport lost (data channel closed/failed)");
+    if (this.#isProcessing) {
+      return;
+    }
+    const current = this.#session.current;
+    if (!current || this.#activeFileIndex < 0) {
+      return;
+    }
+    const position =
+      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+        ? this.#videoElement.currentTime
+        : 0;
+    this.#resumeState = {
+      fileIndex: this.#activeFileIndex,
+      positionSeconds: position,
+      sessionCurrent: current
+    };
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+        detail: { description: Loading.MESSAGES.connectionLost, canRetry: true }
+      })
+    );
+  }
+
+  /**
+   * Retry after a lost connection: restore the session snapshot, replay the
+   * normal file-switch flow (the proxy is re-selected — possibly a different
+   * pool node) and jump back to the captured position. The seek is handled
+   * like a user seek by the server-side seek machinery.
+   */
+  #onRetryPlayback = () => {
+    const resume = this.#resumeState;
+    this.#resumeState = null;
+    if (!resume || !resume.sessionCurrent) {
+      return;
+    }
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.SHOW, {
+        detail: { status: Loading.MESSAGES.reconnecting, progress: 0 }
+      })
+    );
+    this.#session.current = resume.sessionCurrent;
+    void this.#switchToVideoFile(resume.fileIndex)
+      .then(() => {
+        if (resume.positionSeconds > 1 && this.#videoElement instanceof HTMLVideoElement) {
+          this.#videoElement.currentTime = resume.positionSeconds;
+        }
+      })
+      .catch((error) => {
+        if (this.#isAbortError(error)) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[torrent-tv] retry failed:", message, error);
+        document.dispatchEvent(
+          new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+            detail: { description: message }
+          })
+        );
+      });
+  };
 
   /**
    * @param {number} fileIndex
