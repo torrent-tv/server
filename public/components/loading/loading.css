@@ -13,6 +13,13 @@
     background-color: var(--view-bg);
   }
 
+  /* Buttons do not inherit color by default (iOS paints them system blue);
+     keep any control in this view on the view's text colour — including the
+     upcoming loading-cancel button. */
+  & button {
+    color: inherit;
+  }
+
   & #loading__filename {
     text-align: center;
     margin-block-end: 1rem;
