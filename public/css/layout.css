@@ -1,6 +1,18 @@
+/* This is an app, not a page: the document must never scroll. The player
+ * relies on it (#player is wider than the viewport; the playlist drawer is
+ * revealed by translate, not by scrolling). overflow: clip on the ROOT
+ * removes the page scroller entirely — body-only clip depends on
+ * body->viewport propagation, which iOS applies unreliably (the page could
+ * be scrolled after device rotation). Fixed heights keep the body bounded
+ * while dvh recalculates during rotation. */
+html {
+  block-size: 100%;
+  overflow: clip;
+}
+
 body {
   overflow: clip;
-  min-block-size: 100dvh;
+  block-size: 100dvh;
   /* App-like behaviour: no double-tap zoom (iOS ignores user-scalable=no in
      the viewport meta, but honours touch-action). */
   touch-action: manipulation;

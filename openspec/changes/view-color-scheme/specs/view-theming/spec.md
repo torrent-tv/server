@@ -10,8 +10,9 @@ form controls, scrollbars) adapt together with the app styles.
 
 #### Scenario: Dark scheme
 - **WHEN** the OS/browser colour scheme is dark
-- **THEN** every view renders a black background with white text, and accent
-  elements (progress value, hover highlights) render white
+- **THEN** every view renders a black background with soft-white text
+  (dimmed below pure white to avoid halation), and accent elements (progress
+  value, hover highlights) render pure white — brighter than the text
 
 #### Scenario: Light scheme
 - **WHEN** the OS/browser colour scheme is light
