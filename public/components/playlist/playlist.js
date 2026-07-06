@@ -65,7 +65,9 @@ export class Playlist {
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onPlaylistClose);
-    document.addEventListener(ERROR_EVENTS.SHOW, this.#onAppReset);
+    // On error only CLOSE the drawer — do not clear the file list: the error
+    // screen's "Choose File" action returns the user to this playlist.
+    document.addEventListener(ERROR_EVENTS.SHOW, this.#onPlaylistClose);
     this.#root.addEventListener("click", this.#onListClick);
   }
 

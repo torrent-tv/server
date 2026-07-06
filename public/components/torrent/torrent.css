@@ -1,5 +1,7 @@
 #torrent {
   border: none;
+  /* Modal dialogs receive focus on showModal(); hide the focus ring. */
+  outline: none;
   position: fixed;
   inset: 0;
   margin: auto;

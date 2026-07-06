@@ -1,5 +1,7 @@
 #loading {
   border: none;
+  /* Modal dialogs receive focus on showModal(); hide the focus ring. */
+  outline: none;
   font-family: sans-serif;
   inset: 0;
   line-height: 1.44;
