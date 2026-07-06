@@ -1,5 +1,7 @@
 #error {
   border: none;
+  /* Modal dialogs receive focus on showModal(); hide the focus ring. */
+  outline: none;
   box-sizing: border-box;
   padding: 2rem;
   font-family: sans-serif;
