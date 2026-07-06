@@ -96,6 +96,34 @@ export class WebRtcProxy {
    * @type {Promise<void> | null}
    */
   #pnaFetchPromise = null;
+  /** @type {boolean} True once the data channel opened successfully. */
+  #connected = false;
+  /** @type {boolean} True when close() was called by the app itself. */
+  #closedByUser = false;
+  /** @type {boolean} Guards onConnectionLost against double-firing. */
+  #lostFired = false;
+
+  /**
+   * Called once when an ESTABLISHED connection is lost (data channel closed
+   * or the peer connection failed) and the loss was not initiated by our own
+   * close(). Assign a handler to react to mid-playback proxy loss.
+   *
+   * @type {(() => void) | null}
+   */
+  onConnectionLost = null;
+
+  /** Fire onConnectionLost once, only for losses of an established connection. */
+  #fireConnectionLost() {
+    if (!this.#connected || this.#closedByUser || this.#lostFired) {
+      return;
+    }
+    this.#lostFired = true;
+    try {
+      this.onConnectionLost?.();
+    } catch (error) {
+      console.warn("[webrtc-proxy] onConnectionLost handler failed:", error);
+    }
+  }
 
   /**
    * @param {string} proxyId
@@ -242,7 +270,10 @@ export class WebRtcProxy {
     // rather than Blob so they can be parsed synchronously.
     this.#channel.binaryType = "arraybuffer";
 
-    this.#channel.addEventListener("open", () => settle());
+    this.#channel.addEventListener("open", () => {
+      this.#connected = true;
+      settle();
+    });
 
     this.#channel.addEventListener("error", (event) => {
       settle(new Error(`Data channel error: ${event.message ?? "unknown"}`));
@@ -257,6 +288,7 @@ export class WebRtcProxy {
         entry.reject(new Error("Data channel closed."));
       }
       this.#pending.clear();
+      this.#fireConnectionLost();
     });
 
     this.#pc.addEventListener("icecandidate", (event) => {
@@ -273,6 +305,7 @@ export class WebRtcProxy {
     this.#pc.addEventListener("connectionstatechange", () => {
       if (this.#pc?.connectionState === "failed") {
         settle(new Error("WebRTC connection failed."));
+        this.#fireConnectionLost();
       }
     });
 
@@ -511,6 +544,8 @@ export class WebRtcProxy {
    * Close the data channel, peer connection, and signalling WebSocket.
    */
   close() {
+    // Deliberate close — must not be reported as a lost connection.
+    this.#closedByUser = true;
     this.#ws?.close();
     this.#channel?.close();
     this.#pc?.close();

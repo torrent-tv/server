@@ -88,10 +88,17 @@ class TorrentTV {
     const payload = event instanceof CustomEvent ? event.detail : null;
     const description =
       typeof payload?.description === "string" ? payload.description : TorrentTV.MESSAGES.playbackFailed("");
-    this.#logEvt(`transition→ERROR cause=LOADING:PLAYBACK_FAILED (→ERROR:SHOW) "${description}"`);
+    const canRetry = payload?.canRetry === true;
+    this.#logEvt(`transition→ERROR cause=LOADING:PLAYBACK_FAILED (→ERROR:SHOW) "${description}" canRetry=${canRetry}`);
     this.#transitionTo(TorrentTV.STATE.ERROR);
     this.#isBusy = false;
-    this.#showError(TorrentTV.MESSAGES.playbackFailed(description));
+    this.#showError(TorrentTV.MESSAGES.playbackFailed(description), { canRetry });
+  };
+
+  #onRetryPlayback = () => {
+    this.#logEvt("transition→PROCESSING cause=APP:RETRY_PLAYBACK");
+    this.#transitionTo(TorrentTV.STATE.PROCESSING);
+    this.#isBusy = true;
   };
 
   #onAppReset = () => {
@@ -108,6 +115,7 @@ class TorrentTV {
     document.addEventListener(TORRENT_EVENTS.FILE_DETAILS_READY, this.#onTorrentFileDetailsReady);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_READY, this.#onPlaybackReady);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_FAILED, this.#onPlaybackFailed);
+    document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, () => {
       this.#isBusy = false;
@@ -138,8 +146,11 @@ class TorrentTV {
     );
   }
 
-  /** @param {string} description */
-  #showError(description) {
+  /**
+   * @param {string} description
+   * @param {{ canRetry?: boolean }} [options]
+   */
+  #showError(description, { canRetry = false } = {}) {
     this.#transitionTo(TorrentTV.STATE.ERROR);
     document.dispatchEvent(
       new CustomEvent(ERROR_EVENTS.SHOW, {
@@ -148,7 +159,9 @@ class TorrentTV {
           description,
           // Show "Choose File" only when the torrent has multiple video files
           // so the user can pick a different one without re-uploading the torrent.
-          canGoBackToPlaylist: this.#videoCount > 1
+          canGoBackToPlaylist: this.#videoCount > 1,
+          // Recoverable error (connection lost mid-playback) — offer Retry.
+          canRetry
         }
       })
     );

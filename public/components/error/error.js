@@ -5,8 +5,10 @@ import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../s
  *
  * Responsibilities:
  * - Render title/description on `ERROR:SHOW`.
- * - Always show a "New Torrent" button that resets to the torrent picker.
- * - Show a "Choose File" button when the payload includes `canGoBackToPlaylist: true`.
+ * - Show a "Retry" button when the payload includes `canRetry: true`
+ *   (connection lost mid-playback; retry resumes the same file).
+ * - Show a "New Torrent" button that resets to the torrent picker, or a
+ *   "Choose File" button when the payload includes `canGoBackToPlaylist: true`.
  * - Hide on `LOADING:SHOW`, `PLAYER:SHOW`, `APP:RESET_TO_PICKER`, and `APP:BACK_TO_PLAYLIST`.
  */
 export class ErrorDialog {
@@ -14,6 +16,7 @@ export class ErrorDialog {
     dialog: "#error",
     title: "#error__title",
     description: "#error__description",
+    retryButton: "#error__retry",
     resetButton: "#error__back",
     playlistButton: "#error__playlist"
   };
@@ -30,6 +33,7 @@ export class ErrorDialog {
   #dialog;
   #title;
   #description;
+  #retryButton;
   #resetButton;
   #playlistButton;
 
@@ -39,9 +43,12 @@ export class ErrorDialog {
     const title = typeof payload?.title === "string" ? payload.title : "";
     const description = typeof payload?.description === "string" ? payload.description : "";
     const canGoBackToPlaylist = payload?.canGoBackToPlaylist === true;
+    const canRetry = payload?.canRetry === true;
 
-    // Only one button is shown at a time: "Choose File" for multi-file torrents
-    // (where the user can pick a different file), "New Torrent" for everything else.
+    // Retry is an additional primary action for recoverable errors
+    // (connection lost mid-playback). Exactly one NAVIGATION button is shown
+    // besides it: "Choose File" for multi-file torrents, "New Torrent" otherwise.
+    this.#retryButton.hidden = !canRetry;
     this.#resetButton.hidden = canGoBackToPlaylist;
     this.#playlistButton.hidden = !canGoBackToPlaylist;
 
@@ -71,14 +78,20 @@ export class ErrorDialog {
     document.dispatchEvent(new CustomEvent(APP_EVENTS.BACK_TO_PLAYLIST));
   };
 
+  #onRetryClick = () => {
+    this.visible = false;
+    document.dispatchEvent(new CustomEvent(APP_EVENTS.RETRY_PLAYBACK));
+  };
+
   constructor() {
     this.#dialog = document.querySelector(ErrorDialog.SELECTOR.dialog);
     this.#title = document.querySelector(ErrorDialog.SELECTOR.title);
     this.#description = document.querySelector(ErrorDialog.SELECTOR.description);
+    this.#retryButton = document.querySelector(ErrorDialog.SELECTOR.retryButton);
     this.#resetButton = document.querySelector(ErrorDialog.SELECTOR.resetButton);
     this.#playlistButton = document.querySelector(ErrorDialog.SELECTOR.playlistButton);
 
-    if (!this.#dialog || !this.#title || !this.#description || !this.#resetButton || !this.#playlistButton) {
+    if (!this.#dialog || !this.#title || !this.#description || !this.#retryButton || !this.#resetButton || !this.#playlistButton) {
       throw new Error(ErrorDialog.MESSAGES.missingDomNodes);
     }
     this.#dialog.inert = true;
@@ -94,6 +107,7 @@ export class ErrorDialog {
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onHide);
     this.#resetButton.addEventListener("click", this.#onResetClick);
     this.#playlistButton.addEventListener("click", this.#onPlaylistClick);
+    this.#retryButton.addEventListener("click", this.#onRetryClick);
   }
 
   /** @param {boolean} value */
