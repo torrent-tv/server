@@ -6,9 +6,11 @@
   inset: 0;
   line-height: 1.44;
   font-size: 1rem;
+  background-color: var(--view-bg);
+  color: var(--view-text);
 
   &::backdrop {
-    background-color: #fff;
+    background-color: var(--view-bg);
   }
 
   & #loading__filename {
@@ -21,7 +23,7 @@
 
   & #loading__status {
     text-align: center;
-    color: color-mix(#fff, #000 35%);
+    color: var(--view-text-muted);
     white-space: pre-line;
   }
 
@@ -37,15 +39,15 @@
     background-color: transparent;
 
     &::-webkit-progress-bar {
-      background-color: #0001;
+      background-color: var(--view-track);
     }
 
     &::-webkit-progress-value {
-      background-color: #c00;
+      background-color: var(--view-accent);
     }
 
     &::-moz-progress-bar {
-      background-color: #c00;
+      background-color: var(--view-accent);
     }
   }
 }

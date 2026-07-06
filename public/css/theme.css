@@ -1,0 +1,21 @@
+/* Shared colour-scheme tokens for the app views (torrent picker, loading,
+ * error). The player has its own token set in player.css.
+ *
+ * color-scheme makes UA-rendered surfaces (dialogs, form controls,
+ * scrollbars) follow the OS scheme; light-dark() resolves per scheme.
+ */
+:root {
+  color-scheme: light dark;
+
+  --view-bg: light-dark(#fff, #000);
+  --view-text: light-dark(#000, #fff);
+  --view-text-muted: light-dark(
+    color-mix(in srgb, #000 75%, #fff 25%),
+    color-mix(in srgb, #fff 75%, #000 25%)
+  );
+  /* Dark theme is monochrome: the red accent of the light theme becomes
+     white on black. */
+  --view-accent: light-dark(#c00, #fff);
+  /* Progress-bar rail. */
+  --view-track: light-dark(rgb(0 0 0 / 0.07), rgb(255 255 255 / 0.16));
+}

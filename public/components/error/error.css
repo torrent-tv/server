@@ -7,9 +7,11 @@
   font-family: sans-serif;
   max-inline-size: fit-content;
   inset: 0;
+  background-color: var(--view-bg);
+  color: var(--view-text);
 
   &::backdrop {
-    background-color: #fff;
+    background-color: var(--view-bg);
   }
 
   & #error__title {
@@ -25,7 +27,7 @@
     font-size: clamp(1.125rem, 3.5vmin, 2.5rem);
     max-inline-size: 38em;
     line-height: 1.44;
-    color: color-mix(in srgb, #000 75%, #fff 25%);
+    color: var(--view-text-muted);
     text-wrap-style: pretty;
     margin-block-end: 1.5rem;
   }
@@ -45,7 +47,8 @@
     font-family: inherit;
 
     &:hover {
-      background: color-mix(in srgb, #000 8%, transparent);
+      /* Derived from the text colour so it works in both schemes. */
+      background: color-mix(in srgb, currentColor 8%, transparent);
     }
 
     & + & {
