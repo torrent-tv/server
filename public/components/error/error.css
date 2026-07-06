@@ -38,6 +38,10 @@
 
   & .error__action {
     display: inline-flex;
+    /* Buttons do not inherit color by default and iOS paints them system
+       blue; force the view's text colour (white in dark, black in light) —
+       the currentColor border follows. */
+    color: inherit;
     font-size: clamp(1rem, 2.5vmin, 1.75rem);
     padding: 0.5em 1.25em;
     border: 2px solid currentColor;
@@ -49,10 +53,6 @@
     &:hover {
       /* Derived from the text colour so it works in both schemes. */
       background: color-mix(in srgb, currentColor 8%, transparent);
-    }
-
-    & + & {
-      margin-inline-start: 0.75em;
     }
   }
 }

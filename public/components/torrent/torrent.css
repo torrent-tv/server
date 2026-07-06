@@ -61,6 +61,12 @@
     }
   }
 
+  /* Buttons do not inherit color by default (iOS paints them system blue);
+     keep any control in this view on the view's text colour. */
+  button {
+    color: inherit;
+  }
+
   #torrent__input {
     position: fixed;
     top: -100vh;
