@@ -6,18 +6,20 @@ import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../s
  * Responsibilities:
  * - Manage player visibility.
  * - Expose video element reference via `PLAYER:READY`.
+ * - Wire the custom control-bar buttons (close, playlist) that media-chrome
+ *   does not provide out of the box.
  */
 export class Player {
   static SELECTOR = {
     root: "#player",
+    controller: "#player__controller",
     video: "#player__video",
-    resetButton: "#player__reset",
+    closeButton: "#player__close",
     playlistToggle: "#player__playlist-toggle",
   };
 
   static CLASSES = {
     isPlaylistOpen: "player--playlist",
-    isPaused: "player--pause",
     isAnimated: "player--animated",
   };
 
@@ -26,9 +28,10 @@ export class Player {
   };
 
   #root;
+  #controller;
   #video;
   #playlistToggle;
-  #resetButton;
+  #closeButton;
 
   #onShow = () => {
     this.#logEvt("view=player shown cause=PLAYER:SHOW");
@@ -38,7 +41,7 @@ export class Player {
     // audio start together (previously hls.js auto-played under the loading
     // overlay, so audio was heard while only the buffering UI was visible).
     // On iOS autoplay is blocked outside a user gesture; play() rejects and the
-    // user starts it from the native controls — harmless, hence the catch.
+    // user starts it from the play button — harmless, hence the catch.
     if (this.#video instanceof HTMLVideoElement) {
       this.#logEvt("player.play reason=show");
       const started = this.#video.play();
@@ -87,7 +90,6 @@ export class Player {
   #onBackToPlaylist = () => {
     this.visible = true;
     this.#root.classList.add(Player.CLASSES.isAnimated);
-    this.#root.classList.add(Player.CLASSES.isPlaylistOpen);
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
   };
 
@@ -100,17 +102,17 @@ export class Player {
       (Array.isArray(detail?.subtitles) ? detail.subtitles.length : 0);
     // With a single media file there is nothing to switch between, so hide the
     // playlist button entirely.
-    const target = this.#playlistToggle.closest("li") ?? this.#playlistToggle;
-    target.hidden = count <= 1;
+    this.#playlistToggle.hidden = count <= 1;
   };
 
   constructor() {
     this.#root = document.querySelector(Player.SELECTOR.root);
+    this.#controller = document.querySelector(Player.SELECTOR.controller);
     this.#video = document.querySelector(Player.SELECTOR.video);
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
-    this.#resetButton = document.querySelector(Player.SELECTOR.resetButton);
+    this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
 
-    if (!this.#root || !this.#video || !this.#playlistToggle || !this.#resetButton) {
+    if (!this.#root || !this.#controller || !this.#video || !this.#playlistToggle || !this.#closeButton) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }
 
@@ -135,48 +137,50 @@ export class Player {
       this.#root.classList.remove(Player.CLASSES.isAnimated);
     });
 
-    this.#resetButton.addEventListener("click", this.#resetHandler);
+    this.#closeButton.addEventListener("click", this.#closeHandler);
     this.#playlistToggle.addEventListener("click", this.#togglePlaylist);
-    this.#video.addEventListener('play', this.#onStartPlaying);
-    this.#video.addEventListener('pause', this.#onPausePlaying);
+    this.#controller.addEventListener("click", this.#onControllerClick);
   }
 
-  #onStartPlaying = () => {
-    this.#root.classList.toggle(Player.CLASSES.isPaused, false);
-  };
-
-  #onPausePlaying = () => {
-    this.#root.classList.toggle(Player.CLASSES.isPaused, true);
-  };
-
-  #resetHandler = () => {
+  #closeHandler = () => {
     document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
   };
 
-  #togglePlaylist = () => {
+  #togglePlaylist = (event) => {
+    // Keep the click from reaching #onControllerClick, which would treat it as
+    // a click-outside and immediately re-close the playlist being opened.
+    event.stopPropagation();
     const isPlaylistOpen = this.#root.classList.contains(Player.CLASSES.isPlaylistOpen);
     this.#root.classList.add(Player.CLASSES.isAnimated);
-    this.#root.classList.toggle(Player.CLASSES.isPlaylistOpen, !isPlaylistOpen);
-    const event = isPlaylistOpen
+    const nextEvent = isPlaylistOpen
       ? new CustomEvent(PLAYER_EVENTS.CLOSE_PLAYLIST)
       : new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST);
-    document.dispatchEvent(event);
+    document.dispatchEvent(nextEvent);
+  };
+
+  /**
+   * While the playlist drawer is open, a click anywhere on the player surface
+   * (outside the playlist itself) closes it — media gestures are disabled for
+   * the duration, so the click cannot also toggle play/pause.
+   */
+  #onControllerClick = () => {
+    if (!this.#root.classList.contains(Player.CLASSES.isPlaylistOpen)) return;
+    this.#root.classList.add(Player.CLASSES.isAnimated);
+    this.#closePlaylist();
   };
 
   #onPlaylistOpen = () => {
     this.#root.classList.toggle(Player.CLASSES.isPlaylistOpen, true);
     this.#playlistToggle.setAttribute("aria-expanded", "true");
-    this.#video.inert = true;
-    this.#resetButton.inert = false;
-    this.#playlistToggle.inert = false;
+    // Suppress the tap-to-pause gesture so a click that closes the drawer does
+    // not also pause playback.
+    this.#controller.setAttribute("gesturesdisabled", "");
   };
 
   #onPlaylistClose = () => {
     this.#root.classList.toggle(Player.CLASSES.isPlaylistOpen, false);
     this.#playlistToggle.setAttribute("aria-expanded", "false");
-    this.#video.inert = false;
-    this.#resetButton.inert = false;
-    this.#playlistToggle.inert = false;
+    this.#controller.removeAttribute("gesturesdisabled");
   };
 
   #onFocusPlaylistToggle = () => {

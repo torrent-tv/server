@@ -1,4 +1,19 @@
 #player {
+  /* Theme tokens (dark is the default; light overrides below). The playlist
+     and the custom buttons share these with the media-chrome controls so the
+     player presents one visual language. */
+  --player-accent: #c00;
+  --player-surface: #141416;
+  --player-text: #f2f2f2;
+
+  /* media-chrome design tokens derived from the theme. */
+  --media-primary-color: var(--player-text);
+  --media-secondary-color: rgb(20 20 22 / 0.75);
+  --media-control-hover-background: rgb(255 255 255 / 0.18);
+  --media-range-bar-color: var(--player-accent);
+  --media-range-thumb-background: var(--player-accent);
+  --media-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
   margin: 0;
   padding: 0;
   overflow: clip;
@@ -13,15 +28,6 @@
     transition: translate 1.25s;
   }
 
-  & + nav {
-    display: none;
-  }
-
-  &:not([hidden]) + nav {
-    display: block;
-  }
-  
-  
   inline-size: calc(100dvw + min(80dvw, 48rem));
   @media (min-width: 1024px) {
     inline-size: calc(100dvw + min(50dvw, 48rem));
@@ -29,121 +35,92 @@
   @media (min-width: 1440px) {
     inline-size: calc(100dvw + min(33dvw, 52rem));
   }
-  
+
   &:is(.player--playlist) {
     translate: max(-80vw, -48rem) 0;
 
     @media (min-width: 1024px) {
       translate: max(-50vw, -48rem) 0;
     }
-    
+
     @media (min-width: 1440px) {
       translate: max(-33vw, -52rem) 0;
     }
   }
 
-  #player__menu {
-    display: flow-root;
-    position: absolute;
-    inset-block: 25dvh;
-    inset-inline-start: 0;
-    inline-size: 100dvw;
-
-    .player--pause &,
-    &:hover,
-    &:focus,
-    &:focus-visible {
-      button {
-        opacity: 1;
-        transition: background-color .25s, opacity .25s;
-      }
-    }
-
-    button {
-      all: unset;
-      display: block;
-      cursor: pointer;
-      margin: 6px;
-      inline-size: 36px;
-      block-size: 36px;
-      background-color: rgba(32, 33, 36, 0);
-      position: relative;
-      border-radius: 100%;
-      opacity: 0;
-      transition: background-color .25s .5s, opacity .25s .5s;
-
-      &:hover,
-      &:focus,
-      &:focus-visible {
-        background-color: rgba(32, 33, 36, 0.71);
-        transition: background-color .25s, opacity .25s;
-      }
-    }
-
-    #player__playlist-toggle {
-      float: right;
-
-      &::before {
-        content: "";
-        display: block;
-        position: absolute;
-        inset: 0;
-        margin: auto;
-        inline-size: 13px;
-        block-size: 8px;
-        border-top: 2px solid #fff;
-        border-bottom: 2px solid #fff;
-      }
-
-      &::after {
-        content: "";
-        display: block;
-        position: absolute;
-        inset: 0;
-        margin: auto;
-        inline-size: 13px;
-        block-size: 0;
-        border-bottom: 2px solid #fff;
-        background-color: pink;
-      }
-    }
-
-    #player__reset {
-      float: left;
-
-      &::before {
-        content: "";
-        display: block;
-        position: absolute;
-        inset: 0;
-        margin: auto;
-        inline-size: 13px;
-        block-size: 0;
-        border-bottom: 2px solid #fff;
-        transform-origin: 50%;
-        rotate: 45deg;
-      }
-
-      &::after {
-        content: "";
-        display: block;
-        position: absolute;
-        inset: 0;
-        margin: auto;
-        inline-size: 13px;
-        block-size: 0;
-        border-bottom: 2px solid #fff;
-        transform-origin: 50%;
-        rotate: -45deg;
-      }
-    }
-  }
-
-  #player__video {
+  #player__controller {
     block-size: 100dvh;
     inline-size: 100dvw;
     flex-shrink: 0;
     flex-grow: 0;
   }
 
+  #player__video {
+    block-size: 100%;
+    inline-size: 100%;
+  }
+
+  /* The top bar carries only the close button; keep it flush left and
+     transparent (the buttons bring their own background). */
+  #player__top-bar {
+    justify-content: flex-start;
+    background: none;
+  }
+
+  /* Custom control-bar buttons (close, playlist) styled to match the
+     media-chrome buttons around them. */
+  .player__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 10px;
+    margin: 0;
+    border: none;
+    font: inherit;
+    cursor: pointer;
+    color: var(--media-primary-color);
+    background: var(--media-control-background, var(--media-secondary-color));
+
+    &:hover,
+    &:focus-visible {
+      background: var(--media-control-hover-background);
+    }
+
+    svg {
+      inline-size: 24px;
+      block-size: 24px;
+    }
+  }
+
+  /* Hide the captions button until subtitle tracks exist (recommended
+     media-chrome pattern). */
+  media-captions-menu-button:not([mediasubtitleslist]) {
+    display: none;
+  }
+
+  /* media-chrome components (and .player__button) set their own display,
+     which overrides the UA [hidden] rule — enforce it for everything inside
+     the player (settings extension point, single-file playlist toggle). */
+  [hidden] {
+    display: none !important;
+  }
+
+  /* Responsive: drop secondary controls as the player narrows
+     (media-controller sets breakpoint attributes from container width). */
+  media-controller:not([breakpointmd]) media-volume-range {
+    display: none;
+  }
+  media-controller:not([breakpointsm]) media-time-display {
+    display: none;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  #player {
+    --player-surface: #f5f5f7;
+    --player-text: #1c1c1f;
+    --media-secondary-color: rgb(245 245 247 / 0.85);
+    --media-control-hover-background: rgb(0 0 0 / 0.12);
+  }
 }
