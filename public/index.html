@@ -12,7 +12,6 @@
     <link rel="stylesheet" href="components/loading/loading.css" layer="components">
     <link rel="stylesheet" href="components/player/player.css" layer="components" >
     <link rel="stylesheet" href="components/playlist/playlist.css" layer="components" >
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
   </head>
   <body>
 
@@ -42,72 +41,118 @@
       <button id="error__playlist" class="error__action" hidden type="button">Choose File</button>
     </dialog>
 
-    <main id="player" class="player--pause">
-      <video id="player__video" controls playsinline preload="metadata"></video>
-      <ul 
-        id="playlist" 
-        aria-label="Video playlist" 
-        data-open="false" 
+    <main id="player">
+      <media-controller id="player__controller" autohide="2">
+        <video id="player__video" slot="media" playsinline preload="metadata"></video>
+
+        <media-control-bar id="player__top-bar" slot="top-chrome">
+          <button
+            id="player__close"
+            class="player__button"
+            type="button"
+            aria-label="Stop playback and choose another torrent file">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M6 6l12 12M18 6L6 18"/>
+            </svg>
+          </button>
+        </media-control-bar>
+
+        <media-captions-menu hidden anchor="auto"></media-captions-menu>
+        <!-- Settings menu: extension point for the future audio-track and
+             quality items. The button and both items stay hidden until the
+             backing features land (separate changes). -->
+        <media-settings-menu id="player__settings-menu" hidden anchor="auto">
+          <media-settings-menu-item id="player__settings-audio" hidden>Audio</media-settings-menu-item>
+          <media-settings-menu-item id="player__settings-quality" hidden>Quality</media-settings-menu-item>
+        </media-settings-menu>
+
+        <media-control-bar id="player__control-bar">
+          <media-play-button></media-play-button>
+          <media-mute-button></media-mute-button>
+          <media-volume-range></media-volume-range>
+          <media-time-display showduration></media-time-display>
+          <media-time-range></media-time-range>
+          <media-captions-menu-button></media-captions-menu-button>
+          <media-settings-menu-button id="player__settings-button" hidden></media-settings-menu-button>
+          <button
+            id="player__playlist-toggle"
+            class="player__button"
+            type="button"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="playlist"
+            aria-label="Playlist">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M8 6h13M8 12h13M8 18h13"/>
+              <circle cx="4" cy="6" r="1.2" fill="currentColor" stroke="none"/>
+              <circle cx="4" cy="12" r="1.2" fill="currentColor" stroke="none"/>
+              <circle cx="4" cy="18" r="1.2" fill="currentColor" stroke="none"/>
+            </svg>
+          </button>
+          <media-fullscreen-button></media-fullscreen-button>
+        </media-control-bar>
+      </media-controller>
+
+      <ul
+        id="playlist"
+        aria-label="Video playlist"
+        data-open="false"
         inert>
       </ul>
-      
-      <menu
-        id="player__menu"
-        aria-label="Player menu">
-        <ul id="player__menu-list">
-          <li>
-            <button 
-              id="player__reset" 
-              type="button" 
-              aria-label="Stop playback and choose another torrent file"></button>
-          </li>
-          <li>
-            <button
-              id="player__playlist-toggle"
-              type="button"
-              aria-haspopup="true"
-              aria-expanded="false"
-              aria-controls="playlist"
-              aria-label="Playlist"
-            ></button>
-          </li>
-        </ul>
-      </menu>
     </main>
 
     <script>
-      eruda.init();
-      const erudaEl = document.querySelector('#eruda');
+      // Mobile debug console (eruda), opt-in only: add ?debug (any value) or
+      // #debug to the URL to load it.
+      (() => {
+        const params = new URLSearchParams(location.search);
+        if (!params.has("debug") && location.hash !== "#debug") return;
 
-      // Eruda must live inside whichever modal dialog is currently open,
-      // otherwise the open <dialog> makes the rest of the DOM (incl. eruda) inert.
-      // When no dialog is open, eruda lives in <body>.
-      function moveErudaInto(target) {
-        if (erudaEl && target && erudaEl.parentElement !== target) {
-          target.appendChild(erudaEl);
+        // Eruda must live inside whichever modal dialog is currently open,
+        // otherwise the open <dialog> makes the rest of the DOM (incl. eruda)
+        // inert. When no dialog is open, eruda lives in <body>. The element is
+        // looked up lazily because the script loads asynchronously.
+        function moveErudaInto(target) {
+          const erudaEl = document.querySelector("#eruda");
+          if (erudaEl && target && erudaEl.parentElement !== target) {
+            target.appendChild(erudaEl);
+          }
         }
-      }
 
-      const origShowModal = HTMLDialogElement.prototype.showModal;
-      HTMLDialogElement.prototype.showModal = function (...args) {
-        const r = origShowModal.apply(this, args);
-        moveErudaInto(this); // follow the newly opened modal so eruda stays interactive
-        return r;
-      };
+        const origShowModal = HTMLDialogElement.prototype.showModal;
+        HTMLDialogElement.prototype.showModal = function (...args) {
+          const r = origShowModal.apply(this, args);
+          moveErudaInto(this); // follow the newly opened modal so eruda stays interactive
+          return r;
+        };
 
-      const origClose = HTMLDialogElement.prototype.close;
-      HTMLDialogElement.prototype.close = function (...args) {
-        const r = origClose.apply(this, args);
-        if (erudaEl && erudaEl.parentElement === this) {
-          document.body.appendChild(erudaEl); // no longer inside this dialog
-        }
-        return r;
-      };
+        const origClose = HTMLDialogElement.prototype.close;
+        HTMLDialogElement.prototype.close = function (...args) {
+          const r = origClose.apply(this, args);
+          const erudaEl = document.querySelector("#eruda");
+          if (erudaEl && erudaEl.parentElement === this) {
+            document.body.appendChild(erudaEl); // no longer inside this dialog
+          }
+          return r;
+        };
+
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/eruda";
+        script.onload = () => {
+          eruda.init();
+          // A dialog may already be open by the time eruda finishes loading.
+          moveErudaInto(document.querySelector("dialog[open]"));
+        };
+        document.head.appendChild(script);
+      })();
     </script>
 
 
     <script src="/env.js"></script>
     <script src="/vendor/hls.min.js"></script>
+    <!-- media-chrome player UI (custom elements register on import). -->
+    <script type="module" src="/vendor/media-chrome/index.js"></script>
+    <script type="module" src="/vendor/media-chrome/menu/index.js"></script>
     <!-- Forward browser console logs to the server (debugging aid). Loaded
          first so it patches console before the component modules run. -->
     <script type="module" src="./shared/client-logger.js"></script>

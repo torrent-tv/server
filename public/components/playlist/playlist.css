@@ -1,4 +1,9 @@
 #playlist {
+  /* Shares the theme tokens defined on #player (the playlist is inside it). */
+  background: var(--player-surface, #141416);
+  color: var(--player-text, #f2f2f2);
+  font-family: var(--media-font-family, system-ui, sans-serif);
+
   block-size: 100dvh;
   inline-size: min(80dvw, 48rem);
   overflow-x: clip;
@@ -16,31 +21,29 @@
 
   button {
     all: unset;
-    display: inline-block;
+    /* Full-width rows so the hover/current highlight spans the whole drawer. */
+    display: block;
+    inline-size: 100%;
     text-align: start;
     white-space: nowrap;
     overflow: clip;
     text-overflow: ellipsis;
-    max-inline-size: 100%;
-    font-family: sans-serif;
+    font-family: inherit;
     font-size: 16px;
     line-height: 1.44;
-    color: #fff;
+    color: inherit;
     padding: .5rem 1rem;
     box-sizing: border-box;
+    cursor: pointer;
 
     &:hover,
-    &:focus {
-      background-color: #c00;
+    &:focus-visible {
+      background-color: var(--player-accent, #c00);
+      color: #fff;
     }
 
     &[aria-current="true"] {
-      background-color: #c00;
-      background-color: color-mix(#c00 90%, #000 10%);
-    }
-
-    &[aria-current="true"]:hover,
-    &[aria-current="true"]:focus {
+      background-color: color-mix(in srgb, var(--player-accent, #c00) 90%, #000 10%);
       color: #fff;
     }
   }

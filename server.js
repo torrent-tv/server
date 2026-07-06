@@ -27,6 +27,7 @@ const require = createRequire(import.meta.url);
 const { version } = require("./package.json");
 const publicRoot = path.resolve(__dirname, "./public");
 const vendorRoot = path.resolve(__dirname, "./node_modules/hls.js/dist");
+const mediaChromeRoot = path.resolve(__dirname, "./node_modules/media-chrome/dist");
 
 const preferredPort = Number(process.env.PORT ?? 8080);
 const serverToken = process.env.PROXY_TOKEN ?? "";
@@ -124,6 +125,11 @@ await app.register(fastifyStatic, {
 await app.register(fastifyStatic, {
   root: vendorRoot,
   prefix: "/vendor/",
+  decorateReply: false
+});
+await app.register(fastifyStatic, {
+  root: mediaChromeRoot,
+  prefix: "/vendor/media-chrome/",
   decorateReply: false
 });
 
