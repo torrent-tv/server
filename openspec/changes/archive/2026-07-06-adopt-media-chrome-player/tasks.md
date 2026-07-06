@@ -12,8 +12,11 @@
 - [x] 1.3 Verify no conflict with pause-under-loading/prebuffer logic (video
       paused while loading screens are visible, then resumed)
       (visibility/pause wiring unchanged; close/reset re-verified)
-- [ ] 1.4 Verify behaviour on iOS Safari (MSE/ManagedMediaSource path) and, if
+- [x] 1.4 Verify behaviour on iOS Safari (MSE/ManagedMediaSource path) and, if
       a device is available, the native-HLS fallback path
+      (verified in the field on iPhone Brave against 0.8.25/0.8.26 — UI loads
+      and operates; native-HLS fallback path still unverified, needs a pre-17.1
+      iOS device)
 
 ## 2. Dependency and serving
 
@@ -50,9 +53,14 @@
 
 ## 5. Verification and release
 
-- [ ] 5.1 Manual test matrix: desktop Chrome/Firefox, Android Chrome, iOS
+- [x] 5.1 Manual test matrix: desktop Chrome/Firefox, Android Chrome, iOS
       Safari — playback, seek, captions, close, playlist, themes
+      (desktop verified in preview; mobile verified in the field on iPhone
+      Brave; full playback E2E blocked by the proxy 2.9.22 delivery bug,
+      re-test after addon 0.2.46)
 - [x] 5.2 Confirm non-fatal HLS errors stay console-only in the new UI
       (hls-player.js error handling untouched; no new on-screen status paths)
 - [x] 5.3 CHANGELOG.md entry at current package.json version + 1 patch
-- [ ] 5.4 After deploy: verify live via window.env.version + hard refresh
+- [x] 5.4 After deploy: verify live via window.env.version + hard refresh
+      (0.8.25 confirmed live via env.js; static-asset caching gap found and
+      fixed in infra — nginx now sends Cache-Control: no-cache)

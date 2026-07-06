@@ -36,10 +36,18 @@
     box-sizing: border-box;
     cursor: pointer;
 
-    &:hover,
-    &:focus-visible {
+    /* The red fill means "current / will play" — keep it off focus so the
+       auto-focused first row of a fresh playlist does not look selected.
+       Focus renders as an inset outline instead (inset because the list
+       clips overflow). */
+    &:hover {
       background-color: var(--player-accent, #c00);
       color: #fff;
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--player-accent, #c00);
+      outline-offset: -2px;
     }
 
     &[aria-current="true"] {
