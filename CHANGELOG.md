@@ -1,3 +1,7 @@
+## 0.8.26
+
+- **Fix**: Pinch and double-tap zoom are disabled (viewport meta `maximum-scale=1, user-scalable=no` + `touch-action: manipulation`) — this is an app, and accidental zoom over the video hurt more than it helped. Note: iOS Safari ignores `user-scalable=no` for pinch, but `touch-action` kills the double-tap zoom there.
+
 ## 0.8.25
 
 - **Fix**: Playlist rows are full-width, so the hover/current highlight spans the whole drawer instead of only the text.
