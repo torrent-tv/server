@@ -1,4 +1,7 @@
 body {
   overflow: clip;
   min-block-size: 100dvh;
+  /* App-like behaviour: no double-tap zoom (iOS ignores user-scalable=no in
+     the viewport meta, but honours touch-action). */
+  touch-action: manipulation;
 }
