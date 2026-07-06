@@ -8,7 +8,10 @@
   color-scheme: light dark;
 
   --view-bg: light-dark(#fff, #000);
-  --view-text: light-dark(#000, #fff);
+  /* Dark text is soft white (not #fff): full-contrast white on black causes
+     halation. The accent stays pure white — slightly brighter than text,
+     which gives the monochrome dark palette its hierarchy. */
+  --view-text: light-dark(#000, #e6e6e6);
   --view-text-muted: light-dark(
     color-mix(in srgb, #000 75%, #fff 25%),
     color-mix(in srgb, #fff 75%, #000 25%)
