@@ -1,0 +1,38 @@
+schema: spec-driven
+
+context: |
+  torrent-tv server — public web app + WebRTC signalling (https://webauth.courses).
+  Tech stack: Node.js, Fastify, plain ES modules in public/ (no bundler, no
+  framework), hls.js served from /vendor. Serves the static frontend and brokers
+  WebRTC signalling between browsers and torrent proxies; video flows P2P
+  browser<->proxy over a WebRTC data channel and must NEVER flow through this
+  server or Cloudflare.
+  Conventions (see CLAUDE.md for the full set):
+  - Routes: routes/<path>/<method>.js exporting handle<Name><Method>, wired
+    explicitly in server.js. No router framework.
+  - All code, comments and docs in English.
+  - Every behavioural change adds a CHANGELOG.md entry under a heading at
+    current package.json version + 1 patch. Never edit package.json version
+    (npm run patch bumps it on release).
+  - Frontend: playback/codec decisions are made client-side per track
+    (mediaCapabilities/canPlayType); non-fatal HLS errors are console-only,
+    never surfaced to the on-screen status.
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
