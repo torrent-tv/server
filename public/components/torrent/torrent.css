@@ -7,7 +7,8 @@
   margin: auto;
   align-items: center;
   justify-items: center;
-  color: #000;
+  background-color: var(--view-bg);
+  color: var(--view-text);
   font-family: sans-serif;
 
   &[open] {
@@ -15,7 +16,7 @@
   }
 
   &::backdrop {
-    background-color: #fff;
+    background-color: var(--view-bg);
   }
 
   #torrent__label {
@@ -28,7 +29,7 @@
     &:focus-visible,
     &:focus-within {
       cursor: pointer;
-      color: #c00;
+      color: var(--view-accent);
       outline-offset: 1.75vmin;
       outline-width: 1.75vmin;
       outline-style: solid;
@@ -54,7 +55,7 @@
       font-size: clamp(1.125rem, 3.5vmin, 2.5rem);
       max-inline-size: 36em;
       line-height: 1.44;
-      color: color-mix(in srgb, #000 75%, #fff 25%);
+      color: var(--view-text-muted);
       text-wrap-style: pretty;
       margin-block-end: 1.5vmin;
     }
