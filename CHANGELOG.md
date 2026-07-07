@@ -1,3 +1,7 @@
+## 0.8.48
+
+- **Fix**: Reverted the 0.8.47 change that dropped the proxy's private ICE candidates for viewers the server did not classify as same-network — it broke genuine same-LAN playback. `sameNetwork` has false negatives (e.g. the browser reaches the server over IPv6 while the proxy's reported endpoint is IPv4, so the public IPs don't compare equal), and for a real same-LAN viewer the private host candidate is the ONLY working path — dropping it fails the WebRTC connection outright. The candidate filter is removed; a safer Local-Network-Access fix (not gated on the fragile same-network guess) will follow. The 0.8.47 error-screen buttons and dead-player guard are kept.
+
 ## 0.8.47
 
 - **Fix**: Viewers not on the proxy's own network are no longer blocked by the browser's Local Network Access gate. The proxy advertises private host ICE candidates (e.g. `192.168.x`); for a cross-network viewer those can never connect and only trip Chrome's Local Network permission — which stalls the whole WebRTC connection until granted (seen in the field: a viewer in another city got "Data channel closed" until they manually allowed local network + reloaded). The browser now drops the proxy's private candidates unless the server reports the viewer shares the proxy's network (`sameNetwork`); the public path connects with no permission prompt. Same-network viewers keep the private candidates (their working path).
