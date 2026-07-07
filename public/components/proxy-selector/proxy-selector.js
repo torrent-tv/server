@@ -88,18 +88,7 @@ export class ProxySelector {
     const best = pool[0];
     debugState.proxies.selectedId = best.id;
 
-    // Extract the local HTTP port from the proxy's baseUrl so that
-    // WebRtcProxy can fire a PNA preflight fetch to the proxy's LAN address.
-    // The IP in baseUrl may be wrong (server rewrites it), but the port is
-    // always correct.
-    let proxyLocalPort = null;
-    try {
-      const u = new URL(best.baseUrl);
-      const p = parseInt(u.port, 10);
-      if (p > 0 && p <= 65535) proxyLocalPort = p;
-    } catch { /* baseUrl absent or malformed – PNA prefetch will be skipped */ }
-
-    const proxy = new WebRtcProxy(best.id, proxyLocalPort);
+    const proxy = new WebRtcProxy(best.id);
     await proxy.connect();
 
     // Measure actual browser ↔ proxy RTT now that the channel is open.

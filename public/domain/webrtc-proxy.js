@@ -68,8 +68,6 @@ const PING_TIMEOUT_MS = 5_000;
 export class WebRtcProxy {
   /** @type {string} */
   #proxyId;
-  /** @type {number | null} */
-  #proxyLocalPort;
   /** @type {RTCPeerConnection | null} */
   #pc = null;
   /** @type {RTCDataChannel | null} */
@@ -89,13 +87,6 @@ export class WebRtcProxy {
   #pendingCandidates = [];
   /** @type {boolean} */
   #remoteDescriptionSet = false;
-  /**
-   * Resolves once a Private Network Access preflight to the proxy's LAN
-   * address completes (success or failure). Awaited before draining candidates
-   * so that the PNA permission is established before addIceCandidate runs.
-   * @type {Promise<void> | null}
-   */
-  #pnaFetchPromise = null;
   /** @type {boolean} True once the data channel opened successfully. */
   #connected = false;
   /** @type {boolean} True when close() was called by the app itself. */
@@ -127,15 +118,9 @@ export class WebRtcProxy {
 
   /**
    * @param {string} proxyId
-   * @param {number | null} [proxyLocalPort] - HTTP port of the proxy's local
-   *   server (extracted from the baseUrl returned by the health API).  Used to
-   *   issue a Private Network Access preflight fetch before ICE negotiation so
-   *   the browser grants permission before addIceCandidate is called for
-   *   private-network candidates.
    */
-  constructor(proxyId, proxyLocalPort = null) {
+  constructor(proxyId) {
     this.#proxyId = proxyId;
-    this.#proxyLocalPort = proxyLocalPort ?? null;
   }
 
   /** @returns {boolean} */
@@ -207,13 +192,7 @@ export class WebRtcProxy {
       try {
         await this.#pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
         this.#remoteDescriptionSet = true;
-        // Drain buffered candidates IMMEDIATELY — do NOT wait on the PNA
-        // preflight. That fetch is blocked by mixed content (HTTPS page → a
-        // plain-http LAN address) so it grants nothing, yet it hangs until its
-        // 8 s timeout; awaiting it stalled ICE from checking ANY candidate —
-        // including the public ones that actually connect — for those 8 s
-        // (observed in the field: iceConnectionState went to `checking` only
-        // after `PNA preflight FAILED (8015ms)`). ICE now starts at once.
+        // Drain buffered candidates so ICE checking can start.
         for (const c of this.#pendingCandidates) {
           await this.#pc.addIceCandidate(c).catch(() => {});
         }
@@ -232,24 +211,6 @@ export class WebRtcProxy {
       };
       console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(c.candidate)}`);
       if (!this.#remoteDescriptionSet) {
-        // If this is a private IPv4 host candidate and we haven't started a
-        // PNA preflight yet, fire one now.  The fetch triggers Chromium's
-        // Private Network Access permission flow (OPTIONS preflight →
-        // Access-Control-Allow-Private-Network: true from the proxy) so that
-        // addIceCandidate succeeds when the buffer is drained after the answer.
-        if (!this.#pnaFetchPromise && this.#proxyLocalPort) {
-          const ip = WebRtcProxy.#extractCandidateIp(c.candidate);
-          if (ip && WebRtcProxy.#isPrivateIpv4(ip)) {
-            const startedAt = performance.now();
-            console.debug(`[ice] PNA preflight → http://${ip}:${this.#proxyLocalPort}/healthz`);
-            this.#pnaFetchPromise = fetch(
-              `http://${ip}:${this.#proxyLocalPort}/healthz`,
-              { mode: "cors", signal: AbortSignal.timeout(8000) }
-            )
-              .then(() => { console.debug(`[ice] PNA preflight OK (${Math.round(performance.now() - startedAt)}ms)`); })
-              .catch((err) => { console.debug(`[ice] PNA preflight FAILED (${Math.round(performance.now() - startedAt)}ms): ${err?.name ?? err}`); });
-          }
-        }
         // Buffer until the answer is applied.
         this.#pendingCandidates.push(c);
         return;
@@ -594,8 +555,8 @@ export class WebRtcProxy {
   }
 
   /**
-   * Return true for private IPv4 addresses (RFC 1918).
-   * Used to decide whether to attempt a PNA preflight fetch.
+   * Return true for private IPv4 addresses (RFC 1918). Used to classify a
+   * candidate's scope in the diagnostic log.
    *
    * @param {string} ip
    * @returns {boolean}
