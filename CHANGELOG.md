@@ -1,3 +1,7 @@
+## 0.8.43
+
+- **Fix**: The transcode target resolution is now orientation-independent. It is sized from the viewport's long and short edges (provisioning for landscape) instead of the current width/height, so starting in portrait — where a landscape clip is letterboxed and the video box is smaller — no longer under-provisions the encode. Rotating portrait→landscape mid-playback therefore needs no more pixels and forces no transcode restart (the same cold ffmpeg restart seen on seeks); in portrait the player just downscales. The proxy still caps this to the source size (never upscales). This target is the ceiling the upcoming realtime budget scales down from; orientation never changes the encode resolution on its own. OpenSpec change `orientation-independent-target`.
+
 ## 0.8.42
 
 - **Chore**: Playback now classifies and logs the bottleneck (`[bottleneck]` lines, forwarded to the server log) — the foundation for the upcoming realtime transcode budget. From client-visible symptoms it distinguishes client-decode (dropped frames while the buffer holds) from an upstream limit (buffer draining — proxy CPU / download / delivery, to be split by the budget) from healthy playback, with the buffer level/trend and dropped-frame ratio in each line. Diagnostic only; no behaviour change. OpenSpec change `bottleneck-diagnosis`.
