@@ -230,6 +230,7 @@ export class WebRtcProxy {
         sdpMid: msg.mid ?? "0",
         sdpMLineIndex: 0
       };
+      console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(c.candidate)}`);
       if (!this.#remoteDescriptionSet) {
         // If this is a private IPv4 host candidate and we haven't started a
         // PNA preflight yet, fire one now.  The fetch triggers Chromium's
@@ -239,10 +240,14 @@ export class WebRtcProxy {
         if (!this.#pnaFetchPromise && this.#proxyLocalPort) {
           const ip = WebRtcProxy.#extractCandidateIp(c.candidate);
           if (ip && WebRtcProxy.#isPrivateIpv4(ip)) {
+            const startedAt = performance.now();
+            console.debug(`[ice] PNA preflight → http://${ip}:${this.#proxyLocalPort}/healthz`);
             this.#pnaFetchPromise = fetch(
               `http://${ip}:${this.#proxyLocalPort}/healthz`,
               { mode: "cors", signal: AbortSignal.timeout(8000) }
-            ).then(() => {}).catch(() => {});
+            )
+              .then(() => { console.debug(`[ice] PNA preflight OK (${Math.round(performance.now() - startedAt)}ms)`); })
+              .catch((err) => { console.debug(`[ice] PNA preflight FAILED (${Math.round(performance.now() - startedAt)}ms): ${err?.name ?? err}`); });
           }
         }
         // Buffer until the answer is applied.
@@ -292,6 +297,7 @@ export class WebRtcProxy {
     });
 
     this.#pc.addEventListener("icecandidate", (event) => {
+      console.debug(`[ice] local ${WebRtcProxy.#describeCandidate(event.candidate?.candidate)}`);
       if (event.candidate && this.#ws?.readyState === WebSocket.OPEN) {
         this.#ws.send(JSON.stringify({
           type: "candidate",
@@ -302,8 +308,23 @@ export class WebRtcProxy {
       }
     });
 
+    // Diagnostics (temporary): ICE state transitions + the selected pair, so a
+    // failed connection in the field shows which candidate types were tried and
+    // whether the Local Network Access gate is the blocker.
+    this.#pc.addEventListener("iceconnectionstatechange", () => {
+      console.debug(`[ice] iceConnectionState=${this.#pc?.iceConnectionState}`);
+    });
+    this.#pc.addEventListener("icegatheringstatechange", () => {
+      console.debug(`[ice] iceGatheringState=${this.#pc?.iceGatheringState}`);
+    });
+
     this.#pc.addEventListener("connectionstatechange", () => {
-      if (this.#pc?.connectionState === "failed") {
+      const state = this.#pc?.connectionState;
+      console.debug(`[ice] connectionState=${state}`);
+      if (state === "connected" || state === "failed") {
+        void this.#logSelectedPair();
+      }
+      if (state === "failed") {
         settle(new Error("WebRTC connection failed."));
         this.#fireConnectionLost();
       }
@@ -581,6 +602,64 @@ export class WebRtcProxy {
    */
   static #isPrivateIpv4(ip) {
     return /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(ip);
+  }
+
+  /**
+   * Compact, privacy-safe summary of an ICE candidate for diagnostics:
+   * `type/protocol/scope` (no raw IP). Scope = v4-private | v4-public | v6.
+   *
+   * @param {string | undefined | null} candidateStr
+   * @returns {string}
+   */
+  static #describeCandidate(candidateStr) {
+    if (typeof candidateStr !== "string" || candidateStr.length === 0) {
+      return "(end-of-candidates)";
+    }
+    const typ = candidateStr.match(/ typ (\w+)/)?.[1] ?? "?";
+    const parts = candidateStr.split(" ");
+    const proto = parts.length >= 3 ? parts[2] : "?";
+    const ip = WebRtcProxy.#extractCandidateIp(candidateStr);
+    let scope = "?";
+    if (ip) {
+      scope = ip.includes(":") ? "v6" : WebRtcProxy.#isPrivateIpv4(ip) ? "v4-private" : "v4-public";
+    }
+    return `${typ}/${proto}/${scope}`;
+  }
+
+  /**
+   * Log the nominated/succeeded ICE candidate pair (types + protocols) once the
+   * connection settles, so the winning path (or the absence of one) is visible
+   * in the field logs. Diagnostics only.
+   *
+   * @returns {Promise<void>}
+   */
+  async #logSelectedPair() {
+    if (!this.#pc) {
+      return;
+    }
+    try {
+      const stats = await this.#pc.getStats();
+      const byId = new Map();
+      stats.forEach((r) => byId.set(r.id, r));
+      let logged = false;
+      stats.forEach((r) => {
+        if (r.type === "candidate-pair" && (r.nominated || r.state === "succeeded")) {
+          const l = byId.get(r.localCandidateId);
+          const rem = byId.get(r.remoteCandidateId);
+          console.debug(
+            `[ice] pair state=${r.state} nominated=${r.nominated} ` +
+              `local=${l?.candidateType ?? "?"}/${l?.protocol ?? "?"} ` +
+              `remote=${rem?.candidateType ?? "?"}/${rem?.protocol ?? "?"}`
+          );
+          logged = true;
+        }
+      });
+      if (!logged) {
+        console.debug("[ice] no nominated/succeeded candidate pair");
+      }
+    } catch (e) {
+      console.debug(`[ice] getStats failed: ${e instanceof Error ? e.name : e}`);
+    }
   }
 
   /**

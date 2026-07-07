@@ -1,3 +1,7 @@
+## 0.8.49
+
+- **Chore**: WebRTC/ICE diagnostics (temporary), forwarded to the server log, to pin down the Local Network Access failure without guessing. Logs each local/remote ICE candidate as `type/protocol/scope` (host/srflx/relay, udp/tcp, v4-private/v4-public/v6 — no raw IP), the `iceConnectionState`/`iceGatheringState`/`connectionState` transitions, the PNA preflight fire + OK/FAIL + timing, and the nominated/succeeded candidate pair on connect or failure. No behaviour change.
+
 ## 0.8.48
 
 - **Fix**: Reverted the 0.8.47 change that dropped the proxy's private ICE candidates for viewers the server did not classify as same-network — it broke genuine same-LAN playback. `sameNetwork` has false negatives (e.g. the browser reaches the server over IPv6 while the proxy's reported endpoint is IPv4, so the public IPs don't compare equal), and for a real same-LAN viewer the private host candidate is the ONLY working path — dropping it fails the WebRTC connection outright. The candidate filter is removed; a safer Local-Network-Access fix (not gated on the fragile same-network guess) will follow. The 0.8.47 error-screen buttons and dead-player guard are kept.
