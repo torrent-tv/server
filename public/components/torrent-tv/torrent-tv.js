@@ -75,6 +75,44 @@ class TorrentTV {
   }
 
   /** @param {CustomEvent} event */
+  #onMagnetReady = (event) => {
+    const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
+    if (typeof magnetUri !== "string" || magnetUri.length === 0) {
+      return;
+    }
+    if (this.#isBusy) {
+      this.#showError(TorrentTV.MESSAGES.alreadyProcessing);
+      return;
+    }
+    // File count is unknown until the swarm metadata arrives; the
+    // SET_MEDIA_FILES listener updates it then.
+    this.#videoCount = 0;
+
+    this.#transitionTo(TorrentTV.STATE.PROCESSING);
+    this.#isBusy = true;
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.SHOW, {
+        detail: {
+          fileName: "Magnet link",
+          status: TorrentTV.MESSAGES.playbackPreparing,
+          progress: 0
+        }
+      })
+    );
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.PROCESS_MAGNET, {
+        detail: { magnetUri }
+      })
+    );
+  };
+
+  /** Keep the video-file count current (drives the error screen's buttons). */
+  #onSetMediaFiles = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    this.#videoCount = Array.isArray(detail?.video) ? detail.video.length : 0;
+  };
+
+  /** @param {CustomEvent} event */
   #onPlaybackReady = () => {
     this.#logEvt("transition→PLAYING cause=LOADING:PLAYBACK_READY (→PLAYER:SHOW)");
     this.#transitionTo(TorrentTV.STATE.PLAYING);
@@ -113,6 +151,8 @@ class TorrentTV {
 
   #setupEventHandlers = () => {
     document.addEventListener(TORRENT_EVENTS.FILE_DETAILS_READY, this.#onTorrentFileDetailsReady);
+    document.addEventListener(TORRENT_EVENTS.MAGNET_READY, this.#onMagnetReady);
+    document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_READY, this.#onPlaybackReady);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_FAILED, this.#onPlaybackFailed);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);

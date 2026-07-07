@@ -5,9 +5,13 @@ import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 
 /** Embedded-subtitle extraction reads the file to the last cue — allow long. */
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
+
+/** A cold magnet needs swarm metadata before the file list exists. */
+const MAGNET_METADATA_TIMEOUT_MS = 180_000;
 
 /** Common ISO 639-2 (ffmpeg language tags) → 639-1 codes for `srclang`. */
 const ISO639_2_TO_1 = {
@@ -109,7 +113,10 @@ export class Loading {
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
-    switchingAudio: "Switching audio track..."
+    switchingAudio: "Switching audio track...",
+    fetchingMagnetMetadata: "Fetching torrent metadata from the swarm...",
+    magnetMetadataFailed:
+      "Could not fetch metadata for this magnet link — no peers reachable. Try again later."
   };
 
   // How long to keep polling for the file header to download before giving up
@@ -311,6 +318,23 @@ export class Loading {
     });
   };
 
+  /** @param {CustomEvent} event */
+  #onProcessMagnet = (event) => {
+    const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
+    void this.#processMagnetPlayback(magnetUri).catch((error) => {
+      if (this.#isAbortError(error)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[torrent-tv] magnet playback failed:", message, error);
+      document.dispatchEvent(
+        new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+          detail: { description: message }
+        })
+      );
+    });
+  };
+
   #onErrorShow = () => {
     this.#stopPlayback();
     this.visible = false;
@@ -384,6 +408,7 @@ export class Loading {
     document.addEventListener(LOADING_EVENTS.SET_STATUS, this.#onSetStatus);
     document.addEventListener(LOADING_EVENTS.SET_PROGRESS, this.#onSetProgress);
     document.addEventListener(LOADING_EVENTS.PROCESS_PLAYBACK, this.#onProcessPlayback);
+    document.addEventListener(LOADING_EVENTS.PROCESS_MAGNET, this.#onProcessMagnet);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
     document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
@@ -593,6 +618,120 @@ export class Loading {
    * @param {Array<object>} parsedFiles
    * @returns {{ video: Array<object>, audio: Array<object>, subtitles: Array<object> }}
    */
+  /**
+   * Magnet flow: the file list is unknown locally — register the magnet on a
+   * proxy, wait for the swarm metadata (`/api/sources/:key/files`), then
+   * continue exactly like the parsed-torrent flow.
+   *
+   * @param {string} magnetUri
+   * @returns {Promise<void>}
+   */
+  async #processMagnetPlayback(magnetUri) {
+    if (typeof magnetUri !== "string" || magnetUri.trim().length === 0) {
+      return;
+    }
+    if (!(this.#videoElement instanceof HTMLVideoElement)) {
+      throw new Error(Loading.MESSAGES.playerNotReady);
+    }
+    if (this.#isProcessing) {
+      throw new Error(Loading.MESSAGES.alreadyProcessing);
+    }
+
+    // A fresh source invalidates any pending resume state, cancellation and
+    // track selection (same as the parsed-torrent flow).
+    this.#activeFileIndex = -1;
+    this.#resumeState = null;
+    this.#cancelRequested = false;
+    this.#selectedAudioTrackIndex = 0;
+    this.#planTracks = null;
+    this.#isProcessing = true;
+
+    try {
+      this.#hlsPlayer.clear();
+      this.#clearSubtitleTracks();
+      this.#session.clear();
+      const current = this.#session.openMagnetDetails({ magnetUri });
+
+      // Display name from the magnet's dn parameter until metadata arrives.
+      let displayName = "Magnet link";
+      try {
+        const dn = new URLSearchParams(magnetUri.slice(magnetUri.indexOf("?") + 1)).get("dn");
+        if (dn && dn.trim().length > 0) {
+          displayName = dn.trim();
+        }
+      } catch {
+        // Keep the fallback name.
+      }
+
+      this.visible = true;
+      this.setFileName(displayName);
+      this.setProgress(0);
+      this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
+
+      const transport = await this.#acquireTransport();
+      this.#throwIfCancelled();
+      if (!transport) {
+        throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+      }
+      const sourceKey = await this.#session.registerSourceOnProxy(transport);
+      this.#throwIfCancelled();
+
+      const response = await transport.fetch(
+        `/api/sources/${encodeURIComponent(sourceKey)}/files`,
+        { signal: this.#session.abortController.signal, timeoutMs: MAGNET_METADATA_TIMEOUT_MS }
+      );
+      this.#throwIfCancelled();
+      if (!response.ok) {
+        throw new Error(Loading.MESSAGES.magnetMetadataFailed);
+      }
+      const payload = await response.json();
+      const name =
+        typeof payload?.name === "string" && payload.name.length > 0 ? payload.name : displayName;
+      const files = normalizeRemoteFileList(name, payload?.files);
+      if (files.length === 0) {
+        throw new Error(Loading.MESSAGES.magnetMetadataFailed);
+      }
+
+      current.name = name;
+      current.files = files;
+      current.isMultiFile = files.length > 1;
+      this.setFileName(name);
+
+      const mediaFiles = classifyMediaFiles(files);
+      this.#subtitleFiles = mediaFiles.subtitles;
+      document.dispatchEvent(
+        new CustomEvent(PLAYER_EVENTS.SET_MEDIA_FILES, {
+          detail: mediaFiles
+        })
+      );
+
+      const videoCount = mediaFiles.video.length;
+      if (videoCount <= 0) {
+        throw new Error(Loading.MESSAGES.noVideoFile);
+      }
+      if (videoCount === 1) {
+        const videoFileIndex = mediaFiles.video[0].index;
+        await this.#playVideoFile(videoFileIndex);
+        void this.#loadSubtitlesForVideo(videoFileIndex).catch((e) => {
+          if (!this.#isAbortError(e)) {
+            console.warn("[torrent-tv][subtitles] load failed:", e);
+          }
+        });
+      } else {
+        this.setStatus(Loading.MESSAGES.chooseVideoFile);
+        this.setProgress(100);
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+        document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
+        return;
+      }
+
+      this.setProgress(100);
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+    } finally {
+      this.#isProcessing = false;
+    }
+  }
+
   #normalizeMediaFiles(mediaFiles, parsedFiles) {
     const video = Array.isArray(mediaFiles?.video) ? mediaFiles.video : parsedFiles.filter((entry) => entry.isVideo);
     const audio = Array.isArray(mediaFiles?.audio) ? mediaFiles.audio : [];

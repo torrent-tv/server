@@ -94,6 +94,85 @@ function parseSingleFile(name, length) {
   ];
 }
 
+/** Same categorisation rules the torrent picker applies to parsed files. */
+const AUDIO_EXTENSIONS = new Set([
+  ".aac", ".ac3", ".alac", ".dts", ".eac3", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"
+]);
+const SUBTITLE_EXTENSIONS = new Set([
+  ".ass", ".srt", ".ssa", ".sub", ".sup", ".ttml", ".vtt", ".webvtt"
+]);
+
+/**
+ * Group file entries into video / audio / subtitle lists (the shape the
+ * player and subtitle pipeline consume).
+ *
+ * @param {Array<{ relativePath?: string, path?: string, isVideo?: boolean }>} files
+ * @returns {{ video: Array<object>, audio: Array<object>, subtitles: Array<object> }}
+ */
+export function classifyMediaFiles(files) {
+  const video = [];
+  const audio = [];
+  const subtitles = [];
+  const hasExtension = (lowerPath, extensions) => {
+    for (const ext of extensions) {
+      if (lowerPath.endsWith(ext)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const file of Array.isArray(files) ? files : []) {
+    const lowerPath = String(file.relativePath ?? file.path ?? "").toLowerCase();
+    if (file.isVideo) {
+      video.push(file);
+      continue;
+    }
+    if (hasExtension(lowerPath, AUDIO_EXTENSIONS)) {
+      audio.push(file);
+      continue;
+    }
+    if (hasExtension(lowerPath, SUBTITLE_EXTENSIONS)) {
+      subtitles.push(file);
+    }
+  }
+  return { video, audio, subtitles };
+}
+
+/**
+ * Normalize a proxy-reported file list (magnet metadata) into the same file
+ * entries `parseTorrentBytes` produces from a `.torrent` file.
+ *
+ * @param {string} baseName - Torrent name (path prefix for multi-file).
+ * @param {Array<{ index?: number, name?: string, relativePath?: string, length?: number }>} rawFiles
+ * @returns {Array<{ index: number, name: string, path: string, relativePath: string, length: number, isVideo: boolean }>}
+ */
+export function normalizeRemoteFileList(baseName, rawFiles) {
+  if (!Array.isArray(rawFiles)) {
+    return [];
+  }
+  const multi = rawFiles.length > 1;
+  return rawFiles.map((entry, position) => {
+    const index = Number.isInteger(entry?.index) ? entry.index : position;
+    const name = typeof entry?.name === "string" && entry.name.length > 0 ? entry.name : `file-${index}`;
+    // WebTorrent's file.path already includes the torrent name for multi-file
+    // torrents; keep relativePath relative to the torrent root like the
+    // .torrent parser does.
+    const reported = typeof entry?.relativePath === "string" && entry.relativePath.length > 0 ? entry.relativePath : name;
+    const relativePath =
+      multi && baseName && reported.startsWith(`${baseName}/`)
+        ? reported.slice(baseName.length + 1)
+        : reported;
+    return {
+      index,
+      name,
+      path: multi && baseName ? `${baseName}/${relativePath}` : relativePath,
+      relativePath,
+      length: Number.isFinite(entry?.length) ? entry.length : 0,
+      isVideo: isVideoPath(relativePath)
+    };
+  });
+}
+
 async function sha1(bytes) {
   const hashBuffer = await crypto.subtle.digest("SHA-1", bytes);
   return new Uint8Array(hashBuffer);

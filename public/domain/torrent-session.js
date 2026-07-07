@@ -129,6 +129,31 @@ export class TorrentSession {
   }
 
   /**
+   * Open a magnet link as the current source. The file list is unknown until
+   * the proxy fetches the metadata from the swarm — the caller enriches
+   * `current.name` / `current.files` / `current.isMultiFile` afterwards.
+   *
+   * @param {{ magnetUri: string }} params
+   * @returns {object} The minimal `current` record.
+   */
+  openMagnetDetails({ magnetUri }) {
+    if (typeof magnetUri !== "string" || !/^magnet:\?/i.test(magnetUri.trim())) {
+      throw new Error("Not a magnet URI.");
+    }
+    this.onLog("Using magnet link source.");
+    this.current = {
+      type: "torrent",
+      sourceType: "magnet",
+      sourceValue: magnetUri.trim(),
+      name: "",
+      files: [],
+      isMultiFile: false,
+      webSeeds: []
+    };
+    return this.current;
+  }
+
+  /**
    * Start playback of a torrent file.
    *
    * Prefers direct webseed playback when a webseed URL is available.

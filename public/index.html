@@ -24,6 +24,15 @@
             <input id="torrent__input" name="filename" type="file" accept=".torrent,application/x-bittorrent" />
           </label>
           <p id="torrent__abstract">Drop or paste a .torrent file, or click .torrent above to choose one. The video starts automatically as soon as it is ready.</p>
+          <input
+            id="torrent__magnet"
+            name="magnet"
+            type="text"
+            inputmode="url"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="…or paste a magnet link"
+            aria-label="Magnet link" />
         </header>
         <button id="torrent__submit" type="submit">Open</button>
       </form>
