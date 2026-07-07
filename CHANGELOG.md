@@ -1,3 +1,7 @@
+## 0.8.41
+
+- **New**: Subtitle language is detected from content, not just the filename (needs proxy 2.9.30). External subtitle files now come already converted to WebVTT from the proxy (which also decodes UTF-8/Windows-1251 and runs n-gram detection), so the browser no longer converts them. Each track's language is chosen by priority: an explicit code in the filename or container metadata (author intent) → the proxy's content detection (distinguishes e.g. Russian from Ukrainian) → the film's audio-track language (forced-signs subs usually match the dub) → Unknown. So a `.srt` with no language code in its name now shows its real language instead of "Unknown".
+
 ## 0.8.40
 
 - **Fix**: The playlist button no longer appears for a single-video torrent that also carries audio or subtitle files. Its visibility counted video + audio + subtitle files, but the playlist only switches between VIDEO files — a movie plus an external `.srt` (e.g. the Enola Holmes release: one `.avi` + one `.srt`) wrongly showed a playlist with nothing to switch to. It now depends on the video-file count alone.
