@@ -114,6 +114,7 @@ export class Loading {
     reconnecting: "Reconnecting...",
     switchingAudio: "Switching audio track...",
     switchingQuality: "Switching quality...",
+    prebufferStalled: "Could not start playback — no data arrived from the proxy. If it is on your network, allow local network access for this site and try again.",
     fetchingMagnetMetadata: "Fetching torrent metadata from the swarm...",
     magnetMetadataFailed:
       "Could not fetch metadata for this magnet link — no peers reachable. Try again later."
@@ -1950,7 +1951,15 @@ export class Loading {
       this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(target)} s`);
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    this.#logEvt(`prebuffer timeout ahead=${this.#bufferedAheadSeconds(videoElement).toFixed(1)}s`);
+    // Timed out. If NOTHING buffered, the stream never started (dead transport /
+    // segments never arriving — e.g. a WebRTC connection blocked by the Local
+    // Network Access gate). Fail loudly instead of revealing a dead player:
+    // proceeding would fire PLAYBACK_READY over an element that can never play.
+    const finalAhead = this.#bufferedAheadSeconds(videoElement);
+    this.#logEvt(`prebuffer timeout ahead=${finalAhead.toFixed(1)}s`);
+    if (finalAhead < PREBUFFER_MIN_START_SECONDS) {
+      throw new Error(Loading.MESSAGES.prebufferStalled);
+    }
   }
 
   /**
@@ -2705,6 +2714,9 @@ const PREBUFFER_RATE_WINDOW_MS = 10_000;
 const PREBUFFER_RATE_MIN_SPAN_MS = 5_000;
 // Allow a full cushion to build on a genuinely slow start before falling back.
 const PREBUFFER_TIMEOUT_MS = 45_000;
+// If, after the timeout, less than this is buffered, treat the stream as never
+// started (dead transport) and fail rather than reveal an unplayable player.
+const PREBUFFER_MIN_START_SECONDS = 0.5;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
