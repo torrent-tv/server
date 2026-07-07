@@ -14,10 +14,27 @@
   }
 
   /* Buttons do not inherit color by default (iOS paints them system blue);
-     keep any control in this view on the view's text colour — including the
-     upcoming loading-cancel button. */
+     keep any control in this view on the view's text colour. */
   & button {
     color: inherit;
+  }
+
+  & #loading__cancel {
+    display: block;
+    margin-block-start: 1.5rem;
+    margin-inline: auto;
+    padding: 0.5em 1.25em;
+    font-family: inherit;
+    font-size: 1rem;
+    border: 0.125rem solid currentColor;
+    border-radius: 0.375em;
+    background: transparent;
+    cursor: pointer;
+
+    &:hover {
+      /* Derived from the text colour so it works in both schemes. */
+      background: color-mix(in srgb, currentColor 8%, transparent);
+    }
   }
 
   & #loading__filename {
