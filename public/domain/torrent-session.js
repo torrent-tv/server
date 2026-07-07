@@ -224,6 +224,10 @@ export class TorrentSession {
     const targetWidth = Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : 0;
     const targetHeight =
       Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : 0;
+    const audioTrackIndex =
+      Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
+        ? options.audioTrackIndex
+        : 0;
 
     const sourceKey =
       typeof options.sourceKey === "string" && options.sourceKey.length > 0
@@ -238,7 +242,8 @@ export class TorrentSession {
       {
         transcodeAudio,
         targetWidth,
-        targetHeight
+        targetHeight,
+        audioTrackIndex
       }
     );
     if (!playlistUrl) {
@@ -343,6 +348,9 @@ export class TorrentSession {
       videoCodec,
       container,
       durationSeconds,
+      // Full track inventory (proxy 2.9.26+; empty on older proxies).
+      audioTracks: Array.isArray(payload?.audioTracks) ? payload.audioTracks : [],
+      subtitleTracks: Array.isArray(payload?.subtitleTracks) ? payload.subtitleTracks : [],
       pending
     };
   }
@@ -412,7 +420,11 @@ export class TorrentSession {
             Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : undefined,
           consumerId: this.consumerId,
           fileName: this.#getFileLogName(fileIndex),
-          startPositionSeconds: startPositionSeconds > 0 ? startPositionSeconds : undefined
+          startPositionSeconds: startPositionSeconds > 0 ? startPositionSeconds : undefined,
+          audioTrackIndex:
+            Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
+              ? options.audioTrackIndex
+              : undefined
         })
       });
 

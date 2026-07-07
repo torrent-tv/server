@@ -65,7 +65,12 @@
              quality items. The button and both items stay hidden until the
              backing features land (separate changes). -->
         <media-settings-menu id="player__settings-menu" hidden anchor="auto">
-          <media-settings-menu-item id="player__settings-audio" hidden>Audio</media-settings-menu-item>
+          <media-settings-menu-item id="player__settings-audio" hidden>
+            Audio
+            <media-chrome-menu id="player__audio-menu" slot="submenu" hidden>
+              <div slot="title">Audio</div>
+            </media-chrome-menu>
+          </media-settings-menu-item>
           <media-settings-menu-item id="player__settings-quality" hidden>Quality</media-settings-menu-item>
         </media-settings-menu>
 

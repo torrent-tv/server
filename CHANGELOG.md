@@ -1,3 +1,8 @@
+## 0.8.36
+
+- **New**: Audio-track menu (OpenSpec change `track-selection-ui`; pairs with proxy 2.9.26). When the active file has more than one audio track, the player's settings menu appears with an Audio submenu (labels from language + title metadata, e.g. "Russian — Дубляж"). Picking a track replays the file through the proxy with `-map 0:a:N` and resumes at the same position; direct play cannot select tracks, so a non-default choice forces the proxy path.
+- **New**: Embedded subtitles. Embedded TEXT subtitle tracks (inside MKV/MP4) are extracted by the proxy as WebVTT and join the external subtitle files in the captions menu (sequential fetch after playback starts, generous timeout — extraction reads the file to the last cue). Image-based tracks (PGS/VobSub) are skipped. Against a pre-2.9.26 proxy everything degrades to the previous behaviour.
+
 ## 0.8.35
 
 - **New**: The loading screen has a Cancel button (OpenSpec change `cancel-loading`, capability `loading-cancel`). Previously a stalled load could only be waited out or escaped by reloading the page. Cancel aborts the in-flight flow at any phase — transport acquisition, plan polling, transcode warm-up, prebuffer — silently (no error screen), releases pending requests and the transcode session, and returns to the playlist for multi-file torrents (file list stays usable; the open data channel is reused for the next selection) or to the torrent picker otherwise. A cancelled flow can never late-start playback (cooperative AbortError checkpoints at the await boundaries).

@@ -16,6 +16,9 @@ export class Player {
     video: "#player__video",
     closeButton: "#player__close",
     playlistToggle: "#player__playlist-toggle",
+    settingsButton: "#player__settings-button",
+    settingsAudioItem: "#player__settings-audio",
+    audioMenu: "#player__audio-menu",
   };
 
   static CLASSES = {
@@ -32,6 +35,9 @@ export class Player {
   #video;
   #playlistToggle;
   #closeButton;
+  #settingsButton;
+  #settingsAudioItem;
+  #audioMenu;
 
   #onShow = () => {
     this.#logEvt("view=player shown cause=PLAYER:SHOW");
@@ -111,8 +117,14 @@ export class Player {
     this.#video = document.querySelector(Player.SELECTOR.video);
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
+    this.#settingsButton = document.querySelector(Player.SELECTOR.settingsButton);
+    this.#settingsAudioItem = document.querySelector(Player.SELECTOR.settingsAudioItem);
+    this.#audioMenu = document.querySelector(Player.SELECTOR.audioMenu);
 
-    if (!this.#root || !this.#controller || !this.#video || !this.#playlistToggle || !this.#closeButton) {
+    if (
+      !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
+      !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu
+    ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }
 
@@ -140,7 +152,60 @@ export class Player {
     this.#closeButton.addEventListener("click", this.#closeHandler);
     this.#playlistToggle.addEventListener("click", this.#togglePlaylist);
     this.#controller.addEventListener("click", this.#onControllerClick);
+    document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
+    this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
   }
+
+  /**
+   * Populate the audio submenu from the playback plan's track inventory.
+   * The settings button and the Audio item stay hidden until a file actually
+   * has more than one audio track.
+   *
+   * @param {CustomEvent} event
+   */
+  #onSetAudioTracks = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const tracks = Array.isArray(detail?.tracks) ? detail.tracks : [];
+    const activeIndex = Number.isInteger(detail?.activeIndex) ? detail.activeIndex : 0;
+
+    for (const item of this.#audioMenu.querySelectorAll("media-chrome-menu-item")) {
+      item.remove();
+    }
+
+    const show = tracks.length > 1;
+    this.#settingsButton.hidden = !show;
+    this.#settingsAudioItem.hidden = !show;
+    if (!show) {
+      return;
+    }
+
+    for (const track of tracks) {
+      const item = document.createElement("media-chrome-menu-item");
+      item.setAttribute("type", "radio");
+      item.dataset.audioTrackIndex = String(track.index);
+      if (track.index === activeIndex) {
+        item.setAttribute("checked", "");
+      }
+      item.textContent = track.label ?? `Track ${track.index + 1}`;
+      this.#audioMenu.appendChild(item);
+    }
+  };
+
+  /** @param {MouseEvent} event */
+  #onAudioMenuClick = (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const item = target.closest("media-chrome-menu-item[data-audio-track-index]");
+    if (!item || item.hasAttribute("checked")) return;
+    for (const sibling of this.#audioMenu.querySelectorAll("media-chrome-menu-item")) {
+      sibling.toggleAttribute("checked", sibling === item);
+    }
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SELECT_AUDIO_TRACK, {
+        detail: { trackIndex: Number(item.dataset.audioTrackIndex) }
+      })
+    );
+  };
 
   #closeHandler = () => {
     document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
