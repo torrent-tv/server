@@ -5,18 +5,30 @@
 ### Requirement: Magnet links start playback through every input channel
 The app SHALL accept a magnet URI via (1) the `?magnet=` URL parameter
 (removed from the URL immediately), (2) pasting magnet text anywhere on the
-picker (clipboard files keep priority), and (3) a text field on the picker
-submitted with Enter. A non-magnet submission SHALL show a plain-language
-error. `.torrent` file input is unaffected.
+picker (clipboard files keep priority; unrecognised text is silently
+ignored), and (3) a text field on the picker with a visible submit button whose label
+names the action. Every channel SHALL route through the field and its form,
+and the field SHALL clear once the flow starts — consistent with the file
+input. A field value that is
+a COMPLETE magnet URI (`xt=urn:btih/btmh` hash present) SHALL auto-start
+the flow on input, so pasting into the field needs no further action. An
+invalid explicit submission SHALL show an inline field validation message
+(Validation API) — never a separate error screen. `.torrent` file input is
+unaffected.
 
 #### Scenario: Pasted magnet
-- **WHEN** the user pastes a magnet URI on the picker
-- **THEN** the loading flow starts, titled from the magnet's `dn` name when
-  present
+- **WHEN** the user pastes a complete magnet URI anywhere on the picker
+- **THEN** the field shows it and the loading flow starts immediately,
+  titled from the magnet's `dn` name when present
 
-#### Scenario: Invalid input
+#### Scenario: Invalid explicit submission
 - **WHEN** the user submits text that is not a magnet URI
-- **THEN** an error explains it and the picker remains usable
+- **THEN** an inline validation message appears at the field and the picker
+  stays as it was
+
+#### Scenario: Partial manual typing
+- **WHEN** the field contains an incomplete magnet prefix (no hash yet)
+- **THEN** nothing auto-starts
 
 ### Requirement: The magnet flow rejoins the torrent flow
 The magnet flow SHALL rejoin the parsed-torrent flow once the proxy returns

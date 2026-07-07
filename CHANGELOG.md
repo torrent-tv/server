@@ -1,3 +1,7 @@
+## 0.8.38
+
+- **Fix**: Magnet input UX rework after field feedback. (1) A visible "Play magnet" button in one flex row with the field (Enter-only submission on mobile is hostile; the label names the action) plus `enterkeyhint="go"`. (2) Pasting or typing a COMPLETE magnet URI (hash present — a partial "magnet:?" never triggers) auto-starts the flow straight from the `input` event. (3) An invalid explicit submission shows an inline field message via the Validation API instead of ripping the user into the full error screen. (4) All entry channels — URL parameter, paste anywhere on the picker, the field itself — route through the field + form, and the field clears once the flow starts, consistent with the file input. Unrecognised pasted text is still ignored silently (people paste all sorts of things, including .torrent files, which keep priority).
+
 ## 0.8.37
 
 - **New**: Magnet links (OpenSpec change `magnet-input`; needs proxy 2.9.26). A magnet URI now works through every channel the `.torrent` file already had: the `?magnet=` URL parameter, pasting the link anywhere on the picker, and a new text field on the picker (Enter starts it). The proxy fetches the swarm metadata (`/api/sources/:key/files`, up to 3 minutes on a cold magnet, live status shown, cancellable), the file list is normalised to the local parser's shape and the flow continues exactly like a parsed torrent — playlist, subtitles, audio tracks, cancel and retry unchanged. A dead swarm fails with an explicit no-peers message; non-magnet input gets a plain-language error.
