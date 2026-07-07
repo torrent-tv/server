@@ -2362,6 +2362,19 @@ export class Loading {
   }
 
   /**
+   * Build the transcode target resolution sent to the proxy.
+   *
+   * Orientation-independent by design: the target is sized from the viewport's
+   * LONG and SHORT edges (not the current width/height, and not the
+   * `<video>` bounding box, which shrinks in portrait because a landscape clip
+   * is letterboxed there). So the target is identical in portrait and
+   * landscape and always provisions for the landscape (larger) case. Rotating
+   * the device mid-playback therefore never needs more pixels and never forces
+   * a transcode restart; in portrait the player just downscales the extra
+   * pixels. The proxy caps this box to the source size (never upscales), and
+   * the realtime budget scales DOWN from this ceiling — orientation itself
+   * never changes the encode resolution.
+   *
    * @param {boolean} shouldTranscodeVideo
    * @returns {{ targetWidth?: number, targetHeight?: number }}
    */
@@ -2369,15 +2382,19 @@ export class Loading {
     if (!shouldTranscodeVideo || !(this.#videoElement instanceof HTMLVideoElement)) {
       return {};
     }
-    const rect = this.#videoElement.getBoundingClientRect();
-    const viewportWidth = Number.isFinite(rect.width) && rect.width > 0 ? rect.width : window.innerWidth;
-    const viewportHeight = Number.isFinite(rect.height) && rect.height > 0 ? rect.height : window.innerHeight;
+    const viewportWidth = Number.isFinite(window.innerWidth) && window.innerWidth > 0 ? window.innerWidth : 0;
+    const viewportHeight = Number.isFinite(window.innerHeight) && window.innerHeight > 0 ? window.innerHeight : 0;
+    const longEdge = Math.max(viewportWidth, viewportHeight);
+    const shortEdge = Math.min(viewportWidth, viewportHeight);
+    if (longEdge <= 0 || shortEdge <= 0) {
+      return {};
+    }
     const dpr = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
       ? window.devicePixelRatio
       : 1;
     const scaleFactor = 0.95;
-    const targetWidth = this.#toEvenDimension(Math.round(viewportWidth * dpr * scaleFactor));
-    const targetHeight = this.#toEvenDimension(Math.round(viewportHeight * dpr * scaleFactor));
+    const targetWidth = this.#toEvenDimension(Math.round(longEdge * dpr * scaleFactor));
+    const targetHeight = this.#toEvenDimension(Math.round(shortEdge * dpr * scaleFactor));
     if (targetWidth <= 0 || targetHeight <= 0) {
       return {};
     }
