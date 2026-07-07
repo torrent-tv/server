@@ -31,17 +31,25 @@ unaffected.
 - **THEN** nothing auto-starts
 
 ### Requirement: The magnet flow rejoins the torrent flow
-The magnet flow SHALL rejoin the parsed-torrent flow once the proxy returns
-the swarm metadata: the file list is normalised to the same shape the local
-torrent parser produces, then the playlist opens for multiple videos, a
-single video autoplays, and subtitles, tracks, cancel and retry behave
-unchanged. A magnet whose metadata cannot be fetched SHALL fail with an
+The magnet flow SHALL poll for the swarm metadata rather than fail on the
+first miss: the proxy returns `pending` while the fetch continues in the
+background, and the browser SHALL keep polling (showing a metadata-fetch
+status, cancellable) until the file list arrives or a wall-clock deadline is
+reached. Once metadata arrives the file list SHALL be normalised to the same
+shape the local torrent parser produces, then the playlist opens for
+multiple videos, a single video autoplays, and subtitles, tracks, cancel and
+retry behave unchanged. Only after the deadline SHALL it fail with an
 explicit no-peers-reachable message.
+
+#### Scenario: Metadata arrives after a short delay
+- **WHEN** the metadata is not ready on the first poll but arrives moments
+  later
+- **THEN** playback proceeds on a later poll without the user retrying
 
 #### Scenario: Multi-file magnet
 - **WHEN** metadata arrives for a magnet with several videos
 - **THEN** the playlist opens listing them, and selecting one plays it
 
 #### Scenario: Dead swarm
-- **WHEN** no metadata arrives within the wait budget
+- **WHEN** no metadata arrives before the deadline
 - **THEN** the error screen shows the no-peers message
