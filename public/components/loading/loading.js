@@ -676,15 +676,35 @@ export class Loading {
       const sourceKey = await this.#session.registerSourceOnProxy(transport);
       this.#throwIfCancelled();
 
-      const response = await transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/files`,
-        { signal: this.#session.abortController.signal, timeoutMs: MAGNET_METADATA_TIMEOUT_MS }
-      );
-      this.#throwIfCancelled();
-      if (!response.ok) {
-        throw new Error(Loading.MESSAGES.magnetMetadataFailed);
+      // Poll for the swarm metadata: the proxy returns `pending` quickly while
+      // it keeps fetching, so a single request never races the transport
+      // timeout and a slow-to-appear magnet is given a real chance instead of
+      // failing on the first miss (the metadata often arrives seconds later).
+      const metadataDeadline = Date.now() + MAGNET_METADATA_TIMEOUT_MS;
+      let payload = null;
+      for (;;) {
+        this.#throwIfCancelled();
+        const response = await transport.fetch(
+          `/api/sources/${encodeURIComponent(sourceKey)}/files?maxWaitMs=8000`,
+          { signal: this.#session.abortController.signal, timeoutMs: 15_000 }
+        );
+        this.#throwIfCancelled();
+        if (response.ok) {
+          const body = await response.json();
+          if (!body?.pending) {
+            payload = body;
+            break;
+          }
+        }
+        // `pending` (or a transient non-ok) — keep the status up and retry
+        // until the wall-clock deadline.
+        if (Date.now() >= metadataDeadline) {
+          throw new Error(Loading.MESSAGES.magnetMetadataFailed);
+        }
+        this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
-      const payload = await response.json();
+
       const name =
         typeof payload?.name === "string" && payload.name.length > 0 ? payload.name : displayName;
       const files = normalizeRemoteFileList(name, payload?.files);
