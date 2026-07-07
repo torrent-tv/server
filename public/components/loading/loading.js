@@ -1889,7 +1889,10 @@ export class Loading {
         samples.shift();
       }
       const wallSpan = (now - samples[0].t) / 1000;
-      const fillRate = wallSpan >= 0.5 ? (ahead - samples[0].ahead) / wallSpan : NaN;
+      // Trust the rate only once it spans enough wall time to average across
+      // segment-arrival bursts; before that, hold the default target.
+      const fillRate =
+        wallSpan >= PREBUFFER_RATE_MIN_SPAN_MS / 1000 ? (ahead - samples[0].ahead) / wallSpan : NaN;
 
       // Adaptive target from the margin over realtime (R − 1).
       let target = defaultTargetSeconds;
@@ -2663,8 +2666,16 @@ const PREBUFFER_TARGET_SECONDS = 15;
 const PREBUFFER_MIN_SECONDS = 6;
 const PREBUFFER_MAX_SECONDS = 25;
 const PREBUFFER_BASE_SECONDS = 12;
-const PREBUFFER_RATE_WINDOW_MS = 1500;
-const PREBUFFER_TIMEOUT_MS = 30_000;
+// Fill-rate must be averaged over a window long enough to span SEVERAL segment
+// arrivals — segments land in bursts every ~4-11 s on a slow/warming encoder,
+// so a short window reads a single burst as "3x realtime" and releases with a
+// tiny cushion that then drains (the ~35 s start-stutter). Only trust the rate
+// once it covers at least PREBUFFER_RATE_MIN_SPAN_MS of wall time, so it
+// reflects sustained production, not a spike.
+const PREBUFFER_RATE_WINDOW_MS = 10_000;
+const PREBUFFER_RATE_MIN_SPAN_MS = 5_000;
+// Allow a full cushion to build on a genuinely slow start before falling back.
+const PREBUFFER_TIMEOUT_MS = 45_000;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
