@@ -24,7 +24,11 @@ export class Torrent {
     invalidMagnet: "That does not look like a magnet link."
   };
 
-  static MAGNET_RE = /^magnet:\?/i;
+  /**
+   * A COMPLETE magnet URI: requires the xt=urn:btih/btmh hash, so partial
+   * manual typing ("magnet:?") never auto-starts the flow with garbage.
+   */
+  static MAGNET_RE = /^magnet:\?.*xt=urn:bt(?:ih|mh):[a-z0-9]{16,}/i;
   static AUDIO_EXTENSIONS = new Set([
     ".aac",
     ".ac3",
@@ -60,24 +64,34 @@ export class Torrent {
     this.#submitMagnetField();
   };
 
-  /** Start the magnet flow from the text field (Enter or form submit). */
+  /**
+   * Auto-start on paste/typing: as soon as the field holds a COMPLETE magnet
+   * URI, submit through the form (single entry point). Also clears a stale
+   * custom-validity message from a previous failed attempt.
+   */
+  #onMagnetInput = () => {
+    this.#magnetInput.setCustomValidity("");
+    if (Torrent.MAGNET_RE.test(this.#magnetInput.value.trim())) {
+      this.#form.requestSubmit();
+    }
+  };
+
+  /** Start the magnet flow from the text field (button, Enter or auto-start). */
   #submitMagnetField() {
     const value = this.#magnetInput.value.trim();
     if (value.length === 0) {
       return;
     }
     if (!Torrent.MAGNET_RE.test(value)) {
-      document.dispatchEvent(
-        new CustomEvent(ERROR_EVENTS.SHOW, {
-          detail: {
-            title: "Error",
-            description: Torrent.MESSAGES.invalidMagnet,
-            backEvent: APP_EVENTS.RESET_TO_PICKER
-          }
-        })
-      );
+      // Inline field message (Validation API) — a wrong paste must not rip
+      // the user out of the picker into a full error screen.
+      this.#magnetInput.setCustomValidity(Torrent.MESSAGES.invalidMagnet);
+      this.#magnetInput.reportValidity();
       return;
     }
+    this.#magnetInput.setCustomValidity("");
+    // Consistent with the file input: the field clears once the flow starts
+    // (an instant retry would not help a no-peers failure anyway).
     this.#magnetInput.value = "";
     this.#processMagnet(value);
   }
@@ -145,13 +159,18 @@ export class Torrent {
       void this.#processIncomingFiles(files);
       return;
     }
-    // No file in the clipboard — a pasted magnet URI starts the magnet flow
-    // no matter where on the picker it lands.
+    // Paste INTO the field: let the native paste land and the input handler
+    // auto-start. Everywhere else: react ONLY to text recognised as a magnet
+    // (people paste all sorts of things — silence otherwise) by routing it
+    // through the field + form, so the user sees what was accepted.
+    if (event.target === this.#magnetInput) {
+      return;
+    }
     const text = (event.clipboardData?.getData("text") ?? "").trim();
     if (Torrent.MAGNET_RE.test(text)) {
       event.preventDefault();
-      this.#magnetInput.value = "";
-      this.#processMagnet(text);
+      this.#magnetInput.value = text;
+      this.#form.requestSubmit();
     }
   };
 
@@ -182,13 +201,16 @@ export class Torrent {
   async #loadFromUrl() {
     const params = new URLSearchParams(location.search);
 
-    // Magnet link in the URL: ?magnet=<encoded magnet URI>.
+    // Magnet link in the URL: ?magnet=<encoded magnet URI>. Routed through
+    // the field + form like every other magnet entry point (the user sees
+    // what arrived; garbage gets the inline validity message).
     const magnet = (params.get("magnet") ?? "").trim();
-    if (Torrent.MAGNET_RE.test(magnet)) {
+    if (magnet.length > 0) {
       params.delete("magnet");
       const search = params.toString();
       history.replaceState(null, "", search ? `?${search}` : location.pathname);
-      this.#processMagnet(magnet);
+      this.#magnetInput.value = magnet;
+      this.#form.requestSubmit();
       return;
     }
 
@@ -241,6 +263,7 @@ export class Torrent {
 
   #setupEventHandlers() {
     this.#form.addEventListener("submit", this.#onFormSubmit);
+    this.#magnetInput.addEventListener("input", this.#onMagnetInput);
     this.#input.addEventListener("click", this.#onInputClick);
     this.#input.addEventListener("change", this.#onInputChange);
     document.addEventListener("dragover", this.#onDocumentDragOver);

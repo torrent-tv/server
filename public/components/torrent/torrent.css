@@ -15,6 +15,24 @@
     display: grid;
   }
 
+  /* One row: magnet input + its button (the header takes the full first
+     row). No wrapper elements — the form itself is the flex container. */
+  form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 1rem;
+    inline-size: fit-content;
+    max-inline-size: 90dvw;
+    box-sizing: border-box;
+    /* Shared indent for the header content and the magnet row. */
+    padding: 2rem;
+  }
+
+  #torrent__header {
+    flex-basis: 100%;
+  }
+
   &::backdrop {
     background-color: var(--view-bg);
   }
@@ -38,7 +56,6 @@
 
   #torrent__header {
     box-sizing: border-box;
-    padding: 2rem;
     font-family: sans-serif;
     inline-size: fit-content;
 
@@ -60,28 +77,27 @@
       margin-block-end: 1.5vmin;
     }
 
-    #torrent__magnet {
-      display: block;
-      inline-size: 100%;
-      max-inline-size: 36em;
-      box-sizing: border-box;
-      margin-block-start: 1rem;
-      padding: 0.5em 0.75em;
-      font-family: inherit;
-      font-size: clamp(1rem, 2.5vmin, 1.5rem);
-      color: inherit;
-      background: transparent;
-      border: 0.125rem solid var(--view-text-muted);
-      border-radius: 0.375em;
+  }
 
-      &::placeholder {
-        color: var(--view-text-muted);
-      }
+  #torrent__magnet {
+    flex: 1 1 auto;
+    min-inline-size: 12rem;
+    box-sizing: border-box;
+    padding: 0.5em 0.75em;
+    font-family: inherit;
+    font-size: clamp(1rem, 2.5vmin, 1.5rem);
+    color: inherit;
+    background: transparent;
+    border: 0.125rem solid var(--view-text-muted);
+    border-radius: 0.375em;
 
-      &:focus-visible {
-        outline: none;
-        border-color: var(--view-accent);
-      }
+    &::placeholder {
+      color: var(--view-text-muted);
+    }
+
+    &:focus-visible {
+      outline: none;
+      border-color: var(--view-accent);
     }
   }
 
@@ -96,7 +112,23 @@
     top: -100vh;
   }
 
+  /* Visible action for the magnet field: Enter works too, but a button is
+     the honest affordance on mobile. Pasting a valid magnet auto-submits,
+     so this mostly serves manual/keyboard input. */
   #torrent__submit {
-    display: none;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5em 1.25em;
+    font-family: inherit;
+    font-size: clamp(1rem, 2.5vmin, 1.5rem);
+    color: inherit;
+    background: transparent;
+    border: 0.125rem solid currentColor;
+    border-radius: 0.375em;
+    cursor: pointer;
+
+    &:hover {
+      background: color-mix(in srgb, currentColor 8%, transparent);
+    }
   }
 }
