@@ -303,7 +303,7 @@ export class TorrentSession {
    *
    * @param {number} fileIndex
    * @param {ProxyTransport} transport
-   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string, container: string, durationSeconds: number, pending: boolean }>}
+   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string, container: string, durationSeconds: number, videoWidth: number, videoHeight: number, pending: boolean }>}
    */
   async prepareProxyPlaybackPlan(fileIndex, transport) {
     if (!this.current || this.current.type !== "torrent") {
@@ -361,6 +361,12 @@ export class TorrentSession {
       typeof payload?.durationSeconds === "number" && Number.isFinite(payload.durationSeconds)
         ? payload.durationSeconds
         : 0;
+    // Source coded resolution (proxy 2.9.32+; 0 on older proxies) — drives the
+    // manual quality menu.
+    const videoWidth =
+      typeof payload?.videoWidth === "number" && Number.isFinite(payload.videoWidth) ? payload.videoWidth : 0;
+    const videoHeight =
+      typeof payload?.videoHeight === "number" && Number.isFinite(payload.videoHeight) ? payload.videoHeight : 0;
 
     // `pending` = the file header is still downloading and codecs could not be
     // probed yet. The caller should poll again (the proxy keeps the header
@@ -375,6 +381,8 @@ export class TorrentSession {
       videoCodec,
       container,
       durationSeconds,
+      videoWidth,
+      videoHeight,
       // Full track inventory (proxy 2.9.26+; empty on older proxies).
       audioTracks: Array.isArray(payload?.audioTracks) ? payload.audioTracks : [],
       subtitleTracks: Array.isArray(payload?.subtitleTracks) ? payload.subtitleTracks : [],
