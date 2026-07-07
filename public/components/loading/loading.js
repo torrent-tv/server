@@ -65,8 +65,7 @@ function buildTrackLabel(track) {
 import {
   detectSubtitleInfo,
   buildSubtitleLabel,
-  matchSubtitlesForVideo,
-  convertSubtitleToVtt
+  matchSubtitlesForVideo
 } from "../../domain/subtitle-utils.js";
 
 /**
@@ -1292,6 +1291,59 @@ export class Loading {
   }
 
   /**
+   * Read the proxy's detected language from a subtitle response's
+   * `X-Subtitle-Language` / `X-Subtitle-Language-Name` headers.
+   *
+   * @param {{ headers: { get: (name: string) => string | null } }} response
+   * @returns {{ code: string, name: string } | null}
+   */
+  #languageFromHeader(response) {
+    const code = response.headers.get("x-subtitle-language");
+    if (!code) {
+      return null;
+    }
+    const rawName = response.headers.get("x-subtitle-language-name");
+    let name = "";
+    if (rawName) {
+      try {
+        name = decodeURIComponent(rawName);
+      } catch {
+        name = rawName;
+      }
+    }
+    return { code, name: name || this.#languageName(code) || code };
+  }
+
+  /**
+   * The film's primary audio-track language, used as a last-resort subtitle
+   * language (forced-signs subs usually match the dub) — from the plan probe.
+   *
+   * @returns {{ code: string, name: string } | null}
+   */
+  #primaryAudioLanguage() {
+    const audio = this.#planTracks?.audio ?? [];
+    for (const t of audio) {
+      const code = trackLanguageCode(t?.language ?? "");
+      if (code && code !== "und") {
+        return { code, name: this.#languageName(code) || code };
+      }
+    }
+    return null;
+  }
+
+  /** English display name for a language code, or "" when unavailable. */
+  #languageName(code) {
+    if (!code) {
+      return "";
+    }
+    try {
+      return LANGUAGE_DISPLAY?.of(code) ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
    * External subtitle FILES from the torrent (matched to the video by name).
    *
    * @returns {Promise<boolean>} Whether at least one track was attached.
@@ -1318,10 +1370,12 @@ export class Loading {
     let isFirst = true;
     for (const sub of matched) {
       try {
-        const ext = sub.name.slice(sub.name.lastIndexOf(".")).toLowerCase();
+        // The proxy converts (.srt/.ass → WebVTT), decodes the file's encoding
+        // (UTF-8/Windows-1251) and detects the language from the full text,
+        // returning it in X-Subtitle-Language. The browser no longer converts.
         const response = await transport.fetch(
-          `/stream?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${sub.index}`,
-          { signal: this.#session.abortController.signal }
+          `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${sub.index}`,
+          { signal: this.#session.abortController.signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS }
         );
         if (!response.ok) {
           console.warn(
@@ -1331,10 +1385,8 @@ export class Loading {
           continue;
         }
 
-        const text = await response.text();
-        const vtt = convertSubtitleToVtt(text, ext);
-        if (!vtt) {
-          // Unsupported format (e.g. .sup image-based subtitles).
+        const vtt = await response.text();
+        if (!vtt || !vtt.startsWith("WEBVTT")) {
           continue;
         }
 
@@ -1342,7 +1394,16 @@ export class Loading {
         const blobUrl = URL.createObjectURL(blob);
         this.#subtitleBlobUrls.push(blobUrl);
 
+        // Language priority: explicit code in the filename (author intent) →
+        // proxy content detection (franc) → the film's audio language → und.
         const info = detectSubtitleInfo(sub);
+        if (info.code === "und") {
+          const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
+          if (detected) {
+            info.code = detected.code;
+            info.name = detected.name;
+          }
+        }
         const label = buildSubtitleLabel(info);
 
         const track = document.createElement("track");
@@ -1405,10 +1466,24 @@ export class Loading {
         const blobUrl = URL.createObjectURL(blob);
         this.#subtitleBlobUrls.push(blobUrl);
 
+        // Language: container metadata tag (author intent) → proxy content
+        // detection (X-Subtitle-Language) → the film's audio language → und.
+        let lang = { code: trackLanguageCode(track.language), name: "" };
+        if (!lang.code || lang.code === "und") {
+          const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
+          lang = detected ?? { code: "und", name: "" };
+        }
+        // Prefer the metadata title for the label; else the language name.
+        const labelInfo = {
+          code: lang.code || "und",
+          name: lang.name || this.#languageName(lang.code) || "Unknown",
+          group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
+        };
+
         const el = document.createElement("track");
         el.kind = "subtitles";
-        el.label = buildTrackLabel(track);
-        el.srclang = trackLanguageCode(track.language) || "und";
+        el.label = buildSubtitleLabel(labelInfo);
+        el.srclang = lang.code || "und";
         el.src = blobUrl;
         if (!defaultTaken && track.isDefault === true) {
           el.default = true;
