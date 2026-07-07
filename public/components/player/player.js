@@ -102,13 +102,11 @@ export class Player {
   /** @param {CustomEvent} event */
   #onSetMediaFiles = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
-    const count =
-      (Array.isArray(detail?.video) ? detail.video.length : 0) +
-      (Array.isArray(detail?.audio) ? detail.audio.length : 0) +
-      (Array.isArray(detail?.subtitles) ? detail.subtitles.length : 0);
-    // With a single media file there is nothing to switch between, so hide the
-    // playlist button entirely.
-    this.#playlistToggle.hidden = count <= 1;
+    // The playlist only switches between VIDEO files, so its button depends on
+    // the video count alone — audio/subtitle files must not make a single-video
+    // torrent show a playlist there is nothing to switch to.
+    const videoCount = Array.isArray(detail?.video) ? detail.video.length : 0;
+    this.#playlistToggle.hidden = videoCount <= 1;
   };
 
   constructor() {
