@@ -1,3 +1,7 @@
+## 0.8.50
+
+- **Fix**: WebRTC now connects without an 8-second stall (and the failures it caused). ICE candidate application was awaited behind the Local-Network-Access preflight fetch to the proxy's LAN address — but that fetch is blocked by mixed content (HTTPS page → plain-http LAN address) so it grants nothing and simply hangs until its 8 s timeout, during which ICE checked NO candidates (not even the public ones that actually connect). Field trace showed `iceConnectionState=checking` starting only after `PNA preflight FAILED (8015ms)`, and the late-nominated pair then dropping the data channel. Candidates are now applied immediately; the preflight stays fire-and-forget. The proper Local-Network-Access handling (working preflight via `targetAddressSpace`, permission priming for same-LAN) is a separate follow-up.
+
 ## 0.8.49
 
 - **Chore**: WebRTC/ICE diagnostics (temporary), forwarded to the server log, to pin down the Local Network Access failure without guessing. Logs each local/remote ICE candidate as `type/protocol/scope` (host/srflx/relay, udp/tcp, v4-private/v4-public/v6 — no raw IP), the `iceConnectionState`/`iceGatheringState`/`connectionState` transitions, the PNA preflight fire + OK/FAIL + timing, and the nominated/succeeded candidate pair on connect or failure. No behaviour change.
