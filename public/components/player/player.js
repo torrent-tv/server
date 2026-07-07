@@ -19,6 +19,8 @@ export class Player {
     settingsButton: "#player__settings-button",
     settingsAudioItem: "#player__settings-audio",
     audioMenu: "#player__audio-menu",
+    settingsQualityItem: "#player__settings-quality",
+    qualityMenu: "#player__quality-menu",
   };
 
   static CLASSES = {
@@ -38,6 +40,12 @@ export class Player {
   #settingsButton;
   #settingsAudioItem;
   #audioMenu;
+  #settingsQualityItem;
+  #qualityMenu;
+  // The settings button is shared by the Audio and Quality submenus; it shows
+  // when either has something to offer.
+  #audioAvailable = false;
+  #qualityAvailable = false;
 
   #onShow = () => {
     this.#logEvt("view=player shown cause=PLAYER:SHOW");
@@ -118,10 +126,13 @@ export class Player {
     this.#settingsButton = document.querySelector(Player.SELECTOR.settingsButton);
     this.#settingsAudioItem = document.querySelector(Player.SELECTOR.settingsAudioItem);
     this.#audioMenu = document.querySelector(Player.SELECTOR.audioMenu);
+    this.#settingsQualityItem = document.querySelector(Player.SELECTOR.settingsQualityItem);
+    this.#qualityMenu = document.querySelector(Player.SELECTOR.qualityMenu);
 
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
-      !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu
+      !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
+      !this.#settingsQualityItem || !this.#qualityMenu
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }
@@ -152,6 +163,16 @@ export class Player {
     this.#controller.addEventListener("click", this.#onControllerClick);
     document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
     this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
+    document.addEventListener(PLAYER_EVENTS.SET_QUALITY_OPTIONS, this.#onSetQualityOptions);
+    this.#qualityMenu.addEventListener("click", this.#onQualityMenuClick);
+  }
+
+  /**
+   * The settings button is shown when either the Audio or the Quality submenu
+   * has something to offer.
+   */
+  #updateSettingsVisibility() {
+    this.#settingsButton.hidden = !(this.#audioAvailable || this.#qualityAvailable);
   }
 
   /**
@@ -171,8 +192,9 @@ export class Player {
     }
 
     const show = tracks.length > 1;
-    this.#settingsButton.hidden = !show;
+    this.#audioAvailable = show;
     this.#settingsAudioItem.hidden = !show;
+    this.#updateSettingsVisibility();
     if (!show) {
       return;
     }
@@ -201,6 +223,58 @@ export class Player {
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SELECT_AUDIO_TRACK, {
         detail: { trackIndex: Number(item.dataset.audioTrackIndex) }
+      })
+    );
+  };
+
+  /**
+   * Populate the Quality submenu. Options are `{ height, label }`; `height: 0`
+   * is Auto (the proxy's realtime budget). The item stays hidden unless there
+   * is a real choice (Auto plus at least one forced resolution).
+   *
+   * @param {CustomEvent} event
+   */
+  #onSetQualityOptions = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const options = Array.isArray(detail?.options) ? detail.options : [];
+    const activeHeight = Number.isInteger(detail?.activeHeight) ? detail.activeHeight : 0;
+
+    for (const item of this.#qualityMenu.querySelectorAll("media-chrome-menu-item")) {
+      item.remove();
+    }
+
+    const show = options.length > 1;
+    this.#qualityAvailable = show;
+    this.#settingsQualityItem.hidden = !show;
+    this.#updateSettingsVisibility();
+    if (!show) {
+      return;
+    }
+
+    for (const option of options) {
+      const item = document.createElement("media-chrome-menu-item");
+      item.setAttribute("type", "radio");
+      item.dataset.qualityHeight = String(option.height);
+      if (option.height === activeHeight) {
+        item.setAttribute("checked", "");
+      }
+      item.textContent = option.label;
+      this.#qualityMenu.appendChild(item);
+    }
+  };
+
+  /** @param {MouseEvent} event */
+  #onQualityMenuClick = (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const item = target.closest("media-chrome-menu-item[data-quality-height]");
+    if (!item || item.hasAttribute("checked")) return;
+    for (const sibling of this.#qualityMenu.querySelectorAll("media-chrome-menu-item")) {
+      sibling.toggleAttribute("checked", sibling === item);
+    }
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SELECT_QUALITY, {
+        detail: { height: Number(item.dataset.qualityHeight) }
       })
     );
   };

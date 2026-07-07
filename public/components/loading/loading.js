@@ -113,6 +113,7 @@ export class Loading {
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
     switchingAudio: "Switching audio track...",
+    switchingQuality: "Switching quality...",
     fetchingMagnetMetadata: "Fetching torrent metadata from the swarm...",
     magnetMetadataFailed:
       "Could not fetch metadata for this magnet link — no peers reachable. Try again later."
@@ -170,6 +171,13 @@ export class Loading {
    * @type {{ audio: Array<object>, subtitles: Array<object> } | null}
    */
   #planTracks = null;
+  /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
+  #selectedQualityHeight = 0;
+  /** @type {number} Source coded width/height from the plan (0 = unknown). */
+  #sourceVideoWidth = 0;
+  #sourceVideoHeight = 0;
+  /** @type {boolean} Whether the active playback re-encodes video (quality menu applies). */
+  #videoTranscoded = false;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -331,8 +339,9 @@ export class Loading {
     if (this.#isProcessing) {
       return;
     }
-    // A different file has its own tracks — reset the audio choice.
+    // A different file has its own tracks and resolution — reset audio + quality.
     this.#selectedAudioTrackIndex = 0;
+    this.#selectedQualityHeight = 0;
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SHOW, {
         detail: {
@@ -450,6 +459,7 @@ export class Loading {
     document.addEventListener(LOADING_EVENTS.PROCESS_MAGNET, this.#onProcessMagnet);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
     document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
+    document.addEventListener(PLAYER_EVENTS.SELECT_QUALITY, this.#onSelectQuality);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
     document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
@@ -577,6 +587,7 @@ export class Loading {
     this.#resumeState = null;
     this.#cancelRequested = false;
     this.#selectedAudioTrackIndex = 0;
+    this.#selectedQualityHeight = 0;
     this.#planTracks = null;
     this.#isProcessing = true;
 
@@ -682,6 +693,7 @@ export class Loading {
     this.#resumeState = null;
     this.#cancelRequested = false;
     this.#selectedAudioTrackIndex = 0;
+    this.#selectedQualityHeight = 0;
     this.#planTracks = null;
     this.#isProcessing = true;
 
@@ -844,6 +856,9 @@ export class Loading {
     if (!file || file.isVideo !== true) {
       throw new Error(Loading.MESSAGES.selectedFileNotFound);
     }
+    // Assume no video re-encode until a transcode-video path sets it — gates the
+    // quality menu (which only applies when the video is being transcoded).
+    this.#videoTranscoded = false;
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
@@ -922,6 +937,9 @@ export class Loading {
       audio: Array.isArray(prepared.audioTracks) ? prepared.audioTracks : [],
       subtitles: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : []
     };
+    // Source coded resolution — drives the manual quality menu.
+    this.#sourceVideoWidth = Number.isFinite(prepared.videoWidth) ? prepared.videoWidth : 0;
+    this.#sourceVideoHeight = Number.isFinite(prepared.videoHeight) ? prepared.videoHeight : 0;
     if (this.#selectedAudioTrackIndex >= this.#planTracks.audio.length) {
       this.#selectedAudioTrackIndex = 0;
     }
@@ -1560,7 +1578,64 @@ export class Loading {
         detail: { tracks: audioTracks, activeIndex: this.#selectedAudioTrackIndex }
       })
     );
+    // Feed the player's quality menu (Auto + forced resolutions <= source).
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_QUALITY_OPTIONS, {
+        detail: { options: this.#buildQualityOptions(), activeHeight: this.#selectedQualityHeight }
+      })
+    );
   }
+
+  /**
+   * The viewer picked a quality: replay the active file at the chosen
+   * resolution (0 = Auto / realtime budget), preserving the position. Forcing a
+   * resolution re-opens the transcode session at a fixed size (budget off), so
+   * the resolution stays constant for the session — no mid-stream change.
+   *
+   * @param {CustomEvent} event
+   */
+  #onSelectQuality = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const height = Number(detail?.height);
+    if (!Number.isInteger(height) || height < 0) {
+      return;
+    }
+    if (height === this.#selectedQualityHeight) {
+      return;
+    }
+    if (this.#isProcessing || this.#activeFileIndex < 0 || !this.#session.current) {
+      return;
+    }
+    const fileIndex = this.#activeFileIndex;
+    const position =
+      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+        ? this.#videoElement.currentTime
+        : 0;
+    this.#selectedQualityHeight = height;
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.SHOW, {
+        detail: { status: Loading.MESSAGES.switchingQuality, progress: 0 }
+      })
+    );
+    void this.#switchToVideoFile(fileIndex)
+      .then(() => {
+        if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
+          this.#videoElement.currentTime = position;
+        }
+      })
+      .catch((error) => {
+        if (this.#isAbortError(error)) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[torrent-tv] quality switch failed:", message, error);
+        document.dispatchEvent(
+          new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+            detail: { description: message }
+          })
+        );
+      });
+  };
 
   /**
    * The viewer picked another audio track: replay the active file through
@@ -1715,13 +1790,15 @@ export class Loading {
       ? createWebRtcHlsLoader(this.#proxy)
       : undefined;
 
+    // Whether this playback re-encodes video — gates the manual quality menu.
+    this.#videoTranscoded = options.transcodeVideo === true;
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
       transport,
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
       transcodeVideo: options.transcodeVideo === true,
       transcodeAudio: options.transcodeAudio === true,
       audioTrackIndex: this.#selectedAudioTrackIndex,
-      ...this.#buildVideoTargetConfig(options.transcodeVideo === true),
+      ...this.#buildQualityTargetConfig(options.transcodeVideo === true),
       playHls: (videoElement, manifestUrl, playOptions = {}) =>
         this.#hlsPlayer.play(videoElement, manifestUrl, {
           ...(hlsLoader ? { loader: hlsLoader } : {}),
@@ -2399,6 +2476,62 @@ export class Loading {
       return {};
     }
     return { targetWidth, targetHeight };
+  }
+
+  /**
+   * Build the transcode target for the request, honouring a manual quality
+   * choice. On Auto (`#selectedQualityHeight === 0`) this is the
+   * orientation-independent ceiling (realtime budget decides the rest on the
+   * proxy). When the viewer forced a resolution, the target is exactly that
+   * height at the source aspect ratio, flagged `manualQuality` so the proxy
+   * encodes it as-is (capped to source) with the budget disabled.
+   *
+   * @param {boolean} shouldTranscodeVideo
+   * @returns {{ targetWidth?: number, targetHeight?: number, manualQuality?: boolean }}
+   */
+  #buildQualityTargetConfig(shouldTranscodeVideo) {
+    if (!shouldTranscodeVideo) {
+      return {};
+    }
+    const forcedHeight = this.#selectedQualityHeight;
+    if (
+      Number.isInteger(forcedHeight) &&
+      forcedHeight > 0 &&
+      this.#sourceVideoWidth > 0 &&
+      this.#sourceVideoHeight > 0
+    ) {
+      const height = Math.min(forcedHeight, this.#sourceVideoHeight);
+      const width = this.#toEvenDimension((this.#sourceVideoWidth * height) / this.#sourceVideoHeight);
+      const evenHeight = this.#toEvenDimension(height);
+      if (width > 0 && evenHeight > 0) {
+        return { targetWidth: width, targetHeight: evenHeight, manualQuality: true };
+      }
+    }
+    return this.#buildVideoTargetConfig(shouldTranscodeVideo);
+  }
+
+  /**
+   * Quality options for the player menu: Auto plus each standard resolution at
+   * or below the source height. Empty (menu hidden) unless the video is being
+   * transcoded and the source height is known.
+   *
+   * @returns {Array<{ height: number, label: string }>}
+   */
+  #buildQualityOptions() {
+    if (!this.#videoTranscoded || !(this.#sourceVideoHeight > 0)) {
+      return [];
+    }
+    const options = [{ height: 0, label: "Auto" }];
+    const ladder = [2160, 1440, 1080, 720, 540, 480, 360, 240];
+    // The source height itself as the top forced rung (labelled), then standard
+    // rungs strictly below it. Never offer above the source (no upscaling).
+    options.push({ height: this.#sourceVideoHeight, label: `${this.#sourceVideoHeight}p (source)` });
+    for (const height of ladder) {
+      if (height < this.#sourceVideoHeight) {
+        options.push({ height, label: `${height}p` });
+      }
+    }
+    return options;
   }
 
   /**
