@@ -338,7 +338,17 @@ export class WebRtcProxy {
     const offer = await this.#pc.createOffer();
     await this.#pc.setLocalDescription(offer);
 
-    this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: offer.sdp }));
+    // Strip `a=sctp-init` from the COPY of the offer sent to the proxy.
+    // Chromium 152+ embeds its SCTP INIT in the SDP (zero-RTT association).
+    // libdatachannel does not understand the attribute and ECHOES it verbatim
+    // in its answer — the browser then believes the (bogus, self-mirrored)
+    // zero-RTT association is established, no SCTP ever hits the wire, and the
+    // channel dies ~5 s after DTLS (confirmed via tcpdump + SDP capture).
+    // Without the attribute in the answer the browser falls back to the
+    // classic in-band INIT handshake, which works. Local description keeps it.
+    const sdpForProxy = offer.sdp.replace(/a=sctp-init:[^\r\n]*\r\n/g, "");
+
+    this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: sdpForProxy }));
   }
 
   /**
