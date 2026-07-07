@@ -1,6 +1,7 @@
 ## 0.8.45
 
 - **Fix**: The quality menu never appeared because the playback-plan fetch (`prepareProxyPlaybackPlan`) dropped the proxy's `videoWidth`/`videoHeight` — it rebuilt the plan object with only a fixed set of fields, so the browser always saw a source height of 0 and hid the menu (no settings gear). The plan now carries the source resolution through, so the Quality submenu (Auto + forced resolutions ≤ source) shows for transcoded video as intended (needs proxy 2.9.32). Manual-quality feature was otherwise complete in 0.8.44.
+- **Fix**: No more stutter in the first ~35 s of a transcoded stream. The pre-buffer measured its fill rate over a 1.5 s window, but segments arrive in bursts every ~4–11 s on a warming/CPU-contended encoder, so a single arriving segment read as "3× realtime", collapsed the adaptive cushion to the 6 s minimum, and playback started with ~8 s that then drained (repeated stalls until the encoder caught up). The fill rate is now averaged over a 10 s window and trusted only once it spans ≥5 s of wall time — so it reflects sustained production, not a spike — and the pre-buffer timeout is raised to 45 s so a full cushion can build on a slow start. Net effect: a bit longer on the buffering screen, then smooth playback instead of ~35 s of hiccups.
 
 ## 0.8.44
 
