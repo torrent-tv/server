@@ -164,6 +164,16 @@ export class Loading {
    * @type {boolean}
    */
   #cancelRequested = false;
+  /**
+   * Monotonic id of the current playback attempt. Bumped when a new attempt
+   * starts and when the flow is cancelled, so a late failure from a superseded
+   * or cancelled attempt (e.g. a data-channel request that rejects after the
+   * user moved on) is recognised as stale and never shows the error screen over
+   * whatever is playing now. See #failPlayback.
+   *
+   * @type {number}
+   */
+  #playbackEpoch = 0;
   /** @type {number} Viewer-chosen audio track (type-relative; 0 = default). */
   #selectedAudioTrackIndex = 0;
   /**
@@ -173,11 +183,9 @@ export class Loading {
   #planTracks = null;
   /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
   #selectedQualityHeight = 0;
-  /** @type {number} Source coded width/height from the plan (0 = unknown). */
+  /** @type {number} Source coded width/height from the proxy plan (0 = unknown / not proxy-served). */
   #sourceVideoWidth = 0;
   #sourceVideoHeight = 0;
-  /** @type {boolean} Whether the active playback re-encodes video (quality menu applies). */
-  #videoTranscoded = false;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -217,19 +225,14 @@ export class Loading {
   /** @param {CustomEvent} event */
   #onProcessPlayback = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
+    const epoch = this.#beginPlaybackAttempt();
     void this.#processPlayback(payload).catch((error) => {
       if (this.#isAbortError(error)) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] playback failed:", message, error);
-      document.dispatchEvent(
-        new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
-          detail: {
-            description: message
-          }
-        })
-      );
+      this.#failPlayback(epoch, { description: message });
     });
   };
 
@@ -350,36 +353,28 @@ export class Loading {
         }
       })
     );
+    const epoch = this.#beginPlaybackAttempt();
     void this.#switchToVideoFile(fileIndex).catch((error) => {
       if (this.#isAbortError(error)) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] playback failed:", message, error);
-      document.dispatchEvent(
-        new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
-          detail: {
-            description: message
-          }
-        })
-      );
+      this.#failPlayback(epoch, { description: message });
     });
   };
 
   /** @param {CustomEvent} event */
   #onProcessMagnet = (event) => {
     const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
+    const epoch = this.#beginPlaybackAttempt();
     void this.#processMagnetPlayback(magnetUri).catch((error) => {
       if (this.#isAbortError(error)) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] magnet playback failed:", message, error);
-      document.dispatchEvent(
-        new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
-          detail: { description: message }
-        })
-      );
+      this.#failPlayback(epoch, { description: message });
     });
   };
 
@@ -484,6 +479,35 @@ export class Loading {
   }
 
   /**
+   * Mark the start of a new playback attempt and return its epoch. The caller
+   * passes this epoch to #failPlayback so a failure that arrives after the
+   * attempt was superseded/cancelled is ignored.
+   *
+   * @returns {number}
+   */
+  #beginPlaybackAttempt() {
+    this.#playbackEpoch += 1;
+    return this.#playbackEpoch;
+  }
+
+  /**
+   * Surface a playback failure — but only if `epoch` is still the current
+   * attempt. A late rejection from a superseded or cancelled attempt is logged
+   * and dropped, so it never replaces live playback with the error screen.
+   *
+   * @param {number} epoch
+   * @param {{ description: string, canRetry?: boolean }} detail
+   * @returns {void}
+   */
+  #failPlayback(epoch, detail) {
+    if (epoch !== this.#playbackEpoch) {
+      this.#logEvt(`stale playback failure ignored (epoch ${epoch}≠${this.#playbackEpoch}): ${detail?.description ?? ""}`);
+      return;
+    }
+    document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, { detail }));
+  }
+
+  /**
    * User-initiated cancel of the loading flow. Tears the attempt down
    * (pending requests, transcode session, player state) but KEEPS
    * `session.current` and the transport, so a multi-file torrent returns to
@@ -492,6 +516,9 @@ export class Loading {
   #onCancelClick = () => {
     this.#logEvt("loading cancelled by user");
     this.#cancelRequested = true;
+    // Supersede the current attempt so its now-aborted requests, when they
+    // reject, are recognised as stale and cannot surface an error screen.
+    this.#playbackEpoch += 1;
     this.#session.abortPendingRequests();
     this.#session.releaseActiveTranscodeSessions({ reason: "cancel" });
     this.#hlsPlayer.clear();
@@ -856,9 +883,11 @@ export class Loading {
     if (!file || file.isVideo !== true) {
       throw new Error(Loading.MESSAGES.selectedFileNotFound);
     }
-    // Assume no video re-encode until a transcode-video path sets it — gates the
-    // quality menu (which only applies when the video is being transcoded).
-    this.#videoTranscoded = false;
+    // Reset the source resolution; it is set again only when the proxy plan
+    // provides it below. This gates the quality menu to proxy-served streams
+    // (a direct webseed play, which cannot be transcoded, leaves it 0 → no menu).
+    this.#sourceVideoWidth = 0;
+    this.#sourceVideoHeight = 0;
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
@@ -952,7 +981,13 @@ export class Loading {
     // browser cannot decode the video codec, and the audio track only if it
     // cannot decode the audio codec.  The proxy's advisory `mode` is NOT used
     // to force audio transcoding — we transcode strictly what is unsupported.
-    const shouldTranscodeVideo = codecSupport.videoSupported === false;
+    //
+    // A forced quality (viewer picked a resolution, not Auto) ALSO forces a
+    // video re-encode even for a directly-playable codec: the whole point is to
+    // downscale for bandwidth, which only the transcode path can do. Auto
+    // (`#selectedQualityHeight === 0`) keeps the copy-if-playable behaviour.
+    const forceQualityTranscode = this.#selectedQualityHeight > 0;
+    const shouldTranscodeVideo = codecSupport.videoSupported === false || forceQualityTranscode;
     const shouldTranscodeAudio = codecSupport.audioSupported === false;
     this.#debug("playback decision", {
       fileIndex,
@@ -964,6 +999,7 @@ export class Loading {
       plannerMode: prepared.mode,
       shouldTranscodeVideo,
       shouldTranscodeAudio,
+      forceQualityTranscode,
       transport: transport.isHttp ? "http" : "webrtc"
     });
     const directRetryKey = this.#buildDirectRetryCacheKey(fileIndex, prepared);
@@ -976,7 +1012,9 @@ export class Loading {
     const forceAudioRemux = this.#selectedAudioTrackIndex > 0;
 
     // Direct URL probing only works for HTTP transports — WebRTC uses fake URLs.
-    const canProbeDirectUrl = transport.isHttp && !forceAudioRemux;
+    // A forced quality must go through the transcode path, so skip every
+    // direct-play shortcut when it is set.
+    const canProbeDirectUrl = transport.isHttp && !forceAudioRemux && !forceQualityTranscode;
 
     if (
       canProbeDirectUrl &&
@@ -1617,6 +1655,7 @@ export class Loading {
         detail: { status: Loading.MESSAGES.switchingQuality, progress: 0 }
       })
     );
+    const epoch = this.#beginPlaybackAttempt();
     void this.#switchToVideoFile(fileIndex)
       .then(() => {
         if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
@@ -1629,11 +1668,7 @@ export class Loading {
         }
         const message = error instanceof Error ? error.message : String(error);
         console.error("[torrent-tv] quality switch failed:", message, error);
-        document.dispatchEvent(
-          new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
-            detail: { description: message }
-          })
-        );
+        this.#failPlayback(epoch, { description: message });
       });
   };
 
@@ -1666,6 +1701,7 @@ export class Loading {
         detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
       })
     );
+    const epoch = this.#beginPlaybackAttempt();
     void this.#switchToVideoFile(fileIndex)
       .then(() => {
         if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
@@ -1678,11 +1714,7 @@ export class Loading {
         }
         const message = error instanceof Error ? error.message : String(error);
         console.error("[torrent-tv] audio switch failed:", message, error);
-        document.dispatchEvent(
-          new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
-            detail: { description: message }
-          })
-        );
+        this.#failPlayback(epoch, { description: message });
       });
   };
 
@@ -1738,6 +1770,7 @@ export class Loading {
     );
     this.#cancelRequested = false;
     this.#session.current = resume.sessionCurrent;
+    const epoch = this.#beginPlaybackAttempt();
     void this.#switchToVideoFile(resume.fileIndex)
       .then(() => {
         if (resume.positionSeconds > 1 && this.#videoElement instanceof HTMLVideoElement) {
@@ -1750,11 +1783,7 @@ export class Loading {
         }
         const message = error instanceof Error ? error.message : String(error);
         console.error("[torrent-tv] retry failed:", message, error);
-        document.dispatchEvent(
-          new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
-            detail: { description: message }
-          })
-        );
+        this.#failPlayback(epoch, { description: message });
       });
   };
 
@@ -1790,8 +1819,6 @@ export class Loading {
       ? createWebRtcHlsLoader(this.#proxy)
       : undefined;
 
-    // Whether this playback re-encodes video — gates the manual quality menu.
-    this.#videoTranscoded = options.transcodeVideo === true;
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
       transport,
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
@@ -2515,13 +2542,15 @@ export class Loading {
 
   /**
    * Quality options for the player menu: Auto plus each standard resolution at
-   * or below the source height. Empty (menu hidden) unless the video is being
-   * transcoded and the source height is known.
+   * or below the source height. Shown for any proxy-served stream whose source
+   * resolution is known (empty → menu hidden) — including a directly-played
+   * codec, where picking a resolution forces a downscaling re-encode (Auto
+   * keeps the copy). Only downscales are offered; the source is the ceiling.
    *
    * @returns {Array<{ height: number, label: string }>}
    */
   #buildQualityOptions() {
-    if (!this.#videoTranscoded || !(this.#sourceVideoHeight > 0)) {
+    if (!(this.#sourceVideoHeight > 0)) {
       return [];
     }
     const options = [{ height: 0, label: "Auto" }];
