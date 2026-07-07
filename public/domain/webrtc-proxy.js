@@ -427,10 +427,12 @@ export class WebRtcProxy {
    *
    * @param {string} path - Absolute path on the proxy, e.g. `"/api/sources"`.
    * @param {{ method?: string, headers?: object, body?: string | null, signal?: AbortSignal, timeoutMs?: number }} [options]
-   *   Fetch options.  `signal` is accepted but currently not propagated to
-   *   the data channel — the request times out via `timeoutMs` (default
-   *   `REQUEST_TIMEOUT_MS`) if the channel does not respond. Long-running
-   *   responses (e.g. embedded-subtitle extraction) pass a larger value.
+   *   Fetch options.  When `signal` aborts, the pending request is dropped and
+   *   the promise rejects immediately with an `AbortError` (so a cancelled or
+   *   superseded flow does not sit until `timeoutMs`, then reject and surface a
+   *   stale error). `timeoutMs` (default `REQUEST_TIMEOUT_MS`) still bounds a
+   *   channel that never responds; long-running responses (e.g.
+   *   embedded-subtitle extraction) pass a larger value.
    * @returns {Promise<DataChannelResponse>}
    */
   fetch(path, options = {}) {
@@ -444,6 +446,7 @@ export class WebRtcProxy {
       Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
         ? options.timeoutMs
         : REQUEST_TIMEOUT_MS;
+    const signal = options.signal instanceof AbortSignal ? options.signal : null;
 
     // Hoist resolve/reject so we can cancel the timeout if channel.send() throws.
     let pendingResolve;
@@ -453,18 +456,53 @@ export class WebRtcProxy {
       pendingReject = reject;
     });
 
-    const timer = setTimeout(() => {
+    // Tear down the timer and the abort listener exactly once, whichever path
+    // (response / timeout / abort / send-throw) settles the promise first.
+    let timer = null;
+    let onAbort = null;
+    const cleanup = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (signal && onAbort) {
+        signal.removeEventListener("abort", onAbort);
+        onAbort = null;
+      }
+    };
+
+    // An already-aborted signal: reject without ever touching the channel.
+    if (signal && signal.aborted) {
+      const err = new Error("Data channel request aborted.");
+      err.name = "AbortError";
+      pendingReject(err);
+      return responsePromise;
+    }
+
+    timer = setTimeout(() => {
       this.#pending.delete(requestId);
+      cleanup();
       pendingReject(new Error("Data channel request timed out."));
     }, timeoutMs);
 
     this.#pending.set(requestId, {
-      resolve: (result) => { clearTimeout(timer); pendingResolve(result); },
-      reject: (err) => { clearTimeout(timer); pendingReject(err); },
+      resolve: (result) => { cleanup(); pendingResolve(result); },
+      reject: (err) => { cleanup(); pendingReject(err); },
       chunks: [],
       status: 200,
       headers: {}
     });
+
+    if (signal) {
+      onAbort = () => {
+        this.#pending.delete(requestId);
+        cleanup();
+        const err = new Error("Data channel request aborted.");
+        err.name = "AbortError";
+        pendingReject(err);
+      };
+      signal.addEventListener("abort", onAbort);
+    }
 
     try {
       this.#channel.send(JSON.stringify({
@@ -482,7 +520,7 @@ export class WebRtcProxy {
       // the timer, and convert to a rejected promise so callers always receive a
       // Promise, never a synchronous exception.
       this.#pending.delete(requestId);
-      clearTimeout(timer);
+      cleanup();
       return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
 

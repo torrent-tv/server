@@ -10,6 +10,10 @@
   background-color: var(--view-bg);
   color: var(--view-text);
   font-family: sans-serif;
+  /* Width of the abstract text block — the form is capped to the same measure
+     so the magnet row never grows wider than the copy above it. Mirrors the
+     abstract's `36em` at its own font size (kept in one place). */
+  --content-inline-size: calc(36 * clamp(1.125rem, 3.5vmin, 2.5rem));
 
   &[open] {
     display: grid;
@@ -23,7 +27,7 @@
     align-items: stretch;
     gap: 1rem;
     inline-size: fit-content;
-    max-inline-size: 90dvw;
+    max-inline-size: min(90dvw, var(--content-inline-size));
     box-sizing: border-box;
     /* Shared indent for the header content and the magnet row. */
     padding: 2rem;
@@ -70,7 +74,7 @@
 
     #torrent__abstract {
       font-size: clamp(1.125rem, 3.5vmin, 2.5rem);
-      max-inline-size: 36em;
+      max-inline-size: var(--content-inline-size);
       line-height: 1.44;
       color: var(--view-text-muted);
       text-wrap-style: pretty;
