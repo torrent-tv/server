@@ -17,6 +17,10 @@ context: |
   - Frontend: playback/codec decisions are made client-side per track
     (mediaCapabilities/canPlayType); non-fatal HLS errors are console-only,
     never surfaced to the on-screen status.
+  - HTML: no gratuitous wrappers. HTML defines structure and semantics;
+    presentation is layered on top of semantically optimal markup. Every new
+    wrapper element must be justified; if it exists only to hang styles on,
+    restructure the CSS instead.
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.
