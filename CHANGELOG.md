@@ -1,3 +1,8 @@
+## 0.8.40
+
+- **Fix**: The playlist button no longer appears for a single-video torrent that also carries audio or subtitle files. Its visibility counted video + audio + subtitle files, but the playlist only switches between VIDEO files — a movie plus an external `.srt` (e.g. the Enola Holmes release: one `.avi` + one `.srt`) wrongly showed a playlist with nothing to switch to. It now depends on the video-file count alone.
+- **Fix**: A leading UTF-8 BOM in a subtitle file is stripped during WebVTT conversion, so it no longer leaks into the first cue's identifier (common in Russian `.srt` files) or sit before a `.vtt` `WEBVTT` signature. (Investigating a "subtitles don't show" report: the Enola `.srt` is a forced-signs track whose first cue is at 1:35 — nothing was wrong, the check was at 0:47; this BOM cleanup is the one real tidy-up found.)
+
 ## 0.8.39
 
 - **Fix**: A magnet whose swarm metadata takes a moment to arrive no longer fails on the first attempt. The browser now polls `/api/sources/:key/files` (up to 3 minutes, "Fetching torrent metadata from the swarm…" shown throughout, cancellable) instead of issuing one request that gave up the instant the metadata was not yet ready — reported in the field as a paste that errored with "no peers" and then worked on a second paste. Needs proxy 2.9.28 (returns `pending` while the fetch continues).
