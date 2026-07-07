@@ -68,10 +68,12 @@ const PING_TIMEOUT_MS = 5_000;
 export class WebRtcProxy {
   /** @type {string} */
   #proxyId;
-  /** @type {number | null} HTTP port of the proxy's LAN server, for the LNA preflight. */
+  /** @type {number | null} HTTP port of the proxy's LAN server (for #lanProbeUrl). */
   #proxyLocalPort;
-  /** @type {boolean} Guards the one-shot LNA preflight. */
-  #lnaProbeFired = false;
+  /** @type {boolean} Whether the proxy's LOCAL-address candidates are used (see constructor). */
+  #allowPrivateCandidates;
+  /** @type {string | null} `http://<proxy-lan-ip>:<port>/healthz` once a private candidate was seen. */
+  #lanProbeUrl = null;
   /** @type {RTCPeerConnection | null} */
   #pc = null;
   /** @type {RTCDataChannel | null} */
@@ -123,14 +125,18 @@ export class WebRtcProxy {
   /**
    * @param {string} proxyId
    * @param {number | null} [proxyLocalPort] - HTTP port of the proxy's LAN
-   *   server. Used to fire a Local Network Access preflight (with
-   *   `targetAddressSpace: "local"`) so the browser prompts for / grants the
-   *   local-network permission — WebRTC data to a same-LAN private candidate is
-   *   blocked without it. Fire-and-forget; never blocks ICE.
+   *   server (from the health API baseUrl). Used to build {@link lanProbeUrl}.
+   * @param {boolean} [allowPrivateCandidates=true] - When false, the proxy's
+   *   LOCAL-address candidates (192.168.x etc.) are dropped, so the browser
+   *   never touches the local network and never asks for the local-network
+   *   permission. Same-LAN viewers then connect through the router's public
+   *   address (hairpin) when it supports that; the caller retries with
+   *   `true` (after obtaining the permission) when it does not.
    */
-  constructor(proxyId, proxyLocalPort = null) {
+  constructor(proxyId, proxyLocalPort = null, allowPrivateCandidates = true) {
     this.#proxyId = proxyId;
     this.#proxyLocalPort = proxyLocalPort ?? null;
+    this.#allowPrivateCandidates = allowPrivateCandidates !== false;
   }
 
   /** @returns {boolean} */
@@ -139,12 +145,24 @@ export class WebRtcProxy {
   }
 
   /**
+   * `http://<proxy-lan-ip>:<port>/healthz` — the URL whose fetch (with
+   * `targetAddressSpace: "local"`) makes the browser ask for the local-network
+   * permission. Null until a private candidate has been seen.
+   *
+   * @returns {string | null}
+   */
+  get lanProbeUrl() {
+    return this.#lanProbeUrl;
+  }
+
+  /**
    * Open the signalling WebSocket, complete the SDP handshake, and wait for
    * the data channel to become open.
    *
+   * @param {number} [timeoutMs=CONNECT_TIMEOUT_MS]
    * @returns {Promise<void>}
    */
-  async connect() {
+  async connect(timeoutMs = CONNECT_TIMEOUT_MS) {
     const wsUrl = `${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`;
     this.#ws = new WebSocket(wsUrl);
 
@@ -152,7 +170,7 @@ export class WebRtcProxy {
       const timer = setTimeout(() => {
         this.#ws?.close();
         reject(new Error("WebRTC connection timed out."));
-      }, CONNECT_TIMEOUT_MS);
+      }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : CONNECT_TIMEOUT_MS);
 
       // Store settler so the data channel open / error events can resolve/reject the outer promise.
       let settled = false;
@@ -220,7 +238,19 @@ export class WebRtcProxy {
         sdpMLineIndex: 0
       };
       console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(c.candidate)}`);
-      this.#maybeFireLnaPreflight(c.candidate);
+      // Track the proxy's LAN address (for the local-network permission probe)
+      // and, in public-only mode, drop local-address candidates so the browser
+      // never touches the local network — and never asks for the permission.
+      const ip = WebRtcProxy.#extractCandidateIp(c.candidate);
+      if (ip && WebRtcProxy.#isLocalAddress(ip)) {
+        if (this.#lanProbeUrl === null && this.#proxyLocalPort && WebRtcProxy.#isPrivateIpv4(ip)) {
+          this.#lanProbeUrl = `http://${ip}:${this.#proxyLocalPort}/healthz`;
+        }
+        if (!this.#allowPrivateCandidates) {
+          console.debug("[ice] remote local candidate skipped (public-only attempt)");
+          return;
+        }
+      }
       if (!this.#remoteDescriptionSet) {
         // Buffer until the answer is applied.
         this.#pendingCandidates.push(c);
@@ -232,39 +262,6 @@ export class WebRtcProxy {
         // Stale or duplicate candidate — safe to ignore.
       }
     }
-  }
-
-  /**
-   * Fire a one-shot Local Network Access preflight to the proxy's LAN address
-   * when a private-IPv4 host candidate arrives. `targetAddressSpace: "local"`
-   * opts the request into the LNA flow — it is NOT blocked as mixed content the
-   * way a plain http fetch from an https page is — so the browser prompts for /
-   * applies the local-network permission. That permission is what lets WebRTC
-   * DATA (SCTP) flow to a same-LAN private candidate; ICE connects without it,
-   * but the channel carries nothing and drops after ~5 s otherwise. Cross-
-   * network viewers connect over the public path regardless; the prompt is
-   * harmless there. Fire-and-forget — never awaited, so ICE is never stalled.
-   *
-   * @param {string} candidateStr
-   * @returns {void}
-   */
-  #maybeFireLnaPreflight(candidateStr) {
-    if (this.#lnaProbeFired || !this.#proxyLocalPort) {
-      return;
-    }
-    const ip = WebRtcProxy.#extractCandidateIp(candidateStr);
-    if (!ip || !WebRtcProxy.#isPrivateIpv4(ip)) {
-      return;
-    }
-    this.#lnaProbeFired = true;
-    const startedAt = performance.now();
-    const url = `http://${ip}:${this.#proxyLocalPort}/healthz`;
-    console.debug(`[ice] LNA preflight → ${url}`);
-    // `targetAddressSpace` is a newer fetch option; ignored by older engines
-    // (then this degrades to the previously-blocked plain fetch — no worse).
-    fetch(url, { mode: "cors", targetAddressSpace: "local", signal: AbortSignal.timeout(8000) })
-      .then(() => { console.debug(`[ice] LNA preflight OK (${Math.round(performance.now() - startedAt)}ms)`); })
-      .catch((err) => { console.debug(`[ice] LNA preflight FAILED (${Math.round(performance.now() - startedAt)}ms): ${err?.name ?? err}`); });
   }
 
   /**
@@ -617,6 +614,22 @@ export class WebRtcProxy {
    */
   static #isPrivateIpv4(ip) {
     return /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(ip);
+  }
+
+  /**
+   * Return true for any LOCAL (non-internet-routable) address: private IPv4,
+   * IPv4 link-local, IPv6 ULA (fc00::/7), IPv6 link-local (fe80::/10), and
+   * loopback. Chromium's local-network permission applies to these; global
+   * IPv4/IPv6 addresses pass without it.
+   *
+   * @param {string} ip
+   * @returns {boolean}
+   */
+  static #isLocalAddress(ip) {
+    if (ip.includes(":")) {
+      return /^(f[cd]|fe[89ab])/i.test(ip) || ip === "::1";
+    }
+    return WebRtcProxy.#isPrivateIpv4(ip) || ip.startsWith("169.254.") || ip.startsWith("127.");
   }
 
   /**

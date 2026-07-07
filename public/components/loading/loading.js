@@ -4,6 +4,7 @@ import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
+import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 
@@ -79,6 +80,7 @@ import {
 export class Loading {
   static SELECTOR = {
     cancelButton: "#loading__cancel",
+    actionButton: "#loading__action",
     dialog: "#loading",
     fileName: "#loading__filename",
     status: "#loading__status",
@@ -115,6 +117,13 @@ export class Loading {
     switchingAudio: "Switching audio track...",
     switchingQuality: "Switching quality...",
     prebufferStalled: "Could not start playback — no data arrived from the proxy. If it is on your network, allow local network access for this site and try again.",
+    lanPermissionExplainer:
+      "The video source is a device on your own network. Your browser asks for permission before a website may talk to it — press Allow and confirm the browser's question.",
+    lanPermissionWaiting: "Waiting for the browser's local network permission...",
+    lanPermissionDenied:
+      "Local network access is blocked for this site, so the video source on your network cannot be reached. Enable \"Local network\" in the browser's site settings (the icon next to the address), then press Check again.",
+    lanAllowButton: "Allow",
+    lanCheckAgainButton: "Check again",
     fetchingMagnetMetadata: "Fetching torrent metadata from the swarm...",
     magnetMetadataFailed:
       "Could not fetch metadata for this magnet link — no peers reachable. Try again later."
@@ -130,6 +139,7 @@ export class Loading {
   #status;
   #progress;
   #cancelButton;
+  #actionButton;
   #videoElement = null;
   #session;
   #proxySelector;
@@ -429,8 +439,9 @@ export class Loading {
     this.#status = document.querySelector(Loading.SELECTOR.status);
     this.#progress = document.querySelector(Loading.SELECTOR.progress);
     this.#cancelButton = document.querySelector(Loading.SELECTOR.cancelButton);
+    this.#actionButton = document.querySelector(Loading.SELECTOR.actionButton);
 
-    if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress || !this.#cancelButton) {
+    if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress || !this.#cancelButton || !this.#actionButton) {
       throw new Error(Loading.MESSAGES.missingDomNodes);
     }
     this.#dialog.inert = true;
@@ -1148,6 +1159,14 @@ export class Loading {
    * Return the current open transport, or connect a new proxy and create one.
    * Stores the result in `#proxy` / `#transport` for reuse within the same session.
    *
+   * Two-stage connect ("prompt-free first"): the first attempt uses only the
+   * proxy's PUBLIC addresses, so the browser never touches the local network
+   * and never asks for the local-network permission — a same-LAN viewer then
+   * connects through the router's public side when it supports looping the
+   * packets back inside (most home routers do). Only when that fails does the
+   * flow obtain the permission (explainer + one click that makes the browser
+   * ask) and retry with the proxy's local addresses included.
+   *
    * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
    */
   async #acquireTransport() {
@@ -1160,13 +1179,100 @@ export class Loading {
       this.#proxy = null;
       this.#transport = null;
     }
-    const proxy = await this.#proxySelector.chooseBestProxy();
+    let proxy;
+    try {
+      // Attempt 1: public addresses only — never triggers the permission
+      // question. Shorter timeout: either the public path works within
+      // seconds or it never will.
+      proxy = await this.#proxySelector.chooseBestProxy({
+        allowPrivateCandidates: false,
+        connectTimeoutMs: 12_000
+      });
+    } catch (publicOnlyError) {
+      this.#throwIfCancelled();
+      const lanProbeUrl =
+        publicOnlyError instanceof Error && typeof publicOnlyError.lanProbeUrl === "string"
+          ? publicOnlyError.lanProbeUrl
+          : null;
+      this.#logEvt(`public-only connect failed (${publicOnlyError?.message ?? publicOnlyError}); trying local path`);
+      await this.#ensureLocalNetworkPermission(lanProbeUrl);
+      this.#throwIfCancelled();
+      // Attempt 2: all addresses, permission (when the browser has such a
+      // mechanism) obtained above.
+      proxy = await this.#proxySelector.chooseBestProxy({ allowPrivateCandidates: true });
+    }
     // Surface a mid-playback loss of this connection (Retry flow). A close()
     // by #stopPlayback never fires this.
     proxy.onConnectionLost = () => this.#onTransportLost();
     this.#proxy = proxy;
     this.#transport = ProxyTransport.fromWebRtc(proxy);
     return this.#transport;
+  }
+
+  /**
+   * Make sure the browser lets this page reach the proxy's local address.
+   * No-op when the browser has no such permission mechanism (Firefox), or the
+   * permission is already granted. Otherwise walks the user through it:
+   * an explainer + an "Allow" button whose click performs the local request
+   * that makes the browser show its own permission question; a denied state
+   * shows guidance and a "Check again" button.
+   *
+   * @param {string | null} lanProbeUrl - `http://<proxy-lan-ip>:<port>/healthz`, when known.
+   * @returns {Promise<void>}
+   */
+  async #ensureLocalNetworkPermission(lanProbeUrl) {
+    for (;;) {
+      this.#throwIfCancelled();
+      const state = await queryLocalNetworkPermission();
+      if (state === "unsupported" || state === "granted") {
+        return;
+      }
+      if (state === "prompt") {
+        if (!lanProbeUrl) {
+          // Nothing to probe — cannot make the browser ask. Proceed; the
+          // attempt itself will succeed or fail on its own.
+          return;
+        }
+        this.setStatus(Loading.MESSAGES.lanPermissionExplainer);
+        await this.#waitForActionClick(Loading.MESSAGES.lanAllowButton);
+        this.#throwIfCancelled();
+        this.setStatus(Loading.MESSAGES.lanPermissionWaiting);
+        await probeLocalNetwork(lanProbeUrl);
+        continue; // re-check the permission state
+      }
+      // denied — the browser will not ask again; guide to the site settings.
+      this.setStatus(Loading.MESSAGES.lanPermissionDenied);
+      await this.#waitForActionClick(Loading.MESSAGES.lanCheckAgainButton);
+    }
+  }
+
+  /**
+   * Show the loading view's action button with `label` and resolve on click.
+   * The button is hidden again afterwards. Cancellation (the Cancel button)
+   * is honoured: the wait ends and the caller's next #throwIfCancelled throws.
+   *
+   * @param {string} label
+   * @returns {Promise<void>}
+   */
+  #waitForActionClick(label) {
+    return new Promise((resolve) => {
+      const button = this.#actionButton;
+      button.textContent = label;
+      button.hidden = false;
+      const cancelPoll = setInterval(() => {
+        if (this.#cancelRequested) {
+          finish();
+        }
+      }, 250);
+      const onClick = () => finish();
+      const finish = () => {
+        clearInterval(cancelPoll);
+        button.removeEventListener("click", onClick);
+        button.hidden = true;
+        resolve();
+      };
+      button.addEventListener("click", onClick);
+    });
   }
 
   /**
