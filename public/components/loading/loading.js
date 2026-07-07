@@ -259,16 +259,56 @@ export class Loading {
     for (const name of ["seeking", "seeked", "waiting", "playing", "pause", "ended", "stalled", "error"]) {
       videoElement.addEventListener(name, () => log(name));
     }
-    // [evt] TEMPORARY: periodic buffer-health tick while playing — surfaces a
-    // buffer draining/resetting mid-playback (#3) even when no other event fires.
+    // Periodic bottleneck classification while playing. Distinguishes, from
+    // client-visible symptoms, whether playback is limited by the client's own
+    // decode (dropped frames while the buffer holds) or by something upstream
+    // (buffer draining — proxy CPU / proxy download / delivery, split later by
+    // the budget using the proxy's own speed/download signals). Logged as
+    // [bottleneck]; the client logger forwards it to the server log for field
+    // analysis.
+    let prevAhead = this.#bufferedAheadSeconds(videoElement);
+    let prevDropped = 0;
+    let prevTotal = 0;
     window.setInterval(() => {
       if (videoElement.paused || videoElement.ended || videoElement.readyState < 2) {
         return;
       }
       const t = new Date().toISOString().slice(11, 23);
+      const ahead = this.#bufferedAheadSeconds(videoElement);
+      const aheadDelta = ahead - prevAhead;
+      prevAhead = ahead;
+
+      // Dropped-frame ratio over this window (decode can't keep up).
+      let droppedRatio = 0;
+      let windowFrames = 0;
+      let windowDropped = 0;
+      if (typeof videoElement.getVideoPlaybackQuality === "function") {
+        const q = videoElement.getVideoPlaybackQuality();
+        windowFrames = Math.max(0, q.totalVideoFrames - prevTotal);
+        windowDropped = Math.max(0, q.droppedVideoFrames - prevDropped);
+        prevTotal = q.totalVideoFrames;
+        prevDropped = q.droppedVideoFrames;
+        droppedRatio = windowFrames > 0 ? windowDropped / windowFrames : 0;
+      }
+
+      // Classify. Buffer draining toward empty = upstream-limited; heavy frame
+      // drops with a held buffer = client decode-limited.
+      const draining = aheadDelta < -1 && ahead < 8;
+      const decodeStruggling = droppedRatio > 0.05 && windowFrames > 10;
+      let bottleneck;
+      if (decodeStruggling && draining) {
+        bottleneck = "client-decode+upstream";
+      } else if (decodeStruggling) {
+        bottleneck = "client-decode";
+      } else if (draining) {
+        bottleneck = "upstream"; // proxy CPU / download / delivery — split by the budget
+      } else {
+        bottleneck = "ok";
+      }
       console.debug(
-        `[evt] ${t} buffer-health currentTime=${videoElement.currentTime.toFixed(1)} ` +
-          `bufferedAhead=${this.#bufferedAheadSeconds(videoElement).toFixed(1)}s ranges=${videoElement.buffered.length}`
+        `[bottleneck] ${t} ${bottleneck} bufferedAhead=${ahead.toFixed(1)}s ` +
+          `delta=${aheadDelta.toFixed(1)}s dropped=${windowDropped}/${windowFrames} ` +
+          `(${(droppedRatio * 100).toFixed(1)}%)`
       );
     }, 10_000);
   }
