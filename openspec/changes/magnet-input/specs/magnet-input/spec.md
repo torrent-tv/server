@@ -19,12 +19,12 @@ error. `.torrent` file input is unaffected.
 - **THEN** an error explains it and the picker remains usable
 
 ### Requirement: The magnet flow rejoins the torrent flow
-After the proxy returns the swarm metadata (`/api/sources/:key/files`), the
-file list SHALL be normalised to the same shape the local `.torrent` parser
-produces and the flow SHALL continue identically: playlist for multiple
-videos, autoplay for one, subtitles/tracks/cancel/retry unchanged. A magnet
-whose metadata cannot be fetched SHALL fail with an explicit
-no-peers-reachable message.
+The magnet flow SHALL rejoin the parsed-torrent flow once the proxy returns
+the swarm metadata: the file list is normalised to the same shape the local
+torrent parser produces, then the playlist opens for multiple videos, a
+single video autoplays, and subtitles, tracks, cancel and retry behave
+unchanged. A magnet whose metadata cannot be fetched SHALL fail with an
+explicit no-peers-reachable message.
 
 #### Scenario: Multi-file magnet
 - **WHEN** metadata arrives for a magnet with several videos
