@@ -33,11 +33,19 @@ export class ProxySelector {
    * Poll health from all connected proxies, score them, connect via WebRTC
    * to the best candidate, and measure the actual data-channel RTT.
    *
-   * Throws when no proxies are available or the WebRTC connection fails.
+   * Throws when no proxies are available or the WebRTC connection fails. A
+   * connection failure carries `error.lanProbeUrl` (the proxy's LAN healthz
+   * URL, when a private candidate was seen) so the caller can run the
+   * local-network permission flow and retry with `allowPrivateCandidates`.
    *
+   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number }} [options]
+   *   `allowPrivateCandidates: false` = public-only attempt: the proxy's
+   *   local-address candidates are dropped, so the browser never asks for the
+   *   local-network permission (same-LAN connects via router hairpin when
+   *   supported).
    * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
    */
-  async chooseBestProxy() {
+  async chooseBestProxy({ allowPrivateCandidates = true, connectTimeoutMs } = {}) {
     const response = await fetch("/api/proxy-clients/health");
     if (!response.ok) {
       throw new Error(`Proxy health request failed (${response.status}).`);
@@ -98,8 +106,19 @@ export class ProxySelector {
       if (p > 0 && p <= 65535) proxyLocalPort = p;
     } catch { /* baseUrl absent/malformed — preflight is skipped */ }
 
-    const proxy = new WebRtcProxy(best.id, proxyLocalPort);
-    await proxy.connect();
+    const proxy = new WebRtcProxy(best.id, proxyLocalPort, allowPrivateCandidates);
+    try {
+      await proxy.connect(connectTimeoutMs);
+    } catch (error) {
+      // Attach the LAN probe URL (when a private candidate was seen) so the
+      // caller can run the local-network permission flow and retry, then make
+      // sure the failed attempt does not linger.
+      if (error instanceof Error) {
+        error.lanProbeUrl = proxy.lanProbeUrl;
+      }
+      proxy.close();
+      throw error;
+    }
 
     // Measure actual browser ↔ proxy RTT now that the channel is open.
     try {

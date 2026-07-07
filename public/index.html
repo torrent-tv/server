@@ -43,6 +43,10 @@
       <progress id="loading__progress" max="100" value="0"></progress>
       <p id="loading__filename">Waiting for a .torrent file...</p>
       <p id="loading__status">Idle.</p>
+      <!-- Action for flows that need one user click mid-load (e.g. triggering
+           the browser's local-network permission question). Hidden unless a
+           flow is waiting on it; label set by the flow. -->
+      <button id="loading__action" type="button" hidden></button>
       <button id="loading__cancel" type="button">Cancel</button>
     </dialog>
 
