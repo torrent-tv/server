@@ -81,7 +81,12 @@
               <div slot="title">Audio</div>
             </media-chrome-menu>
           </media-settings-menu-item>
-          <media-settings-menu-item id="player__settings-quality" hidden>Quality</media-settings-menu-item>
+          <media-settings-menu-item id="player__settings-quality" hidden>
+            Quality
+            <media-chrome-menu id="player__quality-menu" slot="submenu" hidden>
+              <div slot="title">Quality</div>
+            </media-chrome-menu>
+          </media-settings-menu-item>
         </media-settings-menu>
 
         <media-control-bar id="player__control-bar">

@@ -249,6 +249,7 @@ export class TorrentSession {
     const targetWidth = Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : 0;
     const targetHeight =
       Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : 0;
+    const manualQuality = options.manualQuality === true;
     const audioTrackIndex =
       Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
         ? options.audioTrackIndex
@@ -268,6 +269,7 @@ export class TorrentSession {
         transcodeAudio,
         targetWidth,
         targetHeight,
+        manualQuality,
         audioTrackIndex
       }
     );
@@ -443,6 +445,7 @@ export class TorrentSession {
             Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : undefined,
           targetHeight:
             Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : undefined,
+          manualQuality: options.manualQuality === true ? true : undefined,
           consumerId: this.consumerId,
           fileName: this.#getFileLogName(fileIndex),
           startPositionSeconds: startPositionSeconds > 0 ? startPositionSeconds : undefined,
