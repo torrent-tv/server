@@ -22,6 +22,7 @@ import {
  */
 export class Loading {
   static SELECTOR = {
+    cancelButton: "#loading__cancel",
     dialog: "#loading",
     fileName: "#loading__filename",
     status: "#loading__status",
@@ -66,6 +67,7 @@ export class Loading {
   #fileName;
   #status;
   #progress;
+  #cancelButton;
   #videoElement = null;
   #session;
   #proxySelector;
@@ -92,6 +94,15 @@ export class Loading {
    * @type {{ fileIndex: number, positionSeconds: number, sessionCurrent: object } | null}
    */
   #resumeState = null;
+  /**
+   * Cooperative cancellation for the in-flight loading flow. Checked at the
+   * await boundaries via #throwIfCancelled(); the thrown AbortError rides the
+   * existing silent abort-error handling, which also guarantees a cancelled
+   * flow can never reach its PLAYBACK_READY dispatch.
+   *
+   * @type {boolean}
+   */
+  #cancelRequested = false;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -286,8 +297,9 @@ export class Loading {
     this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
     this.#status = document.querySelector(Loading.SELECTOR.status);
     this.#progress = document.querySelector(Loading.SELECTOR.progress);
+    this.#cancelButton = document.querySelector(Loading.SELECTOR.cancelButton);
 
-    if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress) {
+    if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress || !this.#cancelButton) {
       throw new Error(Loading.MESSAGES.missingDomNodes);
     }
     this.#dialog.inert = true;
@@ -317,7 +329,48 @@ export class Loading {
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     window.addEventListener("pagehide", this.#onPageHide);
     window.addEventListener("beforeunload", this.#onBeforeUnload);
+    this.#cancelButton.addEventListener("click", this.#onCancelClick);
   }
+
+  /**
+   * Throw a silent AbortError when the user cancelled the in-flight flow.
+   * Called at the await boundaries of the loading pipeline.
+   */
+  #throwIfCancelled() {
+    if (!this.#cancelRequested) {
+      return;
+    }
+    const error = new Error("Loading cancelled by the user.");
+    error.name = "AbortError";
+    throw error;
+  }
+
+  /**
+   * User-initiated cancel of the loading flow. Tears the attempt down
+   * (pending requests, transcode session, player state) but KEEPS
+   * `session.current` and the transport, so a multi-file torrent returns to
+   * a usable playlist and the next selection reuses the open data channel.
+   */
+  #onCancelClick = () => {
+    this.#logEvt("loading cancelled by user");
+    this.#cancelRequested = true;
+    this.#session.abortPendingRequests();
+    this.#session.releaseActiveTranscodeSessions({ reason: "cancel" });
+    this.#hlsPlayer.clear();
+    this.#clearSubtitleTracks();
+    if (this.#videoElement instanceof HTMLVideoElement) {
+      this.#videoElement.pause();
+      this.#videoElement.removeAttribute("src");
+      this.#videoElement.load();
+    }
+    const videoCount = this.#session.current?.media?.video?.length ?? 0;
+    if (videoCount > 1) {
+      this.visible = false;
+      document.dispatchEvent(new CustomEvent(APP_EVENTS.BACK_TO_PLAYLIST));
+      return;
+    }
+    document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
+  };
 
   /** @param {boolean} value */
   set visible(value) {
@@ -390,9 +443,10 @@ export class Loading {
       throw new Error(Loading.MESSAGES.alreadyProcessing);
     }
 
-    // A fresh torrent invalidates any pending resume state.
+    // A fresh torrent invalidates any pending resume state and cancellation.
     this.#activeFileIndex = -1;
     this.#resumeState = null;
+    this.#cancelRequested = false;
     this.#isProcessing = true;
 
     try {
@@ -488,6 +542,7 @@ export class Loading {
     if (!(this.#videoElement instanceof HTMLVideoElement)) {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
+    this.#cancelRequested = false;
     this.#isProcessing = true;
     try {
       this.#hlsPlayer.clear();
@@ -557,6 +612,7 @@ export class Loading {
     this.setStatus(Loading.MESSAGES.selectingProxy);
     this.#setPhaseProgress(0, 10); // phase 0 (download) — small floor before stats arrive
     const transport = await this.#acquireTransport();
+    this.#throwIfCancelled();
     if (!transport) {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
     }
@@ -578,6 +634,7 @@ export class Loading {
       // whole time. Bounded so a truly dead torrent (no peers) still fails.
       const planDeadline = Date.now() + Loading.PLAN_WAIT_MS;
       for (;;) {
+        this.#throwIfCancelled();
         prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
         if (!prepared.pending) {
           break;
@@ -1125,6 +1182,7 @@ export class Loading {
         detail: { status: Loading.MESSAGES.reconnecting, progress: 0 }
       })
     );
+    this.#cancelRequested = false;
     this.#session.current = resume.sessionCurrent;
     void this.#switchToVideoFile(resume.fileIndex)
       .then(() => {
@@ -1158,6 +1216,7 @@ export class Loading {
    * @returns {Promise<void>}
    */
   async #playWithProxyTranscode(fileIndex, options = {}) {
+    this.#throwIfCancelled();
     let transport = options.transport ?? this.#transport ?? null;
     if (!transport) {
       transport = await this.#acquireTransport();
@@ -1256,6 +1315,7 @@ export class Loading {
     const samples = [];
     let loggedTarget = -1;
     while (Date.now() - startedAt < timeoutMs) {
+      this.#throwIfCancelled();
       if (videoElement.error) {
         return;
       }
