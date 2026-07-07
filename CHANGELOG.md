@@ -1,3 +1,7 @@
+## 0.8.45
+
+- **Fix**: The quality menu never appeared because the playback-plan fetch (`prepareProxyPlaybackPlan`) dropped the proxy's `videoWidth`/`videoHeight` — it rebuilt the plan object with only a fixed set of fields, so the browser always saw a source height of 0 and hid the menu (no settings gear). The plan now carries the source resolution through, so the Quality submenu (Auto + forced resolutions ≤ source) shows for transcoded video as intended (needs proxy 2.9.32). Manual-quality feature was otherwise complete in 0.8.44.
+
 ## 0.8.44
 
 - **New**: Manual quality menu in the player (OpenSpec change `transcode-quality`, part 4; needs proxy 2.9.32). When the video is being transcoded, the settings menu gains a **Quality** submenu: **Auto** (the proxy's realtime budget decides) plus forced resolutions at or below the source (`{source}p (source)`, then 1080/720/540/480/360p that fit under it). Picking a resolution re-opens the stream at that fixed size with the position preserved (same mechanism as switching audio track) and tells the proxy to encode it exactly with the budget off — so a forced resolution is constant for the whole session (no mid-stream resolution change). The menu is built from the source resolution now reported in the playback plan. The shared settings button appears when either the Audio or the Quality submenu has a choice to offer.
