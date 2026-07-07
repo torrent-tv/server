@@ -45,11 +45,12 @@ export class ErrorDialog {
     const canGoBackToPlaylist = payload?.canGoBackToPlaylist === true;
     const canRetry = payload?.canRetry === true;
 
-    // Retry is an additional primary action for recoverable errors
-    // (connection lost mid-playback). Exactly one NAVIGATION button is shown
-    // besides it: "Choose File" for multi-file torrents, "New Torrent" otherwise.
+    // Navigation actions: "New Torrent" is ALWAYS available (a dead torrent
+    // must never trap the user), and "Back to episodes" is added when the
+    // torrent has more than one video. Retry is an extra action for recoverable
+    // errors (connection lost mid-playback).
     this.#retryButton.hidden = !canRetry;
-    this.#resetButton.hidden = canGoBackToPlaylist;
+    this.#resetButton.hidden = false;
     this.#playlistButton.hidden = !canGoBackToPlaylist;
 
     this.#showError({ title, description });

@@ -70,6 +70,8 @@ export class WebRtcProxy {
   #proxyId;
   /** @type {number | null} */
   #proxyLocalPort;
+  /** @type {boolean} Viewer and proxy share a public IP (same LAN). */
+  #sameNetwork = false;
   /** @type {RTCPeerConnection | null} */
   #pc = null;
   /** @type {RTCDataChannel | null} */
@@ -132,10 +134,15 @@ export class WebRtcProxy {
    *   issue a Private Network Access preflight fetch before ICE negotiation so
    *   the browser grants permission before addIceCandidate is called for
    *   private-network candidates.
+   * @param {boolean} [sameNetwork=false] - Whether the viewer and the proxy
+   *   share a public IP (same LAN). Only then are the proxy's private host
+   *   candidates a usable path; for a cross-network viewer they are dropped so
+   *   they never trigger the browser's Local Network Access gate.
    */
-  constructor(proxyId, proxyLocalPort = null) {
+  constructor(proxyId, proxyLocalPort = null, sameNetwork = false) {
     this.#proxyId = proxyId;
     this.#proxyLocalPort = proxyLocalPort ?? null;
+    this.#sameNetwork = sameNetwork === true;
   }
 
   /** @returns {boolean} */
@@ -230,6 +237,16 @@ export class WebRtcProxy {
         sdpMid: msg.mid ?? "0",
         sdpMLineIndex: 0
       };
+      // Cross-network viewer: the proxy's private host candidates (e.g.
+      // 192.168.x) are unreachable from here and only trip the browser's Local
+      // Network Access gate — which blocks the whole connection until the user
+      // grants it, for a candidate that would never have connected anyway. Drop
+      // them; the public srflx path is what actually links up. Same-network
+      // viewers keep them (that IS their working path, and LNA is warranted).
+      const candidateIp = WebRtcProxy.#extractCandidateIp(c.candidate);
+      if (!this.#sameNetwork && candidateIp && WebRtcProxy.#isPrivateIpv4(candidateIp)) {
+        return;
+      }
       if (!this.#remoteDescriptionSet) {
         // If this is a private IPv4 host candidate and we haven't started a
         // PNA preflight yet, fire one now.  The fetch triggers Chromium's

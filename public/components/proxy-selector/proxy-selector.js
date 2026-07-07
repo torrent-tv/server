@@ -99,7 +99,10 @@ export class ProxySelector {
       if (p > 0 && p <= 65535) proxyLocalPort = p;
     } catch { /* baseUrl absent or malformed – PNA prefetch will be skipped */ }
 
-    const proxy = new WebRtcProxy(best.id, proxyLocalPort);
+    // sameNetwork decides whether the proxy's private host candidates are kept
+    // (a usable same-LAN path) or dropped (cross-network — they only trip the
+    // browser's Local Network Access gate).
+    const proxy = new WebRtcProxy(best.id, proxyLocalPort, best.sameNetwork === true);
     await proxy.connect();
 
     // Measure actual browser ↔ proxy RTT now that the channel is open.
