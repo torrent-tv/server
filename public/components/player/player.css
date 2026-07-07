@@ -29,21 +29,21 @@
   }
 
   inline-size: calc(100dvw + min(80dvw, 48rem));
-  @media (min-width: 1024px) {
+  @media (min-width: 64rem) {
     inline-size: calc(100dvw + min(50dvw, 48rem));
   }
-  @media (min-width: 1440px) {
+  @media (min-width: 90rem) {
     inline-size: calc(100dvw + min(33dvw, 52rem));
   }
 
   &:is(.player--playlist) {
     translate: max(-80vw, -48rem) 0;
 
-    @media (min-width: 1024px) {
+    @media (min-width: 64rem) {
       translate: max(-50vw, -48rem) 0;
     }
 
-    @media (min-width: 1440px) {
+    @media (min-width: 90rem) {
       translate: max(-33vw, -52rem) 0;
     }
   }
@@ -74,7 +74,7 @@
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    padding: 10px;
+    padding: 0.625rem;
     margin: 0;
     border: none;
     font: inherit;
@@ -88,8 +88,8 @@
     }
 
     svg {
-      inline-size: 24px;
-      block-size: 24px;
+      inline-size: 1.5rem;
+      block-size: 1.5rem;
     }
   }
 
