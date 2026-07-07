@@ -13,14 +13,18 @@ export class Torrent {
   static SELECTOR = {
     dialog: "#torrent",
     form: "#torrent form",
-    input: "#torrent__input"
+    input: "#torrent__input",
+    magnetInput: "#torrent__magnet"
   };
 
   static MESSAGES = {
     missingDomNodes: "Torrent component DOM nodes are missing.",
     wrongFileType: "Only .torrent files are accepted.",
-    parseFailed: "Could not parse torrent file."
+    parseFailed: "Could not parse torrent file.",
+    invalidMagnet: "That does not look like a magnet link."
   };
+
+  static MAGNET_RE = /^magnet:\?/i;
   static AUDIO_EXTENSIONS = new Set([
     ".aac",
     ".ac3",
@@ -48,11 +52,44 @@ export class Torrent {
   #dialog;
   #form;
   #input;
+  #magnetInput;
 
   /** @param {SubmitEvent} event */
   #onFormSubmit = (event) => {
     event.preventDefault();
+    this.#submitMagnetField();
   };
+
+  /** Start the magnet flow from the text field (Enter or form submit). */
+  #submitMagnetField() {
+    const value = this.#magnetInput.value.trim();
+    if (value.length === 0) {
+      return;
+    }
+    if (!Torrent.MAGNET_RE.test(value)) {
+      document.dispatchEvent(
+        new CustomEvent(ERROR_EVENTS.SHOW, {
+          detail: {
+            title: "Error",
+            description: Torrent.MESSAGES.invalidMagnet,
+            backEvent: APP_EVENTS.RESET_TO_PICKER
+          }
+        })
+      );
+      return;
+    }
+    this.#magnetInput.value = "";
+    this.#processMagnet(value);
+  }
+
+  /** @param {string} magnetUri */
+  #processMagnet(magnetUri) {
+    document.dispatchEvent(
+      new CustomEvent(TORRENT_EVENTS.MAGNET_READY, {
+        detail: { magnetUri }
+      })
+    );
+  }
 
   /** @param {MouseEvent} event */
   #onInputClick = (event) => {
@@ -104,10 +141,18 @@ export class Torrent {
       return;
     }
     const files = event.clipboardData?.files;
-    if (!files || files.length === 0) {
+    if (files && files.length > 0) {
+      void this.#processIncomingFiles(files);
       return;
     }
-    void this.#processIncomingFiles(files);
+    // No file in the clipboard — a pasted magnet URI starts the magnet flow
+    // no matter where on the picker it lands.
+    const text = (event.clipboardData?.getData("text") ?? "").trim();
+    if (Torrent.MAGNET_RE.test(text)) {
+      event.preventDefault();
+      this.#magnetInput.value = "";
+      this.#processMagnet(text);
+    }
   };
 
   #onErrorShow = () => {
@@ -136,6 +181,17 @@ export class Torrent {
 
   async #loadFromUrl() {
     const params = new URLSearchParams(location.search);
+
+    // Magnet link in the URL: ?magnet=<encoded magnet URI>.
+    const magnet = (params.get("magnet") ?? "").trim();
+    if (Torrent.MAGNET_RE.test(magnet)) {
+      params.delete("magnet");
+      const search = params.toString();
+      history.replaceState(null, "", search ? `?${search}` : location.pathname);
+      this.#processMagnet(magnet);
+      return;
+    }
+
     const b64 = params.get("torrent");
     if (!b64) {
       return;
@@ -170,8 +226,9 @@ export class Torrent {
     this.#dialog = document.querySelector(Torrent.SELECTOR.dialog);
     this.#form = document.querySelector(Torrent.SELECTOR.form);
     this.#input = document.querySelector(Torrent.SELECTOR.input);
+    this.#magnetInput = document.querySelector(Torrent.SELECTOR.magnetInput);
 
-    if (!this.#dialog || !this.#form || !this.#input) {
+    if (!this.#dialog || !this.#form || !this.#input || !this.#magnetInput) {
       throw new Error(Torrent.MESSAGES.missingDomNodes);
     }
 

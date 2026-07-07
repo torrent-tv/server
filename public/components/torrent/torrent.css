@@ -59,6 +59,30 @@
       text-wrap-style: pretty;
       margin-block-end: 1.5vmin;
     }
+
+    #torrent__magnet {
+      display: block;
+      inline-size: 100%;
+      max-inline-size: 36em;
+      box-sizing: border-box;
+      margin-block-start: 1rem;
+      padding: 0.5em 0.75em;
+      font-family: inherit;
+      font-size: clamp(1rem, 2.5vmin, 1.5rem);
+      color: inherit;
+      background: transparent;
+      border: 0.125rem solid var(--view-text-muted);
+      border-radius: 0.375em;
+
+      &::placeholder {
+        color: var(--view-text-muted);
+      }
+
+      &:focus-visible {
+        outline: none;
+        border-color: var(--view-accent);
+      }
+    }
   }
 
   /* Buttons do not inherit color by default (iOS paints them system blue);
