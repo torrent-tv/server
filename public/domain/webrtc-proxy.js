@@ -426,10 +426,11 @@ export class WebRtcProxy {
    * Send a request over the data channel and return a `Response`-like object.
    *
    * @param {string} path - Absolute path on the proxy, e.g. `"/api/sources"`.
-   * @param {{ method?: string, headers?: object, body?: string | null, signal?: AbortSignal }} [options]
+   * @param {{ method?: string, headers?: object, body?: string | null, signal?: AbortSignal, timeoutMs?: number }} [options]
    *   Fetch options.  `signal` is accepted but currently not propagated to
-   *   the data channel — the request will time out via `REQUEST_TIMEOUT_MS`
-   *   if the channel does not respond.
+   *   the data channel — the request times out via `timeoutMs` (default
+   *   `REQUEST_TIMEOUT_MS`) if the channel does not respond. Long-running
+   *   responses (e.g. embedded-subtitle extraction) pass a larger value.
    * @returns {Promise<DataChannelResponse>}
    */
   fetch(path, options = {}) {
@@ -439,6 +440,10 @@ export class WebRtcProxy {
 
     const requestId = crypto.randomUUID();
     const url = new URL(path, "http://proxy");
+    const timeoutMs =
+      Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+        ? options.timeoutMs
+        : REQUEST_TIMEOUT_MS;
 
     // Hoist resolve/reject so we can cancel the timeout if channel.send() throws.
     let pendingResolve;
@@ -451,7 +456,7 @@ export class WebRtcProxy {
     const timer = setTimeout(() => {
       this.#pending.delete(requestId);
       pendingReject(new Error("Data channel request timed out."));
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
 
     this.#pending.set(requestId, {
       resolve: (result) => { clearTimeout(timer); pendingResolve(result); },

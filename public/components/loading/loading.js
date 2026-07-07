@@ -5,6 +5,59 @@ import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+
+/** Embedded-subtitle extraction reads the file to the last cue — allow long. */
+const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
+
+/** Common ISO 639-2 (ffmpeg language tags) → 639-1 codes for `srclang`. */
+const ISO639_2_TO_1 = {
+  eng: "en", rus: "ru", jpn: "ja", kor: "ko", spa: "es", pol: "pl",
+  deu: "de", ger: "de", fra: "fr", fre: "fr", ita: "it", por: "pt",
+  ukr: "uk", zho: "zh", chi: "zh", ara: "ar", hin: "hi", tur: "tr",
+  nld: "nl", dut: "nl", swe: "sv", ces: "cs", cze: "cs"
+};
+
+const LANGUAGE_DISPLAY =
+  typeof Intl !== "undefined" && "DisplayNames" in Intl
+    ? new Intl.DisplayNames(["en"], { type: "language" })
+    : null;
+
+/**
+ * @param {string} language - ffmpeg language tag (usually ISO 639-2).
+ * @returns {string} Two-letter code when known, the tag otherwise.
+ */
+function trackLanguageCode(language) {
+  const lang = typeof language === "string" ? language.toLowerCase() : "";
+  if (lang.length === 2) {
+    return lang;
+  }
+  return ISO639_2_TO_1[lang] ?? lang;
+}
+
+/**
+ * Human label for a probe track: "English — Commentary", "Track 2", …
+ *
+ * @param {{ index: number, language?: string, title?: string }} track
+ * @returns {string}
+ */
+function buildTrackLabel(track) {
+  const parts = [];
+  const code = trackLanguageCode(track.language ?? "");
+  if (code) {
+    try {
+      parts.push(LANGUAGE_DISPLAY?.of(code) ?? code);
+    } catch {
+      parts.push(code);
+    }
+  }
+  if (typeof track.title === "string" && track.title.trim().length > 0) {
+    parts.push(track.title.trim());
+  }
+  if (parts.length === 0) {
+    parts.push(`Track ${Number(track.index) + 1}`);
+  }
+  return parts.join(" — ");
+}
 import {
   detectSubtitleInfo,
   buildSubtitleLabel,
@@ -55,7 +108,8 @@ export class Loading {
     headerDownloadStalled:
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
     connectionLost: "Connection to the proxy was lost.",
-    reconnecting: "Reconnecting..."
+    reconnecting: "Reconnecting...",
+    switchingAudio: "Switching audio track..."
   };
 
   // How long to keep polling for the file header to download before giving up
@@ -103,6 +157,13 @@ export class Loading {
    * @type {boolean}
    */
   #cancelRequested = false;
+  /** @type {number} Viewer-chosen audio track (type-relative; 0 = default). */
+  #selectedAudioTrackIndex = 0;
+  /**
+   * Track inventory from the playback plan of the active file.
+   * @type {{ audio: Array<object>, subtitles: Array<object> } | null}
+   */
+  #planTracks = null;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -224,6 +285,8 @@ export class Loading {
     if (this.#isProcessing) {
       return;
     }
+    // A different file has its own tracks — reset the audio choice.
+    this.#selectedAudioTrackIndex = 0;
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SHOW, {
         detail: {
@@ -322,6 +385,7 @@ export class Loading {
     document.addEventListener(LOADING_EVENTS.SET_PROGRESS, this.#onSetProgress);
     document.addEventListener(LOADING_EVENTS.PROCESS_PLAYBACK, this.#onProcessPlayback);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
+    document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
     document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
@@ -443,10 +507,13 @@ export class Loading {
       throw new Error(Loading.MESSAGES.alreadyProcessing);
     }
 
-    // A fresh torrent invalidates any pending resume state and cancellation.
+    // A fresh torrent invalidates any pending resume state, cancellation and
+    // track selection.
     this.#activeFileIndex = -1;
     this.#resumeState = null;
     this.#cancelRequested = false;
+    this.#selectedAudioTrackIndex = 0;
+    this.#planTracks = null;
     this.#isProcessing = true;
 
     try {
@@ -651,6 +718,16 @@ export class Loading {
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 
+    // Track inventory of the active file (drives the audio menu and the
+    // embedded-subtitle loading).
+    this.#planTracks = {
+      audio: Array.isArray(prepared.audioTracks) ? prepared.audioTracks : [],
+      subtitles: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : []
+    };
+    if (this.#selectedAudioTrackIndex >= this.#planTracks.audio.length) {
+      this.#selectedAudioTrackIndex = 0;
+    }
+
     const codecSupport = await this.#predictCodecSupport({
       audioCodec: prepared.audioCodec,
       videoCodec: prepared.videoCodec
@@ -677,8 +754,13 @@ export class Loading {
     const directHintKey = this.#buildDirectPlaybackHintKey(prepared);
     const directHint = this.#getDirectPlaybackHint(directHintKey);
 
+    // A non-default audio track can only be delivered by the proxy remuxing
+    // with `-map 0:a:N` — direct play always carries the container's default
+    // track, so it is off the table for this attempt.
+    const forceAudioRemux = this.#selectedAudioTrackIndex > 0;
+
     // Direct URL probing only works for HTTP transports — WebRTC uses fake URLs.
-    const canProbeDirectUrl = transport.isHttp;
+    const canProbeDirectUrl = transport.isHttp && !forceAudioRemux;
 
     if (
       canProbeDirectUrl &&
@@ -701,7 +783,7 @@ export class Loading {
       this.#directPlaybackUnsupportedCache.add(directRetryKey);
     }
 
-    if (shouldTranscodeAudio || shouldTranscodeVideo) {
+    if (shouldTranscodeAudio || shouldTranscodeVideo || forceAudioRemux) {
       if (
         canProbeDirectUrl &&
         shouldTranscodeAudio &&
@@ -1034,24 +1116,7 @@ export class Loading {
     if (!transport) {
       return; // webseed-only — no proxy to fetch subtitles from
     }
-    if (this.#subtitleFiles.length === 0) {
-      return;
-    }
     if (!(this.#videoElement instanceof HTMLVideoElement)) {
-      return;
-    }
-
-    const files = this.#session.current?.files;
-    if (!Array.isArray(files)) {
-      return;
-    }
-    const videoFile = files[fileIndex];
-    if (!videoFile) {
-      return;
-    }
-
-    const matched = matchSubtitlesForVideo(videoFile, this.#subtitleFiles);
-    if (matched.length === 0) {
       return;
     }
 
@@ -1063,6 +1128,34 @@ export class Loading {
       return;
     }
 
+    const addedExternal = await this.#loadExternalSubtitles(fileIndex, transport, sourceKey);
+    await this.#loadEmbeddedSubtitles(fileIndex, transport, sourceKey, { hasDefault: addedExternal });
+  }
+
+  /**
+   * External subtitle FILES from the torrent (matched to the video by name).
+   *
+   * @returns {Promise<boolean>} Whether at least one track was attached.
+   */
+  async #loadExternalSubtitles(fileIndex, transport, sourceKey) {
+    if (this.#subtitleFiles.length === 0) {
+      return false;
+    }
+    const files = this.#session.current?.files;
+    if (!Array.isArray(files)) {
+      return false;
+    }
+    const videoFile = files[fileIndex];
+    if (!videoFile) {
+      return false;
+    }
+
+    const matched = matchSubtitlesForVideo(videoFile, this.#subtitleFiles);
+    if (matched.length === 0) {
+      return false;
+    }
+
+    let added = false;
     let isFirst = true;
     for (const sub of matched) {
       try {
@@ -1103,6 +1196,7 @@ export class Loading {
           isFirst = false;
         }
         this.#videoElement.appendChild(track);
+        added = true;
         console.debug(
           `[torrent-tv][subtitles] loaded "${label}" (${info.code}) from`,
           sub.relativePath ?? sub.name
@@ -1118,6 +1212,58 @@ export class Loading {
         );
       }
     }
+    return added;
+  }
+
+  /**
+   * Embedded TEXT subtitle tracks (inside the MKV/MP4), extracted by the
+   * proxy as WebVTT (`GET /api/subtitles`). Fetched sequentially with a
+   * generous timeout: extraction reads the file up to the last cue, so a
+   * cold torrent downloads while extracting. Tracks appear in the captions
+   * menu as they finish.
+   */
+  async #loadEmbeddedSubtitles(fileIndex, transport, sourceKey, { hasDefault = false } = {}) {
+    const tracks = (this.#planTracks?.subtitles ?? []).filter((t) => t?.textBased === true);
+    if (tracks.length === 0) {
+      return;
+    }
+    let defaultTaken = hasDefault;
+    for (const track of tracks) {
+      try {
+        const response = await transport.fetch(
+          `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${fileIndex}&trackIndex=${track.index}`,
+          { signal: this.#session.abortController.signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS }
+        );
+        if (!response.ok) {
+          console.warn(`[torrent-tv][subtitles] embedded track ${track.index} fetch failed (${response.status})`);
+          continue;
+        }
+        const vtt = await response.text();
+        if (!vtt || !vtt.startsWith("WEBVTT")) {
+          continue;
+        }
+        const blob = new Blob([vtt], { type: "text/vtt" });
+        const blobUrl = URL.createObjectURL(blob);
+        this.#subtitleBlobUrls.push(blobUrl);
+
+        const el = document.createElement("track");
+        el.kind = "subtitles";
+        el.label = buildTrackLabel(track);
+        el.srclang = trackLanguageCode(track.language) || "und";
+        el.src = blobUrl;
+        if (!defaultTaken && track.isDefault === true) {
+          el.default = true;
+          defaultTaken = true;
+        }
+        this.#videoElement.appendChild(el);
+        console.debug(`[torrent-tv][subtitles] embedded track loaded "${el.label}"`);
+      } catch (e) {
+        if (this.#isAbortError(e)) {
+          throw e;
+        }
+        console.warn(`[torrent-tv][subtitles] embedded track ${track.index} failed:`, e);
+      }
+    }
   }
 
   /**
@@ -1130,7 +1276,66 @@ export class Loading {
         detail: { fileIndex }
       })
     );
+    // Feed the player's audio menu with the active file's tracks.
+    const audioTracks = (this.#planTracks?.audio ?? []).map((t) => ({
+      index: t.index,
+      label: buildTrackLabel(t)
+    }));
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, {
+        detail: { tracks: audioTracks, activeIndex: this.#selectedAudioTrackIndex }
+      })
+    );
   }
+
+  /**
+   * The viewer picked another audio track: replay the active file through
+   * the remux/transcode path with `-map 0:a:N`, preserving the position.
+   *
+   * @param {CustomEvent} event
+   */
+  #onSelectAudioTrack = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const trackIndex = Number(detail?.trackIndex);
+    if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+      return;
+    }
+    if (trackIndex === this.#selectedAudioTrackIndex) {
+      return;
+    }
+    if (this.#isProcessing || this.#activeFileIndex < 0 || !this.#session.current) {
+      return;
+    }
+    const fileIndex = this.#activeFileIndex;
+    const position =
+      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+        ? this.#videoElement.currentTime
+        : 0;
+    this.#selectedAudioTrackIndex = trackIndex;
+    document.dispatchEvent(
+      new CustomEvent(LOADING_EVENTS.SHOW, {
+        detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
+      })
+    );
+    void this.#switchToVideoFile(fileIndex)
+      .then(() => {
+        if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
+          this.#videoElement.currentTime = position;
+        }
+      })
+      .catch((error) => {
+        if (this.#isAbortError(error)) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[torrent-tv] audio switch failed:", message, error);
+        document.dispatchEvent(
+          new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
+            detail: { description: message }
+          })
+        );
+      });
+  };
 
   /**
    * The proxy connection died after being established (not closed by us).
@@ -1241,6 +1446,7 @@ export class Loading {
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
       transcodeVideo: options.transcodeVideo === true,
       transcodeAudio: options.transcodeAudio === true,
+      audioTrackIndex: this.#selectedAudioTrackIndex,
       ...this.#buildVideoTargetConfig(options.transcodeVideo === true),
       playHls: (videoElement, manifestUrl, playOptions = {}) =>
         this.#hlsPlayer.play(videoElement, manifestUrl, {
