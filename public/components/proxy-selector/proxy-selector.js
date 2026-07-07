@@ -88,7 +88,17 @@ export class ProxySelector {
     const best = pool[0];
     debugState.proxies.selectedId = best.id;
 
-    const proxy = new WebRtcProxy(best.id);
+    // The proxy's local HTTP port (from baseUrl) — used to fire a Local Network
+    // Access preflight to the proxy's LAN address, so the browser grants the
+    // permission that lets WebRTC data flow to a same-LAN private candidate.
+    let proxyLocalPort = null;
+    try {
+      const u = new URL(best.baseUrl);
+      const p = parseInt(u.port, 10);
+      if (p > 0 && p <= 65535) proxyLocalPort = p;
+    } catch { /* baseUrl absent/malformed — preflight is skipped */ }
+
+    const proxy = new WebRtcProxy(best.id, proxyLocalPort);
     await proxy.connect();
 
     // Measure actual browser ↔ proxy RTT now that the channel is open.

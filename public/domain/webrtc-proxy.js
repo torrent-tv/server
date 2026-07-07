@@ -68,6 +68,10 @@ const PING_TIMEOUT_MS = 5_000;
 export class WebRtcProxy {
   /** @type {string} */
   #proxyId;
+  /** @type {number | null} HTTP port of the proxy's LAN server, for the LNA preflight. */
+  #proxyLocalPort;
+  /** @type {boolean} Guards the one-shot LNA preflight. */
+  #lnaProbeFired = false;
   /** @type {RTCPeerConnection | null} */
   #pc = null;
   /** @type {RTCDataChannel | null} */
@@ -118,9 +122,15 @@ export class WebRtcProxy {
 
   /**
    * @param {string} proxyId
+   * @param {number | null} [proxyLocalPort] - HTTP port of the proxy's LAN
+   *   server. Used to fire a Local Network Access preflight (with
+   *   `targetAddressSpace: "local"`) so the browser prompts for / grants the
+   *   local-network permission — WebRTC data to a same-LAN private candidate is
+   *   blocked without it. Fire-and-forget; never blocks ICE.
    */
-  constructor(proxyId) {
+  constructor(proxyId, proxyLocalPort = null) {
     this.#proxyId = proxyId;
+    this.#proxyLocalPort = proxyLocalPort ?? null;
   }
 
   /** @returns {boolean} */
@@ -210,6 +220,7 @@ export class WebRtcProxy {
         sdpMLineIndex: 0
       };
       console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(c.candidate)}`);
+      this.#maybeFireLnaPreflight(c.candidate);
       if (!this.#remoteDescriptionSet) {
         // Buffer until the answer is applied.
         this.#pendingCandidates.push(c);
@@ -221,6 +232,39 @@ export class WebRtcProxy {
         // Stale or duplicate candidate — safe to ignore.
       }
     }
+  }
+
+  /**
+   * Fire a one-shot Local Network Access preflight to the proxy's LAN address
+   * when a private-IPv4 host candidate arrives. `targetAddressSpace: "local"`
+   * opts the request into the LNA flow — it is NOT blocked as mixed content the
+   * way a plain http fetch from an https page is — so the browser prompts for /
+   * applies the local-network permission. That permission is what lets WebRTC
+   * DATA (SCTP) flow to a same-LAN private candidate; ICE connects without it,
+   * but the channel carries nothing and drops after ~5 s otherwise. Cross-
+   * network viewers connect over the public path regardless; the prompt is
+   * harmless there. Fire-and-forget — never awaited, so ICE is never stalled.
+   *
+   * @param {string} candidateStr
+   * @returns {void}
+   */
+  #maybeFireLnaPreflight(candidateStr) {
+    if (this.#lnaProbeFired || !this.#proxyLocalPort) {
+      return;
+    }
+    const ip = WebRtcProxy.#extractCandidateIp(candidateStr);
+    if (!ip || !WebRtcProxy.#isPrivateIpv4(ip)) {
+      return;
+    }
+    this.#lnaProbeFired = true;
+    const startedAt = performance.now();
+    const url = `http://${ip}:${this.#proxyLocalPort}/healthz`;
+    console.debug(`[ice] LNA preflight → ${url}`);
+    // `targetAddressSpace` is a newer fetch option; ignored by older engines
+    // (then this degrades to the previously-blocked plain fetch — no worse).
+    fetch(url, { mode: "cors", targetAddressSpace: "local", signal: AbortSignal.timeout(8000) })
+      .then(() => { console.debug(`[ice] LNA preflight OK (${Math.round(performance.now() - startedAt)}ms)`); })
+      .catch((err) => { console.debug(`[ice] LNA preflight FAILED (${Math.round(performance.now() - startedAt)}ms): ${err?.name ?? err}`); });
   }
 
   /**
