@@ -207,13 +207,13 @@ export class WebRtcProxy {
       try {
         await this.#pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
         this.#remoteDescriptionSet = true;
-        // Wait for the PNA preflight to complete before applying private
-        // candidates — ensures the browser has granted local-network-access
-        // permission before addIceCandidate runs.
-        if (this.#pnaFetchPromise) {
-          await this.#pnaFetchPromise;
-        }
-        // Drain candidates that arrived before the remote description was set.
+        // Drain buffered candidates IMMEDIATELY — do NOT wait on the PNA
+        // preflight. That fetch is blocked by mixed content (HTTPS page → a
+        // plain-http LAN address) so it grants nothing, yet it hangs until its
+        // 8 s timeout; awaiting it stalled ICE from checking ANY candidate —
+        // including the public ones that actually connect — for those 8 s
+        // (observed in the field: iceConnectionState went to `checking` only
+        // after `PNA preflight FAILED (8015ms)`). ICE now starts at once.
         for (const c of this.#pendingCandidates) {
           await this.#pc.addIceCandidate(c).catch(() => {});
         }
