@@ -21,6 +21,10 @@ context: |
     presentation is layered on top of semantically optimal markup. Every new
     wrapper element must be justified; if it exists only to hang styles on,
     restructure the CSS instead.
+  - CSS sizes are rem (em only when coupling to the element's font size is
+    intentional; viewport units where appropriate). No px literals — not in
+    borders (0.125rem = 2px) and not in media query breakpoints
+    (64rem = 1024px, 90rem = 1440px).
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.

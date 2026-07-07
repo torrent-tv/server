@@ -11,11 +11,11 @@
   padding-block: 1rem;
   box-sizing: border-box;
 
-  @media (min-width: 1024px) {
+  @media (min-width: 64rem) {
     inline-size: min(50dvw, 48rem);
   }
 
-  @media (min-width: 1440px) {
+  @media (min-width: 90rem) {
     inline-size: min(33dvw, 52rem);
   }
 
@@ -29,7 +29,7 @@
     overflow: clip;
     text-overflow: ellipsis;
     font-family: inherit;
-    font-size: 16px;
+    font-size: 1rem;
     line-height: 1.44;
     color: inherit;
     padding: .5rem 1rem;
@@ -46,8 +46,8 @@
     }
 
     &:focus-visible {
-      outline: 2px solid var(--player-accent, #c00);
-      outline-offset: -2px;
+      outline: 0.125rem solid var(--player-accent, #c00);
+      outline-offset: -0.125rem;
     }
 
     &[aria-current="true"] {

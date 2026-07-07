@@ -48,7 +48,7 @@
     margin-inline-end: 1rem;
     font-size: clamp(1rem, 2.5vmin, 1.75rem);
     padding: 0.5em 1.25em;
-    border: 2px solid currentColor;
+    border: 0.125rem solid currentColor;
     border-radius: 0.375em;
     background: transparent;
     cursor: pointer;
