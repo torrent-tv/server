@@ -16,7 +16,7 @@
  *   `"arraybuffer"` — media segment (TS/fMP4), expects `data: ArrayBuffer`
  */
 
-/** @import { WebRtcProxy } from './webrtc-proxy.js' */
+/** @import { ProxyTransport } from './proxy-transport.js' */
 
 /**
  * The loader context object passed by HLS.js to `load()`.
@@ -53,15 +53,21 @@
 /**
  * Create a custom HLS.js loader class backed by a WebRTC proxy data channel.
  *
+ * Takes the {@link ProxyTransport} (not the raw `WebRtcProxy`) so that a
+ * seamless reconnect — `transport.replaceWebRtcProxy(next)` — transparently
+ * redirects this loader's fetches to the new channel: the running HLS.js
+ * instance keeps its loader, and the next manifest/segment load goes over the
+ * reconnected proxy with no player rebuild.
+ *
  * Pass the returned class as `{ loader: class }` in the HLS.js config:
  * ```js
- * const Hls = new HlsClass({ loader: createWebRtcHlsLoader(proxy) });
+ * const Hls = new HlsClass({ loader: createWebRtcHlsLoader(transport) });
  * ```
  *
- * @param {WebRtcProxy} proxy - An open `WebRtcProxy` instance.
+ * @param {ProxyTransport} transport - The WebRTC-backed proxy transport.
  * @returns {HlsLoaderClass}
  */
-export function createWebRtcHlsLoader(proxy) {
+export function createWebRtcHlsLoader(transport) {
   return class WebRtcHlsLoader {
     constructor() {
       this._aborted = false;
@@ -105,7 +111,7 @@ export function createWebRtcHlsLoader(proxy) {
       // the exception escaping the loader and causing an internalException.
       let fetchPromise;
       try {
-        fetchPromise = proxy.fetch(path);
+        fetchPromise = transport.fetch(path);
       } catch (syncErr) {
         if (!this._aborted) {
           callbacks.onError(

@@ -22,7 +22,7 @@ function isNativeHlsSupported(videoElement) {
  *
  * @param {(message: string) => void} onLog - Called with status/error messages
  *   emitted by the HLS.js event handler.
- * @returns {{ clear: () => void, play: (videoElement: HTMLVideoElement, manifestUrl: string, options?: { loader?: HlsLoaderClass }) => Promise<void> }}
+ * @returns {{ clear: () => void, isActive: () => boolean, stopLoad: () => void, startLoad: () => void, play: (videoElement: HTMLVideoElement, manifestUrl: string, options?: { loader?: HlsLoaderClass }) => Promise<void> }}
  */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
@@ -33,6 +33,37 @@ export function createHlsPlayer(onLog) {
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
+      }
+    },
+    /**
+     * `true` when an hls.js instance is currently active (i.e. NOT the native
+     * HLS fallback and not cleared). Seamless reconnect — stopLoad/swap/
+     * startLoad — only works with an hls.js instance, so the caller gates on
+     * this.
+     *
+     * @returns {boolean}
+     */
+    isActive() {
+      return hlsInstance !== null;
+    },
+    /**
+     * Freeze manifest/segment fetching while keeping the current buffer and
+     * playback intact (used during a seamless reconnect). No-op for native
+     * HLS (Safari) or when no instance is active.
+     */
+    stopLoad() {
+      if (hlsInstance) {
+        hlsInstance.stopLoad();
+      }
+    },
+    /**
+     * Resume fetching from the current playback position after a
+     * {@link stopLoad} (seamless reconnect). No-op for native HLS or when no
+     * instance is active.
+     */
+    startLoad() {
+      if (hlsInstance) {
+        hlsInstance.startLoad(-1);
       }
     },
     /**

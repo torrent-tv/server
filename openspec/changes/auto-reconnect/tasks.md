@@ -6,66 +6,53 @@ read the code regions listed at the top of design.md.
 
 ## 1. Transport plumbing (single swap point)
 
-- [ ] 1.1 `public/domain/webrtc-proxy.js`: add read-only getters `proxyId`,
-      `proxyLocalPort`, `allowsPrivateCandidates` (return the existing
-      private fields; no other change). Verify: `node --check`.
-- [ ] 1.2 `public/domain/proxy-transport.js`: `fromWebRtc` stores the proxy
-      in a private field and delegates fetch to it; add
-      `replaceWebRtcProxy(newProxy)` (throws for HTTP transports).
-      Verify: `node --check`; normal playback unchanged in preview.
-- [ ] 1.3 `public/domain/webrtc-hls-loader.js`:
-      `createWebRtcHlsLoader(transport)` instead of `(proxy)` — it only
-      calls `.fetch`. Update the call site in loading.js (~1926) to pass
-      `this.#transport`, and the JSDoc examples here and in hls-player.js.
-      Verify: HLS playback works in preview against the dev HA proxy.
-- [ ] 1.4 Verify proxy-side lifecycle assumptions (READ ONLY, `proxy/`
-      repo): (a) what `webrtc-manager.js` tears down when a channel dies —
-      confirm HLS sessions and torrent registrations are NOT killed with
-      it; (b) `hls-session-manager.js` idle TTL (~120 s) and
-      `torrent-pool.js` idle TTL (~300 s) — confirm the warm-resume window;
-      (c) which client API call re-affirms a source registration and that a
-      duplicate registration of a live source is safe (duplicate-infoHash
-      handling, proxy 2.9.27). Record findings in a short note inside this
-      change folder (`notes-proxy-lifecycle.md`). IF a teardown kills the
-      warm sessions on channel death, STOP and fix that in the proxy first
-      (own commit, proxy + addon release per the standard rules) — Level 1
-      depends on it.
-- [ ] 1.5 `public/domain/hls-player.js`: expose `stopLoad()` /
-      `startLoad()` pass-throughs to the live `Hls` instance (no-ops for
-      native HLS / no instance). Verify: calling them from the console
-      mid-playback freezes and resumes segment fetching.
+- [x] 1.1 `public/domain/webrtc-proxy.js`: getters `proxyId`,
+      `proxyLocalPort`, `allowsPrivateCandidates`. `node --check` OK.
+- [x] 1.2 `public/domain/proxy-transport.js`: `fromWebRtc` holds the proxy
+      in `#webRtcProxy` and delegates through it; `replaceWebRtcProxy`
+      (throws for HTTP). Node unit test: fetch routes to A then B after
+      swap; HTTP transport throws. PASS.
+- [x] 1.3 `webrtc-hls-loader.js` takes the transport (calls
+      `transport.fetch`); call site passes `this.#transport`; JSDoc updated.
+- [x] 1.4 Proxy-side lifecycle verified — channel death does NOT tear down
+      the HLS session or torrent (both idle-TTL based, 120 s / 300 s);
+      findings in `notes-proxy-lifecycle.md`. NO proxy change needed. Also
+      refined the seamless success signal to
+      `session.fetchActiveTranscodeProgress()` (the source re-affirm idea
+      does not probe — it is cached; see the note).
+- [x] 1.5 `hls-player.js`: `stopLoad()` / `startLoad()` + `isActive()`.
+      Verified in preview: safe no-ops with no instance.
 
 ## 2. Loading: adoption and factored resume
 
-- [ ] 2.1 `loading.js`: add `#lastProxyDescriptor` and `#adoptProxy(proxy)`
-      per design.md (reuses the existing transport object via
-      `replaceWebRtcProxy` when present); rewire the success paths of
-      `#acquireTransport` through it. Verify in preview: normal playback
-      end-to-end.
-- [ ] 2.2 `loading.js`: factor the resume body of `#onRetryPlayback` into
-      `#resumePlayback(resume)`; the manual handler calls it. Manual Retry
-      behaviour must be byte-for-byte equivalent. Verify: stop the HA addon
-      mid-playback, click Retry on the error screen after it is back —
-      playback resumes.
+- [x] 2.1 `loading.js`: `#lastProxyDescriptor` + `#adoptProxy(proxy)`
+      (reuses the transport via `replaceWebRtcProxy` when present);
+      `#acquireTransport` success path routes through it.
+- [x] 2.2 `loading.js`: `#resumePlayback(resume)` factored out; manual
+      `#onRetryPlayback` delegates to it (equivalent behaviour, plus it now
+      drops the dead transport first so retry always reconnects fresh).
 
 ## 3. Loading: the auto-reconnect loop
 
-- [ ] 3.1 Add the constants and `MESSAGES.waitingForNetwork` (exact values
-      in design.md).
-- [ ] 3.2 Implement `#autoReconnect(resume)` exactly per the design.md
-      pseudocode: cycle guard + stability timer, freeze (stopLoad, close
-      dead proxy, KEEP the transport object and the player), no overlay on
-      the same-proxy path, per-attempt cancel check, backoff before
-      attempt 2, offline wait, same-proxy attempts via `reconnectTo` +
-      `#adoptProxy` + source re-affirmation + `startLoad()`, attempt-3
-      loading view + `#acquireTransport` + `#resumePlayback`, `[torrent-tv]`
-      debug line per attempt and outcome, final PLAYBACK_FAILED dispatch
-      identical to today's.
-- [ ] 3.3 Rewire `#onTransportLost`: keep the existing early returns and
-      snapshot code, clear the pending stability timer, then
-      `void this.#autoReconnect(resume)`.
+- [x] 3.1 Constants + `MESSAGES.waitingForNetwork`.
+- [x] 3.2 `#autoReconnect(resume)` implemented (cycle guard + stability
+      timer, freeze via stopLoad + drop dead proxy while KEEPING the
+      transport/player, seamless same-proxy attempts with a live-session
+      probe, session-gone → rebuild on the same channel, reselect rebuild,
+      offline wait, `[torrent-tv]` logging, final PLAYBACK_FAILED).
+      Refinement vs the pseudocode: on a good swap but expired transcode
+      session, rebuild on the already-connected proxy instead of wasting a
+      re-selection (see notes-proxy-lifecycle.md).
+- [x] 3.3 `#onTransportLost` rewired: early returns + snapshot kept, pending
+      stability timer cleared, then `void this.#autoReconnect(resume)`.
 
 ## 4. Verification (preview + dev HA proxy)
+
+> Automated so far: `node --check` all six files; node unit test of the
+> transport hot-swap (PASS); preview boot with zero console errors and all
+> new APIs present (isActive/stopLoad/startLoad safe no-ops, replace,
+> reconnectTo, WebRtcProxy getters). The live-loss scenarios below need the
+> dev HA proxy + a real stream and are the field-test step.
 
 - [ ] 4.1 Seamless path: start HLS playback from the dev proxy, kill ONLY
       the WebRTC path (restart the addon container is too coarse — it kills

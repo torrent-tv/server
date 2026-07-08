@@ -147,6 +147,33 @@ export class WebRtcProxy {
   }
 
   /**
+   * The proxy id this connection targets. Exposed so the app can rebuild the
+   * same connection on reconnect (see the auto-reconnect flow).
+   * @returns {string}
+   */
+  get proxyId() {
+    return this.#proxyId;
+  }
+
+  /**
+   * The proxy's LAN HTTP port (or null). Part of the reconnect descriptor.
+   * @returns {number | null}
+   */
+  get proxyLocalPort() {
+    return this.#proxyLocalPort;
+  }
+
+  /**
+   * Whether this connection was built allowing the proxy's local-address
+   * candidates. Reused on reconnect so the same candidate policy (and thus no
+   * permission question on the same-proxy path) is applied.
+   * @returns {boolean}
+   */
+  get allowsPrivateCandidates() {
+    return this.#allowPrivateCandidates;
+  }
+
+  /**
    * `http://<proxy-lan-ip>:<port>/healthz` — the URL whose fetch (with
    * `targetAddressSpace: "local"`) makes the browser ask for the local-network
    * permission. Null until a private candidate has been seen.

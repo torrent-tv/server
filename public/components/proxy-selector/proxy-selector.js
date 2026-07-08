@@ -132,6 +132,27 @@ export class ProxySelector {
   }
 
   /**
+   * Rebuild a connection to a specific proxy that was working moments ago
+   * (auto-reconnect, same-proxy path). No health poll, no scoring, no
+   * permission flow — reuse the exact descriptor (id, LAN port, candidate
+   * policy) of the connection that just dropped and dial it again.
+   *
+   * @param {{ proxyId: string, proxyLocalPort: number | null, allowPrivateCandidates: boolean }} descriptor
+   * @param {{ connectTimeoutMs?: number }} [options]
+   * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy`.
+   */
+  async reconnectTo({ proxyId, proxyLocalPort, allowPrivateCandidates }, { connectTimeoutMs } = {}) {
+    const proxy = new WebRtcProxy(proxyId, proxyLocalPort ?? null, allowPrivateCandidates !== false);
+    try {
+      await proxy.connect(connectTimeoutMs);
+    } catch (error) {
+      proxy.close();
+      throw error;
+    }
+    return proxy;
+  }
+
+  /**
    * Score a proxy candidate using server-collected metrics and tunnel RTT.
    * Higher is better.
    *
