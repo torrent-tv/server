@@ -228,6 +228,14 @@ export class Loading {
   /** @type {number} Source coded width/height from the proxy plan (0 = unknown / not proxy-served). */
   #sourceVideoWidth = 0;
   #sourceVideoHeight = 0;
+  /**
+   * Cold-start phase marks (performance.now()) for the proxy-served flow, used
+   * to log one summary line on a successful start. Set at the top of the
+   * proxy branch of #switchToVideoFile; cleared when the summary is logged.
+   *
+   * @type {{ t0: number, t1?: number, t2?: number, t3?: number } | null}
+   */
+  #coldStart = null;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -963,11 +971,15 @@ export class Loading {
 
     this.setStatus(Loading.MESSAGES.selectingProxy);
     this.#setPhaseProgress(0, 10); // phase 0 (download) — small floor before stats arrive
+    // Cold-start timing (proxy-served flow): t0 = entry, filled through the
+    // phases and logged once on a successful prebuffer.
+    this.#coldStart = { t0: performance.now() };
     const transport = await this.#acquireTransport();
     this.#throwIfCancelled();
     if (!transport) {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
     }
+    this.#coldStart.t1 = performance.now();
 
     // Register the torrent source early so we can poll live stats while
     // the proxy pre-fetches file metadata (MOOV atom / EBML headers).
@@ -1000,6 +1012,7 @@ export class Loading {
       stopStatsPoll();
     }
 
+    this.#coldStart.t2 = performance.now();
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 
@@ -2247,6 +2260,11 @@ export class Loading {
     if (!(videoElement instanceof HTMLVideoElement)) {
       return;
     }
+    // Cold-start: prebuffer entry ≈ "prepare done" (t3). t4 is a successful
+    // return below.
+    if (this.#coldStart) {
+      this.#coldStart.t3 = performance.now();
+    }
     // The player is hidden during pre-buffer, so the video MUST stay paused.
     // If it plays here it drains the buffer, so `ahead` never reaches the
     // target — the loading screen sticks while audio is heard. The player
@@ -2292,11 +2310,23 @@ export class Loading {
       }
       target = Math.min(target, PREBUFFER_MAX_SECONDS);
 
-      if (ahead >= target) {
+      // Start early when the fill rate has SUSTAINED a healthy surplus over
+      // the FULL window (not just the min span the adaptive target needs) —
+      // the same anti-burst guard that fixed the 0.8.45 start-stutter. Low
+      // margins keep the deeper adaptive target unchanged.
+      const healthyEarly =
+        ahead >= PREBUFFER_HEALTHY_AHEAD_SECONDS &&
+        Number.isFinite(fillRate) &&
+        fillRate >= PREBUFFER_HEALTHY_FILL_RATE &&
+        wallSpan >= PREBUFFER_RATE_WINDOW_MS / 1000;
+
+      if (ahead >= target || healthyEarly) {
         this.#logEvt(
-          `prebuffer ready ahead=${ahead.toFixed(1)}s target=${target.toFixed(1)}s ` +
+          `prebuffer ready start=${ahead >= target ? "target" : "early"} ` +
+            `ahead=${ahead.toFixed(1)}s target=${target.toFixed(1)}s ` +
             `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
         );
+        this.#logColdStart();
         return;
       }
       if (Math.round(target) !== loggedTarget) {
@@ -2320,6 +2350,29 @@ export class Loading {
     if (finalAhead < PREBUFFER_MIN_START_SECONDS) {
       throw new Error(Loading.MESSAGES.prebufferStalled);
     }
+    // Proceeding into playback despite the timeout — still a (degraded) start.
+    this.#logColdStart();
+  }
+
+  /**
+   * Log the one-line cold-start summary for the proxy-served flow, then clear
+   * the marks. No-op unless all phase marks were captured (a direct/webseed
+   * start, or a partially-instrumented path, logs nothing rather than NaN).
+   *
+   * @returns {void}
+   */
+  #logColdStart() {
+    const c = this.#coldStart;
+    this.#coldStart = null;
+    if (!c || ![c.t0, c.t1, c.t2, c.t3].every((v) => typeof v === "number")) {
+      return;
+    }
+    const t4 = performance.now();
+    this.#logEvt(
+      `cold-start total=${Math.round(t4 - c.t0)}ms ` +
+        `transport=${Math.round(c.t1 - c.t0)}ms plan=${Math.round(c.t2 - c.t1)}ms ` +
+        `prepare=${Math.round(c.t3 - c.t2)}ms prebuffer=${Math.round(t4 - c.t3)}ms`
+    );
   }
 
   /**
@@ -3072,6 +3125,13 @@ const PREBUFFER_BASE_SECONDS = 12;
 // reflects sustained production, not a spike.
 const PREBUFFER_RATE_WINDOW_MS = 10_000;
 const PREBUFFER_RATE_MIN_SPAN_MS = 5_000;
+// Start early when the fill rate has sustained a healthy surplus over the FULL
+// rate window (not merely the min span the adaptive target needs). The
+// full-window requirement is the anti-burst protection from the 0.8.45
+// start-stutter fix: a burst must not masquerade as a sustained rate. Below
+// this fill rate the deeper adaptive target is kept (thin margins need it).
+const PREBUFFER_HEALTHY_FILL_RATE = 1.35;
+const PREBUFFER_HEALTHY_AHEAD_SECONDS = 10;
 // Allow a full cushion to build on a genuinely slow start before falling back.
 const PREBUFFER_TIMEOUT_MS = 45_000;
 // If, after the timeout, less than this is buffered, treat the stream as never
