@@ -9,12 +9,9 @@ the proxy-side design (proxy repo,
   `this.#channel.send(JSON.stringify({type:"request", …}))`),
   `#onChannelMessage` (string vs ArrayBuffer dispatch),
   `#onResponseBinaryChunk` (the response-frame PARSER whose layout the
-  request-frame BUILDER mirrors), `ping()`, the class fields block.
+  request-frame BUILDER mirrors), the class fields block.
 
 ## Wire protocol (browser side of the additions)
-
-    Received once per connection (JSON string):
-      { type: "hello", proto: 1, version, maxRequestBytes }
 
     Sent to announce a chunked request (JSON string):
       { type: "request-start", requestId, method, path, query, headers,
@@ -26,6 +23,10 @@ the proxy-side design (proxy repo,
       bytes 2..2+N  requestId (ASCII)
       bytes 2+N..   payload   UTF-8 bytes of the body string
 
+No capability negotiation: POC, single-proxy pool, lockstep releases —
+this change ships only AFTER the proxy that understands frames is
+deployed.
+
 ## Constants (module scope, next to the existing timeouts)
 
     REQUEST_CHUNK_BYTES = 64 * 1024
@@ -33,31 +34,15 @@ the proxy-side design (proxy repo,
     REQUEST_BUFFERED_HIGH_BYTES = 1 * 1024 * 1024   // pause sending above
     REQUEST_BUFFERED_LOW_BYTES = 256 * 1024          // resume at (bufferedAmountLowThreshold)
 
-## Hello handling
-
-- New private fields: `#proxyHello = null`.
-- In `#onChannelMessage`, before the pending-entry lookup: a parsed message
-  with `type === "hello"` → store `{proto, version, maxRequestBytes}`
-  (validate types; ignore malformed), `console.debug(
-  "[dc] proxy hello v<version> maxRequestBytes=<n>")`, return. Old proxies
-  never send it; nothing else changes.
-
 ## fetch(): the body path decision
 
-Compute once per call: `bodyBytes = body == null ? 0 :
+Compute once per call: `bodyBytes = body == null ? null :
 new TextEncoder().encode(body)` (keep the Uint8Array — it IS the payload
 source; measure bytes, not string length).
 
-    bodyBytes.byteLength <= REQUEST_CHUNK_THRESHOLD_BYTES  → legacy message
-      (exactly today's send; includes bodyless requests)
-    else if #proxyHello supports it (proto >= 1):
-      if bodyBytes.byteLength > #proxyHello.maxRequestBytes →
-        reject with a CLEAR error ("Request body of X MB exceeds the
-        proxy's limit of Y MB.") — no send at all
-      else → chunked path
-    else (no hello — old proxy) → legacy single message (today's
-      behaviour: works when the remote advertises enough, throws otherwise;
-      the throw already converts to a rejected promise)
+    body == null or bodyBytes.byteLength <= REQUEST_CHUNK_THRESHOLD_BYTES
+      → single message (exactly today's send)
+    else → chunked path
 
 ## Chunked send path
 
@@ -79,19 +64,18 @@ source; measure bytes, not string length).
    as the existing catch around the legacy send.
 6. The pending-entry lifecycle (timeout, resolve on response frames) is
    UNCHANGED — a chunked request's response arrives exactly like any other.
-
-The chunked path makes `fetch()` internally async before the request is
-fully on the wire; the returned promise semantics do not change (it already
-resolved later than the send). Register the pending entry BEFORE sending
-`request-start` (same order as today: entry first, then send), so an early
-response/error cannot race the writer.
+   Register the pending entry BEFORE sending `request-start` (same order as
+   today: entry first, then send), so an early response/error cannot race
+   the writer.
 
 ## Rules — do NOT
 
 - Do NOT change the response handling, ping/pong, the legacy request
   message shape, or the reconnect/adoption logic.
-- Do NOT chunk small or bodyless requests — the threshold keeps every
-  existing proxy compatible and the common path single-message.
+- Do NOT chunk small or bodyless requests — the threshold keeps the common
+  path single-message.
+- Do NOT add capability/version negotiation — POC decision; revisit only
+  when the pool has independently-updated proxies.
 - Do NOT buffer-wait with polling; use the `bufferedamountlow` event.
 - Do NOT let a mid-send abort leave the writer looping or the proxy
   waiting: abort frame + local reject, always.
