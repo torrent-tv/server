@@ -65,6 +65,18 @@ const CONNECT_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const PING_TIMEOUT_MS = 5_000;
 
+// Chunked request bodies. A request whose body exceeds the threshold is sent
+// as a `request-start` announcement + binary body frames (the response-frame
+// layout), so a large body (e.g. a multi-season .torrent source registration)
+// is never one oversized data-channel message. Small/bodyless requests keep
+// the single-message form. The proxy reassembles the frames (see the proxy's
+// data-channel-handler); bodies are measured in UTF-8 bytes, not string length.
+const REQUEST_CHUNK_BYTES = 64 * 1024;
+const REQUEST_CHUNK_THRESHOLD_BYTES = 128 * 1024;
+const REQUEST_BUFFERED_HIGH_BYTES = 1 * 1024 * 1024; // pause sending above this
+const REQUEST_BUFFERED_LOW_BYTES = 256 * 1024; // resume once drained to this
+const REQUEST_BUFFER_DRAIN_TIMEOUT_MS = 5_000; // fallback so a missed drain event cannot deadlock
+
 export class WebRtcProxy {
   /** @type {string} */
   #proxyId;
@@ -316,6 +328,8 @@ export class WebRtcProxy {
     // Response bodies arrive as binary frames; receive them as ArrayBuffer
     // rather than Blob so they can be parsed synchronously.
     this.#channel.binaryType = "arraybuffer";
+    // Low-water mark for the chunked-request backpressure loop (see fetch()).
+    this.#channel.bufferedAmountLowThreshold = REQUEST_BUFFERED_LOW_BYTES;
 
     this.#channel.addEventListener("open", () => {
       this.#connected = true;
@@ -577,27 +591,148 @@ export class WebRtcProxy {
       signal.addEventListener("abort", onAbort);
     }
 
-    try {
-      this.#channel.send(JSON.stringify({
-        type: "request",
-        requestId,
-        method: options.method ?? "GET",
-        path: url.pathname,
-        query: url.search.slice(1),
-        headers: options.headers ?? {},
-        body: options.body ?? null
-      }));
-    } catch (err) {
-      // channel.send() can throw if the channel transitions to closing/closed
-      // between the isOpen check and the send.  Remove the pending entry, cancel
-      // the timer, and convert to a rejected promise so callers always receive a
-      // Promise, never a synchronous exception.
-      this.#pending.delete(requestId);
-      cleanup();
-      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    const method = options.method ?? "GET";
+    const reqPath = url.pathname;
+    const query = url.search.slice(1);
+    const headers = options.headers ?? {};
+    // Measure the body in UTF-8 bytes (what the proxy reassembles), not string
+    // length — a body may contain multi-byte characters.
+    const payload = options.body != null ? new TextEncoder().encode(options.body) : null;
+
+    if (!payload || payload.length <= REQUEST_CHUNK_THRESHOLD_BYTES) {
+      // Legacy single message: small or bodyless requests, one send.
+      try {
+        this.#channel.send(JSON.stringify({
+          type: "request",
+          requestId,
+          method,
+          path: reqPath,
+          query,
+          headers,
+          body: options.body ?? null
+        }));
+      } catch (err) {
+        // channel.send() can throw if the channel transitions to closing/closed
+        // between the isOpen check and the send.  Remove the pending entry, cancel
+        // the timer, and convert to a rejected promise so callers always receive a
+        // Promise, never a synchronous exception.
+        this.#pending.delete(requestId);
+        cleanup();
+        return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+      return responsePromise;
     }
 
+    // Large body: announce it, then stream binary frames with backpressure.
+    // Errors reject through the pending entry (the response arrives normally).
+    void this.#sendChunkedRequest({ requestId, method, path: reqPath, query, headers, payload, signal });
+
     return responsePromise;
+  }
+
+  /**
+   * Stream a large request body to the proxy as binary frames after a
+   * `request-start` announcement (see fetch()). Applies backpressure via the
+   * channel's buffered amount. On an aborted signal, sends one abort frame so
+   * the proxy drops its partial state immediately (the signal listener in
+   * fetch() rejects the promise). Send failures reject through the pending
+   * entry.
+   *
+   * @param {{ requestId: string, method: string, path: string, query: string, headers: object, payload: Uint8Array, signal: AbortSignal | null }} params
+   * @returns {Promise<void>}
+   */
+  async #sendChunkedRequest({ requestId, method, path, query, headers, payload, signal }) {
+    const sendAbort = () => {
+      try {
+        this.#channel?.send(WebRtcProxy.#buildBodyFrame(2, requestId, null));
+      } catch {
+        // Channel already gone — nothing to abort.
+      }
+    };
+    try {
+      this.#channel.send(JSON.stringify({
+        type: "request-start",
+        requestId,
+        method,
+        path,
+        query,
+        headers,
+        bodyBytes: payload.length
+      }));
+      for (let offset = 0; offset < payload.length; offset += REQUEST_CHUNK_BYTES) {
+        if (signal?.aborted) {
+          sendAbort();
+          return;
+        }
+        await this.#waitForRequestBufferDrain();
+        if (signal?.aborted) {
+          sendAbort();
+          return;
+        }
+        const end = Math.min(offset + REQUEST_CHUNK_BYTES, payload.length);
+        const done = end >= payload.length;
+        this.#channel.send(WebRtcProxy.#buildBodyFrame(done ? 1 : 0, requestId, payload.subarray(offset, end)));
+      }
+    } catch (err) {
+      // Send failed mid-body (channel closing, etc.). Reject the pending entry
+      // if it is still around (a channel-close may already have cleared it).
+      const entry = this.#pending.get(requestId);
+      if (entry) {
+        this.#pending.delete(requestId);
+        entry.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+  }
+
+  /**
+   * Resolve once the channel's outgoing buffer drains below the low-water
+   * mark, so the chunked-body loop does not balloon the SCTP send buffer.
+   * Resolves immediately when already below the high-water mark; a timeout
+   * fallback guards against a missed `bufferedamountlow` event.
+   *
+   * @returns {Promise<void>}
+   */
+  #waitForRequestBufferDrain() {
+    const channel = this.#channel;
+    return new Promise((resolve) => {
+      if (!channel || channel.bufferedAmount <= REQUEST_BUFFERED_HIGH_BYTES) {
+        resolve();
+        return;
+      }
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        channel.removeEventListener("bufferedamountlow", done);
+        resolve();
+      };
+      const timer = setTimeout(done, REQUEST_BUFFER_DRAIN_TIMEOUT_MS);
+      channel.addEventListener("bufferedamountlow", done);
+    });
+  }
+
+  /**
+   * Build a request-body frame: `[flags(1)][idLen(1)][requestId(ASCII)][payload]`.
+   * Mirrors the response-frame layout the proxy already uses; flags bit 0 =
+   * done (last frame), bit 1 = aborted.
+   *
+   * @param {number} flags
+   * @param {string} requestId
+   * @param {Uint8Array | null} chunk
+   * @returns {ArrayBuffer}
+   */
+  static #buildBodyFrame(flags, requestId, chunk) {
+    const idBytes = new TextEncoder().encode(requestId);
+    const payloadLen = chunk ? chunk.length : 0;
+    const frame = new Uint8Array(2 + idBytes.length + payloadLen);
+    frame[0] = flags;
+    frame[1] = idBytes.length;
+    frame.set(idBytes, 2);
+    if (payloadLen > 0) {
+      frame.set(chunk, 2 + idBytes.length);
+    }
+    return frame.buffer;
   }
 
   /**
