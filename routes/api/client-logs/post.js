@@ -11,6 +11,7 @@ const MAX_LINES = 50;
 const MAX_MSG_LEN = 2000;
 const MAX_TAG_LEN = 40;
 const MAX_SID_LEN = 16;
+const MAX_SIGNAL_SID_LEN = 36;
 
 /**
  * @param {unknown} value
@@ -41,7 +42,12 @@ function sanitizeLine(s) {
 /**
  * POST /api/client-logs
  *
- * Body: { sessionId, tag, userAgent, lines: [{ level, ts, msg }] }
+ * Body: { sessionId, tag, userAgent, signalSessionId, lines: [{ level, ts, msg }] }
+ *
+ * `signalSessionId` is the WebRTC signalling session id — the same id the
+ * proxy prints as `[webrtc] Session <id>` — so a proxy-side session id greps
+ * straight to this client's lines. Absent until the page opens a WebRTC
+ * session (and it changes on reconnect).
  *
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
@@ -51,9 +57,12 @@ export async function handleApiClientLogsPost(req, reply) {
   const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const tag = safeString(body.tag, MAX_TAG_LEN) || "Unknown/Unknown";
   const sessionId = safeString(body.sessionId, MAX_SID_LEN) || "????????";
+  const signalSessionId = safeString(body.signalSessionId, MAX_SIGNAL_SID_LEN);
   const lines = Array.isArray(body.lines) ? body.lines.slice(0, MAX_LINES) : [];
 
-  const prefix = `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)}]`;
+  const prefix = signalSessionId
+    ? `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)} sig=${sanitizeLine(signalSessionId)}]`
+    : `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)}]`;
   for (const line of lines) {
     const entry = line && typeof line === "object" ? line : {};
     const level = safeString(entry.level, 8) || "log";
