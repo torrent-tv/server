@@ -7,15 +7,17 @@
 The app SHALL detect the loss of an established proxy connection (data
 channel closed or connection failed, excluding closes initiated by the app
 itself) and, when a file was playing, SHALL attempt automatic recovery
-BEFORE surfacing an error: the loading view appears with a reconnecting
-status and a working Cancel action, and the error screen (with the manual
-Retry) is shown only after the automatic attempts are exhausted.
+BEFORE surfacing anything: while recovery to the same proxy is in progress
+the player keeps playing from its buffer with no user-visible change; only
+recovery paths that cannot be seamless (a different proxy, a rebuild) show
+the loading view; the error screen (with the manual Retry) is shown only
+after the automatic attempts are exhausted.
 
-#### Scenario: Proxy path dies mid-playback and recovers
-- **WHEN** the data channel closes during playback and the app did not
-  close it, and a reconnect attempt succeeds
-- **THEN** playback resumes at (approximately) the captured position with
-  no user action and the error screen is never shown
+#### Scenario: Transient path loss, seamless recovery
+- **WHEN** the data channel dies during playback and a reconnect to the
+  same proxy succeeds while the player still has buffered media
+- **THEN** playback never visibly stops, no overlay or error appears, and
+  fetching resumes over the new connection
 
 #### Scenario: Automation fails
 - **WHEN** all automatic attempts fail
@@ -24,24 +26,29 @@ Retry) is shown only after the automatic attempts are exhausted.
 
 ## ADDED Requirements
 
-### Requirement: Reconnect prefers the proxy that was just working
+### Requirement: Recovery is layered — seamless first, rebuild second,
+### manual last
 
-The automatic recovery SHALL first retry the same proxy the playback was
-using (rebuilding the connection with the same candidate policy, under a
-short per-attempt timeout, with one short-backoff repeat), and only then
-fall back to the standard full proxy re-selection. Same-proxy attempts
-SHALL NOT trigger any permission UI.
+The automatic recovery SHALL first rebuild the connection to the proxy the
+playback was using (same candidate policy, short per-attempt timeout, one
+short-backoff repeat, no permission UI, no player teardown) and swap the
+transport under the live player; only then SHALL it fall back to the
+standard full re-selection with the loading view and an automated replay of
+the manual-Retry flow (player rebuild + server-side seek to the captured
+position). The manual Retry path and its event contract SHALL remain
+unchanged as the final fallback.
 
-#### Scenario: Transient path loss, proxy alive
-- **WHEN** the loss was a transient network event and the same proxy is
-  still reachable
-- **THEN** the first or second attempt reconnects to it and playback
-  resumes, typically within ~15 seconds of the loss
+#### Scenario: Same proxy alive, warm sessions
+- **WHEN** the same proxy accepts the new connection within the ffmpeg/
+  torrent idle windows
+- **THEN** the same HLS session continues over the new channel — no player
+  rebuild, no seek, no re-transcode
 
 #### Scenario: Proxy gone, pool has another node
 - **WHEN** the same proxy no longer answers but another pool proxy is
   available
-- **THEN** the final attempt re-selects and playback resumes on the new
+- **THEN** the final attempt re-selects, the loading view explains the
+  reconnect, and playback resumes near the captured position on the new
   proxy
 
 ### Requirement: Recovery is offline-aware and loop-guarded
@@ -71,10 +78,11 @@ for a stabilisation period resets that count.
 
 ### Requirement: Recovery attempts are observable in the field
 
-Every attempt (number, same-proxy vs re-selection, failure reason) SHALL be
-logged on the `[torrent-tv]`-prefixed console channel, so the client-log
-pipeline delivers reconnect cycles to the server log correlated with the
-signalling session ids.
+Every attempt (number, same-proxy vs re-selection, seamless vs rebuild,
+failure reason) SHALL be logged on the `[torrent-tv]`-prefixed console
+channel, so the client-log pipeline delivers reconnect cycles to the server
+log correlated with the signalling session ids. The seamless path SHALL
+produce no user-facing output — console/log only.
 
 #### Scenario: Post-hoc session debugging
 - **WHEN** a tester reports a bad mobile session
