@@ -120,12 +120,25 @@ export class ProxySelector {
       throw error;
     }
 
-    // Measure actual browser ↔ proxy RTT now that the channel is open.
+    // Liveness gate. A bare "data channel open" is NOT proof the channel can
+    // carry data. On a same-LAN pair the browser can nominate a local path
+    // (host ↔ peer-reflexive) even in public-only mode — the proxy's LAN
+    // address leaks in as a peer-reflexive candidate — and Chromium then blocks
+    // the SCTP DATA to that local address without the Local Network permission:
+    // the channel opens and dies within milliseconds (observed: a same-LAN
+    // Mac/Chrome, "Data channel closed" right after connect). A ping round-trip
+    // proves the channel actually moves bytes. On failure this attempt is dead;
+    // attach the LAN probe URL so the caller runs the local-network permission
+    // flow and retries with local candidates (where the permission makes SCTP
+    // flow) instead of surfacing a non-retryable error.
     try {
       best.channelRttMs = await proxy.ping();
       debugState.proxies.channelRttMs = best.channelRttMs;
-    } catch {
-      // Non-fatal — proxy is usable even without the RTT measurement.
+    } catch (pingError) {
+      const error = pingError instanceof Error ? pingError : new Error(String(pingError));
+      error.lanProbeUrl = proxy.lanProbeUrl;
+      proxy.close();
+      throw error;
     }
 
     return proxy;
