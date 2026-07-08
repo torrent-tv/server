@@ -14,6 +14,17 @@ const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
 
+// Auto-reconnect after a mid-playback connection loss (see the auto-reconnect
+// OpenSpec change). Attempts 1..2 retry the SAME proxy (seamless swap under
+// the live player); attempt 3 falls back to a full re-selection + rebuild.
+const RECONNECT_SAME_PROXY_ATTEMPTS = 2;
+const RECONNECT_TOTAL_ATTEMPTS = 3;
+const RECONNECT_CONNECT_TIMEOUT_MS = 10_000;
+const RECONNECT_BACKOFF_MS = 2_000; // pause before attempt 2
+const RECONNECT_ONLINE_WAIT_MS = 15_000; // max wait for `online` per attempt
+const RECONNECT_STABLE_RESET_MS = 30_000; // healthy playback resets the cycle count
+const RECONNECT_MAX_CYCLES = 3; // consecutive loss→recover cycles before giving up
+
 /** Common ISO 639-2 (ffmpeg language tags) → 639-1 codes for `srclang`. */
 const ISO639_2_TO_1 = {
   eng: "en", rus: "ru", jpn: "ja", kor: "ko", spa: "es", pol: "pl",
@@ -114,6 +125,7 @@ export class Loading {
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
+    waitingForNetwork: "Waiting for the network to come back…",
     switchingAudio: "Switching audio track...",
     switchingQuality: "Switching quality...",
     prebufferStalled: "Could not start playback — no data arrived from the proxy. If it is on your network, allow local network access for this site and try again.",
@@ -166,6 +178,25 @@ export class Loading {
    * @type {{ fileIndex: number, positionSeconds: number, sessionCurrent: object } | null}
    */
   #resumeState = null;
+  /**
+   * Descriptor of the last successfully connected proxy, so the auto-reconnect
+   * flow can rebuild the SAME connection (same candidate policy → no permission
+   * question on the same-proxy path). Refreshed by #adoptProxy on every
+   * successful connect.
+   *
+   * @type {{ proxyId: string, proxyLocalPort: number | null, allowPrivateCandidates: boolean } | null}
+   */
+  #lastProxyDescriptor = null;
+  /**
+   * Count of consecutive loss→recover cycles. Reset to 0 after playback
+   * survives {@link RECONNECT_STABLE_RESET_MS}. Guards against an endless
+   * reconnect loop when playback keeps dying immediately after recovery.
+   *
+   * @type {number}
+   */
+  #reconnectCycles = 0;
+  /** @type {ReturnType<typeof setTimeout> | null} Pending cycle-count reset timer. */
+  #stableTimer = null;
   /**
    * Cooperative cancellation for the in-flight loading flow. Checked at the
    * await boundaries via #throwIfCancelled(); the thrown AbortError rides the
@@ -1201,11 +1232,34 @@ export class Loading {
       // mechanism) obtained above.
       proxy = await this.#proxySelector.chooseBestProxy({ allowPrivateCandidates: true });
     }
-    // Surface a mid-playback loss of this connection (Retry flow). A close()
-    // by #stopPlayback never fires this.
+    return this.#adoptProxy(proxy);
+  }
+
+  /**
+   * Bind a freshly connected proxy as the active transport: wire the
+   * connection-loss handler, remember the connection descriptor for
+   * auto-reconnect, and either reuse the existing transport object (swapping
+   * its inner proxy in place, so the running HLS loader / torrent-session keep
+   * their reference — seamless reconnect) or create one on first connect.
+   *
+   * @param {import("../../domain/webrtc-proxy.js").WebRtcProxy} proxy
+   * @returns {import("../../domain/proxy-transport.js").ProxyTransport}
+   */
+  #adoptProxy(proxy) {
+    // Surface a mid-playback loss of this connection (auto-reconnect flow). A
+    // close() by #stopPlayback never fires this.
     proxy.onConnectionLost = () => this.#onTransportLost();
     this.#proxy = proxy;
-    this.#transport = ProxyTransport.fromWebRtc(proxy);
+    if (this.#transport && !this.#transport.isHttp) {
+      this.#transport.replaceWebRtcProxy(proxy);
+    } else {
+      this.#transport = ProxyTransport.fromWebRtc(proxy);
+    }
+    this.#lastProxyDescriptor = {
+      proxyId: proxy.proxyId,
+      proxyLocalPort: proxy.proxyLocalPort,
+      allowPrivateCandidates: proxy.allowsPrivateCandidates
+    };
     return this.#transport;
   }
 
@@ -1827,8 +1881,8 @@ export class Loading {
 
   /**
    * The proxy connection died after being established (not closed by us).
-   * With a file playing, capture everything Retry needs BEFORE the error
-   * flow clears the session, then surface a recoverable error. While a
+   * With a file playing, capture everything recovery needs BEFORE anything
+   * clears the session, then start the automatic reconnect loop. While a
    * loading flow is in flight its own failure path reports instead.
    *
    * @returns {void}
@@ -1842,15 +1896,166 @@ export class Loading {
     if (!current || this.#activeFileIndex < 0) {
       return;
     }
+    // A fresh loss invalidates any pending "playback is stable" reset, so a
+    // quick relapse still counts toward the cycle guard.
+    if (this.#stableTimer !== null) {
+      clearTimeout(this.#stableTimer);
+      this.#stableTimer = null;
+    }
     const position =
       this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
         ? this.#videoElement.currentTime
         : 0;
-    this.#resumeState = {
+    const resume = {
       fileIndex: this.#activeFileIndex,
       positionSeconds: position,
       sessionCurrent: current
     };
+    this.#resumeState = resume;
+    void this.#autoReconnect(resume);
+  }
+
+  /**
+   * Automatic recovery ladder (see the auto-reconnect OpenSpec change):
+   * - Level 1 (seamless): keep the player running from its buffer, rebuild
+   *   the connection to the SAME proxy, swap the transport underneath and
+   *   resume fetching — no visible interruption.
+   * - Level 2 (rebuild): re-select (possibly a different proxy) and replay
+   *   the file-switch flow with a server-side seek to the captured position.
+   * - Level 3 (manual): the error screen with Retry, only after all attempts
+   *   fail. #resumeState stays set so manual Retry still works.
+   *
+   * Never throws (called from an event callback); cancellation ends it
+   * silently. Every attempt is logged on the [torrent-tv] channel.
+   *
+   * @param {{ fileIndex: number, positionSeconds: number, sessionCurrent: object }} resume
+   * @returns {Promise<void>}
+   */
+  async #autoReconnect(resume) {
+    this.#reconnectCycles += 1;
+    if (this.#reconnectCycles > RECONNECT_MAX_CYCLES) {
+      console.debug(`[torrent-tv] reconnect: giving up after ${RECONNECT_MAX_CYCLES} cycles`);
+      this.#dispatchConnectionLost();
+      return;
+    }
+
+    // Freeze fetching but keep the player and its buffer alive (Level 1). Keep
+    // the transport OBJECT (swap target); only drop the dead proxy.
+    try { this.#hlsPlayer.stopLoad(); } catch { /* best-effort */ }
+    try { this.#proxy?.close(); } catch { /* best-effort */ }
+    this.#proxy = null;
+
+    // Seamless is only possible over a live hls.js WebRTC transport with a
+    // known proxy to dial back.
+    let seamlessPossible =
+      !!this.#lastProxyDescriptor &&
+      !!this.#transport &&
+      !this.#transport.isHttp &&
+      this.#hlsPlayer.isActive();
+    let overlayShown = false;
+    const showOverlay = () => {
+      if (!overlayShown) {
+        document.dispatchEvent(
+          new CustomEvent(LOADING_EVENTS.SHOW, {
+            detail: { status: Loading.MESSAGES.reconnecting, progress: 0 }
+          })
+        );
+        overlayShown = true;
+      }
+    };
+
+    for (let attempt = 1; attempt <= RECONNECT_TOTAL_ATTEMPTS; attempt += 1) {
+      if (this.#cancelRequested) {
+        return;
+      }
+      if (attempt === 2) {
+        await this.#sleep(RECONNECT_BACKOFF_MS);
+      }
+      if (typeof navigator === "object" && navigator.onLine === false) {
+        if (overlayShown) {
+          this.setStatus(Loading.MESSAGES.waitingForNetwork);
+        }
+        await this.#waitForOnline(RECONNECT_ONLINE_WAIT_MS);
+        if (this.#cancelRequested) {
+          return;
+        }
+      }
+      const sameProxy = seamlessPossible && attempt <= RECONNECT_SAME_PROXY_ATTEMPTS;
+      console.debug(
+        `[torrent-tv] reconnect attempt ${attempt}/${RECONNECT_TOTAL_ATTEMPTS} ` +
+          (sameProxy ? "(same proxy, seamless)" : "(reselect, rebuild)")
+      );
+      try {
+        if (sameProxy) {
+          const proxy = await this.#proxySelector.reconnectTo(this.#lastProxyDescriptor, {
+            connectTimeoutMs: RECONNECT_CONNECT_TIMEOUT_MS
+          });
+          this.#adoptProxy(proxy); // swaps the inner proxy under the live player
+          // Liveness + session-exists probe over the NEW channel (routes
+          // through the swapped transport). Non-null → the warm transcode
+          // session is still there; resume fetching seamlessly.
+          const progress = await this.#session.fetchActiveTranscodeProgress();
+          if (progress) {
+            this.#hlsPlayer.startLoad();
+            console.debug("[torrent-tv] reconnect: seamless resume");
+            this.#armStabilityTimer();
+            return;
+          }
+          // Channel is good but the transcode session expired — rebuild
+          // playback on this (already connected) proxy; no need to re-select.
+          console.debug("[torrent-tv] reconnect: transcode session gone, rebuilding on the new channel");
+          showOverlay();
+          await this.#resumePlayback(resume);
+          this.#armStabilityTimer();
+          return;
+        }
+
+        // Level 2 rebuild: drop the dead transport and acquire a fresh one
+        // (standard two-stage flow — may walk the permission UI), then replay
+        // the file with a server-side seek.
+        showOverlay();
+        this.#transport = null;
+        await this.#acquireTransport();
+        await this.#resumePlayback(resume);
+        this.#armStabilityTimer();
+        return;
+      } catch (error) {
+        if (this.#isAbortError(error) || this.#cancelRequested) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        console.debug(`[torrent-tv] reconnect attempt ${attempt} failed: ${message}`);
+      }
+    }
+
+    this.#dispatchConnectionLost();
+  }
+
+  /**
+   * Restore the session snapshot and replay the file-switch flow, seeking back
+   * to the captured position (the seek rides the server-side seek machinery).
+   * Shared by the automatic rebuild and the manual Retry so the two paths
+   * cannot drift. Rejects on failure so the caller decides how to surface it.
+   *
+   * @param {{ fileIndex: number, positionSeconds: number, sessionCurrent: object }} resume
+   * @returns {Promise<void>}
+   */
+  async #resumePlayback(resume) {
+    this.#cancelRequested = false;
+    this.#session.current = resume.sessionCurrent;
+    await this.#switchToVideoFile(resume.fileIndex);
+    if (resume.positionSeconds > 1 && this.#videoElement instanceof HTMLVideoElement) {
+      this.#videoElement.currentTime = resume.positionSeconds;
+    }
+  }
+
+  /**
+   * Show the recoverable connection-lost error screen (Level 3 fallback).
+   * #resumeState is left intact so the manual Retry can still resume.
+   *
+   * @returns {void}
+   */
+  #dispatchConnectionLost() {
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PLAYBACK_FAILED, {
         detail: { description: Loading.MESSAGES.connectionLost, canRetry: true }
@@ -1859,10 +2064,62 @@ export class Loading {
   }
 
   /**
-   * Retry after a lost connection: restore the session snapshot, replay the
-   * normal file-switch flow (the proxy is re-selected — possibly a different
-   * pool node) and jump back to the captured position. The seek is handled
-   * like a user seek by the server-side seek machinery.
+   * Arm the "playback has stabilised" timer: once playback survives
+   * {@link RECONNECT_STABLE_RESET_MS}, reset the consecutive-cycle counter so a
+   * later, unrelated loss gets the full set of attempts again.
+   *
+   * @returns {void}
+   */
+  #armStabilityTimer() {
+    if (this.#stableTimer !== null) {
+      clearTimeout(this.#stableTimer);
+    }
+    this.#stableTimer = setTimeout(() => {
+      this.#reconnectCycles = 0;
+      this.#stableTimer = null;
+    }, RECONNECT_STABLE_RESET_MS);
+  }
+
+  /**
+   * @param {number} ms
+   * @returns {Promise<void>}
+   */
+  #sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Resolve when the browser regains connectivity (`online` event) or after
+   * `timeoutMs`, whichever comes first. Also polls #cancelRequested so a
+   * cancel during the wait ends it promptly.
+   *
+   * @param {number} timeoutMs
+   * @returns {Promise<void>}
+   */
+  #waitForOnline(timeoutMs) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        clearInterval(poll);
+        window.removeEventListener("online", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      const poll = setInterval(() => {
+        if (this.#cancelRequested || (typeof navigator === "object" && navigator.onLine === true)) {
+          finish();
+        }
+      }, 250);
+      window.addEventListener("online", finish);
+    });
+  }
+
+  /**
+   * Retry after a lost connection (manual, from the error screen). Delegates
+   * to the shared resume path; the proxy is re-selected by the normal flow.
    */
   #onRetryPlayback = () => {
     const resume = this.#resumeState;
@@ -1875,23 +2132,17 @@ export class Loading {
         detail: { status: Loading.MESSAGES.reconnecting, progress: 0 }
       })
     );
-    this.#cancelRequested = false;
-    this.#session.current = resume.sessionCurrent;
+    // A manual retry starts a fresh connection — do not reuse the dead one.
+    this.#transport = null;
     const epoch = this.#beginPlaybackAttempt();
-    void this.#switchToVideoFile(resume.fileIndex)
-      .then(() => {
-        if (resume.positionSeconds > 1 && this.#videoElement instanceof HTMLVideoElement) {
-          this.#videoElement.currentTime = resume.positionSeconds;
-        }
-      })
-      .catch((error) => {
-        if (this.#isAbortError(error)) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("[torrent-tv] retry failed:", message, error);
-        this.#failPlayback(epoch, { description: message });
-      });
+    void this.#resumePlayback(resume).catch((error) => {
+      if (this.#isAbortError(error)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[torrent-tv] retry failed:", message, error);
+      this.#failPlayback(epoch, { description: message });
+    });
   };
 
   /**
@@ -1921,9 +2172,12 @@ export class Loading {
     );
     this.#setPhaseProgress(1, 0); // entering phase 1 (transcode first segment)
 
-    // For WebRTC transport, HLS.js must route all requests through the data channel.
-    const hlsLoader = !transport.isHttp && this.#proxy
-      ? createWebRtcHlsLoader(this.#proxy)
+    // For WebRTC transport, HLS.js must route all requests through the data
+    // channel. The loader takes the transport (not the raw proxy) so a seamless
+    // reconnect (transport.replaceWebRtcProxy) redirects segment loads with no
+    // player rebuild.
+    const hlsLoader = !transport.isHttp
+      ? createWebRtcHlsLoader(transport)
       : undefined;
 
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {

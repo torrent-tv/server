@@ -52,6 +52,14 @@ export class ProxyTransport {
   #fetchFn;
   /** @type {string} */
   #baseUrl;
+  /**
+   * The backing WebRtcProxy for WebRTC transports (null for HTTP). Held so it
+   * can be hot-swapped on reconnect without recreating the transport object —
+   * everything downstream (torrent-session, the HLS loader) keeps its
+   * reference and transparently uses the new connection.
+   * @type {WebRtcProxy | null}
+   */
+  #webRtcProxy = null;
 
   /**
    * @param {ProxyTransportInit} params
@@ -59,6 +67,21 @@ export class ProxyTransport {
   constructor({ fetchFn, baseUrl }) {
     this.#fetchFn = fetchFn;
     this.#baseUrl = baseUrl;
+  }
+
+  /**
+   * Swap the backing WebRTC proxy in place (seamless reconnect). Subsequent
+   * `fetch()` calls — API requests and HLS manifest/segment loads — route
+   * through `newProxy`. Only valid for WebRTC transports.
+   *
+   * @param {WebRtcProxy} newProxy - A freshly connected `WebRtcProxy`.
+   * @returns {void}
+   */
+  replaceWebRtcProxy(newProxy) {
+    if (this.#webRtcProxy === null) {
+      throw new Error("replaceWebRtcProxy is only valid for WebRTC transports.");
+    }
+    this.#webRtcProxy = newProxy;
   }
 
   /**
@@ -144,9 +167,14 @@ export class ProxyTransport {
    * @returns {ProxyTransport}
    */
   static fromWebRtc(proxy) {
-    return new ProxyTransport({
+    const transport = new ProxyTransport({
       baseUrl: "http://webrtc-proxy/",
-      fetchFn: (path, options) => proxy.fetch(path, options)
+      // Route through whatever proxy is currently bound, so replaceWebRtcProxy
+      // redirects in-flight consumers (HLS loader, torrent-session) to a
+      // reconnected channel without any of them changing their reference.
+      fetchFn: (path, options) => transport.#webRtcProxy.fetch(path, options)
     });
+    transport.#webRtcProxy = proxy;
+    return transport;
   }
 }
