@@ -36,6 +36,16 @@ const original = {
 const buffer = [];
 
 /**
+ * The WebRTC signalling session id the page is currently using, as assigned by
+ * the server and logged by the proxy as `[webrtc] Session <id>`. Set via
+ * `window.__ttvClientLogger.setSignalSession(id)` from the WebRTC transport;
+ * attached to every batch so a proxy-side session id greps straight to this
+ * client's lines. A reconnect replaces it (its own log line marks the switch).
+ * @type {string}
+ */
+let currentSignalSession = "";
+
+/**
  * Derive a short "device/browser" tag from the user-agent.
  *
  * @param {string} ua
@@ -134,7 +144,7 @@ function flush(useBeacon = false) {
     return;
   }
   const lines = buffer.splice(0, MAX_BATCH);
-  const body = JSON.stringify({ sessionId, tag, userAgent, lines });
+  const body = JSON.stringify({ sessionId, tag, userAgent, signalSessionId: currentSignalSession, lines });
   try {
     if (useBeacon && typeof navigator.sendBeacon === "function") {
       navigator.sendBeacon(ENDPOINT, new Blob([body], { type: "application/json" }));
@@ -175,7 +185,25 @@ function install() {
   if (window.__ttvClientLogger) {
     return;
   }
-  window.__ttvClientLogger = { sessionId, tag };
+  window.__ttvClientLogger = {
+    sessionId,
+    tag,
+    /**
+     * Record the WebRTC signalling session id so subsequent batches carry it.
+     * Called by the WebRTC transport when the server assigns a session (and
+     * again on each reconnect). A no-op for empty/non-string ids.
+     *
+     * @param {unknown} id
+     * @returns {void}
+     */
+    setSignalSession(id) {
+      if (typeof id !== "string" || id.length === 0 || id === currentSignalSession) {
+        return;
+      }
+      currentSignalSession = id.slice(0, 36);
+      record("info", [`[client-logger] signal-session=${currentSignalSession}`]);
+    }
+  };
 
   patch("log");
   patch("info");
@@ -203,8 +231,18 @@ function install() {
   });
   window.addEventListener("pagehide", () => flush(true));
 
-  // Announce the session once so the server log shows which client this is.
-  record("info", [`[client-logger] session=${sessionId} tag=${tag} ua=${userAgent}`]);
+  // Announce the session once so the server log shows which client this is,
+  // with the context that shapes playback: app version, viewport (drives the
+  // transcode target), and coarse connection type.
+  const version = typeof window === "object" && window.env && window.env.version ? window.env.version : "?";
+  const viewport = typeof window === "object" ? `${window.innerWidth}x${window.innerHeight}` : "?";
+  const net =
+    typeof navigator === "object" && navigator.connection && navigator.connection.effectiveType
+      ? navigator.connection.effectiveType
+      : "?";
+  record("info", [
+    `[client-logger] session=${sessionId} tag=${tag} ver=${version} vp=${viewport} net=${net} ua=${userAgent}`
+  ]);
 }
 
 install();

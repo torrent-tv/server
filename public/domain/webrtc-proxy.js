@@ -99,6 +99,8 @@ export class WebRtcProxy {
   #closedByUser = false;
   /** @type {boolean} Guards onConnectionLost against double-firing. */
   #lostFired = false;
+  /** @type {string | null} Signalling session id assigned by the server (== the proxy's `[webrtc] Session <id>`). */
+  #signalSessionId = null;
 
   /**
    * Called once when an ESTABLISHED connection is lost (data channel closed
@@ -208,6 +210,17 @@ export class WebRtcProxy {
     try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === "session") {
+      // Record the session id and hand it to the log forwarder so browser
+      // logs can be joined to the proxy's `[webrtc] Session <id>` lines.
+      this.#signalSessionId = typeof msg.sessionId === "string" ? msg.sessionId : null;
+      if (this.#signalSessionId) {
+        console.debug(`[ice] signalling session ${this.#signalSessionId}`);
+        try {
+          window.__ttvClientLogger?.setSignalSession?.(this.#signalSessionId);
+        } catch {
+          // Log forwarder is a debugging aid — never let it break signalling.
+        }
+      }
       try {
         await this.#createPeerConnection(msg.sessionId, settle);
       } catch (err) {
