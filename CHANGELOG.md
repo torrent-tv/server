@@ -1,3 +1,8 @@
+## 0.8.59
+
+- **Fix**: Same-LAN proxy selection no longer wastes the full 12 s connect timeout before the local-network permission walkthrough appears. When the browser and proxy share a public IP (`sameNetwork`), the public-only attempt can only succeed via router hairpin — which connects within a couple of seconds or never — so its connect budget is now capped at 5 s, then the flow falls through to the permission walkthrough. Remote viewers (different networks) keep the caller's full timeout, where srflx / port-prediction genuinely needs it. Field-measured: a same-LAN session sat ~11.8 s in a doomed public-only ICE attempt before the prompt.
+- **Chore**: The chunked-request path logs `[dc] request chunked <method> <path> body=<bytes>B frames=<n>` (delivered via the client-log pipeline), so a large source registration's chunking is observable in the server log without proxy-side access.
+
 ## 0.8.58
 
 - **New**: Chunked request bodies over the data channel (OpenSpec change `chunked-request-bodies`). A request body larger than 128 KB (measured in UTF-8 bytes) — notably the source registration, whose body is the base64 `.torrent` of a multi-season pack — is now sent as a `request-start` announcement followed by 64 KB binary frames (the response-frame layout mirrored), with backpressure via the channel's buffered amount, instead of one oversized `channel.send()` that threw "message larger than max-message-size". Small and bodyless requests keep the single-message form. An AbortSignal firing mid-send stops the writer and sends one abort frame so the proxy drops its partial state at once. Requires the proxy to reassemble frames (proxy 2.9.35+); release after it.

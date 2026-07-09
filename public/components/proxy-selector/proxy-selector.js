@@ -4,6 +4,15 @@
 import { getDebugState } from "../../shared/debug-state.js";
 import { WebRtcProxy } from "../../domain/webrtc-proxy.js";
 
+// Same-LAN public-only connect budget. When the browser and proxy share a
+// public IP, the public-only attempt can only succeed via router hairpin,
+// which connects within a couple of seconds or never — so the full connect
+// timeout is dead time the viewer stares at before the local-network
+// permission walkthrough even appears. Cap it there so we fall through fast.
+// Remote viewers (different networks) keep the caller's full timeout, since
+// their srflx / port-prediction path genuinely needs it.
+const SAME_NETWORK_PUBLIC_CONNECT_TIMEOUT_MS = 5000;
+
 /**
  * A proxy client candidate as returned by `GET /api/proxy-clients/health`,
  * enriched with computed score and post-connect RTT.
@@ -106,9 +115,21 @@ export class ProxySelector {
       if (p > 0 && p <= 65535) proxyLocalPort = p;
     } catch { /* baseUrl absent/malformed — preflight is skipped */ }
 
+    // Same-LAN public-only attempts get a short connect budget (hairpin
+    // connects fast or never); everyone else keeps the caller's timeout.
+    const effectiveConnectTimeoutMs =
+      allowPrivateCandidates === false && best.sameNetwork
+        ? Math.min(connectTimeoutMs ?? SAME_NETWORK_PUBLIC_CONNECT_TIMEOUT_MS, SAME_NETWORK_PUBLIC_CONNECT_TIMEOUT_MS)
+        : connectTimeoutMs;
+    if (effectiveConnectTimeoutMs !== connectTimeoutMs) {
+      console.debug(
+        `[proxy-selector] same-network public-only attempt; connect timeout capped to ${effectiveConnectTimeoutMs}ms`
+      );
+    }
+
     const proxy = new WebRtcProxy(best.id, proxyLocalPort, allowPrivateCandidates);
     try {
-      await proxy.connect(connectTimeoutMs);
+      await proxy.connect(effectiveConnectTimeoutMs);
     } catch (error) {
       // Attach the LAN probe URL (when a private candidate was seen) so the
       // caller can run the local-network permission flow and retry, then make

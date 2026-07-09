@@ -625,6 +625,8 @@ export class WebRtcProxy {
 
     // Large body: announce it, then stream binary frames with backpressure.
     // Errors reject through the pending entry (the response arrives normally).
+    const frames = Math.ceil(payload.length / REQUEST_CHUNK_BYTES);
+    console.debug(`[dc] request chunked ${method} ${reqPath} body=${payload.length}B frames=${frames}`);
     void this.#sendChunkedRequest({ requestId, method, path: reqPath, query, headers, payload, signal });
 
     return responsePromise;
