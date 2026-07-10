@@ -1,6 +1,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
+import { startNetReporter, stopNetReporter } from "./net-report.js";
 
 export class TorrentSession {
   /** @type {(() => void) | null} */
@@ -61,6 +62,8 @@ export class TorrentSession {
   releaseActiveTranscodeSessions(options = {}) {
     const preferBeacon = options?.preferBeacon === true;
     const reason = typeof options?.reason === "string" ? options.reason : "";
+    // The viewer net reporter lives exactly as long as the session it feeds.
+    stopNetReporter();
     if (this.activeTranscodeSessions.size === 0) {
       return;
     }
@@ -508,6 +511,14 @@ export class TorrentSession {
       this.activeTranscodeSessions.set(sessionId, transport);
       // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
       console.debug(`[evt] ${nowHms()} transcode-session create id=${sessionId.slice(0, 8)} fileIndex=${fileIndex}`);
+      // Viewer net reporter (adaptive bitrate): feed the proxy's link-deficit
+      // downshift trigger with measured throughput + buffer while this
+      // session is active. Stopped in releaseActiveTranscodeSessions.
+      startNetReporter({
+        transport,
+        sessionId,
+        getBufferedAheadSec: bufferedAheadSeconds
+      });
     }
 
     // Build a fetchFn that routes through this transport (required for WebRTC,
@@ -730,6 +741,29 @@ function buildConsumerId() {
     return globalThis.crypto.randomUUID();
   }
   return `consumer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+/**
+ * Seconds of media buffered ahead of the playhead, for the viewer net
+ * reporter. Looks the player element up lazily by its stable id (the app has
+ * exactly one video element) — this method runs from the session layer,
+ * which has no element reference at session-create time.
+ *
+ * @returns {number}
+ */
+function bufferedAheadSeconds() {
+  const video = document.querySelector("#player__video");
+  if (!(video instanceof HTMLVideoElement)) {
+    return 0;
+  }
+  const t = video.currentTime;
+  const ranges = video.buffered;
+  for (let i = 0; i < ranges.length; i++) {
+    if (ranges.start(i) <= t && t <= ranges.end(i)) {
+      return Math.max(0, ranges.end(i) - t);
+    }
+  }
+  return 0;
 }
 
 function isAbortError(error) {

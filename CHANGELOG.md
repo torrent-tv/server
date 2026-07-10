@@ -1,3 +1,7 @@
+## 0.8.60
+
+- **New**: Viewer net report — the client side of adaptive bitrate (OpenSpec change `viewer-net-report`; proxy counterpart in 2.9.38). While a transcode session is active, the client posts `POST /api/transcode-sessions/:id/net-report` every ~10 s over the data channel with the rolling MEDIAN of per-segment transfer throughput (30 s window, sub-50 ms samples ignored; median so one stalled fetch cannot crater the estimate) and the player's buffered seconds ahead. The proxy's realtime budget uses this as its viewer-link downshift trigger, so a cellular viewer gets stepped down to a rung their link sustains instead of starving. Best-effort telemetry: failures ignored, reporting stops with the session; each send logs one `[torrent-tv] net-report …` line for field correlation. Requires proxy 2.9.38+ (older proxies 404 the route — harmless).
+
 ## 0.8.59
 
 - **Fix**: Same-LAN proxy selection no longer wastes the full 12 s connect timeout before the local-network permission walkthrough appears. When the browser and proxy share a public IP (`sameNetwork`), the public-only attempt can only succeed via router hairpin — which connects within a couple of seconds or never — so its connect budget is now capped at 5 s, then the flow falls through to the permission walkthrough. Remote viewers (different networks) keep the caller's full timeout, where srflx / port-prediction genuinely needs it. Field-measured: a same-LAN session sat ~11.8 s in a doomed public-only ICE attempt before the prompt.

@@ -18,6 +18,8 @@
 
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
+import { recordNetSample } from "./net-report.js";
+
 /**
  * The loader context object passed by HLS.js to `load()`.
  *
@@ -168,6 +170,12 @@ export function createWebRtcHlsLoader(transport) {
             ms: Math.round(ms),
             mbps: Number(mbps.toFixed(2))
           });
+
+          // Feed the viewer net reporter (adaptive bitrate): media segments
+          // only — playlists are tiny and would skew the link estimate.
+          if (context.responseType === "arraybuffer") {
+            recordNetSample(byteLength, ms);
+          }
 
           // Update the public stats so ABR controller sees accurate timings.
           this.stats.loaded = byteLength;
