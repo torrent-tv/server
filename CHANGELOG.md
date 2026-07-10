@@ -1,5 +1,6 @@
 ## 0.8.60
 
+- **New**: Demo button on the picker — "…or try a demo movie" starts Sintel (2010, Blender Foundation, Creative Commons — legal to stream and screenshot) through the standard magnet flow (field + form, same validation and start path). The magnet carries a webseed, so the demo starts even with few peers. Quiet link-styled tertiary action on its own line under the magnet row (no wrapper elements — the line break is the form's `::after` flex item).
 - **New**: Viewer net report — the client side of adaptive bitrate (OpenSpec change `viewer-net-report`; proxy counterpart in 2.9.38). While a transcode session is active, the client posts `POST /api/transcode-sessions/:id/net-report` every ~10 s over the data channel with the rolling MEDIAN of per-segment transfer throughput (30 s window, sub-50 ms samples ignored; median so one stalled fetch cannot crater the estimate) and the player's buffered seconds ahead. The proxy's realtime budget uses this as its viewer-link downshift trigger, so a cellular viewer gets stepped down to a rung their link sustains instead of starving. Best-effort telemetry: failures ignored, reporting stops with the session; each send logs one `[torrent-tv] net-report …` line for field correlation. Requires proxy 2.9.38+ (older proxies 404 the route — harmless).
 
 ## 0.8.59
