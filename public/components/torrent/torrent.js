@@ -14,8 +14,24 @@ export class Torrent {
     dialog: "#torrent",
     form: "#torrent form",
     input: "#torrent__input",
-    magnetInput: "#torrent__magnet"
+    magnetInput: "#torrent__magnet",
+    demoButton: "#torrent__demo"
   };
+
+  /**
+   * Demo content for the picker button: Sintel (2010), an open movie by the
+   * Blender Foundation, Creative Commons — legal to stream and to screenshot.
+   * The magnet carries a webseed (webtorrent.io), so it starts even when the
+   * swarm has few peers. Dead trackers trimmed from the canonical URI.
+   */
+  static DEMO_MAGNET =
+    "magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel" +
+    "&tr=udp%3A%2F%2Fexplodie.org%3A6969" +
+    "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337" +
+    "&tr=wss%3A%2F%2Ftracker.btorrent.xyz" +
+    "&tr=wss%3A%2F%2Ftracker.openwebtorrent.com" +
+    "&ws=https%3A%2F%2Fwebtorrent.io%2Ftorrents%2F" +
+    "&xs=https%3A%2F%2Fwebtorrent.io%2Ftorrents%2Fsintel.torrent";
 
   static MESSAGES = {
     missingDomNodes: "Torrent component DOM nodes are missing.",
@@ -57,6 +73,18 @@ export class Torrent {
   #form;
   #input;
   #magnetInput;
+  #demoButton;
+
+  /**
+   * Demo button: route the demo magnet through the field + form — the single
+   * magnet entry point (same path as paste/URL), so validation, field
+   * clearing and the start flow stay identical.
+   */
+  #onDemoClick = () => {
+    this.#magnetInput.setCustomValidity("");
+    this.#magnetInput.value = Torrent.DEMO_MAGNET;
+    this.#form.requestSubmit();
+  };
 
   /** @param {SubmitEvent} event */
   #onFormSubmit = (event) => {
@@ -249,8 +277,9 @@ export class Torrent {
     this.#form = document.querySelector(Torrent.SELECTOR.form);
     this.#input = document.querySelector(Torrent.SELECTOR.input);
     this.#magnetInput = document.querySelector(Torrent.SELECTOR.magnetInput);
+    this.#demoButton = document.querySelector(Torrent.SELECTOR.demoButton);
 
-    if (!this.#dialog || !this.#form || !this.#input || !this.#magnetInput) {
+    if (!this.#dialog || !this.#form || !this.#input || !this.#magnetInput || !this.#demoButton) {
       throw new Error(Torrent.MESSAGES.missingDomNodes);
     }
 
@@ -264,6 +293,7 @@ export class Torrent {
   #setupEventHandlers() {
     this.#form.addEventListener("submit", this.#onFormSubmit);
     this.#magnetInput.addEventListener("input", this.#onMagnetInput);
+    this.#demoButton.addEventListener("click", this.#onDemoClick);
     this.#input.addEventListener("click", this.#onInputClick);
     this.#input.addEventListener("change", this.#onInputChange);
     document.addEventListener("dragover", this.#onDocumentDragOver);

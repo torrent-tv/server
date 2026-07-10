@@ -111,6 +111,37 @@
     color: inherit;
   }
 
+  /* Line break before the demo button without a wrapper element: the form's
+     ::after is a zero-height full-width flex item ordered between the magnet
+     row (order 0) and the demo button (order 2). */
+  form::after {
+    content: "";
+    flex-basis: 100%;
+    order: 1;
+  }
+
+  /* Quiet tertiary action: legal demo content (Sintel, CC) for first-time
+     users and field tests. Own line under the magnet row (see form::after),
+     sized to its text so only the label is clickable; link-like styling
+     keeps it out of the primary flow's way. */
+  #torrent__demo {
+    order: 2;
+    flex: 0 0 auto;
+    padding: 0;
+    font-family: inherit;
+    font-size: clamp(1rem, 2.5vmin, 1.5rem);
+    background: transparent;
+    border: none;
+    color: var(--view-text-muted);
+    text-decoration: underline;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      color: var(--view-accent);
+    }
+  }
+
   #torrent__input {
     position: fixed;
     top: -100vh;
