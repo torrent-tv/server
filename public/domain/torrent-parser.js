@@ -1,5 +1,10 @@
 import { bytesToHex, bytesToUtf8, decodeBencode } from "./bencode.js";
 
+// Container extensions offered as playable video. The list only decides "treat
+// this file as a video to offer"; actual playability is handled downstream —
+// the proxy probes codecs and transcodes to HLS anything the browser cannot
+// decode natively. So this spans every container ffmpeg reliably demuxes, not
+// just the browser-native ones (e.g. .wmv/.asf → VC-1/WMV, .flv → H.264/VP6).
 const VIDEO_EXTENSIONS = new Set([
   ".mp4",
   ".mkv",
@@ -10,7 +15,24 @@ const VIDEO_EXTENSIONS = new Set([
   ".mpg",
   ".mpeg",
   ".ts",
-  ".m2ts"
+  ".m2ts",
+  ".wmv",
+  ".asf",
+  ".flv",
+  ".f4v",
+  ".ogv",
+  ".ogm",
+  ".3gp",
+  ".3g2",
+  ".divx",
+  ".vob",
+  ".mts",
+  ".m2v",
+  ".m2p",
+  ".mxf",
+  ".rm",
+  ".rmvb",
+  ".dat"
 ]);
 
 function normalizeBytes(value) {
