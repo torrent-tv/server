@@ -1,3 +1,7 @@
+## 0.8.61
+
+- **Fix**: Recognise many more video containers in a torrent, so files that were skipped with "No video file found in this torrent" now play. Added `.wmv .asf .flv .f4v .ogv .ogm .3gp .3g2 .divx .vob .mts .m2v .m2p .mxf .rm .rmvb .dat` to the video-file list (was mp4/mkv/webm/mov/m4v/avi/mpg/mpeg/ts/m2ts). The list only decides which files are offered as video; playability is already handled downstream — the proxy probes codecs and transcodes to HLS anything the browser cannot decode natively (e.g. WMV/VC-1, FLV/VP6).
+
 ## 0.8.60
 
 - **New**: Demo button on the picker — "…or try a demo movie" starts Sintel (2010, Blender Foundation, Creative Commons — legal to stream and screenshot) through the standard magnet flow (field + form, same validation and start path). The magnet carries a webseed, so the demo starts even with few peers. Quiet link-styled tertiary action on its own line under the magnet row (no wrapper elements — the line break is the form's `::after` flex item).
