@@ -87,8 +87,30 @@ export function createHlsPlayer(onLog) {
       const hlsSupported = !!(HlsClass && typeof HlsClass.isSupported === "function" && HlsClass.isSupported());
       // Prefer hls.js where available (Chrome/Firefox). Native HLS fallback is for Safari.
       if (hlsSupported) {
+        // Extend the fragment-load retry budget. The source is torrent-backed:
+        // a seek into not-yet-downloaded data, or a fragment whose ffmpeg
+        // segment is still warming, briefly fails to load. The default policy
+        // gives up after a few quick retries and goes fatal; a wider budget lets
+        // hls.js keep re-requesting until the pieces arrive, so a transient
+        // stall self-heals instead of killing the stream. Based on the default
+        // policy so unrelated fields (timeoutRetry) are preserved.
+        const baseFragPolicy = HlsClass.DefaultConfig?.fragLoadPolicy;
+        const fragLoadPolicy = baseFragPolicy
+          ? {
+              default: {
+                ...baseFragPolicy.default,
+                errorRetry: {
+                  ...baseFragPolicy.default?.errorRetry,
+                  maxNumRetry: 8,
+                  retryDelayMs: 1000,
+                  maxRetryDelayMs: 8000
+                }
+              }
+            }
+          : undefined;
         const hlsConfig = {
           ...(options.loader ? { loader: options.loader } : {}),
+          ...(fragLoadPolicy ? { fragLoadPolicy } : {}),
           // Forward buffer cushion to ride out transient production/delivery
           // dips. Keep maxBufferLength under the proxy's look-ahead window
           // (MAX_LOOKAHEAD_SEGMENTS × segment duration ≈ 32 s): requesting
@@ -100,6 +122,44 @@ export function createHlsPlayer(onLog) {
         };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
+        // Set once the manifest is parsed, so post-manifest fatal errors (live
+        // playback) are recovered in place, while warm-up fatals still reject
+        // the play() promise below (startup error path).
+        let manifestReady = false;
+        // Recover a fatal, self-healing error instead of letting the stream die
+        // terminally and drop the viewer to the loading/error screen. A seek
+        // into not-yet-downloaded torrent data surfaces as a fatal network
+        // error once the retries above are exhausted; resuming the load makes
+        // hls.js re-request and land when the pieces arrive. The mid-playback
+        // buffering notice (driven by the <video> stall events in loading.js)
+        // covers the wait. Debounced so a persistent error cannot hot-loop.
+        let recovering = false;
+        const recoverFatal = (data) => {
+          if (recovering || !manifestReady) {
+            return;
+          }
+          const type = data?.type;
+          if (type !== HlsClass.ErrorTypes.NETWORK_ERROR && type !== HlsClass.ErrorTypes.MEDIA_ERROR) {
+            return;
+          }
+          recovering = true;
+          window.setTimeout(() => {
+            recovering = false;
+            if (hlsInstance !== instance) {
+              return; // superseded / cleared
+            }
+            try {
+              if (type === HlsClass.ErrorTypes.MEDIA_ERROR) {
+                instance.recoverMediaError();
+              } else {
+                instance.startLoad(-1);
+              }
+              console.debug(`[torrent-tv][hls] recovered fatal ${type}`);
+            } catch (recoverError) {
+              console.warn("[torrent-tv][hls] recovery failed", recoverError);
+            }
+          }, 1000);
+        };
 
         // When seeking to a non-zero position (seek-restart), instruct HLS.js
         // to begin buffering from that offset instead of from t=0.
@@ -116,6 +176,7 @@ export function createHlsPlayer(onLog) {
 
           const onManifestParsed = () => {
             window.clearTimeout(timeoutId);
+            manifestReady = true;
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
             resolve();
@@ -156,6 +217,7 @@ export function createHlsPlayer(onLog) {
             const hole = typeof data?.hole === "number" ? ` hole=${data.hole.toFixed(3)}s` : "";
             if (data?.fatal) {
               console.warn(`[torrent-tv][hls] ${t} fatal: ${details} currentTime=${currentTime}${hole}`, data);
+              recoverFatal(data);
             } else {
               console.debug(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}`);
             }
