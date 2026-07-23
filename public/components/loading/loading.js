@@ -429,7 +429,11 @@ export class Loading {
   };
 
   #onErrorShow = () => {
-    this.#stopPlayback();
+    // For a multi-file torrent keep the parsed source so the error screen's
+    // "Back to episodes" → pick another episode re-enters the loading flow;
+    // otherwise `session.current` is null and #onSelectMediaFile bails out,
+    // leaving an empty player.
+    this.#stopPlayback({ keepSource: this.#videoFileCount() > 1 });
     this.visible = false;
   };
 
@@ -456,7 +460,8 @@ export class Loading {
     this.#isProcessing = false;
     this.#session.clear({
       preferBeacon: options?.preferBeacon === true,
-      reason: typeof options?.reason === "string" ? options.reason : ""
+      reason: typeof options?.reason === "string" ? options.reason : "",
+      keepSource: options?.keepSource === true
     });
     this.#hlsPlayer.clear();
     this.#clearSubtitleTracks();
@@ -879,6 +884,21 @@ export class Loading {
     } finally {
       this.#isProcessing = false;
     }
+  }
+
+  /**
+   * Number of video files in the current source. Used to decide whether an
+   * error should preserve the parsed source (so the playlist stays usable) —
+   * matches the criterion the error screen uses to offer "Back to episodes".
+   *
+   * @returns {number}
+   */
+  #videoFileCount() {
+    const files = this.#session.current?.files;
+    if (!Array.isArray(files)) {
+      return 0;
+    }
+    return files.filter((entry) => entry?.isVideo === true).length;
   }
 
   #normalizeMediaFiles(mediaFiles, parsedFiles) {
