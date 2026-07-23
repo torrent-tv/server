@@ -28,13 +28,22 @@ export class TorrentSession {
   clear(options = {}) {
     const preferBeacon = options?.preferBeacon === true;
     const reason = typeof options?.reason === "string" ? options.reason : "";
+    // Tear down the active stream but keep `current` (the parsed torrent
+    // details) when the caller wants the playlist to stay usable — e.g. after a
+    // failed episode, so re-picking another episode re-enters the loading flow
+    // instead of hitting a null `current` and silently doing nothing.
+    const keepSource = options?.keepSource === true;
     if (this.#seekCleanup) {
       this.#seekCleanup();
       this.#seekCleanup = null;
     }
     this.abortPendingRequests();
     this.releaseActiveTranscodeSessions({ preferBeacon, reason });
-    this.current = null;
+    if (!keepSource) {
+      this.current = null;
+    }
+    // The source-key cache is keyed by the (now closed) transport's baseUrl, so
+    // it is always dropped — a re-pick reconnects a fresh proxy and re-registers.
     this.proxySourceKeyCache.clear();
     this.activeProgressPoll = null;
   }

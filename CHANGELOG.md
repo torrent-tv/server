@@ -1,3 +1,7 @@
+## 0.8.62
+
+- **Fix**: Picking another episode from the error screen now restarts loading instead of showing an empty player. A failed session cleared the parsed torrent details (`session.current`), so after "Back to episodes" the next episode selection hit a null source and silently did nothing. The error teardown now preserves the source for a multi-file torrent (`clear({ keepSource })`) — matching the criterion the error screen already uses to offer "Back to episodes" — while still tearing down the failed stream and proxy; the re-pick reconnects a fresh proxy and re-enters the normal flow.
+
 ## 0.8.61
 
 - **Fix**: Recognise many more video containers in a torrent, so files that were skipped with "No video file found in this torrent" now play. Added `.wmv .asf .flv .f4v .ogv .ogm .3gp .3g2 .divx .vob .mts .m2v .m2p .mxf .rm .rmvb .dat` to the video-file list (was mp4/mkv/webm/mov/m4v/avi/mpg/mpeg/ts/m2ts). The list only decides which files are offered as video; playability is already handled downstream — the proxy probes codecs and transcodes to HLS anything the browser cannot decode natively (e.g. WMV/VC-1, FLV/VP6).
