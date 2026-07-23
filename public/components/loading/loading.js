@@ -102,7 +102,8 @@ export class Loading {
     missingDomNodes: "Loading component DOM nodes are missing.",
     readingTorrentFile: (fileName) => fileName,
     readingMetadata: "Reading torrent metadata...",
-    selectingProxy: "Selecting best proxy by available load metrics...",
+    selectingProxy: "Selecting proxy...",
+    connectingToProxy: "Connecting to proxy...",
     fetchingMetadata: "Fetching file metadata...",
     checkingCompatibility: "Checking playback compatibility...",
     preparingHls: "Preparing HLS transcode...",
@@ -1172,7 +1173,11 @@ export class Loading {
     // Cold-start timing (proxy-served flow): t0 = entry, filled through the
     // phases and logged once on a successful prebuffer.
     this.#coldStart = { t0: performance.now() };
-    const transport = await this.#acquireTransport();
+    // Honest status split: the pick is instant; the time is the WebRTC connect.
+    // Relabel to "Connecting to proxy" once the selector starts the connect.
+    const transport = await this.#acquireTransport({
+      onConnecting: () => this.setStatus(Loading.MESSAGES.connectingToProxy)
+    });
     this.#throwIfCancelled();
     if (!transport) {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
@@ -1428,9 +1433,10 @@ export class Loading {
    * flow obtain the permission (explainer + one click that makes the browser
    * ask) and retry with the proxy's local addresses included.
    *
+   * @param {{ onConnecting?: (proxyName: string) => void }} [options]
    * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
    */
-  async #acquireTransport() {
+  async #acquireTransport({ onConnecting } = {}) {
     if (this.#transport && (!this.#proxy || this.#proxy.isOpen)) {
       return this.#transport;
     }
@@ -1447,7 +1453,8 @@ export class Loading {
       // seconds or it never will.
       proxy = await this.#proxySelector.chooseBestProxy({
         allowPrivateCandidates: false,
-        connectTimeoutMs: 12_000
+        connectTimeoutMs: 12_000,
+        onConnecting
       });
     } catch (publicOnlyError) {
       this.#throwIfCancelled();
@@ -1460,7 +1467,7 @@ export class Loading {
       this.#throwIfCancelled();
       // Attempt 2: all addresses, permission (when the browser has such a
       // mechanism) obtained above.
-      proxy = await this.#proxySelector.chooseBestProxy({ allowPrivateCandidates: true });
+      proxy = await this.#proxySelector.chooseBestProxy({ allowPrivateCandidates: true, onConnecting });
     }
     return this.#adoptProxy(proxy);
   }

@@ -47,14 +47,16 @@ export class ProxySelector {
    * URL, when a private candidate was seen) so the caller can run the
    * local-network permission flow and retry with `allowPrivateCandidates`.
    *
-   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number }} [options]
+   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number, onConnecting?: (proxyName: string) => void }} [options]
    *   `allowPrivateCandidates: false` = public-only attempt: the proxy's
    *   local-address candidates are dropped, so the browser never asks for the
    *   local-network permission (same-LAN connects via router hairpin when
-   *   supported).
+   *   supported). `onConnecting` fires once the candidate is picked and the
+   *   WebRTC connect is about to begin — so the caller can split its status
+   *   between the (instant) selection and the (round-trip) connect.
    * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
    */
-  async chooseBestProxy({ allowPrivateCandidates = true, connectTimeoutMs } = {}) {
+  async chooseBestProxy({ allowPrivateCandidates = true, connectTimeoutMs, onConnecting } = {}) {
     const response = await fetch("/api/proxy-clients/health");
     if (!response.ok) {
       throw new Error(`Proxy health request failed (${response.status}).`);
@@ -125,6 +127,12 @@ export class ProxySelector {
       console.debug(
         `[proxy-selector] same-network public-only attempt; connect timeout capped to ${effectiveConnectTimeoutMs}ms`
       );
+    }
+
+    // The pick is done; what follows (WebRTC connect + liveness ping) is the
+    // round-trip cost. Let the caller relabel from "selecting" to "connecting".
+    if (typeof onConnecting === "function") {
+      onConnecting(best.name);
     }
 
     const proxy = new WebRtcProxy(best.id, proxyLocalPort, allowPrivateCandidates);
