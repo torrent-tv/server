@@ -66,6 +66,12 @@
       <media-controller id="player__controller" autohide="2">
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
+        <!-- Transient mid-playback buffering notice (data starvation): shown
+             over the video when the buffer drains while downloading, so a slow
+             torrent reads as "still downloading (peers: N)" instead of a
+             silent freeze. Hidden by default; driven by PLAYER:SET_BUFFERING. -->
+        <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" hidden></div>
+
         <media-control-bar id="player__top-bar" slot="top-chrome">
           <button
             id="player__close"
