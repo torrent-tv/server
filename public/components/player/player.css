@@ -93,6 +93,20 @@
     }
   }
 
+  /* Transient buffering notice over the video (data starvation). Centered by
+     the media-controller's centered-chrome slot; non-interactive so it never
+     intercepts player gestures. */
+  #player__buffering {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    background: var(--media-secondary-color);
+    color: var(--media-primary-color);
+    font-family: var(--media-font-family);
+    font-size: 0.875rem;
+    text-align: center;
+    pointer-events: none;
+  }
+
   /* Hide the captions button until subtitle tracks exist (recommended
      media-chrome pattern). */
   media-captions-menu-button:not([mediasubtitleslist]) {

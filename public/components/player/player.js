@@ -21,6 +21,7 @@ export class Player {
     audioMenu: "#player__audio-menu",
     settingsQualityItem: "#player__settings-quality",
     qualityMenu: "#player__quality-menu",
+    buffering: "#player__buffering",
   };
 
   static CLASSES = {
@@ -42,6 +43,7 @@ export class Player {
   #audioMenu;
   #settingsQualityItem;
   #qualityMenu;
+  #buffering;
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -82,11 +84,13 @@ export class Player {
 
   #onLoadingShow = () => {
     this.#closePlaylist();
+    this.#hideBuffering();
     this.visible = false;
   };
 
   #onErrorShow = () => {
     this.#closePlaylist();
+    this.#hideBuffering();
     this.#video.pause();
     this.#video.removeAttribute("src");
     this.#video.load();
@@ -95,11 +99,36 @@ export class Player {
 
   #onAppReset = () => {
     this.#closePlaylist();
+    this.#hideBuffering();
     this.#video.pause();
     this.#video.removeAttribute("src");
     this.#video.load();
     this.visible = false;
   };
+
+  /**
+   * Show/hide the transient buffering notice (data starvation). The message is
+   * supplied by the loading component, which owns the peer-count lookup.
+   *
+   * @param {CustomEvent} event
+   */
+  #onSetBuffering = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (detail?.active === true) {
+      const message = typeof detail?.message === "string" && detail.message.trim().length > 0
+        ? detail.message
+        : "Buffering…";
+      this.#buffering.textContent = message;
+      this.#buffering.hidden = false;
+      return;
+    }
+    this.#hideBuffering();
+  };
+
+  #hideBuffering() {
+    this.#buffering.hidden = true;
+    this.#buffering.textContent = "";
+  }
 
   #onBackToPlaylist = () => {
     this.visible = true;
@@ -128,11 +157,12 @@ export class Player {
     this.#audioMenu = document.querySelector(Player.SELECTOR.audioMenu);
     this.#settingsQualityItem = document.querySelector(Player.SELECTOR.settingsQualityItem);
     this.#qualityMenu = document.querySelector(Player.SELECTOR.qualityMenu);
+    this.#buffering = document.querySelector(Player.SELECTOR.buffering);
 
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
       !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
-      !this.#settingsQualityItem || !this.#qualityMenu
+      !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }
@@ -152,6 +182,7 @@ export class Player {
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
+    document.addEventListener(PLAYER_EVENTS.SET_BUFFERING, this.#onSetBuffering);
 
     this.#root.addEventListener('transitionend', (event) => {
       if (event.target !== this.#root || event.propertyName !== 'translate') return;

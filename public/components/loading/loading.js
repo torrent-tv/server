@@ -125,6 +125,7 @@ export class Loading {
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
+    bufferingDownloading: "Buffering — downloading",
     waitingForNetwork: "Waiting for the network to come back…",
     switchingAudio: "Switching audio track...",
     switchingQuality: "Switching quality...",
@@ -236,12 +237,28 @@ export class Loading {
    * @type {{ t0: number, t1?: number, t2?: number, t3?: number } | null}
    */
   #coldStart = null;
+  /**
+   * True once the player view is revealed and playback is live, so buffer-empty
+   * events are treated as mid-playback data starvation (buffering notice) rather
+   * than the normal pre-buffer fill. Cleared when loading/error/stop take over.
+   *
+   * @type {boolean}
+   */
+  #playbackLive = false;
+  /** @type {ReturnType<typeof setTimeout> | null} Debounce before showing the buffering notice. */
+  #bufferingTimer = null;
+  /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
+  #bufferingShown = false;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
     this.#logEvt(`view=loading shown cause=LOADING:SHOW`);
     this.visible = true;
+    // The loading view is back in front — playback is no longer live; drop any
+    // mid-playback buffering notice so it cannot leak onto the next state.
+    this.#playbackLive = false;
+    this.#clearBuffering();
     if (typeof payload?.fileName === "string") {
       this.setFileName(payload.fileName);
     }
@@ -282,7 +299,7 @@ export class Loading {
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] playback failed:", message, error);
-      this.#failPlayback(epoch, { description: message });
+      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
     });
   };
 
@@ -318,7 +335,10 @@ export class Loading {
       );
     };
     for (const name of ["seeking", "seeked", "waiting", "playing", "pause", "ended", "stalled", "error"]) {
-      videoElement.addEventListener(name, () => log(name));
+      videoElement.addEventListener(name, () => {
+        log(name);
+        this.#onPlaybackEventForBuffering(name);
+      });
     }
     // Periodic bottleneck classification while playing. Distinguishes, from
     // client-visible symptoms, whether playback is limited by the client's own
@@ -374,9 +394,130 @@ export class Loading {
     }, 10_000);
   }
 
+  /**
+   * Map a raw <video> event to the mid-playback buffering notice. A stall
+   * (`waiting`/`stalled`) schedules the notice after a short debounce; a resume
+   * or a stop (`playing`/`seeked`/`pause`/`ended`/`error`) clears it.
+   *
+   * @param {string} name
+   * @returns {void}
+   */
+  #onPlaybackEventForBuffering(name) {
+    if (name === "waiting" || name === "stalled") {
+      this.#scheduleBufferingCheck();
+      return;
+    }
+    if (name === "playing" || name === "seeked" || name === "pause" || name === "ended" || name === "error") {
+      this.#clearBuffering();
+    }
+  }
+
+  /**
+   * After a short debounce, show the buffering notice only if playback is still
+   * genuinely starved — playing (not paused/ended) and lacking enough buffered
+   * data to proceed. The debounce keeps a normal sub-second wait from flashing
+   * the notice.
+   *
+   * @returns {void}
+   */
+  #scheduleBufferingCheck() {
+    if (!this.#playbackLive || this.#bufferingTimer !== null) {
+      return;
+    }
+    this.#bufferingTimer = window.setTimeout(() => {
+      this.#bufferingTimer = null;
+      const video = this.#videoElement;
+      if (!(video instanceof HTMLVideoElement) || video.paused || video.ended || video.error) {
+        return;
+      }
+      // HAVE_FUTURE_DATA (3) or HAVE_ENOUGH_DATA (4) means playback can proceed.
+      if (video.readyState >= 3) {
+        return;
+      }
+      void this.#showBuffering();
+    }, 800);
+  }
+
+  /**
+   * Show the buffering notice, then enrich it with the live peer count so a
+   * stalled viewer sees the torrent is still downloading (few peers) rather
+   * than a frozen player.
+   *
+   * @returns {Promise<void>}
+   */
+  async #showBuffering() {
+    this.#bufferingShown = true;
+    this.#dispatchBuffering(true, Loading.MESSAGES.bufferingDownloading);
+    const peers = await this.#fetchPeerCount();
+    // Only enrich if still buffering — a resume during the fetch may have
+    // already cleared the notice.
+    if (this.#bufferingShown && typeof peers === "number") {
+      this.#dispatchBuffering(true, `${Loading.MESSAGES.bufferingDownloading} (peers: ${peers})`);
+    }
+  }
+
+  /**
+   * Cancel a pending buffering check and hide the notice if it is showing.
+   *
+   * @returns {void}
+   */
+  #clearBuffering() {
+    if (this.#bufferingTimer !== null) {
+      clearTimeout(this.#bufferingTimer);
+      this.#bufferingTimer = null;
+    }
+    if (this.#bufferingShown) {
+      this.#bufferingShown = false;
+      this.#dispatchBuffering(false);
+    }
+  }
+
+  /**
+   * @param {boolean} active
+   * @param {string} [message]
+   * @returns {void}
+   */
+  #dispatchBuffering(active, message = "") {
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_BUFFERING, {
+        detail: { active, message }
+      })
+    );
+  }
+
+  /**
+   * One-shot live peer count for the active file. Reuses the cached sourceKey
+   * (no re-registration), so it is a single cheap stats fetch. Returns null on
+   * any failure — the notice then stays generic.
+   *
+   * @returns {Promise<number | null>}
+   */
+  async #fetchPeerCount() {
+    try {
+      if (!this.#transport || this.#activeFileIndex < 0) {
+        return null;
+      }
+      const sourceKey = await this.#session.registerSourceOnProxy(this.#transport);
+      const response = await this.#transport.fetch(
+        `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${this.#activeFileIndex}`,
+        { cache: "no-store" }
+      );
+      if (!response.ok) {
+        return null;
+      }
+      const stats = await response.json();
+      return typeof stats?.numPeers === "number" ? stats.numPeers : null;
+    } catch {
+      return null;
+    }
+  }
+
   #onPlayerShow = () => {
     this.#logEvt(`view=loading hidden cause=PLAYER:SHOW`);
     this.visible = false;
+    // Playback is live now — buffer-empty events mean data starvation, not the
+    // pre-buffer fill, so the mid-playback buffering notice applies.
+    this.#playbackLive = true;
   };
 
   /** @param {CustomEvent} event */
@@ -410,7 +551,7 @@ export class Loading {
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] playback failed:", message, error);
-      this.#failPlayback(epoch, { description: message });
+      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
     });
   };
 
@@ -424,7 +565,7 @@ export class Loading {
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] magnet playback failed:", message, error);
-      this.#failPlayback(epoch, { description: message });
+      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
     });
   };
 
@@ -458,6 +599,8 @@ export class Loading {
 
   #stopPlayback(options = {}) {
     this.#isProcessing = false;
+    this.#playbackLive = false;
+    this.#clearBuffering();
     this.#session.clear({
       preferBeacon: options?.preferBeacon === true,
       reason: typeof options?.reason === "string" ? options.reason : "",
@@ -901,6 +1044,41 @@ export class Loading {
     return files.filter((entry) => entry?.isVideo === true).length;
   }
 
+  /**
+   * A data-channel request that timed out (as opposed to a closed channel or a
+   * genuine protocol error). Transient: the request can be retried while the
+   * connection stays up — used to keep waiting on a slow torrent instead of
+   * failing.
+   *
+   * @param {unknown} error
+   * @returns {boolean}
+   */
+  #isTransientRequestTimeout(error) {
+    return error instanceof Error && /request timed out/i.test(error.message);
+  }
+
+  /**
+   * Build the "torrent isn't downloading" stall error and arm a resume so the
+   * error screen offers a Retry that restarts this file from the beginning.
+   * Data starvation is a supply problem (few peers), not a permanent failure,
+   * so it must be retryable rather than a dead end.
+   *
+   * @param {number} fileIndex
+   * @returns {Error}
+   */
+  #armRetryableStall(fileIndex) {
+    if (this.#session.current) {
+      this.#resumeState = {
+        fileIndex,
+        positionSeconds: 0,
+        sessionCurrent: this.#session.current
+      };
+    }
+    const error = new Error(Loading.MESSAGES.headerDownloadStalled);
+    error.canRetry = true;
+    return error;
+  }
+
   #normalizeMediaFiles(mediaFiles, parsedFiles) {
     const video = Array.isArray(mediaFiles?.video) ? mediaFiles.video : parsedFiles.filter((entry) => entry.isVideo);
     const audio = Array.isArray(mediaFiles?.audio) ? mediaFiles.audio : [];
@@ -1019,12 +1197,31 @@ export class Loading {
       const planDeadline = Date.now() + Loading.PLAN_WAIT_MS;
       for (;;) {
         this.#throwIfCancelled();
-        prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
+        try {
+          prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
+        } catch (planError) {
+          // A slow torrent (few peers) can keep the proxy busy waiting on
+          // pieces long enough for the data-channel request itself to time out,
+          // even though the connection is healthy. That is data starvation, not
+          // a fatal error: keep polling (the stats poll keeps peers/speed/% on
+          // screen) until the wall-clock budget is spent, instead of dropping to
+          // the error screen. A genuinely closed channel is NOT transient — it
+          // propagates and is handled as a real failure.
+          if (this.#isTransientRequestTimeout(planError) && (this.#proxy?.isOpen ?? true)) {
+            this.#logEvt("plan request timed out while waiting on pieces — keep waiting");
+            if (Date.now() >= planDeadline) {
+              throw this.#armRetryableStall(fileIndex);
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            continue;
+          }
+          throw planError;
+        }
         if (!prepared.pending) {
           break;
         }
         if (Date.now() >= planDeadline) {
-          throw new Error(Loading.MESSAGES.headerDownloadStalled);
+          throw this.#armRetryableStall(fileIndex);
         }
         await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
@@ -2174,7 +2371,7 @@ export class Loading {
       }
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] retry failed:", message, error);
-      this.#failPlayback(epoch, { description: message });
+      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
     });
   };
 
