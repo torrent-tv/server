@@ -23,6 +23,7 @@ export class Player {
     qualityMenu: "#player__quality-menu",
     buffering: "#player__buffering",
     bufferingPeers: "#player__buffering-peers",
+    share: "#player__share",
   };
 
   static CLASSES = {
@@ -46,6 +47,11 @@ export class Player {
   #qualityMenu;
   #buffering;
   #bufferingPeers;
+  #share;
+  /** @type {string} Shareable URL for the current source (empty = nothing to share). */
+  #shareUrl = "";
+  /** @type {ReturnType<typeof setTimeout> | null} Copied-feedback reset timer. */
+  #shareCopiedTimer = null;
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -137,6 +143,47 @@ export class Player {
     this.#bufferingPeers.textContent = "";
   }
 
+  /**
+   * Receive the shareable URL for the current source (a `?magnet=…` / `?torrent=…`
+   * link the address bar no longer shows once loading cleaned it). An empty
+   * value hides the button.
+   *
+   * @param {CustomEvent} event
+   */
+  #onSetShareLink = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const url = typeof detail?.url === "string" ? detail.url : "";
+    this.#shareUrl = url;
+    this.#share.hidden = url.length === 0;
+  };
+
+  #onShareClick = async () => {
+    if (this.#shareUrl.length === 0) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(this.#shareUrl);
+      this.#flashShareCopied();
+    } catch {
+      // Clipboard blocked (permissions / insecure context) — no-op; the button
+      // stays available for a retry.
+    }
+  };
+
+  /** Brief "copied" affordance on the share button. */
+  #flashShareCopied() {
+    this.#share.classList.add("player__button--copied");
+    this.#share.setAttribute("aria-label", "Link copied");
+    if (this.#shareCopiedTimer !== null) {
+      clearTimeout(this.#shareCopiedTimer);
+    }
+    this.#shareCopiedTimer = setTimeout(() => {
+      this.#share.classList.remove("player__button--copied");
+      this.#share.setAttribute("aria-label", "Copy a share link for what you are watching");
+      this.#shareCopiedTimer = null;
+    }, 1500);
+  }
+
   #onBackToPlaylist = () => {
     this.visible = true;
     this.#root.classList.add(Player.CLASSES.isAnimated);
@@ -166,11 +213,13 @@ export class Player {
     this.#qualityMenu = document.querySelector(Player.SELECTOR.qualityMenu);
     this.#buffering = document.querySelector(Player.SELECTOR.buffering);
     this.#bufferingPeers = document.querySelector(Player.SELECTOR.bufferingPeers);
+    this.#share = document.querySelector(Player.SELECTOR.share);
 
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
       !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
-      !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering || !this.#bufferingPeers
+      !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering || !this.#bufferingPeers ||
+      !this.#share
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }
@@ -191,6 +240,8 @@ export class Player {
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_BUFFERING, this.#onSetBuffering);
+    document.addEventListener(PLAYER_EVENTS.SET_SHARE_LINK, this.#onSetShareLink);
+    this.#share.addEventListener("click", this.#onShareClick);
 
     this.#root.addEventListener('transitionend', (event) => {
       if (event.target !== this.#root || event.propertyName !== 'translate') return;

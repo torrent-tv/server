@@ -1048,6 +1048,30 @@ export class Loading {
   }
 
   /**
+   * Reconstruct a shareable URL for the current source — the `?magnet=…` /
+   * `?torrent=…` link that loading cleaned from the address bar. Empty when
+   * there is no current source. (Position-resume is a future extension, ties to
+   * the cross-device handoff roadmap item.)
+   *
+   * @returns {string}
+   */
+  #buildShareUrl() {
+    const current = this.#session.current;
+    const value = typeof current?.sourceValue === "string" ? current.sourceValue : "";
+    if (value.length === 0) {
+      return "";
+    }
+    const base = `${location.origin}${location.pathname}`;
+    if (current.sourceType === "magnet") {
+      return `${base}?magnet=${encodeURIComponent(value)}`;
+    }
+    if (current.sourceType === "torrent") {
+      return `${base}?torrent=${encodeURIComponent(value)}`;
+    }
+    return "";
+  }
+
+  /**
    * A data-channel request that timed out (as opposed to a closed channel or a
    * genuine protocol error). Transient: the request can be retried while the
    * connection stays up — used to keep waiting on a slow torrent instead of
@@ -2004,6 +2028,13 @@ export class Loading {
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, {
         detail: { fileIndex }
+      })
+    );
+    // A shareable link for what's playing (the address bar cleaned the source
+    // param on load). Same source for every file of the torrent.
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_SHARE_LINK, {
+        detail: { url: this.#buildShareUrl() }
       })
     );
     // Feed the player's audio menu with the active file's tracks.

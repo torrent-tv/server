@@ -1,3 +1,7 @@
+## 0.8.65
+
+- **New**: "Copy share link" button in the player. Copies a URL for what you are watching — `<origin>/?magnet=…` for a magnet source, `?torrent=…` for an uploaded `.torrent` — to the clipboard, to drop into a messenger. The address bar cleans the source param on load, so this reconstructs it. Built on the existing magnet-in-URL handling + the Clipboard API; the recipient lands via the normal magnet flow (any proxy). Brief "Link copied" affordance on click. (Position-resume — sharing from the current timestamp — is a follow-up that ties into the cross-device handoff item.)
+
 ## 0.8.64
 
 - **New**: Reworked the loading/seeking indicator. Replaced media-chrome's `<media-loading-indicator>` (which did not fire for our stream) with our OWN detection: the loading component watches the video's `waiting`/`stalled`/`seeking` events and drives a `PLAYER:SET_BUFFERING` event, so the indicator now also shows on a **paused** seek (scrubbing on a paused player) into not-yet-downloaded data. The overlay is a bare, centered white spinner (the "growing arc" css-loaders l20, thin 0.3rem stroke) with a small peer-count pill below it — shown only once the count is known — instead of the previous "Buffering — downloading (peers: N)" text plate. Sits in the centered-chrome slot with `noautohide`, so it stays visible while the controls fade and renders in desktop/Android fullscreen. (iPhone fullscreen and Picture-in-Picture are the OS-native player with no page DOM — iOS shows its own native spinner there.)
