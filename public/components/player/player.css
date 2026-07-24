@@ -93,6 +93,11 @@
     }
   }
 
+  /* Brief affordance after the share link is copied to the clipboard. */
+  .player__button--copied {
+    color: var(--player-accent);
+  }
+
   /* Transient buffering/seeking indicator over the video (data starvation): a
      bare spinner with a small peer-count pill below it. A transparent container
      — no plate around the spinner itself. Centered by the centered-chrome slot;
