@@ -1,3 +1,8 @@
+## 0.8.63
+
+- **New**: Loading/seeking is now clearly visible in every mode — on-page AND fullscreen. Added media-chrome's standard `<media-loading-indicator>`: a spinner driven by the player's own buffering state (`waiting`/`readyState`), so it shows on a seek into not-yet-downloaded data as well as on a mid-playback buffer, stays up independent of the control-bar autohide, and renders in fullscreen (fullscreen is on `media-controller`, so the overlay is intact). Previously a fullscreen seek just froze the frame with no indication, and the buffering notice vanished with the controls after 2 s even though loading continued.
+- **Fix**: The "Buffering — downloading (peers: N)" notice no longer disappears with the control bar. It now carries `noautohide`, so media-chrome keeps it visible while the controls fade (it was in the autohiding `centered-chrome` layer). It sits just below the spinner as the peer-count context. (PiP is unavoidably excluded — the Picture-in-Picture window renders only raw `<video>` frames, no page DOM; the browser shows its own native buffering spinner there.)
+
 ## 0.8.62
 
 - **Fix**: Honest loading status during proxy acquisition. "Selecting best proxy by available load metrics…" previously sat over the whole acquire step — the (instant) pick plus the WebRTC connect (ICE/STUN + DTLS + liveness ping) — overstating both the wait's cause and what is actually known (proxy bandwidth is not measured). The status now splits: a brief "Selecting proxy…" for the pick, then "Connecting to proxy…" for the round-trip connect (the selector signals the phase change via an `onConnecting` callback).
