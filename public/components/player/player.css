@@ -94,9 +94,11 @@
   }
 
   /* Transient buffering notice over the video (data starvation). Centered by
-     the media-controller's centered-chrome slot; non-interactive so it never
-     intercepts player gestures. */
+     the centered-chrome slot; nudged below the loading spinner so the two do
+     not overlap. `noautohide` (in the markup) keeps it visible while the
+     controls fade; non-interactive so it never intercepts player gestures. */
   #player__buffering {
+    translate: 0 3.5rem;
     padding: 0.5rem 1rem;
     border-radius: 0.5rem;
     background: var(--media-secondary-color);

@@ -66,11 +66,20 @@
       <media-controller id="player__controller" autohide="2">
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
-        <!-- Transient mid-playback buffering notice (data starvation): shown
-             over the video when the buffer drains while downloading, so a slow
-             torrent reads as "still downloading (peers: N)" instead of a
-             silent freeze. Hidden by default; driven by PLAYER:SET_BUFFERING. -->
-        <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" hidden></div>
+        <!-- Standard buffering/seeking spinner. Driven by the controller's own
+             media-buffering state (readyState/`waiting`), so it shows on seek AND
+             buffer, stays up independent of control autohide, and renders in
+             fullscreen (fullscreen is on media-controller). This is the primary
+             "something is loading" signal in every mode. -->
+        <media-loading-indicator noautohide></media-loading-indicator>
+
+        <!-- Transient mid-playback buffering notice (data starvation): the
+             peer-count context below the spinner, so a slow torrent reads as
+             "still downloading (peers: N)" instead of a silent freeze. Centered
+             by the centered-chrome slot; `noautohide` keeps it up while the
+             controls fade (media-chrome autohides slotted content otherwise).
+             Driven by PLAYER:SET_BUFFERING. -->
+        <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" noautohide hidden></div>
 
         <media-control-bar id="player__top-bar" slot="top-chrome">
           <button
