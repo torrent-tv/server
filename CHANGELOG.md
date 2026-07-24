@@ -1,3 +1,7 @@
+## 0.8.64
+
+- **New**: Reworked the loading/seeking indicator. Replaced media-chrome's `<media-loading-indicator>` (which did not fire for our stream) with our OWN detection: the loading component watches the video's `waiting`/`stalled`/`seeking` events and drives a `PLAYER:SET_BUFFERING` event, so the indicator now also shows on a **paused** seek (scrubbing on a paused player) into not-yet-downloaded data. The overlay is a bare, centered white spinner (the "growing arc" css-loaders l20, thin 0.3rem stroke) with a small peer-count pill below it — shown only once the count is known — instead of the previous "Buffering — downloading (peers: N)" text plate. Sits in the centered-chrome slot with `noautohide`, so it stays visible while the controls fade and renders in desktop/Android fullscreen. (iPhone fullscreen and Picture-in-Picture are the OS-native player with no page DOM — iOS shows its own native spinner there.)
+
 ## 0.8.63
 
 - **New**: Loading/seeking is now clearly visible in every mode — on-page AND fullscreen. Added media-chrome's standard `<media-loading-indicator>`: a spinner driven by the player's own buffering state (`waiting`/`readyState`), so it shows on a seek into not-yet-downloaded data as well as on a mid-playback buffer, stays up independent of the control-bar autohide, and renders in fullscreen (fullscreen is on `media-controller`, so the overlay is intact). Previously a fullscreen seek just froze the frame with no indication, and the buffering notice vanished with the controls after 2 s even though loading continued.

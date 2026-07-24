@@ -22,6 +22,7 @@ export class Player {
     settingsQualityItem: "#player__settings-quality",
     qualityMenu: "#player__quality-menu",
     buffering: "#player__buffering",
+    bufferingPeers: "#player__buffering-peers",
   };
 
   static CLASSES = {
@@ -44,6 +45,7 @@ export class Player {
   #settingsQualityItem;
   #qualityMenu;
   #buffering;
+  #bufferingPeers;
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -107,19 +109,23 @@ export class Player {
   };
 
   /**
-   * Show/hide the transient buffering notice (data starvation). The message is
-   * supplied by the loading component, which owns the peer-count lookup.
+   * Show/hide the transient buffering/seeking indicator (data starvation): the
+   * spinner, plus a peer-count pill when the count is known. The peer count is
+   * supplied by the loading component, which owns the lookup.
    *
    * @param {CustomEvent} event
    */
   #onSetBuffering = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (detail?.active === true) {
-      const message = typeof detail?.message === "string" && detail.message.trim().length > 0
-        ? detail.message
-        : "Buffering…";
-      this.#buffering.textContent = message;
       this.#buffering.hidden = false;
+      const peers = detail?.peers;
+      if (typeof peers === "number") {
+        this.#bufferingPeers.textContent = `peers: ${peers}`;
+        this.#bufferingPeers.hidden = false;
+      } else {
+        this.#bufferingPeers.hidden = true;
+      }
       return;
     }
     this.#hideBuffering();
@@ -127,7 +133,8 @@ export class Player {
 
   #hideBuffering() {
     this.#buffering.hidden = true;
-    this.#buffering.textContent = "";
+    this.#bufferingPeers.hidden = true;
+    this.#bufferingPeers.textContent = "";
   }
 
   #onBackToPlaylist = () => {
@@ -158,11 +165,12 @@ export class Player {
     this.#settingsQualityItem = document.querySelector(Player.SELECTOR.settingsQualityItem);
     this.#qualityMenu = document.querySelector(Player.SELECTOR.qualityMenu);
     this.#buffering = document.querySelector(Player.SELECTOR.buffering);
+    this.#bufferingPeers = document.querySelector(Player.SELECTOR.bufferingPeers);
 
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
       !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
-      !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering
+      !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering || !this.#bufferingPeers
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }

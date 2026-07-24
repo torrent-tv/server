@@ -126,7 +126,6 @@ export class Loading {
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
-    bufferingDownloading: "Buffering — downloading",
     waitingForNetwork: "Waiting for the network to come back…",
     switchingAudio: "Switching audio track...",
     switchingQuality: "Switching quality...",
@@ -396,15 +395,17 @@ export class Loading {
   }
 
   /**
-   * Map a raw <video> event to the mid-playback buffering notice. A stall
-   * (`waiting`/`stalled`) schedules the notice after a short debounce; a resume
-   * or a stop (`playing`/`seeked`/`pause`/`ended`/`error`) clears it.
+   * Map a raw <video> event to the mid-playback buffering notice. A stall or a
+   * seek (`waiting`/`stalled`/`seeking`) schedules the notice after a short
+   * debounce; a resume or a stop (`playing`/`seeked`/`pause`/`ended`/`error`)
+   * clears it. `seeking` is included so a seek into not-yet-downloaded data
+   * shows the spinner even while paused (scrubbing on a paused player).
    *
    * @param {string} name
    * @returns {void}
    */
   #onPlaybackEventForBuffering(name) {
-    if (name === "waiting" || name === "stalled") {
+    if (name === "waiting" || name === "stalled" || name === "seeking") {
       this.#scheduleBufferingCheck();
       return;
     }
@@ -415,9 +416,10 @@ export class Loading {
 
   /**
    * After a short debounce, show the buffering notice only if playback is still
-   * genuinely starved — playing (not paused/ended) and lacking enough buffered
-   * data to proceed. The debounce keeps a normal sub-second wait from flashing
-   * the notice.
+   * genuinely starved — lacking enough buffered data to proceed. A paused player
+   * is NOT excluded (a paused seek into not-yet-downloaded data must show the
+   * spinner); an ended/errored one is. The debounce keeps a normal sub-second
+   * wait or an instant in-buffer seek from flashing the notice.
    *
    * @returns {void}
    */
@@ -428,7 +430,7 @@ export class Loading {
     this.#bufferingTimer = window.setTimeout(() => {
       this.#bufferingTimer = null;
       const video = this.#videoElement;
-      if (!(video instanceof HTMLVideoElement) || video.paused || video.ended || video.error) {
+      if (!(video instanceof HTMLVideoElement) || video.ended || video.error) {
         return;
       }
       // HAVE_FUTURE_DATA (3) or HAVE_ENOUGH_DATA (4) means playback can proceed.
@@ -436,11 +438,11 @@ export class Loading {
         return;
       }
       void this.#showBuffering();
-    }, 800);
+    }, 250);
   }
 
   /**
-   * Show the buffering notice, then enrich it with the live peer count so a
+   * Show the spinner immediately, then add the live peer count below it so a
    * stalled viewer sees the torrent is still downloading (few peers) rather
    * than a frozen player.
    *
@@ -448,12 +450,12 @@ export class Loading {
    */
   async #showBuffering() {
     this.#bufferingShown = true;
-    this.#dispatchBuffering(true, Loading.MESSAGES.bufferingDownloading);
+    this.#dispatchBuffering(true, null); // spinner only until the count is known
     const peers = await this.#fetchPeerCount();
     // Only enrich if still buffering — a resume during the fetch may have
     // already cleared the notice.
     if (this.#bufferingShown && typeof peers === "number") {
-      this.#dispatchBuffering(true, `${Loading.MESSAGES.bufferingDownloading} (peers: ${peers})`);
+      this.#dispatchBuffering(true, peers);
     }
   }
 
@@ -475,13 +477,13 @@ export class Loading {
 
   /**
    * @param {boolean} active
-   * @param {string} [message]
+   * @param {number | null} [peers] - Live peer count, or null when not yet known.
    * @returns {void}
    */
-  #dispatchBuffering(active, message = "") {
+  #dispatchBuffering(active, peers = null) {
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_BUFFERING, {
-        detail: { active, message }
+        detail: { active, peers }
       })
     );
   }

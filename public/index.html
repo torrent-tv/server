@@ -66,20 +66,19 @@
       <media-controller id="player__controller" autohide="2">
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
-        <!-- Standard buffering/seeking spinner. Driven by the controller's own
-             media-buffering state (readyState/`waiting`), so it shows on seek AND
-             buffer, stays up independent of control autohide, and renders in
-             fullscreen (fullscreen is on media-controller). This is the primary
-             "something is loading" signal in every mode. -->
-        <media-loading-indicator noautohide></media-loading-indicator>
-
-        <!-- Transient mid-playback buffering notice (data starvation): the
-             peer-count context below the spinner, so a slow torrent reads as
-             "still downloading (peers: N)" instead of a silent freeze. Centered
-             by the centered-chrome slot; `noautohide` keeps it up while the
-             controls fade (media-chrome autohides slotted content otherwise).
-             Driven by PLAYER:SET_BUFFERING. -->
-        <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" noautohide hidden></div>
+        <!-- Loading/seeking indicator: a bare spinner (CSS ::before) with a
+             small peer-count pill below it (only when known). Driven by our OWN
+             buffering detection (PLAYER:SET_BUFFERING, from the video's
+             waiting/seeking events) — NOT media-chrome's internal `medialoading`
+             state, which did not fire for our stream. Centered by the
+             centered-chrome slot; `noautohide` keeps it visible while the
+             controls fade. Shows in the on-page player and in desktop/Android
+             fullscreen. iPhone fullscreen is the OS-native video player, which
+             shows no page DOM — iOS renders its own native spinner there (same
+             limitation as Picture-in-Picture). -->
+        <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" noautohide hidden>
+          <span id="player__buffering-peers" hidden></span>
+        </div>
 
         <media-control-bar id="player__top-bar" slot="top-chrome">
           <button
