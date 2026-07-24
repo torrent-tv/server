@@ -93,20 +93,43 @@
     }
   }
 
-  /* Transient buffering notice over the video (data starvation). Centered by
-     the centered-chrome slot; nudged below the loading spinner so the two do
-     not overlap. `noautohide` (in the markup) keeps it visible while the
-     controls fade; non-interactive so it never intercepts player gestures. */
+  /* Transient buffering/seeking indicator over the video (data starvation): a
+     bare spinner with a small peer-count pill below it. A transparent container
+     — no plate around the spinner itself. Centered by the centered-chrome slot;
+     `noautohide` (in the markup) keeps it visible while the controls fade;
+     non-interactive so it never intercepts player gestures. */
   #player__buffering {
-    translate: 0 3.5rem;
-    padding: 0.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    pointer-events: none;
+  }
+
+  /* The spinner — the "growing arc" loader (css-loaders l20), recoloured white
+     to match media-chrome. A pseudo-element, so it is independent of the
+     peer-count child. Keyframes are top-level (below). */
+  #player__buffering::before {
+    content: "";
+    inline-size: 3rem;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 0.3rem solid #fff;
+    animation:
+      player-loader-arc 0.8s infinite linear alternate,
+      player-loader-flip 1.6s infinite linear;
+  }
+
+  /* The small peer-count pill below the spinner (shown only when the count is
+     known). This is the only "plate" — the spinner itself stays bare. */
+  #player__buffering-peers {
+    padding: 0.25rem 0.6rem;
     border-radius: 0.5rem;
     background: var(--media-secondary-color);
     color: var(--media-primary-color);
     font-family: var(--media-font-family);
-    font-size: 0.875rem;
-    text-align: center;
-    pointer-events: none;
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
   }
 
   /* Hide the captions button until subtitle tracks exist (recommended
@@ -139,4 +162,22 @@
     --media-secondary-color: rgb(245 245 247 / 0.85);
     --media-control-hover-background: rgb(0 0 0 / 0.12);
   }
+}
+
+/* Buffering spinner (css-loaders l20) — top-level so the at-rules are valid
+   (nested @keyframes inside a style rule are ignored). */
+@keyframes player-loader-arc {
+  0%    { clip-path: polygon(50% 50%, 0    0,   50%  0%,  50%  0%,  50%  0%,  50%  0%,  50%  0%  ); }
+  12.5% { clip-path: polygon(50% 50%, 0    0,   50%  0%,  100% 0%,  100% 0%,  100% 0%,  100% 0%  ); }
+  25%   { clip-path: polygon(50% 50%, 0    0,   50%  0%,  100% 0%,  100% 100%, 100% 100%, 100% 100%); }
+  50%   { clip-path: polygon(50% 50%, 0    0,   50%  0%,  100% 0%,  100% 100%, 50%  100%, 0%   100%); }
+  62.5% { clip-path: polygon(50% 50%, 100% 0,   100% 0%,  100% 0%,  100% 100%, 50%  100%, 0%   100%); }
+  75%   { clip-path: polygon(50% 50%, 100% 100%, 100% 100%, 100% 100%, 100% 100%, 50% 100%, 0% 100%); }
+  100%  { clip-path: polygon(50% 50%, 50%  100%, 50%  100%, 50% 100%, 50% 100%, 50% 100%, 0% 100%); }
+}
+@keyframes player-loader-flip {
+  0%     { transform: scaleY(1)  rotate(0deg); }
+  49.99% { transform: scaleY(1)  rotate(135deg); }
+  50%    { transform: scaleY(-1) rotate(0deg); }
+  100%   { transform: scaleY(-1) rotate(-135deg); }
 }
