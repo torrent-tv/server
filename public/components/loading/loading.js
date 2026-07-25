@@ -249,6 +249,12 @@ export class Loading {
   #bufferingTimer = null;
   /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
   #bufferingShown = false;
+  /**
+   * Resume position (seconds) from a shared `&t=` link, applied once the player
+   * is revealed and the media is seekable, then cleared. Null = no resume.
+   * @type {number | null}
+   */
+  #pendingResumeSeconds = null;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -521,7 +527,39 @@ export class Loading {
     // Playback is live now — buffer-empty events mean data starvation, not the
     // pre-buffer fill, so the mid-playback buffering notice applies.
     this.#playbackLive = true;
+    this.#applyPendingResume();
   };
+
+  /**
+   * Seek to the shared-link resume position once, when the player is revealed.
+   * Waits for the media to become seekable (duration known — the synthetic VOD
+   * playlist provides it) if it is not ready yet. One-shot.
+   *
+   * @returns {void}
+   */
+  #applyPendingResume() {
+    const target = this.#pendingResumeSeconds;
+    if (target == null || !(this.#videoElement instanceof HTMLVideoElement)) {
+      return;
+    }
+    this.#pendingResumeSeconds = null;
+    const video = this.#videoElement;
+    const seek = () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        try {
+          video.currentTime = Math.min(target, video.duration - 1);
+          this.#logEvt(`resume seek to ${target}s`);
+        } catch {
+          // Non-seekable yet / rejected — best effort.
+        }
+      }
+    };
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      seek();
+    } else {
+      video.addEventListener("loadedmetadata", seek, { once: true });
+    }
+  }
 
   /** @param {CustomEvent} event */
   #onSelectMediaFile = (event) => {
@@ -561,8 +599,9 @@ export class Loading {
   /** @param {CustomEvent} event */
   #onProcessMagnet = (event) => {
     const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
+    const resumeSeconds = event instanceof CustomEvent ? (event.detail?.resumeSeconds ?? null) : null;
     const epoch = this.#beginPlaybackAttempt();
-    void this.#processMagnetPlayback(magnetUri).catch((error) => {
+    void this.#processMagnetPlayback(magnetUri, resumeSeconds).catch((error) => {
       if (this.#isAbortError(error)) {
         return;
       }
@@ -818,6 +857,8 @@ export class Loading {
     this.#selectedAudioTrackIndex = 0;
     this.#selectedQualityHeight = 0;
     this.#planTracks = null;
+    // Shared-link resume position (seconds), applied once the player is shown.
+    this.#pendingResumeSeconds = Number.isFinite(payload?.resumeSeconds) ? payload.resumeSeconds : null;
     this.#isProcessing = true;
 
     try {
@@ -905,7 +946,7 @@ export class Loading {
    * @param {string} magnetUri
    * @returns {Promise<void>}
    */
-  async #processMagnetPlayback(magnetUri) {
+  async #processMagnetPlayback(magnetUri, resumeSeconds = null) {
     if (typeof magnetUri !== "string" || magnetUri.trim().length === 0) {
       return;
     }
@@ -924,6 +965,8 @@ export class Loading {
     this.#selectedAudioTrackIndex = 0;
     this.#selectedQualityHeight = 0;
     this.#planTracks = null;
+    // Shared-link resume position (seconds), applied once the player is shown.
+    this.#pendingResumeSeconds = Number.isFinite(resumeSeconds) ? resumeSeconds : null;
     this.#isProcessing = true;
 
     try {

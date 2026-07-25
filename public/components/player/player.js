@@ -24,6 +24,7 @@ export class Player {
     buffering: "#player__buffering",
     bufferingPeers: "#player__buffering-peers",
     share: "#player__share",
+    shareMenu: "#player__share-menu",
   };
 
   static CLASSES = {
@@ -48,6 +49,7 @@ export class Player {
   #buffering;
   #bufferingPeers;
   #share;
+  #shareMenu;
   /** @type {string} Shareable URL for the current source (empty = nothing to share). */
   #shareUrl = "";
   /** @type {ReturnType<typeof setTimeout> | null} Copied-feedback reset timer. */
@@ -157,18 +159,68 @@ export class Player {
     this.#share.hidden = url.length === 0;
   };
 
-  #onShareClick = async () => {
+  /** Open (or toggle) the share menu, positioned over the share button. */
+  #onShareClick = () => {
     if (this.#shareUrl.length === 0) {
       return;
     }
+    if (this.#shareMenu.matches(":popover-open")) {
+      this.#shareMenu.hidePopover();
+      return;
+    }
+    const rect = this.#share.getBoundingClientRect();
+    // Right-align to the button (it sits near the control bar's right edge, so
+    // extending leftward keeps the menu on screen) and sit just above it.
+    this.#shareMenu.style.left = "auto";
+    this.#shareMenu.style.right = `${Math.max(0, window.innerWidth - rect.right)}px`;
+    this.#shareMenu.style.top = `${rect.top}px`;
+    this.#shareMenu.style.transform = "translateY(-100%) translateY(-0.5rem)";
     try {
-      await navigator.clipboard.writeText(this.#shareUrl);
-      this.#flashShareCopied();
+      this.#shareMenu.showPopover();
     } catch {
-      // Clipboard blocked (permissions / insecure context) — no-op; the button
-      // stays available for a retry.
+      // Already open / unsupported — no-op.
     }
   };
+
+  /** Copy the chosen share link (from start, or carrying the current time). */
+  #onShareMenuClick = async (event) => {
+    const target = event.target;
+    const item = target instanceof Element ? target.closest("button[data-share]") : null;
+    if (!item) {
+      return;
+    }
+    const url = this.#buildShareUrl(item.dataset.share === "time");
+    try {
+      this.#shareMenu.hidePopover();
+    } catch {
+      // ignore
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      this.#flashShareCopied();
+    } catch {
+      // Clipboard blocked (permissions / insecure context) — no-op.
+    }
+  };
+
+  /**
+   * The share URL, optionally with the current playback position appended as
+   * `&t=<seconds>` so the recipient resumes there.
+   *
+   * @param {boolean} withTime
+   * @returns {string}
+   */
+  #buildShareUrl(withTime) {
+    if (!withTime) {
+      return this.#shareUrl;
+    }
+    const seconds = Math.floor(this.#video instanceof HTMLVideoElement ? this.#video.currentTime : 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return this.#shareUrl;
+    }
+    const separator = this.#shareUrl.includes("?") ? "&" : "?";
+    return `${this.#shareUrl}${separator}t=${seconds}`;
+  }
 
   /** Brief "copied" affordance on the share button. */
   #flashShareCopied() {
@@ -214,12 +266,13 @@ export class Player {
     this.#buffering = document.querySelector(Player.SELECTOR.buffering);
     this.#bufferingPeers = document.querySelector(Player.SELECTOR.bufferingPeers);
     this.#share = document.querySelector(Player.SELECTOR.share);
+    this.#shareMenu = document.querySelector(Player.SELECTOR.shareMenu);
 
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
       !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
       !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering || !this.#bufferingPeers ||
-      !this.#share
+      !this.#share || !this.#shareMenu
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
     }
@@ -242,6 +295,7 @@ export class Player {
     document.addEventListener(PLAYER_EVENTS.SET_BUFFERING, this.#onSetBuffering);
     document.addEventListener(PLAYER_EVENTS.SET_SHARE_LINK, this.#onSetShareLink);
     this.#share.addEventListener("click", this.#onShareClick);
+    this.#shareMenu.addEventListener("click", this.#onShareMenuClick);
 
     this.#root.addEventListener('transitionend', (event) => {
       if (event.target !== this.#root || event.propertyName !== 'translate') return;

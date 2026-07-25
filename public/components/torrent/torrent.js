@@ -74,6 +74,13 @@ export class Torrent {
   #input;
   #magnetInput;
   #demoButton;
+  /**
+   * Resume position (seconds) parsed from a shared `?…&t=<sec>` URL, consumed
+   * by the next source dispatch so the receiver seeks there once playback
+   * starts. Null when the URL carried no `t`. See #loadFromUrl.
+   * @type {number | null}
+   */
+  #urlResumeSeconds = null;
 
   /**
    * Demo button: route the demo magnet through the field + form — the single
@@ -126,9 +133,12 @@ export class Torrent {
 
   /** @param {string} magnetUri */
   #processMagnet(magnetUri) {
+    // Consume any pending resume position from a shared `&t=` URL (one-shot).
+    const resumeSeconds = this.#urlResumeSeconds;
+    this.#urlResumeSeconds = null;
     document.dispatchEvent(
       new CustomEvent(TORRENT_EVENTS.MAGNET_READY, {
-        detail: { magnetUri }
+        detail: { magnetUri, resumeSeconds }
       })
     );
   }
@@ -228,6 +238,14 @@ export class Torrent {
 
   async #loadFromUrl() {
     const params = new URLSearchParams(location.search);
+
+    // Optional resume position from a shared link (`&t=<seconds>`). Parsed once,
+    // consumed by the next source dispatch (magnet or torrent) so the receiver
+    // seeks there after playback starts. Removed from the address bar below with
+    // the source param.
+    const tRaw = Number.parseInt(params.get("t") ?? "", 10);
+    this.#urlResumeSeconds = Number.isFinite(tRaw) && tRaw > 0 ? tRaw : null;
+    params.delete("t");
 
     // Magnet link in the URL: ?magnet=<encoded magnet URI>. Routed through
     // the field + form like every other magnet entry point (the user sees
@@ -353,6 +371,9 @@ export class Torrent {
       const torrentBytes = new Uint8Array(await torrentFile.arrayBuffer());
       const meta = await parseTorrentBytes(torrentBytes);
       const mediaFiles = this.#extractMediaFiles(meta.files);
+      // Consume any pending resume position from a shared `&t=` URL (one-shot).
+      const resumeSeconds = this.#urlResumeSeconds;
+      this.#urlResumeSeconds = null;
       this.visible = false;
       document.dispatchEvent(
         new CustomEvent(TORRENT_EVENTS.FILE_DETAILS_READY, {
@@ -360,7 +381,8 @@ export class Torrent {
             file: torrentFile,
             torrentBytes,
             meta,
-            mediaFiles
+            mediaFiles,
+            resumeSeconds
           }
         })
       );
