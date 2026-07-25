@@ -1,3 +1,7 @@
+## 0.8.66
+
+- **New**: Share a stream **with or without a time position**. The player's share button now opens a small menu with two choices: "Copy link from start" (the plain `?magnet=…`/`?torrent=…` link) and "Copy link at current time", which appends `&t=<seconds>` for the current playback position. When someone opens a `&t=` link, the receiver parses it, threads it through the load flow, and seeks there once the player is revealed and the media is seekable (the synthetic VOD playlist makes the full duration known immediately). Works for both magnet and uploaded-`.torrent` shares; `t` is stripped from the address bar on load like the source param. Best-effort for multi-file torrents (the link carries no file index — resume applies to the first file played). Menu is a light-dismiss popover positioned over the button.
+
 ## 0.8.65
 
 - **New**: "Copy share link" button in the player. Copies a URL for what you are watching — `<origin>/?magnet=…` for a magnet source, `?torrent=…` for an uploaded `.torrent` — to the clipboard, to drop into a messenger. The address bar cleans the source param on load, so this reconstructs it. Built on the existing magnet-in-URL handling + the Clipboard API; the recipient lands via the normal magnet flow (any proxy). Brief "Link copied" affordance on click. (Position-resume — sharing from the current timestamp — is a follow-up that ties into the cross-device handoff item.)

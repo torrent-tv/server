@@ -124,6 +124,7 @@
             class="player__button"
             type="button"
             hidden
+            aria-haspopup="menu"
             aria-label="Copy a share link for what you are watching">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/>
@@ -148,6 +149,16 @@
           <media-fullscreen-button></media-fullscreen-button>
         </media-control-bar>
       </media-controller>
+
+      <!-- Share menu: two choices — a plain link (from start) or one carrying
+           the current playback position (`&t=`) so the recipient resumes where
+           you are. A popover (light-dismiss); positioned over the share button
+           by player.js. Outside media-controller so its slot system does not
+           swallow the unslotted element. -->
+      <menu id="player__share-menu" class="player__share-menu" popover>
+        <button type="button" data-share="time">Copy link at current time</button>
+        <button type="button" data-share="start">Copy link from start</button>
+      </menu>
 
       <ul
         id="playlist"

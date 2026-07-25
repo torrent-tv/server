@@ -65,7 +65,7 @@ class TorrentTV {
 
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PROCESS_PLAYBACK, {
-        detail: { file, torrentBytes, meta, mediaFiles }
+        detail: { file, torrentBytes, meta, mediaFiles, resumeSeconds: payload?.resumeSeconds ?? null }
       })
     );
   };
@@ -77,6 +77,7 @@ class TorrentTV {
   /** @param {CustomEvent} event */
   #onMagnetReady = (event) => {
     const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
+    const resumeSeconds = event instanceof CustomEvent ? (event.detail?.resumeSeconds ?? null) : null;
     if (typeof magnetUri !== "string" || magnetUri.length === 0) {
       return;
     }
@@ -101,7 +102,7 @@ class TorrentTV {
     );
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PROCESS_MAGNET, {
-        detail: { magnetUri }
+        detail: { magnetUri, resumeSeconds }
       })
     );
   };
