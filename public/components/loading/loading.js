@@ -422,8 +422,21 @@ export class Loading {
       this.#scheduleBufferingCheck();
       return;
     }
-    if (name === "playing" || name === "seeked" || name === "pause" || name === "ended" || name === "error") {
+    // `seeked` = the seek genuinely completed (data arrived); terminal states
+    // always clear.
+    if (name === "seeked" || name === "ended" || name === "error") {
       this.#clearBuffering();
+      return;
+    }
+    // A pause/resume toggled WHILE a seek is still pending must NOT hide the
+    // spinner — the target data has not arrived yet (start seek → pause → play →
+    // pause with the seek unfinished keeps it visible). Clear only when no seek
+    // is in progress.
+    if (name === "playing" || name === "pause") {
+      const video = this.#videoElement;
+      if (!(video instanceof HTMLVideoElement) || !video.seeking) {
+        this.#clearBuffering();
+      }
     }
   }
 
@@ -446,11 +459,16 @@ export class Loading {
       if (!(video instanceof HTMLVideoElement) || video.ended || video.error) {
         return;
       }
-      // HAVE_FUTURE_DATA (3) or HAVE_ENOUGH_DATA (4) means playback can proceed.
-      if (video.readyState >= 3) {
-        return;
+      // Show when a seek is STILL in progress after the debounce — the target
+      // data has not arrived. `video.seeking` (true from `seeking` until
+      // `seeked`) is reliable across browsers INCLUDING iOS native HLS, where
+      // `readyState` can stay optimistically high during a paused scrub, so the
+      // readyState check alone missed the iPhone non-fullscreen paused-seek case.
+      // Otherwise fall back to genuine buffer starvation (readyState below
+      // HAVE_FUTURE_DATA).
+      if (video.seeking || video.readyState < 3) {
+        void this.#showBuffering();
       }
-      void this.#showBuffering();
     }, 250);
   }
 
