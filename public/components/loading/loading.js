@@ -249,6 +249,8 @@ export class Loading {
   #bufferingTimer = null;
   /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
   #bufferingShown = false;
+  /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/ready). */
+  #bufferingPollTimer = null;
   /**
    * Playback position (seconds) from a shared `&currentTime=` link, applied once
    * the player is revealed and the media is seekable, then cleared. Named to
@@ -481,17 +483,48 @@ export class Loading {
    */
   async #showBuffering() {
     this.#bufferingShown = true;
-    this.#dispatchBuffering(true, null); // spinner only until the count is known
-    const peers = await this.#fetchPeerCount();
-    // Only enrich if still buffering — a resume during the fetch may have
-    // already cleared the notice.
-    if (this.#bufferingShown && typeof peers === "number") {
-      this.#dispatchBuffering(true, peers);
+    this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
+    // Poll live stats while buffering so the pill shows peers, download speed and
+    // how many seconds are already buffered ahead (progress toward resuming) —
+    // not just the peer count. Stopped by #clearBuffering.
+    const poll = async () => {
+      const stats = await this.#fetchBufferingStats();
+      if (this.#bufferingShown) {
+        this.#dispatchBuffering(true, this.#formatBufferingText(stats));
+      }
+    };
+    await poll();
+    if (this.#bufferingShown && this.#bufferingPollTimer === null) {
+      this.#bufferingPollTimer = window.setInterval(() => { void poll(); }, 1500);
     }
   }
 
   /**
-   * Cancel a pending buffering check and hide the notice if it is showing.
+   * Build the buffering pill text from live stats plus the seconds already
+   * buffered ahead of the playhead (client-side "how much is ready to resume").
+   *
+   * @param {{ numPeers?: number, downloadSpeed?: number } | null} stats
+   * @returns {string}
+   */
+  #formatBufferingText(stats) {
+    const parts = [];
+    if (stats && typeof stats.numPeers === "number") {
+      parts.push(`peers: ${stats.numPeers}`);
+    }
+    if (stats && typeof stats.downloadSpeed === "number" && stats.downloadSpeed > 0) {
+      parts.push(`${this.#formatBytes(stats.downloadSpeed)}/s`);
+    }
+    const readySeconds =
+      this.#videoElement instanceof HTMLVideoElement ? this.#bufferedAheadSeconds(this.#videoElement) : 0;
+    if (readySeconds > 0) {
+      parts.push(`${Math.round(readySeconds)}s ready`);
+    }
+    return parts.join(" • ");
+  }
+
+  /**
+   * Cancel a pending buffering check + the stats poll, and hide the notice if
+   * it is showing.
    *
    * @returns {void}
    */
@@ -499,6 +532,10 @@ export class Loading {
     if (this.#bufferingTimer !== null) {
       clearTimeout(this.#bufferingTimer);
       this.#bufferingTimer = null;
+    }
+    if (this.#bufferingPollTimer !== null) {
+      clearInterval(this.#bufferingPollTimer);
+      this.#bufferingPollTimer = null;
     }
     if (this.#bufferingShown) {
       this.#bufferingShown = false;
@@ -508,25 +545,25 @@ export class Loading {
 
   /**
    * @param {boolean} active
-   * @param {number | null} [peers] - Live peer count, or null when not yet known.
+   * @param {string} [text] - Pre-formatted pill text (empty until stats arrive).
    * @returns {void}
    */
-  #dispatchBuffering(active, peers = null) {
+  #dispatchBuffering(active, text = "") {
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_BUFFERING, {
-        detail: { active, peers }
+        detail: { active, text }
       })
     );
   }
 
   /**
-   * One-shot live peer count for the active file. Reuses the cached sourceKey
-   * (no re-registration), so it is a single cheap stats fetch. Returns null on
-   * any failure — the notice then stays generic.
+   * Live stats for the active file (peers + download speed). Reuses the cached
+   * sourceKey (no re-registration), so it is a single cheap stats fetch.
+   * Returns null on any failure — the pill then stays with just the spinner.
    *
-   * @returns {Promise<number | null>}
+   * @returns {Promise<{ numPeers: number, downloadSpeed: number } | null>}
    */
-  async #fetchPeerCount() {
+  async #fetchBufferingStats() {
     try {
       if (!this.#transport || this.#activeFileIndex < 0) {
         return null;
@@ -540,7 +577,10 @@ export class Loading {
         return null;
       }
       const stats = await response.json();
-      return typeof stats?.numPeers === "number" ? stats.numPeers : null;
+      return {
+        numPeers: typeof stats?.numPeers === "number" ? stats.numPeers : 0,
+        downloadSpeed: typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0
+      };
     } catch {
       return null;
     }
