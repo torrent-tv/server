@@ -1,4 +1,8 @@
-## 0.8.71
+## 0.8.74
+
+- **Fix**: The peer-count pill under the buffering spinner no longer shifts the spinner when it appears or disappears. It now stays in the layout — toggled with `visibility` (its line reserved with a non-breaking space) instead of being removed with `display:none` — so the centered spinner holds its position.
+
+## 0.8.73
 
 - **Fix**: The "To next phase" line on the loading screen now shows only the ETA, not a percent — the header/index is a handful of whole pieces, so the percent jumped 0 → 50 → 100 and read as broken. (The progress bar underneath is unchanged.)
 - **Fix**: Custom control-bar buttons (share, close, playlist) are no longer rendered black/invisible in the light theme. They read their background from media-chrome's `--media-control-background` (a fixed dark value that leaks in from the surrounding `<media-control-bar>`), which won over the theme-aware fallback; they now use our own `--media-secondary-color` directly, so the plate follows the light/dark theme like the rest of the player.
