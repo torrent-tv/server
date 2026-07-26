@@ -128,9 +128,13 @@
   /* The small peer-count pill below the spinner (shown only when the count is
      known). This is the only "plate" — the spinner itself stays bare. */
   #player__buffering-peers {
-    padding: 0.25rem 0.6rem;
+    /* Block padding + line-height so the glyphs are never clipped (on mobile
+       the pill was shorter than the text). Background is a slightly transparent,
+       theme-aware plate over the video (light override below). */
+    padding: 0.4rem 0.7rem;
+    line-height: 1.35;
     border-radius: 0.5rem;
-    background: var(--media-secondary-color);
+    background: rgb(20 20 22 / 0.5);
     color: var(--media-primary-color);
     font-family: var(--media-font-family);
     font-size: 0.8125rem;
@@ -202,6 +206,12 @@
     --player-text: #1c1c1f;
     --media-secondary-color: rgb(245 245 247 / 0.85);
     --media-control-hover-background: rgb(0 0 0 / 0.12);
+  }
+
+  /* Light-theme peer pill: light translucent plate (text is the dark
+     --media-primary-color, kept readable). */
+  #player #player__buffering-peers {
+    background: rgb(245 245 247 / 0.6);
   }
 }
 
