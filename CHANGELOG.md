@@ -1,3 +1,7 @@
+## 0.8.71
+
+- **Fix**: Opening a share link with a resume position (`?…&currentTime=<sec>`) now shows a SINGLE loading screen and starts playback directly at that position, instead of loading from the start, revealing the player, and only then seeking — which restarted the transcode at the target and produced a second loading screen. The resume position is now passed to hls.js as `startPosition`, so the proxy's server-side seek produces the segment at that offset and the pre-buffer fills there before the player is revealed. The post-reveal one-shot seek is consumed on the transcode path so it never runs a second time.
+
 ## 0.8.70
 
 - **Fix**: The buffering/seeking spinner now appears on iPhone in the on-page (non-fullscreen) player when scrubbing while PAUSED into not-yet-downloaded data — previously the frame just froze with no indication. The spinner was shown only when `readyState < 3`, but iOS native HLS keeps `readyState` optimistically high during a paused seek, so it never triggered. It now also shows while a seek is in progress (`video.seeking`), which is reliable across browsers. Additionally, pausing/resuming DURING an unfinished seek no longer hides the spinner — it stays until the seek actually completes (`seeked`), so "start seek → pause → play → pause" while the target data is still loading keeps the indicator visible. (The spinner already clears on file switch, and on the picker/loading/error screens.)
