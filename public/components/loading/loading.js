@@ -2639,6 +2639,16 @@ export class Loading {
       ? createWebRtcHlsLoader(transport)
       : undefined;
 
+    // Shared-link resume: begin the transcode AND the pre-buffer AT the target
+    // position via hls.js `startPosition` (the proxy produces the segment there
+    // through its server-side seek), so there is a SINGLE loading at the resume
+    // point. Without this we loaded from 0, revealed the player, THEN seeked —
+    // which restarted the transcode at the target and showed a SECOND loading
+    // screen. One-shot: consumed here so the post-reveal #applyPendingResume
+    // does not seek a second time.
+    const resumeStartPosition = this.#pendingCurrentTime;
+    this.#pendingCurrentTime = null;
+
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
       transport,
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
@@ -2649,6 +2659,9 @@ export class Loading {
       playHls: (videoElement, manifestUrl, playOptions = {}) =>
         this.#hlsPlayer.play(videoElement, manifestUrl, {
           ...(hlsLoader ? { loader: hlsLoader } : {}),
+          ...(typeof resumeStartPosition === "number" && resumeStartPosition > 0
+            ? { startPosition: resumeStartPosition }
+            : {}),
           ...playOptions
         }),
       onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
