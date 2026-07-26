@@ -1091,25 +1091,97 @@ export class Loading {
   }
 
   /**
-   * Reconstruct a shareable URL for the current source — the `?magnet=…` /
-   * `?torrent=…` link that loading cleaned from the address bar. Empty when
-   * there is no current source. (Position-resume is a future extension, ties to
-   * the cross-device handoff roadmap item.)
+   * Reconstruct a shareable URL for the current source. Always a `?magnet=…`
+   * link: for a magnet source the original URI; for a `.torrent`-file source a
+   * magnet BUILT from the infohash (+ name + trackers) — NOT the whole torrent
+   * file base64-embedded, which produced multi-KB URLs that browsers truncate
+   * past their length limit. The recipient's proxy fetches metadata from the
+   * swarm/DHT, the same path a normal magnet already uses. Empty when there is
+   * no current source or no infohash to build from.
+   *
+   * (Position-resume is a future extension, ties to the cross-device handoff
+   * roadmap item.)
    *
    * @returns {string}
    */
   #buildShareUrl() {
     const current = this.#session.current;
-    const value = typeof current?.sourceValue === "string" ? current.sourceValue : "";
-    if (value.length === 0) {
+    const base = `${location.origin}${location.pathname}`;
+    if (current?.sourceType === "magnet") {
+      const value = typeof current.sourceValue === "string" ? current.sourceValue : "";
+      return value.length > 0 ? `${base}?magnet=${encodeURIComponent(value)}` : "";
+    }
+    if (current?.sourceType === "torrent") {
+      const magnet = this.#buildMagnetFromCurrent(current);
+      return magnet.length > 0 ? `${base}?magnet=${encodeURIComponent(magnet)}` : "";
+    }
+    return "";
+  }
+
+  /**
+   * Build a magnet URI from the parsed torrent details of the current source:
+   * `magnet:?xt=urn:btih:<hash>&dn=<name>&tr=<tracker>…`. Keeps the link short
+   * (the swarm/DHT supplies the metadata) instead of embedding the whole file.
+   *
+   * @param {{ infoHashHex?: string, name?: string, announce?: string, announceList?: unknown }} current
+   * @returns {string} Magnet URI, or "" when the infohash is unavailable.
+   */
+  #buildMagnetFromCurrent(current) {
+    const hash = typeof current?.infoHashHex === "string" ? current.infoHashHex.trim() : "";
+    if (!/^[0-9a-f]{40}$/i.test(hash)) {
       return "";
     }
-    const base = `${location.origin}${location.pathname}`;
-    if (current.sourceType === "magnet") {
-      return `${base}?magnet=${encodeURIComponent(value)}`;
+    const parts = [`magnet:?xt=urn:btih:${hash.toLowerCase()}`];
+    if (typeof current.name === "string" && current.name.trim().length > 0) {
+      parts.push(`dn=${encodeURIComponent(current.name.trim())}`);
     }
-    if (current.sourceType === "torrent") {
-      return `${base}?torrent=${encodeURIComponent(value)}`;
+    const trackers = new Set();
+    const addTracker = (t) => {
+      const s = this.#toTrackerString(t);
+      if (s && /^(https?|udp|wss?):\/\//i.test(s)) {
+        trackers.add(s);
+      }
+    };
+    addTracker(current.announce);
+    if (Array.isArray(current.announceList)) {
+      for (const tier of current.announceList) {
+        if (Array.isArray(tier)) {
+          tier.forEach(addTracker);
+        } else {
+          addTracker(tier);
+        }
+      }
+    }
+    for (const tr of trackers) {
+      parts.push(`tr=${encodeURIComponent(tr)}`);
+    }
+    return parts.join("&");
+  }
+
+  /**
+   * Coerce a tracker value to a string. The bencode parser may leave
+   * announce-list entries as raw byte arrays; decode those as UTF-8.
+   *
+   * @param {unknown} value
+   * @returns {string}
+   */
+  #toTrackerString(value) {
+    if (typeof value === "string") {
+      return value.trim();
+    }
+    if (value instanceof Uint8Array) {
+      try {
+        return new TextDecoder().decode(value).trim();
+      } catch {
+        return "";
+      }
+    }
+    if (Array.isArray(value) && value.every((n) => Number.isInteger(n))) {
+      try {
+        return new TextDecoder().decode(Uint8Array.from(value)).trim();
+      } catch {
+        return "";
+      }
     }
     return "";
   }
