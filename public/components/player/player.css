@@ -131,6 +131,10 @@
   /* The small peer-count pill below the spinner (shown only when the count is
      known). This is the only "plate" — the spinner itself stays bare. */
   #player__buffering-peers {
+    /* Toggled with `visibility` (not display) by player.js, so the pill's box is
+       always reserved and the centered spinner never jumps when the peer count
+       appears/disappears. Default invisible until a count arrives. */
+    visibility: hidden;
     /* Block padding + line-height so the glyphs are never clipped (on mobile
        the pill was shorter than the text). Background is a slightly transparent,
        theme-aware plate over the video (light override below). */

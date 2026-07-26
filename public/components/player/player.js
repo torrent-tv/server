@@ -130,9 +130,13 @@ export class Player {
       const peers = detail?.peers;
       if (typeof peers === "number") {
         this.#bufferingPeers.textContent = `peers: ${peers}`;
-        this.#bufferingPeers.hidden = false;
+        this.#bufferingPeers.style.visibility = "visible";
       } else {
-        this.#bufferingPeers.hidden = true;
+        // Keep the pill in the layout — a non-breaking space reserves its line
+        // and `visibility:hidden` (not display:none) keeps its box — so the
+        // centered spinner does not jump when the peer count appears/disappears.
+        this.#bufferingPeers.textContent = " ";
+        this.#bufferingPeers.style.visibility = "hidden";
       }
       return;
     }
@@ -141,8 +145,10 @@ export class Player {
 
   #hideBuffering() {
     this.#buffering.hidden = true;
-    this.#bufferingPeers.hidden = true;
-    this.#bufferingPeers.textContent = "";
+    // The whole overlay is display:none while off; keep the pill reserved +
+    // invisible so it never causes a layout jump when it reappears.
+    this.#bufferingPeers.style.visibility = "hidden";
+    this.#bufferingPeers.textContent = " ";
   }
 
   /**
