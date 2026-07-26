@@ -42,10 +42,13 @@
        blue; force the view's text colour (white in dark, black in light) —
        the currentColor border follows. */
     color: inherit;
-    /* Spacing between adjacent buttons (trailing margin on the last one is
-       harmless). Unlike the removed `& + &` margin, this cannot indent a
-       single visible button because of a hidden sibling. */
+    /* Spacing between adjacent buttons — the same 1rem inline AND block, so
+       buttons that wrap onto a second row are spaced identically to those in a
+       row (trailing margins on the last button/row are harmless). Unlike the
+       removed `& + &` margin, this cannot indent a single visible button
+       because of a hidden sibling. */
     margin-inline-end: 1rem;
+    margin-block-end: 1rem;
     font-size: clamp(1rem, 2.5vmin, 1.75rem);
     padding: 0.5em 1.25em;
     border: 0.125rem solid currentColor;

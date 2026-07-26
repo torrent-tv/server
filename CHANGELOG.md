@@ -1,5 +1,6 @@
 ## 0.8.71
 
+- **Fix**: Error-screen action buttons that wrap onto a second row (e.g. Retry / Back to episodes / New Torrent on a narrow phone) are now spaced vertically the same 1rem as the horizontal gap between buttons — previously the wrapped row sat flush against the row above it.
 - **Fix**: Opening a share link with a resume position (`?…&currentTime=<sec>`) now shows a SINGLE loading screen and starts playback directly at that position, instead of loading from the start, revealing the player, and only then seeking — which restarted the transcode at the target and produced a second loading screen. The resume position is now passed to hls.js as `startPosition`, so the proxy's server-side seek produces the segment at that offset and the pre-buffer fills there before the player is revealed. The post-reveal one-shot seek is consumed on the transcode path so it never runs a second time.
 
 ## 0.8.70
