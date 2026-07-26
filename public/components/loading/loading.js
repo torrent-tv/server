@@ -3250,7 +3250,9 @@ export class Loading {
       const remaining = Math.max(0, headerBytes - headerDownloadedBytes);
       const etaText =
         downloadSpeed > 0 ? `~${this.#formatDuration(remaining / downloadSpeed)}` : "n/a";
-      phaseLine = `\nTo next phase: ${Math.round(pct)}% • ETA ${etaText}`;
+      // Show ETA only — the header is a handful of whole pieces, so a percent
+      // jumps 0 → 50 → 100 and reads as broken. The bar below still uses `pct`.
+      phaseLine = `\nTo next phase: ${etaText}`;
       this.#setPhaseProgress(0, pct); // phase 0 (download) fills its third by header %
     }
 
