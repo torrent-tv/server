@@ -75,12 +75,22 @@ export class Torrent {
   #magnetInput;
   #demoButton;
   /**
-   * Resume position (seconds) parsed from a shared `?…&t=<sec>` URL, consumed
-   * by the next source dispatch so the receiver seeks there once playback
-   * starts. Null when the URL carried no `t`. See #loadFromUrl.
+   * Playback position (seconds) parsed from a shared `?…&currentTime=<sec>`
+   * URL, consumed by the next source dispatch so the receiver seeks there once
+   * playback starts. Null when the URL carried no `currentTime`. Named to match
+   * `video.currentTime` — the same name is used across every layer. See
+   * #loadFromUrl.
    * @type {number | null}
    */
-  #urlResumeSeconds = null;
+  #pendingCurrentTime = null;
+
+  /**
+   * File index parsed from a shared `?…&fileIndex=<n>` URL — which file of a
+   * multi-file torrent to open — consumed by the next source dispatch. Null
+   * when the URL carried no `fileIndex`. See #loadFromUrl.
+   * @type {number | null}
+   */
+  #pendingFileIndex = null;
 
   /**
    * Demo button: route the demo magnet through the field + form — the single
@@ -133,12 +143,14 @@ export class Torrent {
 
   /** @param {string} magnetUri */
   #processMagnet(magnetUri) {
-    // Consume any pending resume position from a shared `&t=` URL (one-shot).
-    const resumeSeconds = this.#urlResumeSeconds;
-    this.#urlResumeSeconds = null;
+    // Consume any pending position/file from a shared URL (one-shot).
+    const currentTime = this.#pendingCurrentTime;
+    const fileIndex = this.#pendingFileIndex;
+    this.#pendingCurrentTime = null;
+    this.#pendingFileIndex = null;
     document.dispatchEvent(
       new CustomEvent(TORRENT_EVENTS.MAGNET_READY, {
-        detail: { magnetUri, resumeSeconds }
+        detail: { magnetUri, currentTime, fileIndex }
       })
     );
   }
@@ -233,19 +245,29 @@ export class Torrent {
     this.#setupEventHandlers();
     this.#setupViewEventHandlers();
     this.visible = true;
-    void this.#loadFromUrl();
+    // Defer URL-source loading to the next macrotask so every other component
+    // (torrent-tv, loading, player) has finished bootstrapping and registered
+    // its event listeners first. Otherwise the MAGNET_READY / FILE_DETAILS_READY
+    // dispatched from #loadFromUrl can fire before anyone listens, and a shared
+    // link opens the picker instead of starting playback.
+    setTimeout(() => { void this.#loadFromUrl(); }, 0);
   }
 
   async #loadFromUrl() {
     const params = new URLSearchParams(location.search);
 
-    // Optional resume position from a shared link (`&t=<seconds>`). Parsed once,
-    // consumed by the next source dispatch (magnet or torrent) so the receiver
-    // seeks there after playback starts. Removed from the address bar below with
-    // the source param.
-    const tRaw = Number.parseInt(params.get("t") ?? "", 10);
-    this.#urlResumeSeconds = Number.isFinite(tRaw) && tRaw > 0 ? tRaw : null;
-    params.delete("t");
+    // Optional playback position (`&currentTime=<seconds>`) and file index
+    // (`&fileIndex=<n>`) from a shared link. Parsed once, consumed by the next
+    // source dispatch (magnet or torrent) so the receiver opens the right file
+    // and seeks there after playback starts. Removed from the address bar below
+    // with the source param.
+    const currentTimeRaw = Number.parseInt(params.get("currentTime") ?? "", 10);
+    this.#pendingCurrentTime = Number.isFinite(currentTimeRaw) && currentTimeRaw > 0 ? currentTimeRaw : null;
+    params.delete("currentTime");
+
+    const fileIndexRaw = Number.parseInt(params.get("fileIndex") ?? "", 10);
+    this.#pendingFileIndex = Number.isFinite(fileIndexRaw) && fileIndexRaw >= 0 ? fileIndexRaw : null;
+    params.delete("fileIndex");
 
     // Magnet link in the URL: ?magnet=<encoded magnet URI>. Routed through
     // the field + form like every other magnet entry point (the user sees
@@ -260,8 +282,8 @@ export class Torrent {
       return;
     }
 
-    const b64 = params.get("torrent");
-    if (!b64) {
+    const torrentBase64 = params.get("torrent");
+    if (!torrentBase64) {
       return;
     }
 
@@ -272,10 +294,10 @@ export class Torrent {
 
     let bytes;
     try {
-      const binary = atob(b64);
+      const binary = atob(torrentBase64);
       bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+      for (let index = 0; index < binary.length; index++) {
+        bytes[index] = binary.charCodeAt(index);
       }
     } catch {
       document.dispatchEvent(
@@ -371,9 +393,11 @@ export class Torrent {
       const torrentBytes = new Uint8Array(await torrentFile.arrayBuffer());
       const meta = await parseTorrentBytes(torrentBytes);
       const mediaFiles = this.#extractMediaFiles(meta.files);
-      // Consume any pending resume position from a shared `&t=` URL (one-shot).
-      const resumeSeconds = this.#urlResumeSeconds;
-      this.#urlResumeSeconds = null;
+      // Consume any pending position/file from a shared URL (one-shot).
+      const currentTime = this.#pendingCurrentTime;
+      const fileIndex = this.#pendingFileIndex;
+      this.#pendingCurrentTime = null;
+      this.#pendingFileIndex = null;
       this.visible = false;
       document.dispatchEvent(
         new CustomEvent(TORRENT_EVENTS.FILE_DETAILS_READY, {
@@ -382,7 +406,8 @@ export class Torrent {
             torrentBytes,
             meta,
             mediaFiles,
-            resumeSeconds
+            currentTime,
+            fileIndex
           }
         })
       );

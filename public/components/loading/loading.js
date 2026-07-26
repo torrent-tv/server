@@ -250,11 +250,18 @@ export class Loading {
   /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
   #bufferingShown = false;
   /**
-   * Resume position (seconds) from a shared `&t=` link, applied once the player
-   * is revealed and the media is seekable, then cleared. Null = no resume.
+   * Playback position (seconds) from a shared `&currentTime=` link, applied once
+   * the player is revealed and the media is seekable, then cleared. Named to
+   * match `video.currentTime` — the same name across every layer. Null = none.
    * @type {number | null}
    */
-  #pendingResumeSeconds = null;
+  #pendingCurrentTime = null;
+  /**
+   * File index from a shared `&fileIndex=` link — which file of a multi-file
+   * torrent to open — consumed when the source's file list is known. Null = none.
+   * @type {number | null}
+   */
+  #pendingFileIndex = null;
 
   /** @param {CustomEvent} event */
   #onShow = (event) => {
@@ -538,17 +545,17 @@ export class Loading {
    * @returns {void}
    */
   #applyPendingResume() {
-    const target = this.#pendingResumeSeconds;
-    if (target == null || !(this.#videoElement instanceof HTMLVideoElement)) {
+    const currentTime = this.#pendingCurrentTime;
+    if (currentTime == null || !(this.#videoElement instanceof HTMLVideoElement)) {
       return;
     }
-    this.#pendingResumeSeconds = null;
+    this.#pendingCurrentTime = null;
     const video = this.#videoElement;
     const seek = () => {
       if (Number.isFinite(video.duration) && video.duration > 0) {
         try {
-          video.currentTime = Math.min(target, video.duration - 1);
-          this.#logEvt(`resume seek to ${target}s`);
+          video.currentTime = Math.min(currentTime, video.duration - 1);
+          this.#logEvt(`resume seek to ${currentTime}s`);
         } catch {
           // Non-seekable yet / rejected — best effort.
         }
@@ -599,9 +606,10 @@ export class Loading {
   /** @param {CustomEvent} event */
   #onProcessMagnet = (event) => {
     const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
-    const resumeSeconds = event instanceof CustomEvent ? (event.detail?.resumeSeconds ?? null) : null;
+    const currentTime = event instanceof CustomEvent ? (event.detail?.currentTime ?? null) : null;
+    const fileIndex = event instanceof CustomEvent ? (event.detail?.fileIndex ?? null) : null;
     const epoch = this.#beginPlaybackAttempt();
-    void this.#processMagnetPlayback(magnetUri, resumeSeconds).catch((error) => {
+    void this.#processMagnetPlayback(magnetUri, currentTime, fileIndex).catch((error) => {
       if (this.#isAbortError(error)) {
         return;
       }
@@ -857,8 +865,9 @@ export class Loading {
     this.#selectedAudioTrackIndex = 0;
     this.#selectedQualityHeight = 0;
     this.#planTracks = null;
-    // Shared-link resume position (seconds), applied once the player is shown.
-    this.#pendingResumeSeconds = Number.isFinite(payload?.resumeSeconds) ? payload.resumeSeconds : null;
+    // Shared-link position/file, applied once the player is shown / files known.
+    this.#pendingCurrentTime = Number.isFinite(payload?.currentTime) ? payload.currentTime : null;
+    this.#pendingFileIndex = Number.isFinite(payload?.fileIndex) ? payload.fileIndex : null;
     this.#isProcessing = true;
 
     try {
@@ -910,10 +919,21 @@ export class Loading {
       if (videoCount <= 0) {
         throw new Error(Loading.MESSAGES.noVideoFile);
       }
+      const sharedVideoFileIndex = this.#sharedVideoFileIndex();
       if (videoCount === 1) {
         const videoFileIndex = mediaFiles.video[0].index;
         await this.#playVideoFile(videoFileIndex);
         void this.#loadSubtitlesForVideo(videoFileIndex).catch((e) => {
+          if (!this.#isAbortError(e)) {
+            console.warn("[torrent-tv][subtitles] load failed:", e);
+          }
+        });
+      } else if (sharedVideoFileIndex != null) {
+        // A shared link targeted a specific file of a multi-file torrent — open
+        // it directly instead of the playlist.
+        this.#pendingFileIndex = null;
+        await this.#playVideoFile(sharedVideoFileIndex);
+        void this.#loadSubtitlesForVideo(sharedVideoFileIndex).catch((e) => {
           if (!this.#isAbortError(e)) {
             console.warn("[torrent-tv][subtitles] load failed:", e);
           }
@@ -946,7 +966,7 @@ export class Loading {
    * @param {string} magnetUri
    * @returns {Promise<void>}
    */
-  async #processMagnetPlayback(magnetUri, resumeSeconds = null) {
+  async #processMagnetPlayback(magnetUri, currentTime = null, fileIndex = null) {
     if (typeof magnetUri !== "string" || magnetUri.trim().length === 0) {
       return;
     }
@@ -965,8 +985,9 @@ export class Loading {
     this.#selectedAudioTrackIndex = 0;
     this.#selectedQualityHeight = 0;
     this.#planTracks = null;
-    // Shared-link resume position (seconds), applied once the player is shown.
-    this.#pendingResumeSeconds = Number.isFinite(resumeSeconds) ? resumeSeconds : null;
+    // Shared-link position/file, applied once the player is shown / files known.
+    this.#pendingCurrentTime = Number.isFinite(currentTime) ? currentTime : null;
+    this.#pendingFileIndex = Number.isFinite(fileIndex) ? fileIndex : null;
     this.#isProcessing = true;
 
     try {
@@ -1052,10 +1073,21 @@ export class Loading {
       if (videoCount <= 0) {
         throw new Error(Loading.MESSAGES.noVideoFile);
       }
+      const sharedVideoFileIndex = this.#sharedVideoFileIndex();
       if (videoCount === 1) {
         const videoFileIndex = mediaFiles.video[0].index;
         await this.#playVideoFile(videoFileIndex);
         void this.#loadSubtitlesForVideo(videoFileIndex).catch((e) => {
+          if (!this.#isAbortError(e)) {
+            console.warn("[torrent-tv][subtitles] load failed:", e);
+          }
+        });
+      } else if (sharedVideoFileIndex != null) {
+        // A shared link targeted a specific file of a multi-file torrent — open
+        // it directly instead of the playlist.
+        this.#pendingFileIndex = null;
+        await this.#playVideoFile(sharedVideoFileIndex);
+        void this.#loadSubtitlesForVideo(sharedVideoFileIndex).catch((e) => {
           if (!this.#isAbortError(e)) {
             console.warn("[torrent-tv][subtitles] load failed:", e);
           }
@@ -1107,15 +1139,39 @@ export class Loading {
   #buildShareUrl() {
     const current = this.#session.current;
     const base = `${location.origin}${location.pathname}`;
+    let magnetUri = "";
     if (current?.sourceType === "magnet") {
-      const value = typeof current.sourceValue === "string" ? current.sourceValue : "";
-      return value.length > 0 ? `${base}?magnet=${encodeURIComponent(value)}` : "";
+      magnetUri = typeof current.sourceValue === "string" ? current.sourceValue : "";
+    } else if (current?.sourceType === "torrent") {
+      magnetUri = this.#buildMagnetFromCurrent(current);
     }
-    if (current?.sourceType === "torrent") {
-      const magnet = this.#buildMagnetFromCurrent(current);
-      return magnet.length > 0 ? `${base}?magnet=${encodeURIComponent(magnet)}` : "";
+    if (magnetUri.length === 0) {
+      return "";
     }
-    return "";
+    let url = `${base}?magnet=${encodeURIComponent(magnetUri)}`;
+    // For a multi-file torrent, carry which file is playing so the recipient
+    // opens the same one directly instead of the playlist (`fileIndex` — the
+    // same name the receiver parses; see torrent.js #loadFromUrl).
+    if (this.#activeFileIndex >= 0 && this.#videoFileCount() > 1) {
+      url += `&fileIndex=${this.#activeFileIndex}`;
+    }
+    return url;
+  }
+
+  /**
+   * The shared-link file index (`#pendingFileIndex`) when it points to a valid
+   * video file of the current source, else null. Lets a shared link open a
+   * specific file of a multi-file torrent directly instead of the playlist.
+   *
+   * @returns {number | null}
+   */
+  #sharedVideoFileIndex() {
+    const fileIndex = this.#pendingFileIndex;
+    if (fileIndex == null) {
+      return null;
+    }
+    const file = this.#session.current?.files?.[fileIndex];
+    return file?.isVideo === true ? fileIndex : null;
   }
 
   /**
@@ -1136,10 +1192,10 @@ export class Loading {
       parts.push(`dn=${encodeURIComponent(current.name.trim())}`);
     }
     const trackers = new Set();
-    const addTracker = (t) => {
-      const s = this.#toTrackerString(t);
-      if (s && /^(https?|udp|wss?):\/\//i.test(s)) {
-        trackers.add(s);
+    const addTracker = (candidate) => {
+      const trackerString = this.#toTrackerString(candidate);
+      if (trackerString && /^(https?|udp|wss?):\/\//i.test(trackerString)) {
+        trackers.add(trackerString);
       }
     };
     addTracker(current.announce);
@@ -1152,8 +1208,8 @@ export class Loading {
         }
       }
     }
-    for (const tr of trackers) {
-      parts.push(`tr=${encodeURIComponent(tr)}`);
+    for (const tracker of trackers) {
+      parts.push(`tr=${encodeURIComponent(tracker)}`);
     }
     return parts.join("&");
   }
@@ -1176,7 +1232,7 @@ export class Loading {
         return "";
       }
     }
-    if (Array.isArray(value) && value.every((n) => Number.isInteger(n))) {
+    if (Array.isArray(value) && value.every((byte) => Number.isInteger(byte))) {
       try {
         return new TextDecoder().decode(Uint8Array.from(value)).trim();
       } catch {
