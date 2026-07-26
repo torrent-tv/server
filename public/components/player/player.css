@@ -80,7 +80,10 @@
     font: inherit;
     cursor: pointer;
     color: var(--media-primary-color);
-    background: var(--media-control-background, var(--media-secondary-color));
+    /* Use OUR theme-aware plate colour, not media-chrome's --media-control-background
+       (a fixed dark that leaks in from the surrounding <media-control-bar> and
+       rendered the button black/invisible in the light theme). */
+    background: var(--media-secondary-color);
 
     &:hover,
     &:focus-visible {
