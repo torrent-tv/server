@@ -118,8 +118,11 @@ await app.register(fastifyStatic, {
   // Without this, ES modules were cached for hours, making deploys invisible
   // on returning devices. Unchanged files still return a cheap 304.
   cacheControl: false,
-  setHeaders: (res) => {
-    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  // @fastify/static v10 changed the setHeaders callback to receive the Fastify
+  // reply (was the raw ServerResponse in v9), so use reply.header(), not
+  // res.setHeader().
+  setHeaders: (reply) => {
+    reply.header("Cache-Control", "no-cache, must-revalidate");
   }
 });
 await app.register(fastifyStatic, {
