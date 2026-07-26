@@ -1,5 +1,6 @@
 ## 0.8.67
 
+- **Fix**: Buffering peer-count pill no longer clips its text on mobile (the plate was shorter than the glyphs) — added block padding and a line-height. The plate is now slightly transparent and theme-aware (dark by default, light in light theme) so the video shows through.
 - **Fix**: The share link for a video opened from a `.torrent` FILE is now a compact magnet instead of a multi-kilobyte URL that browsers truncate. Previously the link embedded the entire `.torrent` file base64-encoded (`?torrent=<base64>`), easily exceeding the URL length limit so the pasted/opened link was cut off and unusable. The share link now always builds a `?magnet=…` — for a `.torrent` source it constructs the magnet from the parsed infohash plus the name and trackers (`magnet:?xt=urn:btih:…&dn=…&tr=…`, ~200 chars); the receiver's proxy fetches the metadata from the swarm/DHT, the same path a normal magnet already uses. Trade-off: a magnet needs live peers/DHT to resolve, but a dead torrent could not be played from the embedded file either. (announce-list trackers left as raw bytes by the bencode parser are decoded as UTF-8.)
 
 ## 0.8.66
