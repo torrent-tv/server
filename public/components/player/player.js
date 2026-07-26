@@ -118,8 +118,9 @@ export class Player {
 
   /**
    * Show/hide the transient buffering/seeking indicator (data starvation): the
-   * spinner, plus a peer-count pill when the count is known. The peer count is
-   * supplied by the loading component, which owns the lookup.
+   * spinner, plus an info pill (peers, download speed, seconds ready) once stats
+   * arrive. The pill text is pre-formatted by the loading component, which owns
+   * the stats poll.
    *
    * @param {CustomEvent} event
    */
@@ -127,9 +128,9 @@ export class Player {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (detail?.active === true) {
       this.#buffering.hidden = false;
-      const peers = detail?.peers;
-      if (typeof peers === "number") {
-        this.#bufferingPeers.textContent = `peers: ${peers}`;
+      const text = typeof detail?.text === "string" ? detail.text : "";
+      if (text.length > 0) {
+        this.#bufferingPeers.textContent = text;
         this.#bufferingPeers.style.visibility = "visible";
       } else {
         // Keep the pill in the layout — a non-breaking space reserves its line
