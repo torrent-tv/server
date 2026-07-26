@@ -14,6 +14,13 @@ const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
 
+/**
+ * Seconds of video that must be buffered ahead of the playhead before stalled
+ * playback resumes. Used to estimate the "starts in ~Ns" ETA in the buffering
+ * pill from the measured fill rate.
+ */
+const RESUME_CUSHION_SECONDS = 2;
+
 // Auto-reconnect after a mid-playback connection loss (see the auto-reconnect
 // OpenSpec change). Attempts 1..2 retry the SAME proxy (seamless swap under
 // the live player); attempt 3 falls back to a full re-selection + rebuild.
@@ -251,6 +258,10 @@ export class Loading {
   #bufferingShown = false;
   /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/ready). */
   #bufferingPollTimer = null;
+  /** @type {number} Buffered-ahead seconds at the previous poll, for the fill-rate ETA (-1 = none yet). */
+  #bufferingPrevAheadSeconds = -1;
+  /** @type {number} performance.now() of the previous poll, for the fill-rate ETA. */
+  #bufferingPrevPollTime = 0;
   /**
    * Playback position (seconds) from a shared `&currentTime=` link, applied once
    * the player is revealed and the media is seekable, then cleared. Named to
@@ -483,6 +494,8 @@ export class Loading {
    */
   async #showBuffering() {
     this.#bufferingShown = true;
+    this.#bufferingPrevAheadSeconds = -1; // reset the fill-rate ETA trend
+    this.#bufferingPrevPollTime = 0;
     this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
     // Poll live stats while buffering so the pill shows peers, download speed and
     // how many seconds are already buffered ahead (progress toward resuming) —
@@ -514,10 +527,28 @@ export class Loading {
     if (stats && typeof stats.downloadSpeed === "number" && stats.downloadSpeed > 0) {
       parts.push(`${this.#formatBytes(stats.downloadSpeed)}/s`);
     }
+
     const readySeconds =
       this.#videoElement instanceof HTMLVideoElement ? this.#bufferedAheadSeconds(this.#videoElement) : 0;
-    if (readySeconds > 0) {
-      parts.push(`${Math.round(readySeconds)}s ready`);
+    // Estimate time-to-resume from how fast the buffer is filling. Playback
+    // needs a small cushion ahead of the playhead before it can resume; the ETA
+    // is (cushion − buffered) / fill-rate, measured between polls. Shown only
+    // when the buffer is actually growing; otherwise fall back to how many
+    // seconds are already buffered.
+    const now = performance.now();
+    const stillNeeded = Math.max(0, RESUME_CUSHION_SECONDS - readySeconds);
+    let etaShown = false;
+    if (this.#bufferingPrevAheadSeconds >= 0 && now > this.#bufferingPrevPollTime && stillNeeded > 0) {
+      const fillRate = (readySeconds - this.#bufferingPrevAheadSeconds) / ((now - this.#bufferingPrevPollTime) / 1000);
+      if (fillRate > 0.05) {
+        parts.push(`starts in ~${Math.ceil(stillNeeded / fillRate)}s`);
+        etaShown = true;
+      }
+    }
+    this.#bufferingPrevAheadSeconds = readySeconds;
+    this.#bufferingPrevPollTime = now;
+    if (!etaShown && readySeconds > 0) {
+      parts.push(`${Math.round(readySeconds)}s buffered`);
     }
     return parts.join(" • ");
   }
