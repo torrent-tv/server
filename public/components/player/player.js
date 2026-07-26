@@ -189,7 +189,7 @@ export class Player {
     if (!item) {
       return;
     }
-    const url = this.#buildShareUrl(item.dataset.share === "time");
+    const url = this.#buildShareUrl(item.dataset.share === "currentTime");
     try {
       this.#shareMenu.hidePopover();
     } catch {
@@ -205,21 +205,22 @@ export class Player {
 
   /**
    * The share URL, optionally with the current playback position appended as
-   * `&t=<seconds>` so the recipient resumes there.
+   * `&currentTime=<seconds>` so the recipient resumes there. The query name
+   * matches `video.currentTime` — the same name is used across every layer.
    *
-   * @param {boolean} withTime
+   * @param {boolean} withCurrentTime
    * @returns {string}
    */
-  #buildShareUrl(withTime) {
-    if (!withTime) {
+  #buildShareUrl(withCurrentTime) {
+    if (!withCurrentTime) {
       return this.#shareUrl;
     }
-    const seconds = Math.floor(this.#video instanceof HTMLVideoElement ? this.#video.currentTime : 0);
-    if (!Number.isFinite(seconds) || seconds <= 0) {
+    const currentTime = Math.floor(this.#video instanceof HTMLVideoElement ? this.#video.currentTime : 0);
+    if (!Number.isFinite(currentTime) || currentTime <= 0) {
       return this.#shareUrl;
     }
     const separator = this.#shareUrl.includes("?") ? "&" : "?";
-    return `${this.#shareUrl}${separator}t=${seconds}`;
+    return `${this.#shareUrl}${separator}currentTime=${currentTime}`;
   }
 
   /** Brief "copied" affordance on the share button. */

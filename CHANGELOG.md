@@ -1,3 +1,9 @@
+## 0.8.69
+
+- **Fix**: A shared link (`?magnet=…`) now auto-starts playback instead of landing on the picker. `#loadFromUrl` ran synchronously in the Torrent constructor, so the `MAGNET_READY` / `FILE_DETAILS_READY` it dispatched could fire before the other components (torrent-tv, loading, player) had registered their listeners — the event was lost and the shared link opened the start page. It is now deferred to the next macrotask, after every component has bootstrapped.
+- **New**: Share links carry the file index (`&fileIndex=<n>`) for a multi-file torrent, so the recipient opens the SAME file directly instead of the playlist. The receiver parses `fileIndex` and plays that video file (falling back to the playlist when absent or invalid).
+- **Chore**: Uniform naming for the shared playback position across every layer — URL query, events and all variables are now `currentTime` (matching `video.currentTime`, the value's source and sink), replacing the previous `t` / `resumeSeconds` / `#pendingResumeSeconds` mix. Same for the file: `fileIndex` everywhere. Also removed single-letter variables in the touched code (`b64`→`torrentBase64`, loop `i`→`index`, tracker `t`/`s`/`tr`→`candidate`/`trackerString`/`tracker`).
+
 ## 0.8.67
 
 - **Fix**: Buffering peer-count pill no longer clips its text on mobile (the plate was shorter than the glyphs) — added block padding and a line-height. The plate is now slightly transparent and theme-aware (dark by default, light in light theme) so the video shows through.
