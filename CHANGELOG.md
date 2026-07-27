@@ -1,4 +1,8 @@
-## 0.8.75
+## 0.8.78
+
+- **New**: While buffering/seeking, the pill now shows how much is left to download before playback resumes and the time to get it — `peers: N • <speed>/s • <amount> left • ~<time>` — instead of only the peer count. The amount comes from the proxy's resume window: the bytes still to download in the 16 MB window ahead of the file's current read position, counted byte-accurately (partial pieces) so it moves smoothly rather than jumping by a whole piece. Falls back to seconds-buffered if the proxy does not report it (needs proxy 2.9.46+).
+
+## 0.8.77
 
 - **New**: The buffering/seeking pill now shows more than the peer count. While the video is stalled it polls live stats (~1.5 s) and displays `peers: N • <download speed>/s` plus a time-to-resume estimate — `starts in ~Ns`, computed from how fast the buffer is filling toward the cushion playback needs — or `Ns buffered` when the buffer is not growing. Previously it showed only a one-shot peer count.
 

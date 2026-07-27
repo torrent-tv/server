@@ -14,13 +14,6 @@ const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
 
-/**
- * Seconds of video that must be buffered ahead of the playhead before stalled
- * playback resumes. Used to estimate the "starts in ~Ns" ETA in the buffering
- * pill from the measured fill rate.
- */
-const RESUME_CUSHION_SECONDS = 2;
-
 // Auto-reconnect after a mid-playback connection loss (see the auto-reconnect
 // OpenSpec change). Attempts 1..2 retry the SAME proxy (seamless swap under
 // the live player); attempt 3 falls back to a full re-selection + rebuild.
@@ -256,12 +249,8 @@ export class Loading {
   #bufferingTimer = null;
   /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
   #bufferingShown = false;
-  /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/ready). */
+  /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/amount-left). */
   #bufferingPollTimer = null;
-  /** @type {number} Buffered-ahead seconds at the previous poll, for the fill-rate ETA (-1 = none yet). */
-  #bufferingPrevAheadSeconds = -1;
-  /** @type {number} performance.now() of the previous poll, for the fill-rate ETA. */
-  #bufferingPrevPollTime = 0;
   /**
    * Playback position (seconds) from a shared `&currentTime=` link, applied once
    * the player is revealed and the media is seekable, then cleared. Named to
@@ -494,12 +483,10 @@ export class Loading {
    */
   async #showBuffering() {
     this.#bufferingShown = true;
-    this.#bufferingPrevAheadSeconds = -1; // reset the fill-rate ETA trend
-    this.#bufferingPrevPollTime = 0;
     this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
     // Poll live stats while buffering so the pill shows peers, download speed and
-    // how many seconds are already buffered ahead (progress toward resuming) —
-    // not just the peer count. Stopped by #clearBuffering.
+    // how much is left to download before playback resumes (from the proxy's
+    // resume window) — not just the peer count. Stopped by #clearBuffering.
     const poll = async () => {
       const stats = await this.#fetchBufferingStats();
       if (this.#bufferingShown) {
@@ -513,10 +500,11 @@ export class Loading {
   }
 
   /**
-   * Build the buffering pill text from live stats plus the seconds already
-   * buffered ahead of the playhead (client-side "how much is ready to resume").
+   * Build the buffering pill text from live proxy stats: peers, download speed,
+   * and how much is left to download (with the time to get it) before playback
+   * can resume — from the proxy's resume window.
    *
-   * @param {{ numPeers?: number, downloadSpeed?: number } | null} stats
+   * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} stats
    * @returns {string}
    */
   #formatBufferingText(stats) {
@@ -528,27 +516,25 @@ export class Loading {
       parts.push(`${this.#formatBytes(stats.downloadSpeed)}/s`);
     }
 
-    const readySeconds =
-      this.#videoElement instanceof HTMLVideoElement ? this.#bufferedAheadSeconds(this.#videoElement) : 0;
-    // Estimate time-to-resume from how fast the buffer is filling. Playback
-    // needs a small cushion ahead of the playhead before it can resume; the ETA
-    // is (cushion − buffered) / fill-rate, measured between polls. Shown only
-    // when the buffer is actually growing; otherwise fall back to how many
-    // seconds are already buffered.
-    const now = performance.now();
-    const stillNeeded = Math.max(0, RESUME_CUSHION_SECONDS - readySeconds);
-    let etaShown = false;
-    if (this.#bufferingPrevAheadSeconds >= 0 && now > this.#bufferingPrevPollTime && stillNeeded > 0) {
-      const fillRate = (readySeconds - this.#bufferingPrevAheadSeconds) / ((now - this.#bufferingPrevPollTime) / 1000);
-      if (fillRate > 0.05) {
-        parts.push(`starts in ~${Math.ceil(stillNeeded / fillRate)}s`);
-        etaShown = true;
+    // Amount still to download before playback can resume, and the time to get
+    // it at the current speed. Both come from the proxy's resume window (bytes
+    // needed vs downloaded ahead of the read head). Human-readable units.
+    const neededBytes = stats && typeof stats.resumeNeededBytes === "number" ? stats.resumeNeededBytes : null;
+    const downloadedBytes = stats && typeof stats.resumeDownloadedBytes === "number" ? stats.resumeDownloadedBytes : null;
+    const speedBytesPerSecond = stats && typeof stats.downloadSpeed === "number" ? stats.downloadSpeed : 0;
+    if (neededBytes !== null && downloadedBytes !== null) {
+      const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
+      parts.push(`${this.#formatBytes(remainingBytes)} left`);
+      if (remainingBytes > 0 && speedBytesPerSecond > 0) {
+        parts.push(`~${this.#formatDuration(remainingBytes / speedBytesPerSecond)}`);
       }
-    }
-    this.#bufferingPrevAheadSeconds = readySeconds;
-    this.#bufferingPrevPollTime = now;
-    if (!etaShown && readySeconds > 0) {
-      parts.push(`${Math.round(readySeconds)}s buffered`);
+    } else if (this.#videoElement instanceof HTMLVideoElement) {
+      // Proxy did not report the resume window (older proxy / read position not
+      // known yet) — fall back to how many seconds are already buffered.
+      const readySeconds = this.#bufferedAheadSeconds(this.#videoElement);
+      if (readySeconds > 0) {
+        parts.push(`${Math.round(readySeconds)}s buffered`);
+      }
     }
     return parts.join(" • ");
   }
@@ -610,7 +596,9 @@ export class Loading {
       const stats = await response.json();
       return {
         numPeers: typeof stats?.numPeers === "number" ? stats.numPeers : 0,
-        downloadSpeed: typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0
+        downloadSpeed: typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0,
+        resumeNeededBytes: typeof stats?.resumeNeededBytes === "number" ? stats.resumeNeededBytes : null,
+        resumeDownloadedBytes: typeof stats?.resumeDownloadedBytes === "number" ? stats.resumeDownloadedBytes : null
       };
     } catch {
       return null;
