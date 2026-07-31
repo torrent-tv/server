@@ -590,7 +590,8 @@ export class Loading {
       ? transcodeProgress.processedSeconds : null;
     const startPositionSeconds = transcodeProgress && typeof transcodeProgress.startPositionSeconds === "number"
       ? transcodeProgress.startPositionSeconds : 0;
-    const encodeSpeed = transcodeProgress ? this.#parseRealtimeMultiplier(transcodeProgress.speed) : null;
+    const parsedEncodeSpeed = transcodeProgress ? this.#parseSpeedMultiplier(transcodeProgress.speed) : NaN;
+    const encodeSpeed = Number.isFinite(parsedEncodeSpeed) && parsedEncodeSpeed > 0 ? parsedEncodeSpeed : null;
     let transcodeRemainingSeconds = null;
     if (processedSeconds !== null) {
       const producedSinceResume = Math.max(0, processedSeconds - startPositionSeconds);
@@ -622,22 +623,6 @@ export class Loading {
     }
 
     return candidates.length > 0 ? Math.max(...candidates) : null;
-  }
-
-  /**
-   * Parse ffmpeg's `speed` progress value (e.g. "2.40x", "0.90x", "N/A") into
-   * a realtime multiplier. Mirrors the proxy's own parser (kept independent —
-   * this is just string parsing, not shared state).
-   *
-   * @param {string | undefined} value
-   * @returns {number | null}
-   */
-  #parseRealtimeMultiplier(value) {
-    if (typeof value !== "string" || value.length === 0) {
-      return null;
-    }
-    const numeric = Number.parseFloat(value);
-    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
   }
 
   /**
@@ -3141,9 +3126,11 @@ export class Loading {
   /**
    * Render loading status oriented to the FIRST segment — the only thing the
    * player waits for before playback starts. Shows transcoder warmup while
-   * ffmpeg spins up, then progress toward producing the first segment with a
-   * dynamic ETA derived from the encode speed. Used both by the warmup polling
-   * inside the transcode session and by #startTranscodeProgressPoll.
+   * ffmpeg spins up, then progress toward producing the first segment, with
+   * the unified download/transcode/delivery "time to playback" estimate
+   * (#computeUnifiedEtaSeconds — the same one shown during mid-playback
+   * buffering). Used both by the warmup polling inside the transcode session
+   * and by #startTranscodeProgressPoll.
    *
    * @param {object | null} progress
    * @returns {void}
@@ -3162,12 +3149,22 @@ export class Loading {
       typeof progress.processedSeconds === "number" ? progress.processedSeconds : NaN;
     const warmupPercent =
       typeof progress.warmupPercent === "number" ? progress.warmupPercent : NaN;
-    const warmupRemainingSeconds =
-      typeof progress.warmupRemainingSeconds === "number" ? progress.warmupRemainingSeconds : NaN;
     const speedText =
       typeof progress.speed === "string" && progress.speed.trim().length > 0
         ? progress.speed.trim()
         : "";
+
+    // Same unified download/transcode/delivery "time until playback" estimate
+    // used by the mid-playback buffering pill (#computeUnifiedEtaSeconds),
+    // applied here too so the INITIAL loading screen gives the same honest
+    // figure instead of a narrower "just the first segment, just the encode
+    // speed" one. No download-stats argument: by the time a transcode session
+    // exists the file header has already been probed, and a download-starved
+    // input is already reflected in ffmpeg's own stalled `speed`.
+    const unifiedEtaSeconds = this.#computeUnifiedEtaSeconds(null, progress);
+    const unifiedEtaText = unifiedEtaSeconds === null
+      ? "n/a"
+      : unifiedEtaSeconds > 0 ? this.#formatDuration(unifiedEtaSeconds) : "0:00";
 
     // First-segment progress: how much of the first segment ffmpeg has encoded.
     const segmentProcessed = Number.isFinite(processedSeconds)
@@ -3175,15 +3172,11 @@ export class Loading {
       : NaN;
     if (Number.isFinite(segmentDurationSec) && Number.isFinite(segmentProcessed) && segmentProcessed >= 0) {
       const pct = Math.max(0, Math.min(100, (segmentProcessed / segmentDurationSec) * 100));
-      const speedMultiplier = this.#parseSpeedMultiplier(speedText);
-      const remainSeconds = Math.max(0, segmentDurationSec - segmentProcessed);
-      const etaSeconds = speedMultiplier > 0 ? remainSeconds / speedMultiplier : NaN;
-      const etaText = Number.isFinite(etaSeconds) ? this.#formatDuration(etaSeconds) : "n/a";
       // Phase 1 (transcode first segment) fills its third by first-segment %.
       this.#setPhaseProgress(1, pct);
       this.setStatus(
         `Preparing first segment... ${Math.round(pct)}%\n` +
-          `ETA (dynamic): ${etaText}` +
+          `Time to playback: ${unifiedEtaText}` +
           (speedText ? `\nSpeed: ${speedText}` : "")
       );
       return;
@@ -3191,13 +3184,10 @@ export class Loading {
 
     // Warmup phase: ffmpeg is starting and has not produced segment data yet.
     if (Number.isFinite(warmupPercent)) {
-      const etaText = Number.isFinite(warmupRemainingSeconds)
-        ? this.#formatDuration(warmupRemainingSeconds)
-        : "n/a";
       // Warmup is the lead-in of phase 1 → fills only the first ~20% of its band
       // so the first-segment progress (0–100%) that follows doesn't jump back.
       this.#setPhaseProgress(1, warmupPercent * 0.2);
-      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nETA (dynamic): ${etaText}`);
+      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nTime to playback: ${unifiedEtaText}`);
     }
   }
 
@@ -3487,12 +3477,19 @@ export class Loading {
 
     // Phase 1 → phase 2 (transcode): progress and ETA toward having the
     // header/index downloaded so the codec probe can run. Coarse (whole pieces).
+    // Uses the SAME unified ETA formula as the mid-playback buffering pill
+    // (#computeUnifiedEtaSeconds) — at this phase only its download stage ever
+    // applies (no transcode session exists yet), so it reduces to the header
+    // bytes remaining at the current download speed, but it is the one
+    // canonical formula rather than a second, separately-maintained one.
     let phaseLine = "";
     if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
       const pct = Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100));
-      const remaining = Math.max(0, headerBytes - headerDownloadedBytes);
-      const etaText =
-        downloadSpeed > 0 ? `~${this.#formatDuration(remaining / downloadSpeed)}` : "n/a";
+      const etaSeconds = this.#computeUnifiedEtaSeconds(
+        { resumeNeededBytes: headerBytes, resumeDownloadedBytes: headerDownloadedBytes, downloadSpeed },
+        null
+      );
+      const etaText = etaSeconds === null ? "n/a" : `~${this.#formatDuration(etaSeconds)}`;
       // Show ETA only — the header is a handful of whole pieces, so a percent
       // jumps 0 → 50 → 100 and reads as broken. The bar below still uses `pct`.
       phaseLine = `\nTo next phase: ${etaText}`;
