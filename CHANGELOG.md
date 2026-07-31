@@ -1,3 +1,7 @@
+## 0.8.79
+
+- **Fix**: The "left to download" figure in the buffering pill could jump UP mid-poll instead of counting down, because it tracked the proxy's LIVE (moving) read position — the window slides forward as the file is read/transcoded further, and could slide into a fresh, never-downloaded piece, making the figure jump even though nothing regressed. The client now captures the proxy's resume-window anchor on the first poll of a buffering episode and pins it for every subsequent poll of that same episode (`&resumeAnchorByteStart=`), so the figure only ever decreases as real download progress happens. Requires proxy 2.9.48+ (older proxies simply echo back the live position each time, same as before).
+
 ## 0.8.78
 
 - **New**: While buffering/seeking, the pill now shows how much is left to download before playback resumes and the time to get it — `peers: N • <speed>/s • <amount> left • ~<time>` — instead of only the peer count. The amount comes from the proxy's resume window: the bytes still to download in the 16 MB window ahead of the file's current read position, counted byte-accurately (partial pieces) so it moves smoothly rather than jumping by a whole piece. Falls back to seconds-buffered if the proxy does not report it (needs proxy 2.9.46+).
