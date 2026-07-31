@@ -497,13 +497,20 @@ export class Loading {
     this.#bufferingShown = true;
     this.#bufferingResumeAnchorByteStart = null; // fresh episode — re-pin on the first poll
     this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
-    // Poll live stats while buffering so the pill shows peers, download speed and
-    // how much is left to download before playback resumes (from the proxy's
-    // resume window) — not just the peer count. Stopped by #clearBuffering.
+    // Poll live stats while buffering. Two DISTINCT stages, shown one at a time:
+    // while there is no active transcode session yet, show download progress
+    // (peers/speed/bytes-left); once a transcode session exists for the file
+    // (the download-phase byte target has effectively been met and encoding has
+    // started), show ITS progress instead — a downloaded-bytes count is no
+    // longer the meaningful number once ffmpeg is actively producing segments.
+    // Stopped by #clearBuffering.
     const poll = async () => {
-      const stats = await this.#fetchBufferingStats();
+      const [downloadStats, transcodeProgress] = await Promise.all([
+        this.#fetchBufferingStats(),
+        this.#session.fetchActiveTranscodeProgress()
+      ]);
       if (this.#bufferingShown) {
-        this.#dispatchBuffering(true, this.#formatBufferingText(stats));
+        this.#dispatchBuffering(true, this.#formatBufferingText(downloadStats, transcodeProgress));
       }
     };
     await poll();
@@ -513,14 +520,61 @@ export class Loading {
   }
 
   /**
-   * Build the buffering pill text from live proxy stats: peers, download speed,
-   * and how much is left to download (with the time to get it) before playback
-   * can resume — from the proxy's resume window.
+   * Build the buffering pill text for whichever stage currently applies:
+   * download (peers/speed/bytes-left) or, once a transcode session exists for
+   * the file, transcode (percent/seconds-left/encode-speed).
+   *
+   * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
+   * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string } | null} transcodeProgress
+   * @returns {string}
+   */
+  #formatBufferingText(downloadStats, transcodeProgress) {
+    const transcodeText = this.#formatTranscodeStageText(transcodeProgress);
+    if (transcodeText !== null) {
+      return transcodeText;
+    }
+    return this.#formatDownloadStageText(downloadStats);
+  }
+
+  /**
+   * Transcode-stage text: "Transcoding — 42% (01:20 left, 2.4x realtime)".
+   * Returns null when there is no active/progressing transcode session — the
+   * caller then falls back to the download-stage display.
+   *
+   * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string } | null} progress
+   * @returns {string | null}
+   */
+  #formatTranscodeStageText(progress) {
+    if (!progress || progress.state === "failed" || typeof progress.percent !== "number") {
+      return null;
+    }
+    const parts = [`Transcoding — ${Math.round(progress.percent)}%`];
+    const details = [];
+    if (typeof progress.remainingSeconds === "number" && progress.remainingSeconds > 0) {
+      details.push(`${this.#formatDuration(progress.remainingSeconds)} left`);
+    }
+    // ffmpeg reports speed as e.g. "2.40x" / "0.90x" / "N/A" — a realtime
+    // multiplier of the ENCODE rate (content-seconds produced per wall-clock
+    // second). Shown as-is; "N/A" (no measurement yet) is omitted.
+    const speed = typeof progress.speed === "string" ? progress.speed.trim() : "";
+    if (speed.length > 0 && speed.toUpperCase() !== "N/A") {
+      details.push(`${speed} realtime`);
+    }
+    if (details.length > 0) {
+      parts.push(`(${details.join(", ")})`);
+    }
+    return parts.join(" ");
+  }
+
+  /**
+   * Download-stage text: peers, download speed, and how much is left to
+   * download (with the time to get it) before playback can resume — from the
+   * proxy's resume window.
    *
    * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} stats
    * @returns {string}
    */
-  #formatBufferingText(stats) {
+  #formatDownloadStageText(stats) {
     const parts = [];
     if (stats && typeof stats.numPeers === "number") {
       parts.push(`peers: ${stats.numPeers}`);
