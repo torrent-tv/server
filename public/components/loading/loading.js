@@ -634,10 +634,23 @@ export class Loading {
       }
     }
 
-    return {
+    const result = {
       etaSeconds: candidates.length > 0 ? Math.max(...candidates) : null,
       cushionPercent
     };
+    // [eta] TEMPORARY: raw inputs + result on every computation, so a field
+    // report of a stuck/wrong percent can be verified from the server log
+    // (client-logger.js forwards console.debug there — readable via `ssh do`,
+    // no device access needed) instead of reasoned about from a screenshot.
+    console.debug(
+      `[eta] processed=${processedSeconds} startPos=${startPositionSeconds} ` +
+        `producedSinceResume=${processedSeconds !== null ? Math.max(0, processedSeconds - startPositionSeconds).toFixed(2) : "n/a"} ` +
+        `speedRaw=${transcodeProgress?.speed ?? "n/a"} encodeSpeed=${encodeSpeed} ` +
+        `transcodeRemaining=${transcodeRemainingSeconds} outputMbps=${outputMbps} clientLinkMbps=${clientLinkMbps} ` +
+        `candidates=[${candidates.map((c) => c.toFixed(2)).join(",")}] ` +
+        `=> cushionPercent=${cushionPercent?.toFixed(1) ?? "null"} etaSeconds=${result.etaSeconds?.toFixed(2) ?? "null"}`
+    );
+    return result;
   }
 
   /**
