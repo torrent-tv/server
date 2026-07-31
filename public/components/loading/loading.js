@@ -531,12 +531,13 @@ export class Loading {
    * @returns {string}
    */
   #formatBufferingText(downloadStats, transcodeProgress) {
-    const stageText = this.#formatTranscodeStageText(transcodeProgress) ?? this.#formatDownloadStageText(downloadStats);
-    const unifiedEtaSeconds = this.#computeUnifiedEtaSeconds(downloadStats, transcodeProgress);
-    if (unifiedEtaSeconds === null) {
+    const unified = this.#computeUnifiedEta(downloadStats, transcodeProgress);
+    const stageText = this.#formatTranscodeStageText(transcodeProgress, unified.cushionPercent)
+      ?? this.#formatDownloadStageText(downloadStats);
+    if (unified.etaSeconds === null) {
       return stageText;
     }
-    const etaText = unifiedEtaSeconds > 0 ? `~${this.#formatDuration(unifiedEtaSeconds)} to playback` : "starting now";
+    const etaText = unified.etaSeconds > 0 ? `~${this.#formatDuration(unified.etaSeconds)} to playback` : "starting now";
     return stageText.length > 0 ? `${stageText} • ${etaText}` : etaText;
   }
 
@@ -559,14 +560,23 @@ export class Loading {
    *
    * The three ETAs are pipelined (each stage can make progress on different
    * material concurrently), so the TRUE bottleneck is whichever is currently
-   * slowest — the result is their max(), computed only from the stages that
-   * are actually measurable right now. Returns null when NONE are.
+   * slowest — `etaSeconds` is their max(), computed only from the stages that
+   * are actually measurable right now (null when NONE are).
+   *
+   * Also returns `cushionPercent` — how much of the SAME near-term cushion the
+   * transcode stage has produced so far. This must be shown ANYWHERE a percent
+   * is displayed alongside this ETA (never the whole-file percent): a fast
+   * copy-mode transcode on a long file can satisfy the 15 s cushion in well
+   * under a second while the whole-file percent is still "0%" for MINUTES (the
+   * file being hours long) — showing that whole-file number next to "starting
+   * now" read as self-contradictory nonsense. Root-caused from a field report:
+   * "Transcoding — 0% (22:39 left) • starting now" on a long copy-mode file.
    *
    * @param {{ downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
    * @param {{ processedSeconds?: number, startPositionSeconds?: number, speed?: string, outputMbps?: number | null } | null} transcodeProgress
-   * @returns {number | null}
+   * @returns {{ etaSeconds: number | null, cushionPercent: number | null }}
    */
-  #computeUnifiedEtaSeconds(downloadStats, transcodeProgress) {
+  #computeUnifiedEta(downloadStats, transcodeProgress) {
     const candidates = [];
 
     // Stage 1 — download: bytes remaining in the frozen resume window / speed.
@@ -593,8 +603,10 @@ export class Loading {
     const parsedEncodeSpeed = transcodeProgress ? this.#parseSpeedMultiplier(transcodeProgress.speed) : NaN;
     const encodeSpeed = Number.isFinite(parsedEncodeSpeed) && parsedEncodeSpeed > 0 ? parsedEncodeSpeed : null;
     let transcodeRemainingSeconds = null;
+    let cushionPercent = null;
     if (processedSeconds !== null) {
       const producedSinceResume = Math.max(0, processedSeconds - startPositionSeconds);
+      cushionPercent = Math.max(0, Math.min(100, (producedSinceResume / PREBUFFER_TARGET_SECONDS) * 100));
       transcodeRemainingSeconds = Math.max(0, PREBUFFER_TARGET_SECONDS - producedSinceResume);
       if (transcodeRemainingSeconds <= 0) {
         candidates.push(0);
@@ -622,25 +634,33 @@ export class Loading {
       }
     }
 
-    return candidates.length > 0 ? Math.max(...candidates) : null;
+    return {
+      etaSeconds: candidates.length > 0 ? Math.max(...candidates) : null,
+      cushionPercent
+    };
   }
 
   /**
-   * Transcode-stage text: "Transcoding — 42% (01:20 left, 2.4x realtime)".
-   * Returns null when there is no active/progressing transcode session — the
-   * caller then falls back to the download-stage display.
+   * Transcode-stage text: "Transcoding — 42% (2:16:49 of file left, 2.4x
+   * realtime)". The percent is `cushionPercent` — progress toward the SAME
+   * near-term resume cushion the unified ETA targets (NOT the whole-file
+   * percent, which can sit at "0%" for minutes on a long file even once the
+   * cushion is long since satisfied — see #computeUnifiedEta). Returns null
+   * when there is no active/progressing transcode session — the caller then
+   * falls back to the download-stage display.
    *
-   * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string } | null} progress
+   * @param {{ remainingSeconds?: number | null, speed?: string, state?: string } | null} progress
+   * @param {number | null} cushionPercent
    * @returns {string | null}
    */
-  #formatTranscodeStageText(progress) {
-    if (!progress || progress.state === "failed" || typeof progress.percent !== "number") {
+  #formatTranscodeStageText(progress, cushionPercent) {
+    if (!progress || progress.state === "failed" || typeof cushionPercent !== "number") {
       return null;
     }
-    const parts = [`Transcoding — ${Math.round(progress.percent)}%`];
+    const parts = [`Transcoding — ${Math.round(cushionPercent)}%`];
     const details = [];
     if (typeof progress.remainingSeconds === "number" && progress.remainingSeconds > 0) {
-      details.push(`${this.#formatDuration(progress.remainingSeconds)} left`);
+      details.push(`${this.#formatDuration(progress.remainingSeconds)} of file left`);
     }
     // ffmpeg reports speed as e.g. "2.40x" / "0.90x" / "N/A" — a realtime
     // multiplier of the ENCODE rate (content-seconds produced per wall-clock
@@ -3128,7 +3148,7 @@ export class Loading {
    * player waits for before playback starts. Shows transcoder warmup while
    * ffmpeg spins up, then progress toward producing the first segment, with
    * the unified download/transcode/delivery "time to playback" estimate
-   * (#computeUnifiedEtaSeconds — the same one shown during mid-playback
+   * (#computeUnifiedEta — the same one shown during mid-playback
    * buffering). Used both by the warmup polling inside the transcode session
    * and by #startTranscodeProgressPoll.
    *
@@ -3155,13 +3175,13 @@ export class Loading {
         : "";
 
     // Same unified download/transcode/delivery "time until playback" estimate
-    // used by the mid-playback buffering pill (#computeUnifiedEtaSeconds),
-    // applied here too so the INITIAL loading screen gives the same honest
-    // figure instead of a narrower "just the first segment, just the encode
-    // speed" one. No download-stats argument: by the time a transcode session
-    // exists the file header has already been probed, and a download-starved
-    // input is already reflected in ffmpeg's own stalled `speed`.
-    const unifiedEtaSeconds = this.#computeUnifiedEtaSeconds(null, progress);
+    // used by the mid-playback buffering pill (#computeUnifiedEta), applied
+    // here too so the INITIAL loading screen gives the same honest figure
+    // instead of a narrower "just the first segment, just the encode speed"
+    // one. No download-stats argument: by the time a transcode session exists
+    // the file header has already been probed, and a download-starved input is
+    // already reflected in ffmpeg's own stalled `speed`.
+    const unifiedEtaSeconds = this.#computeUnifiedEta(null, progress).etaSeconds;
     const unifiedEtaText = unifiedEtaSeconds === null
       ? "n/a"
       : unifiedEtaSeconds > 0 ? this.#formatDuration(unifiedEtaSeconds) : "0:00";
@@ -3478,17 +3498,17 @@ export class Loading {
     // Phase 1 → phase 2 (transcode): progress and ETA toward having the
     // header/index downloaded so the codec probe can run. Coarse (whole pieces).
     // Uses the SAME unified ETA formula as the mid-playback buffering pill
-    // (#computeUnifiedEtaSeconds) — at this phase only its download stage ever
+    // (#computeUnifiedEta) — at this phase only its download stage ever
     // applies (no transcode session exists yet), so it reduces to the header
     // bytes remaining at the current download speed, but it is the one
     // canonical formula rather than a second, separately-maintained one.
     let phaseLine = "";
     if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
       const pct = Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100));
-      const etaSeconds = this.#computeUnifiedEtaSeconds(
+      const etaSeconds = this.#computeUnifiedEta(
         { resumeNeededBytes: headerBytes, resumeDownloadedBytes: headerDownloadedBytes, downloadSpeed },
         null
-      );
+      ).etaSeconds;
       const etaText = etaSeconds === null ? "n/a" : `~${this.#formatDuration(etaSeconds)}`;
       // Show ETA only — the header is a handful of whole pieces, so a percent
       // jumps 0 → 50 → 100 and reads as broken. The bar below still uses `pct`.
