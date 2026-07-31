@@ -1546,15 +1546,36 @@ export class Loading {
   }
 
   /**
-   * Build the "torrent isn't downloading" stall error and arm a resume so the
-   * error screen offers a Retry that restarts this file from the beginning.
-   * Data starvation is a supply problem (few peers), not a permanent failure,
-   * so it must be retryable rather than a dead end.
+   * A transport-level failure — the WebRTC data channel closed while a
+   * loading request was in flight — as opposed to a content/logic error.
+   * Field-diagnosed: ICE connects, then the channel dies ~6s later while
+   * source registration or the playback-plan request is still in flight.
+   * `#onTransportLost`'s automatic reconnect ladder deliberately bails out
+   * while a loading flow is running (`#isProcessing`), on the assumption that
+   * the loading flow's own failure path handles it — this is that path. Not
+   * permanent: a retry acquires a FRESH proxy (`#acquireTransport` never
+   * reuses a dead one), so callers should treat it like the data-starvation
+   * stall (retryable), not a dead end.
+   *
+   * @param {unknown} error
+   * @returns {boolean}
+   */
+  #isTransportClosedError(error) {
+    return error instanceof Error && /channel closed|channel is not open/i.test(error.message);
+  }
+
+  /**
+   * Build a retryable loading-stage error and arm a resume so the error
+   * screen offers a Retry that restarts this file from the beginning. Used
+   * for failure modes that are not permanent — data starvation (few peers)
+   * and a mid-loading transport loss (see #isTransportClosedError) — so
+   * neither dead-ends the viewer.
    *
    * @param {number} fileIndex
+   * @param {string} [message] - Defaults to the data-starvation stall message.
    * @returns {Error}
    */
-  #armRetryableStall(fileIndex) {
+  #armRetryableStall(fileIndex, message = Loading.MESSAGES.headerDownloadStalled) {
     if (this.#session.current) {
       this.#resumeState = {
         fileIndex,
@@ -1562,7 +1583,7 @@ export class Loading {
         sessionCurrent: this.#session.current
       };
     }
-    const error = new Error(Loading.MESSAGES.headerDownloadStalled);
+    const error = new Error(message);
     error.canRetry = true;
     return error;
   }
@@ -1676,7 +1697,18 @@ export class Loading {
     // prepareProxyPlaybackPlan will reuse the cached sourceKey.
     this.setStatus(Loading.MESSAGES.fetchingMetadata);
     this.#setPhaseProgress(0, 20); // phase 0 floor; header download % (stats poll) drives the rest
-    const earlySourceKey = await this.#session.registerSourceOnProxy(transport);
+    let earlySourceKey;
+    try {
+      earlySourceKey = await this.#session.registerSourceOnProxy(transport);
+    } catch (registerError) {
+      // See #isTransportClosedError: a transport death here must not become a
+      // dead-end fatal error either — same treatment as the plan-poll loop
+      // below.
+      if (this.#isTransportClosedError(registerError)) {
+        throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.connectionLost);
+      }
+      throw registerError;
+    }
     const stopStatsPoll = this.#startTorrentStatsPoll(transport, earlySourceKey, fileIndex);
 
     let prepared;
@@ -1697,8 +1729,7 @@ export class Loading {
           // even though the connection is healthy. That is data starvation, not
           // a fatal error: keep polling (the stats poll keeps peers/speed/% on
           // screen) until the wall-clock budget is spent, instead of dropping to
-          // the error screen. A genuinely closed channel is NOT transient — it
-          // propagates and is handled as a real failure.
+          // the error screen.
           if (this.#isTransientRequestTimeout(planError) && (this.#proxy?.isOpen ?? true)) {
             this.#logEvt("plan request timed out while waiting on pieces — keep waiting");
             if (Date.now() >= planDeadline) {
@@ -1706,6 +1737,12 @@ export class Loading {
             }
             await new Promise((resolve) => setTimeout(resolve, 2_000));
             continue;
+          }
+          // The transport itself died mid-request (see #isTransportClosedError)
+          // — retryable, not a dead end.
+          if (this.#isTransportClosedError(planError)) {
+            this.#logEvt("transport closed while polling playback plan — retryable");
+            throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.connectionLost);
           }
           throw planError;
         }
