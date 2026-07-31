@@ -53,6 +53,19 @@ function prune(now) {
 }
 
 /**
+ * Median link throughput (Mbit/s) over the sample window, or null when there
+ * is not enough recent material to estimate. Public so callers other than the
+ * reporter itself (e.g. the unified download/transcode/delivery ETA in
+ * loading.js) can read the CLIENT's own observed delivery speed without a
+ * round trip to the proxy — this is the exact figure already posted to it.
+ *
+ * @returns {number | null}
+ */
+export function getEstimatedLinkMbps() {
+  return medianLinkMbps();
+}
+
+/**
  * Median link throughput over the sample window, or null when there is not
  * enough recent material to estimate.
  *
