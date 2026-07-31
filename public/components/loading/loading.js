@@ -7,6 +7,7 @@ import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
+import { getEstimatedLinkMbps } from "../../domain/net-report.js";
 
 /** Embedded-subtitle extraction reads the file to the last cue — allow long. */
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
@@ -522,18 +523,121 @@ export class Loading {
   /**
    * Build the buffering pill text for whichever stage currently applies:
    * download (peers/speed/bytes-left) or, once a transcode session exists for
-   * the file, transcode (percent/seconds-left/encode-speed).
+   * the file, transcode (percent/seconds-left/encode-speed) — with the unified
+   * three-stage "time until playback" appended when computable.
    *
    * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
-   * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string } | null} transcodeProgress
+   * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string, processedSeconds?: number, startPositionSeconds?: number, outputMbps?: number | null } | null} transcodeProgress
    * @returns {string}
    */
   #formatBufferingText(downloadStats, transcodeProgress) {
-    const transcodeText = this.#formatTranscodeStageText(transcodeProgress);
-    if (transcodeText !== null) {
-      return transcodeText;
+    const stageText = this.#formatTranscodeStageText(transcodeProgress) ?? this.#formatDownloadStageText(downloadStats);
+    const unifiedEtaSeconds = this.#computeUnifiedEtaSeconds(downloadStats, transcodeProgress);
+    if (unifiedEtaSeconds === null) {
+      return stageText;
     }
-    return this.#formatDownloadStageText(downloadStats);
+    const etaText = unifiedEtaSeconds > 0 ? `~${this.#formatDuration(unifiedEtaSeconds)} to playback` : "starting now";
+    return stageText.length > 0 ? `${stageText} • ${etaText}` : etaText;
+  }
+
+  /**
+   * Unified "time until playback can resume", combining ALL THREE pipeline
+   * stages that can each independently gate it:
+   *
+   *  1. Download  — bytes still needed in the (frozen) resume window, at the
+   *     current torrent download speed.
+   *  2. Transcode — content-seconds still needed to cover the near-term resume
+   *     cushion ({@link PREBUFFER_TARGET_SECONDS}), at ffmpeg's own realtime
+   *     speed multiplier (already reflects a download-starved input, since
+   *     ffmpeg's OWN progress stalls when its read blocks on missing pieces).
+   *  3. Delivery  — content-seconds still needed for the SAME cushion to reach
+   *     the browser's buffer, at the proxy→client link's own throughput
+   *     relative to the stream's output bitrate (both already-measured
+   *     figures — the client's own net-report sample and the proxy's observed
+   *     segment bitrate — turned into a "content-seconds delivered per
+   *     wall-clock second" rate, exactly like the transcode multiplier is).
+   *
+   * The three ETAs are pipelined (each stage can make progress on different
+   * material concurrently), so the TRUE bottleneck is whichever is currently
+   * slowest — the result is their max(), computed only from the stages that
+   * are actually measurable right now. Returns null when NONE are.
+   *
+   * @param {{ downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
+   * @param {{ processedSeconds?: number, startPositionSeconds?: number, speed?: string, outputMbps?: number | null } | null} transcodeProgress
+   * @returns {number | null}
+   */
+  #computeUnifiedEtaSeconds(downloadStats, transcodeProgress) {
+    const candidates = [];
+
+    // Stage 1 — download: bytes remaining in the frozen resume window / speed.
+    const neededBytes = downloadStats && typeof downloadStats.resumeNeededBytes === "number"
+      ? downloadStats.resumeNeededBytes : null;
+    const downloadedBytes = downloadStats && typeof downloadStats.resumeDownloadedBytes === "number"
+      ? downloadStats.resumeDownloadedBytes : null;
+    const downloadSpeed = downloadStats && typeof downloadStats.downloadSpeed === "number" ? downloadStats.downloadSpeed : 0;
+    if (neededBytes !== null && downloadedBytes !== null) {
+      const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
+      if (remainingBytes <= 0) {
+        candidates.push(0);
+      } else if (downloadSpeed > 0) {
+        candidates.push(remainingBytes / downloadSpeed);
+      }
+    }
+
+    // Stage 2 — transcode: content-seconds still needed to cover the near-term
+    // resume cushion, at the encoder's own realtime multiplier.
+    const processedSeconds = transcodeProgress && typeof transcodeProgress.processedSeconds === "number"
+      ? transcodeProgress.processedSeconds : null;
+    const startPositionSeconds = transcodeProgress && typeof transcodeProgress.startPositionSeconds === "number"
+      ? transcodeProgress.startPositionSeconds : 0;
+    const encodeSpeed = transcodeProgress ? this.#parseRealtimeMultiplier(transcodeProgress.speed) : null;
+    let transcodeRemainingSeconds = null;
+    if (processedSeconds !== null) {
+      const producedSinceResume = Math.max(0, processedSeconds - startPositionSeconds);
+      transcodeRemainingSeconds = Math.max(0, PREBUFFER_TARGET_SECONDS - producedSinceResume);
+      if (transcodeRemainingSeconds <= 0) {
+        candidates.push(0);
+      } else if (encodeSpeed !== null && encodeSpeed > 0) {
+        candidates.push(transcodeRemainingSeconds / encodeSpeed);
+      }
+    }
+
+    // Stage 3 — delivery: the SAME near-term cushion, at the client's own
+    // measured link throughput relative to the stream's output bitrate. Both
+    // already-measured Mbps figures turned into a multiplier, the same shape
+    // as the transcode's own "speed". Needs the output bitrate (from the
+    // proxy) AND a live client-side link sample — silently skipped otherwise
+    // (no invented number).
+    const outputMbps = transcodeProgress && typeof transcodeProgress.outputMbps === "number" ? transcodeProgress.outputMbps : null;
+    const clientLinkMbps = getEstimatedLinkMbps();
+    if (transcodeRemainingSeconds !== null && outputMbps !== null && outputMbps > 0 && clientLinkMbps !== null) {
+      if (transcodeRemainingSeconds <= 0) {
+        candidates.push(0);
+      } else {
+        const deliverySpeedMultiplier = clientLinkMbps / outputMbps;
+        if (deliverySpeedMultiplier > 0) {
+          candidates.push(transcodeRemainingSeconds / deliverySpeedMultiplier);
+        }
+      }
+    }
+
+    return candidates.length > 0 ? Math.max(...candidates) : null;
+  }
+
+  /**
+   * Parse ffmpeg's `speed` progress value (e.g. "2.40x", "0.90x", "N/A") into
+   * a realtime multiplier. Mirrors the proxy's own parser (kept independent —
+   * this is just string parsing, not shared state).
+   *
+   * @param {string | undefined} value
+   * @returns {number | null}
+   */
+  #parseRealtimeMultiplier(value) {
+    if (typeof value !== "string" || value.length === 0) {
+      return null;
+    }
+    const numeric = Number.parseFloat(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
   }
 
   /**
@@ -583,18 +687,15 @@ export class Loading {
       parts.push(`${this.#formatBytes(stats.downloadSpeed)}/s`);
     }
 
-    // Amount still to download before playback can resume, and the time to get
-    // it at the current speed. Both come from the proxy's resume window (bytes
-    // needed vs downloaded ahead of the read head). Human-readable units.
+    // Amount still to download before playback can resume, from the proxy's
+    // resume window (bytes needed vs downloaded ahead of the read head). A
+    // magnitude only — the TIME estimate is the single unified three-stage ETA
+    // appended by the caller, not a separate per-stage one here.
     const neededBytes = stats && typeof stats.resumeNeededBytes === "number" ? stats.resumeNeededBytes : null;
     const downloadedBytes = stats && typeof stats.resumeDownloadedBytes === "number" ? stats.resumeDownloadedBytes : null;
-    const speedBytesPerSecond = stats && typeof stats.downloadSpeed === "number" ? stats.downloadSpeed : 0;
     if (neededBytes !== null && downloadedBytes !== null) {
       const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
       parts.push(`${this.#formatBytes(remainingBytes)} left`);
-      if (remainingBytes > 0 && speedBytesPerSecond > 0) {
-        parts.push(`~${this.#formatDuration(remainingBytes / speedBytesPerSecond)}`);
-      }
     } else if (this.#videoElement instanceof HTMLVideoElement) {
       // Proxy did not report the resume window (older proxy / read position not
       // known yet) — fall back to how many seconds are already buffered.
