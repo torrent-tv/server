@@ -252,6 +252,18 @@ export class Loading {
   /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/amount-left). */
   #bufferingPollTimer = null;
   /**
+   * Byte offset the resume window is pinned to for the CURRENT buffering
+   * episode. Captured from the proxy's first poll response and sent back on
+   * every subsequent poll of the SAME episode, so the proxy computes "bytes
+   * needed" against a fixed target instead of the live read position — which
+   * slides forward as playback/encoding progresses and would otherwise make
+   * the number jump up mid-poll. Null = no episode in progress / not yet
+   * captured. Reset at the start of each new episode (#showBuffering) and
+   * cleared when it ends (#clearBuffering).
+   * @type {number | null}
+   */
+  #bufferingResumeAnchorByteStart = null;
+  /**
    * Playback position (seconds) from a shared `&currentTime=` link, applied once
    * the player is revealed and the media is seekable, then cleared. Named to
    * match `video.currentTime` — the same name across every layer. Null = none.
@@ -483,6 +495,7 @@ export class Loading {
    */
   async #showBuffering() {
     this.#bufferingShown = true;
+    this.#bufferingResumeAnchorByteStart = null; // fresh episode — re-pin on the first poll
     this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
     // Poll live stats while buffering so the pill shows peers, download speed and
     // how much is left to download before playback resumes (from the proxy's
@@ -558,6 +571,7 @@ export class Loading {
       this.#bufferingShown = false;
       this.#dispatchBuffering(false);
     }
+    this.#bufferingResumeAnchorByteStart = null;
   }
 
   /**
@@ -578,6 +592,12 @@ export class Loading {
    * sourceKey (no re-registration), so it is a single cheap stats fetch.
    * Returns null on any failure — the pill then stays with just the spinner.
    *
+   * Pins the resume window to a fixed byte offset for the duration of one
+   * buffering episode: sends back `#bufferingResumeAnchorByteStart` once it has
+   * been captured from an earlier poll of the SAME episode, so the proxy
+   * computes "bytes needed" against a fixed target instead of the live read
+   * position (see the field's doc comment).
+   *
    * @returns {Promise<{ numPeers: number, downloadSpeed: number } | null>}
    */
   async #fetchBufferingStats() {
@@ -586,14 +606,23 @@ export class Loading {
         return null;
       }
       const sourceKey = await this.#session.registerSourceOnProxy(this.#transport);
+      const anchorParam = this.#bufferingResumeAnchorByteStart !== null
+        ? `&resumeAnchorByteStart=${this.#bufferingResumeAnchorByteStart}`
+        : "";
       const response = await this.#transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${this.#activeFileIndex}`,
+        `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${this.#activeFileIndex}${anchorParam}`,
         { cache: "no-store" }
       );
       if (!response.ok) {
         return null;
       }
       const stats = await response.json();
+      // Capture the anchor ONCE per episode (first successful poll) — later
+      // polls keep sending that same value above, so we must not overwrite it
+      // with a newer live position on every response.
+      if (this.#bufferingResumeAnchorByteStart === null && typeof stats?.resumeAnchorByteStart === "number") {
+        this.#bufferingResumeAnchorByteStart = stats.resumeAnchorByteStart;
+      }
       return {
         numPeers: typeof stats?.numPeers === "number" ? stats.numPeers : 0,
         downloadSpeed: typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0,
