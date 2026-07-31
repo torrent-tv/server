@@ -532,7 +532,7 @@ export class Loading {
    */
   #formatBufferingText(downloadStats, transcodeProgress) {
     const unified = this.#computeUnifiedEta(downloadStats, transcodeProgress);
-    const stageText = this.#formatTranscodeStageText(transcodeProgress, unified.cushionPercent)
+    const stageText = this.#formatTranscodeStageText(transcodeProgress, unified.cushionPercent, unified.cushionRemainingSeconds)
       ?? this.#formatDownloadStageText(downloadStats);
     if (unified.etaSeconds === null) {
       return stageText;
@@ -574,7 +574,7 @@ export class Loading {
    *
    * @param {{ downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
    * @param {{ processedSeconds?: number, startPositionSeconds?: number, speed?: string, outputMbps?: number | null } | null} transcodeProgress
-   * @returns {{ etaSeconds: number | null, cushionPercent: number | null }}
+   * @returns {{ etaSeconds: number | null, cushionPercent: number | null, cushionRemainingSeconds: number | null }}
    */
   #computeUnifiedEta(downloadStats, transcodeProgress) {
     const candidates = [];
@@ -636,7 +636,11 @@ export class Loading {
 
     const result = {
       etaSeconds: candidates.length > 0 ? Math.max(...candidates) : null,
-      cushionPercent
+      cushionPercent,
+      // Content-seconds still needed to cover the near-term resume cushion —
+      // "how much MORE needs to be encoded", not a whole-file figure. Distinct
+      // from etaSeconds (wall-clock time to get there).
+      cushionRemainingSeconds: transcodeRemainingSeconds
     };
     // [eta] TEMPORARY: raw inputs + result on every computation, so a field
     // report of a stuck/wrong percent can be verified from the server log
@@ -654,26 +658,33 @@ export class Loading {
   }
 
   /**
-   * Transcode-stage text: "Transcoding — 42% (2:16:49 of file left, 2.4x
-   * realtime)". The percent is `cushionPercent` — progress toward the SAME
-   * near-term resume cushion the unified ETA targets (NOT the whole-file
-   * percent, which can sit at "0%" for minutes on a long file even once the
-   * cushion is long since satisfied — see #computeUnifiedEta). Returns null
-   * when there is no active/progressing transcode session — the caller then
-   * falls back to the download-stage display.
+   * Transcode-stage text: "Transcoding — 42% (6s left to encode, 2.4x
+   * realtime)". Every figure here is scoped to the SAME near-term resume
+   * cushion the unified ETA targets — NEVER whole-file:
+   *   - `cushionPercent`   — % of the cushion produced so far.
+   *   - `cushionRemainingSeconds` — content-seconds still needed to finish it
+   *     ("how much MORE to encode", not a wall-clock duration).
+   *   - `speed`            — the encoder's realtime multiplier (context for
+   *     the above two, not a figure on its own).
+   * The whole-file percent/remaining-time are NEVER shown here: on a long
+   * file they can sit at "0%"/"hours left" for a long time even once the
+   * cushion is long satisfied — see #computeUnifiedEta. Returns null when
+   * there is no active/progressing transcode session — the caller then falls
+   * back to the download-stage display.
    *
-   * @param {{ remainingSeconds?: number | null, speed?: string, state?: string } | null} progress
+   * @param {{ speed?: string, state?: string } | null} progress
    * @param {number | null} cushionPercent
+   * @param {number | null} cushionRemainingSeconds
    * @returns {string | null}
    */
-  #formatTranscodeStageText(progress, cushionPercent) {
+  #formatTranscodeStageText(progress, cushionPercent, cushionRemainingSeconds) {
     if (!progress || progress.state === "failed" || typeof cushionPercent !== "number") {
       return null;
     }
     const parts = [`Transcoding — ${Math.round(cushionPercent)}%`];
     const details = [];
-    if (typeof progress.remainingSeconds === "number" && progress.remainingSeconds > 0) {
-      details.push(`${this.#formatDuration(progress.remainingSeconds)} of file left`);
+    if (typeof cushionRemainingSeconds === "number" && cushionRemainingSeconds > 0) {
+      details.push(`${Math.ceil(cushionRemainingSeconds)}s left to encode`);
     }
     // ffmpeg reports speed as e.g. "2.40x" / "0.90x" / "N/A" — a realtime
     // multiplier of the ENCODE rate (content-seconds produced per wall-clock
