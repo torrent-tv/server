@@ -146,6 +146,11 @@
     font-family: var(--media-font-family);
     font-size: 0.8125rem;
     font-variant-numeric: tabular-nums;
+    /* #formatBufferingText separates the stage description from the ETA with
+       a literal newline (matches the loading screen's own status text, which
+       already relies on this same property) — without it the browser default
+       collapses the newline into a space and the two lines run together. */
+    white-space: pre-line;
   }
 
   /* Share menu popover (two copy-link choices). position:fixed + coordinates
