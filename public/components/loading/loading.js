@@ -625,17 +625,43 @@ export class Loading {
     let etaSeconds = null;
     let fillRate = null;
 
+    // Bytes still to arrive before playback can proceed — the proxy's resume
+    // window mid-playback, the file header on the very first open. Used only as
+    // a floor (see below), never to declare readiness.
+    const neededBytes = downloadStats && typeof downloadStats.resumeNeededBytes === "number"
+      ? downloadStats.resumeNeededBytes : null;
+    const downloadedBytes = downloadStats && typeof downloadStats.resumeDownloadedBytes === "number"
+      ? downloadStats.resumeDownloadedBytes : null;
+    const downloadSpeed = downloadStats && typeof downloadStats.downloadSpeed === "number"
+      ? downloadStats.downloadSpeed : 0;
+    let downloadEtaSeconds = null;
+    if (neededBytes !== null && downloadedBytes !== null && downloadSpeed > 0) {
+      const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
+      if (remainingBytes > 0) {
+        downloadEtaSeconds = remainingBytes / downloadSpeed;
+      }
+    }
+
     if (bufferedAhead !== null) {
       cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / PREBUFFER_TARGET_SECONDS) * 100));
       cushionRemainingSeconds = Math.max(0, PREBUFFER_TARGET_SECONDS - bufferedAhead);
       fillRate = this.#trackBufferFillRate(bufferedAhead);
       if (cushionRemainingSeconds <= 0) {
+        // The buffer has actually reached the target — the only state that may
+        // be reported as "starting now".
         etaSeconds = 0;
       } else if (fillRate !== null && fillRate > 0) {
         etaSeconds = cushionRemainingSeconds / fillRate;
+      } else if (downloadEtaSeconds !== null) {
+        // The buffer is not filling measurably yet (typically the first open,
+        // before any media exists). Data still has to arrive before anything
+        // else can happen, so that time is a sound LOWER bound — better than
+        // "unknown", and it can never read as "starting now" because it is only
+        // used while strictly positive.
+        etaSeconds = downloadEtaSeconds;
       }
-      // else: the buffer is not (yet) measurably filling → etaSeconds stays
-      // null → "estimating…". Never claim imminence we cannot substantiate.
+      // else: nothing measurable → null → "estimating…". Never claim imminence
+      // we cannot substantiate.
     }
 
     // The encoder's own multiplier is kept only as CONTEXT next to the figures
@@ -674,7 +700,7 @@ export class Loading {
     // no device access needed) instead of reasoned about from a screenshot.
     console.debug(
       `[eta] buffered=${bufferedAhead?.toFixed(2) ?? "n/a"} fillRate=${fillRate?.toFixed(3) ?? "n/a"} ` +
-        `remaining=${cushionRemainingSeconds?.toFixed(2) ?? "n/a"} ` +
+        `remaining=${cushionRemainingSeconds?.toFixed(2) ?? "n/a"} downloadEta=${downloadEtaSeconds?.toFixed(2) ?? "n/a"} ` +
         `proxyProcessed=${processedSeconds} proxyStartPos=${startPositionSeconds} ` +
         `proxyProduced=${producedSinceResume?.toFixed(2) ?? "n/a"} speedRaw=${transcodeProgress?.speed ?? "n/a"} ` +
         `=> cushionPercent=${cushionPercent?.toFixed(1) ?? "null"} etaSeconds=${etaSeconds?.toFixed(2) ?? "null"}`
@@ -3581,12 +3607,24 @@ export class Loading {
   /**
    * Render the "Fetching file metadata" status line with live torrent stats.
    *
-   * @param {{ numPeers?: number, downloadSpeed?: number, fileProgress?: number, fileDownloaded?: number, fileLength?: number }} stats
+   * Opening a torrent and resuming after a seek are the same wait for the
+   * viewer, so they are described by the SAME line, built by the SAME code
+   * ({@link #formatBufferingText}) — same metrics, same single end-to-end
+   * "time until playback" figure. Previously this screen computed its own
+   * narrower "time to next phase", which answered a different question and
+   * could disagree with what the seek overlay showed for the same session.
+   *
+   * The whole-file line stays: during the initial fetch the file is genuinely
+   * being downloaded from zero, and its size/progress is real, relevant
+   * context that has no equivalent mid-playback.
+   *
+   * @param {{
+   *   numPeers?: number, downloadSpeed?: number,
+   *   fileProgress?: number, fileDownloaded?: number, fileLength?: number,
+   *   headerBytes?: number, headerDownloadedBytes?: number
+   * }} stats
    */
   #updateMetadataStatus(stats) {
-    const peers = typeof stats?.numPeers === "number" ? stats.numPeers : 0;
-    const downloadSpeed = typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0;
-    const speed = this.#formatBytes(downloadSpeed);
     const fileProgress = typeof stats?.fileProgress === "number" ? stats.fileProgress : null;
     const fileDownloaded = typeof stats?.fileDownloaded === "number" ? stats.fileDownloaded : null;
     const fileLength = typeof stats?.fileLength === "number" ? stats.fileLength : null;
@@ -3594,28 +3632,21 @@ export class Loading {
     const headerDownloadedBytes =
       typeof stats?.headerDownloadedBytes === "number" ? stats.headerDownloadedBytes : null;
 
-    const peersLine = `Peers: ${peers}`;
-    const speedLine = `Speed: ${speed}/s`;
+    // Until the codec probe can run, "what still has to arrive" is the file
+    // header — so it plays the role the resume window plays mid-playback, and
+    // feeds the shared formatter through the same fields.
+    const statsForShared = {
+      ...stats,
+      resumeNeededBytes: headerBytes,
+      resumeDownloadedBytes: headerDownloadedBytes
+    };
+    const sharedLine = this.#formatBufferingText(statsForShared, null);
 
-    // Phase 1 → phase 2 (transcode): progress and ETA toward having the
-    // header/index downloaded so the codec probe can run. Coarse (whole pieces).
-    // Uses the SAME unified ETA formula as the mid-playback buffering pill
-    // (#computeUnifiedEta) — at this phase only its download stage ever
-    // applies (no transcode session exists yet), so it reduces to the header
-    // bytes remaining at the current download speed, but it is the one
-    // canonical formula rather than a second, separately-maintained one.
-    let phaseLine = "";
     if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
-      const pct = Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100));
-      const etaSeconds = this.#computeUnifiedEta(
-        { resumeNeededBytes: headerBytes, resumeDownloadedBytes: headerDownloadedBytes, downloadSpeed },
-        null
-      ).etaSeconds;
-      const etaText = etaSeconds === null ? "n/a" : `~${this.#formatDuration(etaSeconds)}`;
-      // Show ETA only — the header is a handful of whole pieces, so a percent
-      // jumps 0 → 50 → 100 and reads as broken. The bar below still uses `pct`.
-      phaseLine = `\nTo next phase: ${etaText}`;
-      this.#setPhaseProgress(0, pct); // phase 0 (download) fills its third by header %
+      // The bar still advances on header progress; the text does not show this
+      // percent — the header is a handful of whole pieces, so it jumps
+      // 0 → 50 → 100 and reads as broken.
+      this.#setPhaseProgress(0, Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100)));
     }
 
     let fileLine = "";
@@ -3626,7 +3657,7 @@ export class Loading {
       fileLine = `\nFile: ${pct}% (${downloaded} / ${total})`;
     }
 
-    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${peersLine} • ${speedLine}${phaseLine}${fileLine}`);
+    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${sharedLine}${fileLine}`);
   }
 
   /**
