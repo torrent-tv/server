@@ -253,6 +253,14 @@ export class Loading {
   /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/amount-left). */
   #bufferingPollTimer = null;
   /**
+   * Trailing samples of `{ at, ahead }` used to measure how fast the browser's
+   * buffer is actually filling — the basis of the playback ETA. See
+   * #trackBufferFillRate.
+   *
+   * @type {{ at: number, ahead: number }[]}
+   */
+  #bufferFillSamples = [];
+  /**
    * Bumped on every #showBuffering() call (a fresh buffering episode) and on
    * #clearBuffering(). A re-entrant #showBuffering() (e.g. a seek-settle
    * debounce firing, then a `stalled` event re-arming its own debounce before
@@ -551,166 +559,200 @@ export class Loading {
    */
   #formatBufferingText(downloadStats, transcodeProgress) {
     const unified = this.#computeUnifiedEta(downloadStats, transcodeProgress);
-    const stageText = this.#formatTranscodeStageText(transcodeProgress, unified.cushionPercent, unified.cushionRemainingSeconds)
+    const stageText = this.#formatTranscodeStageText(transcodeProgress, unified)
       ?? this.#formatDownloadStageText(downloadStats);
-    if (unified.etaSeconds === null) {
-      return stageText;
-    }
-    const etaText = unified.etaSeconds > 0 ? `~${this.#formatDuration(unified.etaSeconds)} to playback` : "starting now";
+    // "starting now" is only ever printed for a measured zero — i.e. the buffer
+    // has actually reached the target. An unknown ETA says so ("estimating…"),
+    // because claiming imminence on a player that then sits frozen is the exact
+    // failure this display had in the field.
+    const etaText = unified.etaSeconds === null
+      ? "estimating…"
+      : unified.etaSeconds > 0 ? `~${this.#formatDuration(unified.etaSeconds)} to playback` : "starting now";
     return stageText.length > 0 ? `${stageText} • ${etaText}` : etaText;
   }
 
   /**
-   * Unified "time until playback can resume", combining ALL THREE pipeline
-   * stages that can each independently gate it:
+   * How close playback is to (re)starting, and how long that will take.
    *
-   *  1. Download  — bytes still needed in the (frozen) resume window, at the
-   *     current torrent download speed.
-   *  2. Transcode — content-seconds still needed to cover the near-term resume
-   *     cushion ({@link PREBUFFER_TARGET_SECONDS}), at ffmpeg's own realtime
-   *     speed multiplier (already reflects a download-starved input, since
-   *     ffmpeg's OWN progress stalls when its read blocks on missing pieces).
-   *  3. Delivery  — content-seconds still needed for the SAME cushion to reach
-   *     the browser's buffer, at the proxy→client link's own throughput
-   *     relative to the stream's output bitrate (both already-measured
-   *     figures — the client's own net-report sample and the proxy's observed
-   *     segment bitrate — turned into a "content-seconds delivered per
-   *     wall-clock second" rate, exactly like the transcode multiplier is).
+   * The figure the viewer is shown MUST describe the thing they are waiting
+   * for — playback starting — so it is measured where that is actually
+   * decided: **the browser's own buffer**. Playback begins when enough media
+   * is buffered ahead of the playhead ({@link PREBUFFER_TARGET_SECONDS}) and
+   * at no other moment, so:
    *
-   * The three ETAs are pipelined (each stage can make progress on different
-   * material concurrently), so the TRUE bottleneck is whichever is currently
-   * slowest — `etaSeconds` is their max(), computed only from the stages that
-   * are actually measurable right now (null when NONE are).
+   *   - `cushionPercent`          = buffered-ahead / target
+   *   - `cushionRemainingSeconds` = target - buffered-ahead
+   *   - `etaSeconds`              = remaining / the MEASURED rate at which the
+   *                                 buffer is actually filling
    *
-   * Also returns `cushionPercent` — how much of the SAME near-term cushion the
-   * transcode stage has produced so far. This must be shown ANYWHERE a percent
-   * is displayed alongside this ETA (never the whole-file percent): a fast
-   * copy-mode transcode on a long file can satisfy the 15 s cushion in well
-   * under a second while the whole-file percent is still "0%" for MINUTES (the
-   * file being hours long) — showing that whole-file number next to "starting
-   * now" read as self-contradictory nonsense. Root-caused from a field report:
-   * "Transcoding — 0% (22:39 left) • starting now" on a long copy-mode file.
+   * The buffer's fill rate is the end result of the whole pipeline (torrent
+   * download → ffmpeg → data channel → MediaSource), so it prices in every
+   * bottleneck at once, including ones no single stage can see.
+   *
+   * This replaces an earlier version that measured the PROXY's transcode
+   * progress instead. That was the wrong quantity and it lied in the field
+   * (2026-08-01): after a seek, ffmpeg had produced 110 s of content — a
+   * legitimate "100%" by that measure — while the browser's buffer sat at 0.0 s
+   * and playback never started, because the segments were being rejected on
+   * arrival. The display read "Transcoding — 100% • starting now" for minutes
+   * on a player that was frozen. A progress figure taken upstream of the actual
+   * failure point can always disagree with reality like this; one taken at the
+   * buffer cannot.
+   *
+   * When the buffer is not filling, the honest answer is "unknown", not a
+   * number derived from the stages that DO have a rate — so `etaSeconds` is
+   * null and the caller shows "estimating…" rather than "starting now".
    *
    * @param {{ downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
-   * @param {{ processedSeconds?: number, startPositionSeconds?: number, speed?: string, outputMbps?: number | null } | null} transcodeProgress
-   * @returns {{ etaSeconds: number | null, cushionPercent: number | null, cushionRemainingSeconds: number | null }}
+   *   Retained for the caller's stage text; the estimate itself is measured at
+   *   the buffer, so these no longer feed it.
+   * @param {{ processedSeconds?: number, startPositionSeconds?: number, speed?: string } | null} transcodeProgress
+   * @returns {{
+   *   etaSeconds: number | null,
+   *   cushionPercent: number | null,
+   *   cushionRemainingSeconds: number | null,
+   *   encodeSpeedText: string | null
+   * }}
    */
   #computeUnifiedEta(downloadStats, transcodeProgress) {
-    const candidates = [];
+    // How much media the player actually has ahead of the playhead. This — not
+    // the proxy's encode progress — is what gates playback starting.
+    const video = this.#videoElement;
+    const bufferedAhead = video instanceof HTMLVideoElement ? this.#bufferedAheadSeconds(video) : null;
 
-    // Stage 1 — download: bytes remaining in the frozen resume window / speed.
-    const neededBytes = downloadStats && typeof downloadStats.resumeNeededBytes === "number"
-      ? downloadStats.resumeNeededBytes : null;
-    const downloadedBytes = downloadStats && typeof downloadStats.resumeDownloadedBytes === "number"
-      ? downloadStats.resumeDownloadedBytes : null;
-    const downloadSpeed = downloadStats && typeof downloadStats.downloadSpeed === "number" ? downloadStats.downloadSpeed : 0;
-    if (neededBytes !== null && downloadedBytes !== null) {
-      const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
-      if (remainingBytes <= 0) {
-        candidates.push(0);
-      } else if (downloadSpeed > 0) {
-        candidates.push(remainingBytes / downloadSpeed);
+    let cushionPercent = null;
+    let cushionRemainingSeconds = null;
+    let etaSeconds = null;
+    let fillRate = null;
+
+    if (bufferedAhead !== null) {
+      cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / PREBUFFER_TARGET_SECONDS) * 100));
+      cushionRemainingSeconds = Math.max(0, PREBUFFER_TARGET_SECONDS - bufferedAhead);
+      fillRate = this.#trackBufferFillRate(bufferedAhead);
+      if (cushionRemainingSeconds <= 0) {
+        etaSeconds = 0;
+      } else if (fillRate !== null && fillRate > 0) {
+        etaSeconds = cushionRemainingSeconds / fillRate;
       }
+      // else: the buffer is not (yet) measurably filling → etaSeconds stays
+      // null → "estimating…". Never claim imminence we cannot substantiate.
     }
 
-    // Stage 2 — transcode: content-seconds still needed to cover the near-term
-    // resume cushion, at the encoder's own realtime multiplier.
+    // The encoder's own multiplier is kept only as CONTEXT next to the figures
+    // above ("…, 1.4x realtime") — never as the progress or the ETA itself; it
+    // describes work on the proxy, not media in this browser. Ignored until the
+    // run has produced enough content for the cumulative average to mean
+    // anything (see ENCODE_SPEED_MIN_PRODUCED_SECONDS).
     const processedSeconds = transcodeProgress && typeof transcodeProgress.processedSeconds === "number"
       ? transcodeProgress.processedSeconds : null;
     const startPositionSeconds = transcodeProgress && typeof transcodeProgress.startPositionSeconds === "number"
       ? transcodeProgress.startPositionSeconds : 0;
     const parsedEncodeSpeed = transcodeProgress ? this.#parseSpeedMultiplier(transcodeProgress.speed) : NaN;
-    const encodeSpeed = Number.isFinite(parsedEncodeSpeed) && parsedEncodeSpeed > 0 ? parsedEncodeSpeed : null;
-    let transcodeRemainingSeconds = null;
-    let cushionPercent = null;
-    if (processedSeconds !== null) {
-      const producedSinceResume = Math.max(0, processedSeconds - startPositionSeconds);
-      cushionPercent = Math.max(0, Math.min(100, (producedSinceResume / PREBUFFER_TARGET_SECONDS) * 100));
-      transcodeRemainingSeconds = Math.max(0, PREBUFFER_TARGET_SECONDS - producedSinceResume);
-      if (transcodeRemainingSeconds <= 0) {
-        candidates.push(0);
-      } else if (encodeSpeed !== null && encodeSpeed > 0) {
-        candidates.push(transcodeRemainingSeconds / encodeSpeed);
-      }
-    }
-
-    // Stage 3 — delivery: the SAME near-term cushion, at the client's own
-    // measured link throughput relative to the stream's output bitrate. Both
-    // already-measured Mbps figures turned into a multiplier, the same shape
-    // as the transcode's own "speed". Needs the output bitrate (from the
-    // proxy) AND a live client-side link sample — silently skipped otherwise
-    // (no invented number).
-    const outputMbps = transcodeProgress && typeof transcodeProgress.outputMbps === "number" ? transcodeProgress.outputMbps : null;
-    const clientLinkMbps = getEstimatedLinkMbps();
-    if (transcodeRemainingSeconds !== null && outputMbps !== null && outputMbps > 0 && clientLinkMbps !== null) {
-      if (transcodeRemainingSeconds <= 0) {
-        candidates.push(0);
-      } else {
-        const deliverySpeedMultiplier = clientLinkMbps / outputMbps;
-        if (deliverySpeedMultiplier > 0) {
-          candidates.push(transcodeRemainingSeconds / deliverySpeedMultiplier);
-        }
-      }
-    }
+    const producedSinceResume = processedSeconds !== null
+      ? Math.max(0, processedSeconds - startPositionSeconds)
+      : null;
+    const encodeSpeed =
+      Number.isFinite(parsedEncodeSpeed) &&
+      parsedEncodeSpeed > 0 &&
+      producedSinceResume !== null &&
+      producedSinceResume >= ENCODE_SPEED_MIN_PRODUCED_SECONDS
+        ? parsedEncodeSpeed
+        : null;
 
     const result = {
-      etaSeconds: candidates.length > 0 ? Math.max(...candidates) : null,
+      etaSeconds,
       cushionPercent,
-      // Content-seconds still needed to cover the near-term resume cushion —
-      // "how much MORE needs to be encoded", not a whole-file figure. Distinct
-      // from etaSeconds (wall-clock time to get there).
-      cushionRemainingSeconds: transcodeRemainingSeconds
+      // Seconds of media still needed in the BUFFER before playback starts.
+      cushionRemainingSeconds,
+      // One decimal, and null while the measurement is still a start-up
+      // artefact — so the display can never read "0.00757x realtime".
+      encodeSpeedText: encodeSpeed !== null ? `${encodeSpeed.toFixed(1)}x realtime` : null
     };
     // [eta] TEMPORARY: raw inputs + result on every computation, so a field
     // report of a stuck/wrong percent can be verified from the server log
     // (client-logger.js forwards console.debug there — readable via `ssh do`,
     // no device access needed) instead of reasoned about from a screenshot.
     console.debug(
-      `[eta] processed=${processedSeconds} startPos=${startPositionSeconds} ` +
-        `producedSinceResume=${processedSeconds !== null ? Math.max(0, processedSeconds - startPositionSeconds).toFixed(2) : "n/a"} ` +
-        `speedRaw=${transcodeProgress?.speed ?? "n/a"} encodeSpeed=${encodeSpeed} ` +
-        `transcodeRemaining=${transcodeRemainingSeconds} outputMbps=${outputMbps} clientLinkMbps=${clientLinkMbps} ` +
-        `candidates=[${candidates.map((c) => c.toFixed(2)).join(",")}] ` +
-        `=> cushionPercent=${cushionPercent?.toFixed(1) ?? "null"} etaSeconds=${result.etaSeconds?.toFixed(2) ?? "null"}`
+      `[eta] buffered=${bufferedAhead?.toFixed(2) ?? "n/a"} fillRate=${fillRate?.toFixed(3) ?? "n/a"} ` +
+        `remaining=${cushionRemainingSeconds?.toFixed(2) ?? "n/a"} ` +
+        `proxyProcessed=${processedSeconds} proxyStartPos=${startPositionSeconds} ` +
+        `proxyProduced=${producedSinceResume?.toFixed(2) ?? "n/a"} speedRaw=${transcodeProgress?.speed ?? "n/a"} ` +
+        `=> cushionPercent=${cushionPercent?.toFixed(1) ?? "null"} etaSeconds=${etaSeconds?.toFixed(2) ?? "null"}`
     );
     return result;
   }
 
   /**
-   * Transcode-stage text: "Transcoding — 42% (6s left to encode, 2.4x
-   * realtime)". Every figure here is scoped to the SAME near-term resume
-   * cushion the unified ETA targets — NEVER whole-file:
-   *   - `cushionPercent`   — % of the cushion produced so far.
-   *   - `cushionRemainingSeconds` — content-seconds still needed to finish it
-   *     ("how much MORE to encode", not a wall-clock duration).
-   *   - `speed`            — the encoder's realtime multiplier (context for
-   *     the above two, not a figure on its own).
-   * The whole-file percent/remaining-time are NEVER shown here: on a long
-   * file they can sit at "0%"/"hours left" for a long time even once the
-   * cushion is long satisfied — see #computeUnifiedEta. Returns null when
-   * there is no active/progressing transcode session — the caller then falls
-   * back to the download-stage display.
+   * Measured rate at which the browser's buffer is filling, in seconds of media
+   * gained per second of wall clock. This is the end-to-end rate of the entire
+   * pipeline, so it accounts for every bottleneck at once — including ones the
+   * individual stages cannot see (e.g. segments arriving but being rejected).
    *
-   * @param {{ speed?: string, state?: string } | null} progress
-   * @param {number | null} cushionPercent
-   * @param {number | null} cushionRemainingSeconds
-   * @returns {string | null}
+   * Averaged over a short trailing window rather than taken between two
+   * consecutive polls: media arrives in whole segments, so a per-poll delta
+   * alternates between a spike and zero and would make the ETA jump around.
+   * Returns null until the window covers enough wall time to be meaningful, and
+   * while the buffer is not growing — the caller then reports "unknown" instead
+   * of inventing a number.
+   *
+   * @param {number} bufferedAhead - Current seconds buffered ahead.
+   * @returns {number | null}
    */
-  #formatTranscodeStageText(progress, cushionPercent, cushionRemainingSeconds) {
-    if (!progress || progress.state === "failed" || typeof cushionPercent !== "number") {
+  #trackBufferFillRate(bufferedAhead) {
+    const now = Date.now();
+    const samples = this.#bufferFillSamples;
+    samples.push({ at: now, ahead: bufferedAhead });
+    while (samples.length > 0 && now - samples[0].at > BUFFER_FILL_WINDOW_MS) {
+      samples.shift();
+    }
+    if (samples.length < 2) {
       return null;
     }
-    const parts = [`Transcoding — ${Math.round(cushionPercent)}%`];
-    const details = [];
-    if (typeof cushionRemainingSeconds === "number" && cushionRemainingSeconds > 0) {
-      details.push(`${Math.ceil(cushionRemainingSeconds)}s left to encode`);
+    const oldest = samples[0];
+    const spanMs = now - oldest.at;
+    if (spanMs < BUFFER_FILL_MIN_SPAN_MS) {
+      return null;
     }
-    // ffmpeg reports speed as e.g. "2.40x" / "0.90x" / "N/A" — a realtime
-    // multiplier of the ENCODE rate (content-seconds produced per wall-clock
-    // second). Shown as-is; "N/A" (no measurement yet) is omitted.
-    const speed = typeof progress.speed === "string" ? progress.speed.trim() : "";
-    if (speed.length > 0 && speed.toUpperCase() !== "N/A") {
-      details.push(`${speed} realtime`);
+    const gained = bufferedAhead - oldest.ahead;
+    if (gained <= 0) {
+      return null; // not filling — the honest answer is "unknown", not zero
+    }
+    return gained / (spanMs / 1000);
+  }
+
+  /**
+   * The "how close am I to watching" line, e.g.
+   * `Buffering — 42% (9s of video still needed, 2.4x realtime)`.
+   *
+   * Every figure describes the BUFFER — the thing that gates playback — not the
+   * proxy's encode progress (see #computeUnifiedEta for why that distinction is
+   * the whole point). The encoder's multiplier is appended only as context, and
+   * only once it is a real measurement.
+   *
+   * Returns null when there is no active/progressing transcode session; the
+   * caller then falls back to the download-stage display.
+   *
+   * @param {{ state?: string } | null} progress
+   * @param {{
+   *   cushionPercent: number | null,
+   *   cushionRemainingSeconds: number | null,
+   *   encodeSpeedText: string | null
+   * }} unified - As returned by #computeUnifiedEta.
+   * @returns {string | null}
+   */
+  #formatTranscodeStageText(progress, unified) {
+    if (!progress || progress.state === "failed" || typeof unified?.cushionPercent !== "number") {
+      return null;
+    }
+    const parts = [`Buffering — ${Math.round(unified.cushionPercent)}%`];
+    const details = [];
+    if (typeof unified.cushionRemainingSeconds === "number" && unified.cushionRemainingSeconds > 0) {
+      details.push(`${Math.ceil(unified.cushionRemainingSeconds)}s of video still needed`);
+    }
+    // Encoder speed is context only, already validated + rounded upstream
+    // (null while it would still be a start-up artefact).
+    if (unified.encodeSpeedText) {
+      details.push(unified.encodeSpeedText);
     }
     if (details.length > 0) {
       parts.push(`(${details.join(", ")})`);
@@ -3251,10 +3293,10 @@ export class Loading {
     // already reflected in ffmpeg's own stalled `speed`.
     const unified = this.#computeUnifiedEta(null, progress);
     const etaText = unified.etaSeconds === null
-      ? "n/a"
-      : unified.etaSeconds > 0 ? this.#formatDuration(unified.etaSeconds) : "0:00";
+      ? "estimating…"
+      : unified.etaSeconds > 0 ? this.#formatDuration(unified.etaSeconds) : "starting now";
 
-    const stageText = this.#formatTranscodeStageText(progress, unified.cushionPercent, unified.cushionRemainingSeconds);
+    const stageText = this.#formatTranscodeStageText(progress, unified);
     if (stageText !== null) {
       // Phase 1 (transcode) fills its third by the SAME cushion % the pill uses.
       this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
@@ -3607,21 +3649,33 @@ export class Loading {
   }
 
   /**
+   * A short WAITING duration, with explicit units. Used for every "how long
+   * until X" figure the viewer reads.
+   *
+   * Clock notation (`00:08`) is wrong here: it reads as a position in a
+   * timeline, not a wait, and eight seconds shown as `00:08` has no unit at all
+   * (field-reported 2026-08-01). Minutes are always paired with their seconds
+   * (`2m 30s`), never given as a fraction. Nothing is ever shown below whole
+   * seconds.
+   *
    * @param {number} seconds
-   * @returns {string}
+   * @returns {string} e.g. "8s", "2m 30s", "1h 5m"
    */
   #formatDuration(seconds) {
     if (!Number.isFinite(seconds) || seconds < 0) {
-      return "00:00";
+      return "0s";
     }
-    const total = Math.floor(seconds);
+    const total = Math.round(seconds);
+    if (total < 60) {
+      return `${total}s`;
+    }
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const rest = total % 60;
     if (hours > 0) {
-      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+      return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
     }
-    return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+    return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
   }
 
   /**
@@ -3895,6 +3949,22 @@ const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);
 // and the proxy look-ahead window (~32 s), or buffering ahead triggers a
 // seek-restart.
 const PREBUFFER_TARGET_SECONDS = 15;
+// ffmpeg's `speed` is a CUMULATIVE average over the whole run, so the first
+// samples after a (re)start are dominated by process start-up and input open —
+// not by encoding. Field-observed on a seek-restart: `0.00757x` a second in,
+// settling to `1.4x` shortly after. Feeding that first sample into an ETA gave
+// "32m 56s to playback" for a 15 s cushion (14.958 / 0.00757), and printing it
+// verbatim gave "0.00757x realtime". Ignore the multiplier — for both the ETA
+// and the display — until the run has actually produced this many seconds of
+// content, by which point the cumulative average is meaningful.
+const ENCODE_SPEED_MIN_PRODUCED_SECONDS = 2;
+// Trailing window over which the buffer's fill rate is averaged. Media lands in
+// whole segments (~4 s each, in bursts), so a rate taken between two adjacent
+// polls alternates between a spike and zero; the window smooths that into the
+// sustained rate the ETA needs. The minimum span stops a rate being reported
+// from a window too short to have seen a segment arrive at all.
+const BUFFER_FILL_WINDOW_MS = 12_000;
+const BUFFER_FILL_MIN_SPAN_MS = 3_000;
 const PREBUFFER_MIN_SECONDS = 6;
 const PREBUFFER_MAX_SECONDS = 25;
 const PREBUFFER_BASE_SECONDS = 12;
