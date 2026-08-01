@@ -261,6 +261,15 @@ export class Loading {
    */
   #bufferFillSamples = [];
   /**
+   * Most recent torrent stats (peers / speed / bytes still needed), kept so
+   * every surface that answers "how long until I can watch" can show the
+   * supply stage — not just the one that happens to be polling right now.
+   * Null until the first poll lands.
+   *
+   * @type {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null}
+   */
+  #lastDownloadStats = null;
+  /**
    * Bumped on every #showBuffering() call (a fresh buffering episode) and on
    * #clearBuffering(). A re-entrant #showBuffering() (e.g. a seek-settle
    * debounce firing, then a `stalled` event re-arming its own debounce before
@@ -537,6 +546,9 @@ export class Loading {
         this.#fetchBufferingStats(),
         this.#session.fetchActiveTranscodeProgress()
       ]);
+      if (downloadStats) {
+        this.#lastDownloadStats = downloadStats;
+      }
       if (this.#bufferingShown && epoch === this.#bufferingEpoch) {
         this.#dispatchBuffering(true, this.#formatBufferingText(downloadStats, transcodeProgress));
       }
@@ -548,10 +560,17 @@ export class Loading {
   }
 
   /**
-   * Build the buffering pill text for whichever stage currently applies:
-   * download (peers/speed/bytes-left) or, once a transcode session exists for
-   * the file, transcode (percent/seconds-left/encode-speed) — with the unified
-   * three-stage "time until playback" appended when computable.
+   * The single "how close am I to watching" block, used EVERYWHERE that
+   * question is answered — the first open, the pre-buffer tail, and a
+   * mid-playback seek — so all three show the same figures, in the same
+   * order, from the same data.
+   *
+   * Both stages are always described, in pipeline order, one per line:
+   * supply (peers / speed / bytes still needed) and then playback readiness
+   * (percent of the required cushion / seconds of media still needed), with
+   * the single end-to-end time last. A stage with nothing to report is
+   * omitted rather than shown empty, but it is never REPLACED by the other —
+   * they answer different questions and the viewer needs both.
    *
    * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
    * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string, processedSeconds?: number, startPositionSeconds?: number, outputMbps?: number | null } | null} transcodeProgress
@@ -559,16 +578,24 @@ export class Loading {
    */
   #formatBufferingText(downloadStats, transcodeProgress) {
     const unified = this.#computeUnifiedEta(downloadStats, transcodeProgress);
-    const stageText = this.#formatTranscodeStageText(transcodeProgress, unified)
-      ?? this.#formatDownloadStageText(downloadStats);
-    // "starting now" is only ever printed for a measured zero — i.e. the buffer
-    // has actually reached the target. An unknown ETA says so ("estimating…"),
-    // because claiming imminence on a player that then sits frozen is the exact
-    // failure this display had in the field.
-    const etaText = unified.etaSeconds === null
-      ? "estimating…"
-      : unified.etaSeconds > 0 ? `~${this.#formatDuration(unified.etaSeconds)} to playback` : "starting now";
-    return stageText.length > 0 ? `${stageText}\n${etaText}` : etaText;
+    const lines = [];
+    const downloadLine = this.#formatDownloadStageText(downloadStats);
+    if (downloadLine.length > 0) {
+      lines.push(downloadLine);
+    }
+    const readinessLine = this.#formatTranscodeStageText(transcodeProgress, unified);
+    if (readinessLine !== null) {
+      lines.push(readinessLine);
+    }
+    // Always a number: #computeUnifiedEta never returns null (see its source
+    // ladder). "starting now" is still reserved for a measured zero — a
+    // buffer that has genuinely reached the target.
+    lines.push(
+      unified.etaSeconds !== null && unified.etaSeconds > 0
+        ? `${this.#formatDuration(unified.etaSeconds)} until playback`
+        : "starting now"
+    );
+    return lines.join("\n");
   }
 
   /**
@@ -654,22 +681,57 @@ export class Loading {
       const cushionTarget = this.#adaptiveCushionTarget(fillRate);
       cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / cushionTarget) * 100));
       cushionRemainingSeconds = Math.max(0, cushionTarget - bufferedAhead);
+      // A number is ALWAYS produced — "estimating…" is not an acceptable
+      // answer to "how long until I can watch". Sources, best first; each
+      // later one is a coarser approximation of the same quantity (seconds of
+      // wall clock until `cushionRemainingSeconds` of media exists in the
+      // buffer), and every one of them is a real measurement of some stage,
+      // never a guess:
+      //   1. the buffer has reached the target — genuinely zero;
+      //   2. the buffer's own measured fill rate (end-to-end, prices in every
+      //      bottleneck at once) — the most honest figure available;
+      //   3. the transcode's delivery rate: how fast the proxy PRODUCES media
+      //      (ffmpeg's own realtime multiplier) capped by how fast the link
+      //      can carry it, both already reported by the proxy. Valid before
+      //      the browser's buffer has moved at all, which is exactly when (2)
+      //      cannot exist yet;
+      //   4. the download stage: bytes still missing / current torrent speed —
+      //      the only stage that exists before any transcode session does.
       if (cushionRemainingSeconds <= 0) {
-        // The buffer has actually reached the target — the only state that may
-        // be reported as "starting now".
         etaSeconds = 0;
       } else if (fillRate !== null && fillRate > 0) {
         etaSeconds = cushionRemainingSeconds / fillRate;
-      } else if (downloadEtaSeconds !== null) {
-        // The buffer is not filling measurably yet (typically the first open,
-        // before any media exists). Data still has to arrive before anything
-        // else can happen, so that time is a sound LOWER bound — better than
-        // "unknown", and it can never read as "starting now" because it is only
-        // used while strictly positive.
-        etaSeconds = downloadEtaSeconds;
+      } else {
+        // (3) Production-side rate, in media-seconds per wall-second. The
+        // encode multiplier and the link's carrying capacity are independent
+        // limits on the same pipeline, so the effective rate is the smaller.
+        const produceRate = this.#parseSpeedMultiplier(transcodeProgress?.speed);
+        const outputMbps = typeof transcodeProgress?.outputMbps === "number" && transcodeProgress.outputMbps > 0
+          ? transcodeProgress.outputMbps
+          : null;
+        const linkMbps = getEstimatedLinkMbps();
+        // Media-seconds deliverable per wall-second = link throughput divided
+        // by the stream's own bitrate (both Mbit/s, so the ratio is unitless).
+        const deliverRate = outputMbps !== null && Number.isFinite(linkMbps) && linkMbps > 0
+          ? linkMbps / outputMbps
+          : null;
+        const pipelineRate = Number.isFinite(produceRate) && produceRate > 0
+          ? (deliverRate !== null ? Math.min(produceRate, deliverRate) : produceRate)
+          : deliverRate;
+        if (pipelineRate !== null && pipelineRate > 0) {
+          etaSeconds = cushionRemainingSeconds / pipelineRate;
+        } else if (downloadEtaSeconds !== null) {
+          // (4) Nothing is being produced yet — the wait is still the download.
+          etaSeconds = downloadEtaSeconds;
+        } else {
+          // Last resort: no stage has reported a rate yet (the very first
+          // moments). Assume the pipeline merely keeps up with realtime — a
+          // deliberately conservative floor, so the figure starts high and
+          // falls as real measurements arrive, rather than promising a speed
+          // nothing has demonstrated.
+          etaSeconds = cushionRemainingSeconds;
+        }
       }
-      // else: nothing measurable → null → "estimating…". Never claim imminence
-      // we cannot substantiate.
     }
 
     // The encoder's own multiplier is kept only as CONTEXT next to the figures
@@ -3211,7 +3273,7 @@ export class Loading {
         }
       }
       const ahead = this.#bufferedAheadSeconds(videoElement);
-      const unified = this.#computeUnifiedEta(null, cachedProgress);
+      const unified = this.#computeUnifiedEta(this.#lastDownloadStats, cachedProgress);
       const fillRate = unified.fillRate;
       const target = this.#adaptiveCushionTarget(fillRate);
 
@@ -3243,7 +3305,7 @@ export class Loading {
         );
       }
       this.#setPhaseProgress(2, unified.cushionPercent ?? 0); // phase 2 (buffering) fills the final third
-      this.setStatus(this.#formatBufferingText(null, cachedProgress));
+      this.setStatus(this.#formatBufferingText(this.#lastDownloadStats, cachedProgress));
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     // Timed out. If NOTHING buffered, the stream never started (dead transport /
@@ -3363,29 +3425,22 @@ export class Loading {
     const warmupPercent =
       typeof progress.warmupPercent === "number" ? progress.warmupPercent : NaN;
 
-    // No download-stats argument: by the time a transcode session exists the
-    // file header has already been probed, and a download-starved input is
-    // already reflected in ffmpeg's own stalled `speed`.
-    const unified = this.#computeUnifiedEta(null, progress);
-    const etaText = unified.etaSeconds === null
-      ? "estimating…"
-      : unified.etaSeconds > 0 ? this.#formatDuration(unified.etaSeconds) : "starting now";
+    // The live download stats captured by the stats poll, so this screen feeds
+    // #formatBufferingText the SAME two-stage input a mid-playback seek does —
+    // the supply line must not vanish here just because a transcode session
+    // now exists (field-reported: the first-open screen and the seek overlay
+    // showed different information for the same underlying state).
+    const unified = this.#computeUnifiedEta(this.#lastDownloadStats, progress);
+    // Phase 1 fills its third by the SAME cushion % every other surface uses.
+    this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
 
-    const stageText = this.#formatTranscodeStageText(progress, unified);
-    if (stageText !== null) {
-      // Phase 1 (transcode) fills its third by the SAME cushion % the pill uses.
-      this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
-      this.setStatus(`${stageText}\nTime to playback: ${etaText}`);
-      return;
-    }
-
-    // Warmup phase: ffmpeg is starting and has not produced segment data yet.
-    if (Number.isFinite(warmupPercent)) {
-      // Warmup is the lead-in of phase 1 → fills only the first ~20% of its band
-      // so the cushion progress (0–100%) that follows doesn't jump back.
-      this.#setPhaseProgress(1, warmupPercent * 0.2);
-      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nTime to playback: ${etaText}`);
-    }
+    const text = this.#formatBufferingText(this.#lastDownloadStats, progress);
+    // Before ffmpeg has produced anything the readiness line has no percent to
+    // report, so name what IS happening — the transcoder starting — above the
+    // shared block, rather than leaving the screen silent about it.
+    const isWarmingUp =
+      this.#formatTranscodeStageText(progress, unified) === null && Number.isFinite(warmupPercent);
+    this.setStatus(isWarmingUp ? `Starting transcoder... ${Math.round(warmupPercent)}%\n${text}` : text);
   }
 
   /**
@@ -3689,6 +3744,9 @@ export class Loading {
       resumeNeededBytes: headerBytes,
       resumeDownloadedBytes: headerDownloadedBytes
     };
+    // Retained so the later transcode/pre-buffer screens can keep showing the
+    // supply stage instead of dropping it the moment a session appears.
+    this.#lastDownloadStats = statsForShared;
     const sharedLine = this.#formatBufferingText(statsForShared, null);
 
     if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
