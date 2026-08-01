@@ -3205,13 +3205,16 @@ export class Loading {
   }
 
   /**
-   * Render loading status oriented to the FIRST segment — the only thing the
-   * player waits for before playback starts. Shows transcoder warmup while
-   * ffmpeg spins up, then progress toward producing the first segment, with
-   * the unified download/transcode/delivery "time to playback" estimate
-   * (#computeUnifiedEta — the same one shown during mid-playback
-   * buffering). Used both by the warmup polling inside the transcode session
-   * and by #startTranscodeProgressPoll.
+   * Render loading status for the transcode stage — the only thing the player
+   * waits for before playback starts. Shows transcoder warmup while ffmpeg
+   * spins up, then the SAME cushion percent / cushion-remaining-seconds /
+   * unified "time to playback" estimate the mid-playback buffering pill shows
+   * (#computeUnifiedEta + #formatTranscodeStageText) — not a separate,
+   * narrower "just the first 4s segment" calculation, which used to disagree
+   * with what the buffering pill shows for the exact same session (field-
+   * reported: this screen was never migrated when the pill moved off the
+   * whole-file percent onto the cushion figures). Used both by the warmup
+   * polling inside the transcode session and by #startTranscodeProgressPoll.
    *
    * @param {object | null} progress
    * @returns {void}
@@ -3220,55 +3223,31 @@ export class Loading {
     if (!progress || typeof progress !== "object") {
       return;
     }
-    const segmentDurationSec =
-      typeof progress.segmentDurationSec === "number" && progress.segmentDurationSec > 0
-        ? progress.segmentDurationSec
-        : NaN;
-    const startPositionSeconds =
-      typeof progress.startPositionSeconds === "number" ? progress.startPositionSeconds : 0;
-    const processedSeconds =
-      typeof progress.processedSeconds === "number" ? progress.processedSeconds : NaN;
     const warmupPercent =
       typeof progress.warmupPercent === "number" ? progress.warmupPercent : NaN;
-    const speedText =
-      typeof progress.speed === "string" && progress.speed.trim().length > 0
-        ? progress.speed.trim()
-        : "";
 
-    // Same unified download/transcode/delivery "time until playback" estimate
-    // used by the mid-playback buffering pill (#computeUnifiedEta), applied
-    // here too so the INITIAL loading screen gives the same honest figure
-    // instead of a narrower "just the first segment, just the encode speed"
-    // one. No download-stats argument: by the time a transcode session exists
-    // the file header has already been probed, and a download-starved input is
+    // No download-stats argument: by the time a transcode session exists the
+    // file header has already been probed, and a download-starved input is
     // already reflected in ffmpeg's own stalled `speed`.
-    const unifiedEtaSeconds = this.#computeUnifiedEta(null, progress).etaSeconds;
-    const unifiedEtaText = unifiedEtaSeconds === null
+    const unified = this.#computeUnifiedEta(null, progress);
+    const etaText = unified.etaSeconds === null
       ? "n/a"
-      : unifiedEtaSeconds > 0 ? this.#formatDuration(unifiedEtaSeconds) : "0:00";
+      : unified.etaSeconds > 0 ? this.#formatDuration(unified.etaSeconds) : "0:00";
 
-    // First-segment progress: how much of the first segment ffmpeg has encoded.
-    const segmentProcessed = Number.isFinite(processedSeconds)
-      ? Math.max(0, processedSeconds - startPositionSeconds)
-      : NaN;
-    if (Number.isFinite(segmentDurationSec) && Number.isFinite(segmentProcessed) && segmentProcessed >= 0) {
-      const pct = Math.max(0, Math.min(100, (segmentProcessed / segmentDurationSec) * 100));
-      // Phase 1 (transcode first segment) fills its third by first-segment %.
-      this.#setPhaseProgress(1, pct);
-      this.setStatus(
-        `Preparing first segment... ${Math.round(pct)}%\n` +
-          `Time to playback: ${unifiedEtaText}` +
-          (speedText ? `\nSpeed: ${speedText}` : "")
-      );
+    const stageText = this.#formatTranscodeStageText(progress, unified.cushionPercent, unified.cushionRemainingSeconds);
+    if (stageText !== null) {
+      // Phase 1 (transcode) fills its third by the SAME cushion % the pill uses.
+      this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
+      this.setStatus(`${stageText}\nTime to playback: ${etaText}`);
       return;
     }
 
     // Warmup phase: ffmpeg is starting and has not produced segment data yet.
     if (Number.isFinite(warmupPercent)) {
       // Warmup is the lead-in of phase 1 → fills only the first ~20% of its band
-      // so the first-segment progress (0–100%) that follows doesn't jump back.
+      // so the cushion progress (0–100%) that follows doesn't jump back.
       this.#setPhaseProgress(1, warmupPercent * 0.2);
-      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nTime to playback: ${unifiedEtaText}`);
+      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%\nTime to playback: ${etaText}`);
     }
   }
 
