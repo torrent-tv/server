@@ -253,6 +253,22 @@ export class Loading {
   /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/amount-left). */
   #bufferingPollTimer = null;
   /**
+   * Bumped on every #showBuffering() call (a fresh buffering episode) and on
+   * #clearBuffering(). A re-entrant #showBuffering() (e.g. a seek-settle
+   * debounce firing, then a `stalled` event re-arming its own debounce before
+   * the first one's poll() has resolved — both real events from the SAME
+   * scrub, observed field-side ~3s apart) starts a SECOND overlapping poll()
+   * with no ordering guarantee against the first; whichever network response
+   * lands last wins the DOM write regardless of which was actually more
+   * recent. Each poll() captures the epoch at its own #showBuffering() call
+   * and only writes to the DOM while it is still current, so a slow, stale
+   * response can never overwrite a fresher one — this is what "the percent
+   * looked frozen" traced back to (field-reported 2026-08-01).
+   *
+   * @type {number}
+   */
+  #bufferingEpoch = 0;
+  /**
    * Byte offset the resume window is pinned to for the CURRENT buffering
    * episode. Captured from the proxy's first poll response and sent back on
    * every subsequent poll of the SAME episode, so the proxy computes "bytes
@@ -495,6 +511,7 @@ export class Loading {
    * @returns {Promise<void>}
    */
   async #showBuffering() {
+    const epoch = ++this.#bufferingEpoch;
     this.#bufferingShown = true;
     this.#bufferingResumeAnchorByteStart = null; // fresh episode — re-pin on the first poll
     this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
@@ -504,18 +521,20 @@ export class Loading {
     // (the download-phase byte target has effectively been met and encoding has
     // started), show ITS progress instead — a downloaded-bytes count is no
     // longer the meaningful number once ffmpeg is actively producing segments.
-    // Stopped by #clearBuffering.
+    // Stopped by #clearBuffering. Guarded by `epoch` (see #bufferingEpoch) so a
+    // re-entrant #showBuffering() call's poll can never have its DOM write
+    // clobbered by a slower, now-stale response from an earlier one.
     const poll = async () => {
       const [downloadStats, transcodeProgress] = await Promise.all([
         this.#fetchBufferingStats(),
         this.#session.fetchActiveTranscodeProgress()
       ]);
-      if (this.#bufferingShown) {
+      if (this.#bufferingShown && epoch === this.#bufferingEpoch) {
         this.#dispatchBuffering(true, this.#formatBufferingText(downloadStats, transcodeProgress));
       }
     };
     await poll();
-    if (this.#bufferingShown && this.#bufferingPollTimer === null) {
+    if (this.#bufferingShown && epoch === this.#bufferingEpoch && this.#bufferingPollTimer === null) {
       this.#bufferingPollTimer = window.setInterval(() => { void poll(); }, 1500);
     }
   }
@@ -743,6 +762,7 @@ export class Loading {
    * @returns {void}
    */
   #clearBuffering() {
+    this.#bufferingEpoch += 1; // invalidate any in-flight poll() from this or a prior episode
     if (this.#bufferingTimer !== null) {
       clearTimeout(this.#bufferingTimer);
       this.#bufferingTimer = null;
