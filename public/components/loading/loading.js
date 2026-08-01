@@ -568,7 +568,7 @@ export class Loading {
     const etaText = unified.etaSeconds === null
       ? "estimating…"
       : unified.etaSeconds > 0 ? `~${this.#formatDuration(unified.etaSeconds)} to playback` : "starting now";
-    return stageText.length > 0 ? `${stageText} • ${etaText}` : etaText;
+    return stageText.length > 0 ? `${stageText}\n${etaText}` : etaText;
   }
 
   /**
@@ -643,9 +643,17 @@ export class Loading {
     }
 
     if (bufferedAhead !== null) {
-      cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / PREBUFFER_TARGET_SECONDS) * 100));
-      cushionRemainingSeconds = Math.max(0, PREBUFFER_TARGET_SECONDS - bufferedAhead);
       fillRate = this.#trackBufferFillRate(bufferedAhead);
+      // Same adaptive target #waitForPrebuffer gates the actual reveal on
+      // (see #adaptiveCushionTarget) — not a fixed constant — so the number
+      // shown here can never claim "ready" while the real gate is still
+      // waiting for a bigger cushion (field bug 2026-08-01: a weak margin
+      // grows the real gate's target past what this fixed-15s math assumed,
+      // so the display read "100% / starting now" for up to 10s while
+      // nothing happened).
+      const cushionTarget = this.#adaptiveCushionTarget(fillRate);
+      cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / cushionTarget) * 100));
+      cushionRemainingSeconds = Math.max(0, cushionTarget - bufferedAhead);
       if (cushionRemainingSeconds <= 0) {
         // The buffer has actually reached the target — the only state that may
         // be reported as "starting now".
@@ -692,7 +700,12 @@ export class Loading {
       cushionRemainingSeconds,
       // One decimal, and null while the measurement is still a start-up
       // artefact — so the display can never read "0.00757x realtime".
-      encodeSpeedText: encodeSpeed !== null ? `${encodeSpeed.toFixed(1)}x realtime` : null
+      encodeSpeedText: encodeSpeed !== null ? `${encodeSpeed.toFixed(1)}x realtime` : null,
+      // Exposed so #waitForPrebuffer's early-start heuristic reads the SAME
+      // measurement this function used for cushionPercent, instead of
+      // re-sampling #trackBufferFillRate a second time (which would corrupt
+      // its rolling window — it is stateful, one sample per call).
+      fillRate
     };
     // [eta] TEMPORARY: raw inputs + result on every computation, so a field
     // report of a stuck/wrong percent can be verified from the server log
@@ -744,6 +757,36 @@ export class Loading {
       return null; // not filling — the honest answer is "unknown", not zero
     }
     return gained / (spanMs / 1000);
+  }
+
+  /**
+   * The buffer-ahead cushion required before playback may (re)start, adaptive
+   * to the measured end-to-end fill rate `R` (media-seconds gained per wall
+   * second — see #trackBufferFillRate). At `R` = 1 the buffer neither grows
+   * nor drains once playing, so ANY cushion is fragile against a dip — the
+   * target grows to the maximum. A comfortable surplus over 1x needs only a
+   * small cushion (it refills fast after a dip).
+   *
+   * SHARED by #computeUnifiedEta (the percent/ETA shown to the viewer) and
+   * #waitForPrebuffer (the actual gate that reveals the player) — they must
+   * use the identical target at the same instant, or the display can claim
+   * "ready" while the real gate is still waiting (see the call site comment
+   * in #computeUnifiedEta for the field bug this caused).
+   *
+   * @param {number | null} fillRate - As returned by #trackBufferFillRate.
+   * @returns {number} Seconds, in [PREBUFFER_MIN_SECONDS, PREBUFFER_MAX_SECONDS].
+   */
+  #adaptiveCushionTarget(fillRate) {
+    if (!Number.isFinite(fillRate)) {
+      // Not yet measurable (first moments, or the buffer is not growing) —
+      // the fallback used before any real rate exists.
+      return PREBUFFER_TARGET_SECONDS;
+    }
+    const margin = fillRate - 1;
+    const target = margin <= 0
+      ? PREBUFFER_MAX_SECONDS
+      : Math.min(PREBUFFER_MAX_SECONDS, Math.max(PREBUFFER_MIN_SECONDS, PREBUFFER_BASE_SECONDS / margin));
+    return Math.min(target, PREBUFFER_MAX_SECONDS);
   }
 
   /**
@@ -3089,30 +3132,46 @@ export class Loading {
     // doesn't immediately stall. The video stays paused (player hidden) so hls.js
     // fills the buffer without draining it; #waitForPrebuffer is the only status
     // writer here.
-    await this.#waitForPrebuffer(this.#videoElement, PREBUFFER_TARGET_SECONDS, PREBUFFER_TIMEOUT_MS);
+    await this.#waitForPrebuffer(this.#videoElement, PREBUFFER_TIMEOUT_MS);
+  }
+
+  /**
+   * Wall-clock span currently covered by the buffer-fill rolling window (see
+   * #trackBufferFillRate) — read-only, pushes no sample. Used by
+   * #waitForPrebuffer to require the FULL window before trusting the rate for
+   * an EARLY start, not just the shorter minimum span that makes the rate
+   * trustworthy at all (see BUFFER_FILL_MIN_SPAN_MS vs BUFFER_FILL_WINDOW_MS).
+   *
+   * @returns {number} Milliseconds; 0 if fewer than 2 samples exist yet.
+   */
+  #bufferFillSpanMs() {
+    const samples = this.#bufferFillSamples;
+    return samples.length < 2 ? 0 : Date.now() - samples[0].at;
   }
 
   /**
    * Wait until enough video is buffered ahead before revealing the player.
    *
-   * The cushion size is ADAPTIVE: it is derived from the measured fill rate
-   * `R` (media-seconds buffered per wall-second — the video is paused here, so
-   * this is the production+delivery rate). During playback the buffer drains at
-   * 1×, so the margin is `R − 1`. A comfortable margin needs only a small
-   * cushion (it refills quickly → start sooner); a margin near zero needs a
-   * large one (any dip drains it). Capped at `PREBUFFER_MAX_SECONDS`, which must
-   * stay under hls.js `maxBufferLength` and the proxy look-ahead window so we
-   * never buffer far enough ahead to trigger a seek-restart.
+   * The cushion target and the fill-rate measurement are the SAME ones
+   * #computeUnifiedEta uses for the displayed percent/ETA (#adaptiveCushionTarget,
+   * #trackBufferFillRate) — this function calls #computeUnifiedEta itself each
+   * tick rather than recomputing them, so the reveal gate and the number shown
+   * to the viewer can never disagree about what "ready" means. Also fetches the
+   * SAME live transcode progress the mid-playback buffering pill polls
+   * (#session.fetchActiveTranscodeProgress), at the same ~1.5s cadence, and
+   * renders it through the SAME formatter (#formatBufferingText) — so the text
+   * is identical in format and in data source across first-open, this pre-
+   * buffer tail, and a later seek, not three independent approximations of the
+   * same question.
    *
-   * Falls back to `defaultTargetSeconds` until the rate is measurable, and to
-   * an absolute `timeoutMs` so a slow encoder never blocks playback forever.
+   * Falls back to an absolute `timeoutMs` so a slow encoder never blocks
+   * playback forever.
    *
    * @param {HTMLVideoElement} videoElement
-   * @param {number} defaultTargetSeconds
    * @param {number} timeoutMs
    * @returns {Promise<void>}
    */
-  async #waitForPrebuffer(videoElement, defaultTargetSeconds, timeoutMs) {
+  async #waitForPrebuffer(videoElement, timeoutMs) {
     if (!(videoElement instanceof HTMLVideoElement)) {
       return;
     }
@@ -3130,9 +3189,9 @@ export class Loading {
       videoElement.pause();
     }
     const startedAt = Date.now();
-    /** @type {Array<{ t: number, ahead: number }>} Rolling window for fill-rate. */
-    const samples = [];
     let loggedTarget = -1;
+    let cachedProgress = null;
+    let lastProgressFetchAt = 0;
     while (Date.now() - startedAt < timeoutMs) {
       this.#throwIfCancelled();
       if (videoElement.error) {
@@ -3143,38 +3202,29 @@ export class Loading {
         videoElement.pause();
       }
       const now = Date.now();
+      if (now - lastProgressFetchAt >= 1500) {
+        lastProgressFetchAt = now;
+        try {
+          cachedProgress = await this.#session.fetchActiveTranscodeProgress();
+        } catch {
+          // Transient — keep the last known progress rather than blanking it.
+        }
+      }
       const ahead = this.#bufferedAheadSeconds(videoElement);
-
-      // Fill rate R over a short rolling window.
-      samples.push({ t: now, ahead });
-      while (samples.length > 1 && now - samples[0].t > PREBUFFER_RATE_WINDOW_MS) {
-        samples.shift();
-      }
-      const wallSpan = (now - samples[0].t) / 1000;
-      // Trust the rate only once it spans enough wall time to average across
-      // segment-arrival bursts; before that, hold the default target.
-      const fillRate =
-        wallSpan >= PREBUFFER_RATE_MIN_SPAN_MS / 1000 ? (ahead - samples[0].ahead) / wallSpan : NaN;
-
-      // Adaptive target from the margin over realtime (R − 1).
-      let target = defaultTargetSeconds;
-      if (Number.isFinite(fillRate)) {
-        const margin = fillRate - 1;
-        target = margin <= 0
-          ? PREBUFFER_MAX_SECONDS
-          : Math.min(PREBUFFER_MAX_SECONDS, Math.max(PREBUFFER_MIN_SECONDS, PREBUFFER_BASE_SECONDS / margin));
-      }
-      target = Math.min(target, PREBUFFER_MAX_SECONDS);
+      const unified = this.#computeUnifiedEta(null, cachedProgress);
+      const fillRate = unified.fillRate;
+      const target = this.#adaptiveCushionTarget(fillRate);
 
       // Start early when the fill rate has SUSTAINED a healthy surplus over
-      // the FULL window (not just the min span the adaptive target needs) —
-      // the same anti-burst guard that fixed the 0.8.45 start-stutter. Low
-      // margins keep the deeper adaptive target unchanged.
+      // the FULL rolling window (not just the shorter span that makes the
+      // rate trustworthy at all) — the same anti-burst guard that fixed the
+      // 0.8.45 start-stutter. Low margins keep the deeper adaptive target
+      // unchanged.
       const healthyEarly =
         ahead >= PREBUFFER_HEALTHY_AHEAD_SECONDS &&
         Number.isFinite(fillRate) &&
         fillRate >= PREBUFFER_HEALTHY_FILL_RATE &&
-        wallSpan >= PREBUFFER_RATE_WINDOW_MS / 1000;
+        this.#bufferFillSpanMs() >= BUFFER_FILL_WINDOW_MS;
 
       if (ahead >= target || healthyEarly) {
         this.#logEvt(
@@ -3192,9 +3242,8 @@ export class Loading {
             `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
         );
       }
-      const pct = Math.max(0, Math.min(100, (ahead / target) * 100));
-      this.#setPhaseProgress(2, pct); // phase 2 (buffering) fills the final third
-      this.setStatus(`Buffering... ${Math.round(ahead)} / ${Math.round(target)} s`);
+      this.#setPhaseProgress(2, unified.cushionPercent ?? 0); // phase 2 (buffering) fills the final third
+      this.setStatus(this.#formatBufferingText(null, cachedProgress));
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     // Timed out. If NOTHING buffered, the stream never started (dead transport /
@@ -3680,33 +3729,35 @@ export class Loading {
   }
 
   /**
-   * A short WAITING duration, with explicit units. Used for every "how long
+   * A short WAITING duration, spelled out in words. Used for every "how long
    * until X" figure the viewer reads.
    *
    * Clock notation (`00:08`) is wrong here: it reads as a position in a
-   * timeline, not a wait, and eight seconds shown as `00:08` has no unit at all
-   * (field-reported 2026-08-01). Minutes are always paired with their seconds
-   * (`2m 30s`), never given as a fraction. Nothing is ever shown below whole
-   * seconds.
+   * timeline, not a wait, and eight seconds shown as `00:08` has no unit at
+   * all (field-reported 2026-08-01). Abbreviations (`2m 30s`) were tried next
+   * and also rejected — spelled out in full instead. Minutes are always paired
+   * with their seconds, never given as a fraction. Nothing is ever shown below
+   * whole seconds.
    *
    * @param {number} seconds
-   * @returns {string} e.g. "8s", "2m 30s", "1h 5m"
+   * @returns {string} e.g. "8 seconds", "2 minutes 30 seconds", "1 hour 5 minutes"
    */
   #formatDuration(seconds) {
+    const plural = (value, unit) => `${value} ${unit}${value === 1 ? "" : "s"}`;
     if (!Number.isFinite(seconds) || seconds < 0) {
-      return "0s";
+      return plural(0, "second");
     }
     const total = Math.round(seconds);
     if (total < 60) {
-      return `${total}s`;
+      return plural(total, "second");
     }
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const rest = total % 60;
     if (hours > 0) {
-      return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+      return minutes > 0 ? `${plural(hours, "hour")} ${plural(minutes, "minute")}` : plural(hours, "hour");
     }
-    return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+    return rest > 0 ? `${plural(minutes, "minute")} ${plural(rest, "second")}` : plural(minutes, "minute");
   }
 
   /**
@@ -3999,19 +4050,14 @@ const BUFFER_FILL_MIN_SPAN_MS = 3_000;
 const PREBUFFER_MIN_SECONDS = 6;
 const PREBUFFER_MAX_SECONDS = 25;
 const PREBUFFER_BASE_SECONDS = 12;
-// Fill-rate must be averaged over a window long enough to span SEVERAL segment
-// arrivals — segments land in bursts every ~4-11 s on a slow/warming encoder,
-// so a short window reads a single burst as "3x realtime" and releases with a
-// tiny cushion that then drains (the ~35 s start-stutter). Only trust the rate
-// once it covers at least PREBUFFER_RATE_MIN_SPAN_MS of wall time, so it
-// reflects sustained production, not a spike.
-const PREBUFFER_RATE_WINDOW_MS = 10_000;
-const PREBUFFER_RATE_MIN_SPAN_MS = 5_000;
 // Start early when the fill rate has sustained a healthy surplus over the FULL
-// rate window (not merely the min span the adaptive target needs). The
-// full-window requirement is the anti-burst protection from the 0.8.45
-// start-stutter fix: a burst must not masquerade as a sustained rate. Below
-// this fill rate the deeper adaptive target is kept (thin margins need it).
+// buffer-fill window (BUFFER_FILL_WINDOW_MS above — not merely the shorter
+// span that makes the rate trustworthy at all). The full-window requirement
+// is the anti-burst protection from the 0.8.45 start-stutter fix: segments
+// land in bursts every ~4-11 s on a slow/warming encoder, so a short window
+// reads a single burst as "3x realtime" and releases with a tiny cushion that
+// then drains. Below this fill rate the deeper adaptive target is kept (thin
+// margins need it).
 const PREBUFFER_HEALTHY_FILL_RATE = 1.35;
 const PREBUFFER_HEALTHY_AHEAD_SECONDS = 10;
 // Allow a full cushion to build on a genuinely slow start before falling back.
