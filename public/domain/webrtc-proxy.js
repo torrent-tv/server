@@ -475,10 +475,29 @@ export class WebRtcProxy {
     if (!entry) return;
 
     if (payload.length > 0) {
+      // First body byte: everything before it is the proxy producing/reading
+      // the response, everything after is transfer. Without the split a slow
+      // response cannot be attributed to either side.
+      if (entry.firstByteAt === undefined) {
+        entry.firstByteAt = performance.now();
+      }
       entry.chunks.push(payload);
     }
     if ((flags & 1) === 1) {
       this.#pending.delete(requestId);
+      const finishedAt = performance.now();
+      const totalBytes = entry.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      // Only worth reporting for real payloads; status-only replies are noise.
+      if (totalBytes > 65536 && typeof entry.startedAt === "number") {
+        const waitMs = (entry.firstByteAt ?? finishedAt) - entry.startedAt;
+        const transferMs = finishedAt - (entry.firstByteAt ?? finishedAt);
+        const mbps = transferMs > 0 ? (totalBytes * 8) / (transferMs * 1000) : 0;
+        console.debug(
+          `[dc-recv] ${entry.path ?? "?"} bytes=${totalBytes} ` +
+            `waitMs=${waitMs.toFixed(0)} transferMs=${transferMs.toFixed(0)} ` +
+            `chunks=${entry.chunks.length} rate=${mbps.toFixed(1)}Mbps`
+        );
+      }
       entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks));
     }
   }
@@ -577,7 +596,12 @@ export class WebRtcProxy {
       reject: (err) => { cleanup(); pendingReject(err); },
       chunks: [],
       status: 200,
-      headers: {}
+      headers: {},
+      // For the [dc-recv] timing line: when the request left, and what it was
+      // for. `firstByteAt` is filled when the first body byte arrives.
+      startedAt: performance.now(),
+      path,
+      firstByteAt: undefined
     });
 
     if (signal) {

@@ -1,3 +1,7 @@
+## 0.8.93
+
+- **Chore**: Browser-side receive timing for data-channel responses, the counterpart to the proxy's transfer instrumentation. Each body over 64 KB logs `[dc-recv]` with `waitMs` (request sent → first body byte, i.e. time spent on the proxy) and `transferMs` (first byte → last, i.e. time on the wire), plus chunk count and resulting rate. The two sides together locate a slow segment delivery without guessing: proxy-side production, transfer, or the browser's own handling.
+
 ## 0.8.92
 
 - **Fix**: The browser now tells the proxy **where the viewer seeked**, instead of leaving it to guess from segment requests. A scrub emits a continuous stream of `seeking` events; 300 ms after the last one the settled `currentTime` is posted to the proxy session. This is the only place the intent exists — measured on the proxy side, one seek leaves ~25 concurrent segment requests outstanding across a wide span, so no rule over them can recover which position the viewer meant (it caused nine encoder restarts in one minute and a ~70 s seek). Requires proxy 2.9.62+; on older proxies the post is ignored and behaviour is unchanged.
