@@ -1,3 +1,7 @@
+## 0.8.90
+
+- **Chore**: Widened the hls.js fragment retry budget (`fragLoadPolicy` `maxNumRetry` 8 → 12) to match proxy 2.9.57, which now answers a not-yet-produced segment with a retryable 503 after ~2 s instead of holding the request open for up to 30 s (required to stay under iOS AVPlayer's ~3.5 s response-header deadline). A slow segment is therefore spread across more retries than before; with the existing growing delay this budget still covers well over a minute of production time.
+
 ## 0.8.89
 
 - **Fix**: "estimating…" is gone — a time is now always shown. It was displayed whenever the browser's buffer had not measurably moved yet, which is exactly the moment the viewer most wants a number: right after a seek, and on the first open before any media exists (field logs: `etaSeconds=null` for minutes at a stretch while the transcode was running at 8x). The estimate now falls through a ladder of real measurements, each a coarser view of the same quantity — (1) the buffer's own measured fill rate, (2) the proxy's production rate (ffmpeg's realtime multiplier) capped by what the measured link can carry (`outputMbps` vs the client's own net-report sample), (3) the download stage (bytes still missing ÷ torrent speed), (4) a deliberately conservative realtime floor when literally nothing has reported yet. Verified against the exact field numbers that previously produced no estimate: all now yield sensible times (a post-seek stall reads 16 s, link-limited; a download-only first open reads 5 s).
