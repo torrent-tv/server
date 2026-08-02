@@ -1,4 +1,4 @@
-## 0.8.90
+## 0.8.91
 
 - **Chore**: Widened the hls.js fragment retry budget (`fragLoadPolicy` `maxNumRetry` 8 → 12) to match proxy 2.9.57, which now answers a not-yet-produced segment with a retryable 503 after ~2 s instead of holding the request open for up to 30 s (required to stay under iOS AVPlayer's ~3.5 s response-header deadline). A slow segment is therefore spread across more retries than before; with the existing growing delay this budget still covers well over a minute of production time.
 
