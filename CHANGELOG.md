@@ -1,3 +1,7 @@
+## 0.8.92
+
+- **Fix**: The browser now tells the proxy **where the viewer seeked**, instead of leaving it to guess from segment requests. A scrub emits a continuous stream of `seeking` events; 300 ms after the last one the settled `currentTime` is posted to the proxy session. This is the only place the intent exists — measured on the proxy side, one seek leaves ~25 concurrent segment requests outstanding across a wide span, so no rule over them can recover which position the viewer meant (it caused nine encoder restarts in one minute and a ~70 s seek). Requires proxy 2.9.62+; on older proxies the post is ignored and behaviour is unchanged.
+
 ## 0.8.91
 
 - **Chore**: Widened the hls.js fragment retry budget (`fragLoadPolicy` `maxNumRetry` 8 → 12) to match proxy 2.9.57, which now answers a not-yet-produced segment with a retryable 503 after ~2 s instead of holding the request open for up to 30 s (required to stay under iOS AVPlayer's ~3.5 s response-header deadline). A slow segment is therefore spread across more retries than before; with the existing growing delay this budget still covers well over a minute of production time.

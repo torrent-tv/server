@@ -63,6 +63,46 @@ export class TorrentSession {
     return fetchTranscodeProgress(poll.progressUrl, this.abortController.signal, poll.fetchFn);
   }
 
+  /**
+   * Tell the proxy where the viewer seeked to.
+   *
+   * The proxy cannot work this out for itself. A single seek leaves ~25
+   * concurrent segment requests outstanding across a wide span (measured
+   * 2026-08-02), so "the segment the player asked for last" is noise — acting
+   * on it caused nine encoder restarts in one minute and a ~70 s seek. The
+   * position exists only here, in `video.currentTime` once the scrub ends.
+   *
+   * Same split as Jellyfin (`startTimeTicks`) and webtor (`?t=`): requests
+   * fetch data, this states intent. Best-effort — a lost report only means the
+   * encoder keeps producing where it already is.
+   *
+   * @param {number} positionSeconds - Absolute position on the source timeline.
+   * @returns {Promise<void>}
+   */
+  async reportSeek(positionSeconds) {
+    if (!Number.isFinite(positionSeconds) || positionSeconds < 0) {
+      return;
+    }
+    const sessions = Array.from(this.activeTranscodeSessions.entries());
+    for (const [sessionId, transport] of sessions) {
+      const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/seek`;
+      const init = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ positionSeconds })
+      };
+      try {
+        if (!transport.isHttp) {
+          await transport.fetch(path, init);
+        } else {
+          await fetch(new URL(path.slice(1), ensureTrailingSlash(transport.baseUrl)), init);
+        }
+      } catch {
+        // Best-effort: the encoder simply keeps producing where it is.
+      }
+    }
+  }
+
   abortPendingRequests() {
     this.abortController.abort();
     this.abortController = new AbortController();
