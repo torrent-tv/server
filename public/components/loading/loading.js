@@ -246,6 +246,9 @@ export class Loading {
    * @type {boolean}
    */
   #playbackLive = false;
+
+  /** Pending seek-intent report timer (see #reportSeekIntent). */
+  #seekReportTimer = null;
   /** @type {ReturnType<typeof setTimeout> | null} Debounce before showing the buffering notice. */
   #bufferingTimer = null;
   /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
@@ -399,6 +402,7 @@ export class Loading {
       videoElement.addEventListener(name, () => {
         log(name);
         this.#onPlaybackEventForBuffering(name);
+        this.#reportSeekIntent(name, videoElement);
       });
     }
     // Periodic bottleneck classification while playing. Distinguishes, from
@@ -453,6 +457,41 @@ export class Loading {
           `(${(droppedRatio * 100).toFixed(1)}%)`
       );
     }, 10_000);
+  }
+
+  /**
+   * Tell the proxy where the viewer seeked, so it can move the encoder there.
+   *
+   * Debounced on `seeking`: a scrub emits a continuous stream of `seeking`
+   * events (one per pointer move — a single drag produced dozens, measured),
+   * and only the position it settles on matters. `SEEK_REPORT_DEBOUNCE_MS`
+   * after the last one, that position is sent.
+   *
+   * This is the sole source of seek intent. The proxy cannot infer it: one seek
+   * leaves ~25 concurrent segment requests outstanding across a wide span, so
+   * any rule over them picks noise (field 2026-08-02: nine encoder restarts in
+   * a minute, ~70 s to complete one seek).
+   *
+   * @param {string} name - The <video> event name.
+   * @param {HTMLVideoElement} videoElement
+   * @returns {void}
+   */
+  #reportSeekIntent(name, videoElement) {
+    if (name !== "seeking") {
+      return;
+    }
+    if (this.#seekReportTimer !== null) {
+      clearTimeout(this.#seekReportTimer);
+    }
+    this.#seekReportTimer = window.setTimeout(() => {
+      this.#seekReportTimer = null;
+      const position = videoElement.currentTime;
+      if (!Number.isFinite(position)) {
+        return;
+      }
+      this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
+      void this.#session.reportSeek(position);
+    }, SEEK_REPORT_DEBOUNCE_MS);
   }
 
   /**
@@ -4088,6 +4127,10 @@ const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);
 // measurable. PREBUFFER_MAX_SECONDS must stay under hls.js maxBufferLength (30)
 // and the proxy look-ahead window (~32 s), or buffering ahead triggers a
 // seek-restart.
+// A scrub emits `seeking` on every pointer move; only where it settles counts.
+// Long enough to collapse a drag into one report, short enough that the encoder
+// starts on the real target promptly.
+const SEEK_REPORT_DEBOUNCE_MS = 300;
 const PREBUFFER_TARGET_SECONDS = 15;
 // ffmpeg's `speed` is a CUMULATIVE average over the whole run, so the first
 // samples after a (re)start are dominated by process start-up and input open —
