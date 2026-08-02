@@ -101,7 +101,13 @@ export function createHlsPlayer(onLog) {
                 ...baseFragPolicy.default,
                 errorRetry: {
                   ...baseFragPolicy.default?.errorRetry,
-                  maxNumRetry: 8,
+                  // Widened again alongside the proxy's short segment hold
+                  // (SEGMENT_WAIT_MS): the proxy now answers "retry" within
+                  // ~2 s instead of holding the request, so a segment that
+                  // takes a while to produce is spread over more retries than
+                  // before. This budget (with the growing delay below) still
+                  // covers well over a minute of production time.
+                  maxNumRetry: 12,
                   retryDelayMs: 1000,
                   maxRetryDelayMs: 8000
                 }
