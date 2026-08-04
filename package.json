@@ -1,6 +1,6 @@
 {
   "name": "@torrent-tv/server",
-  "version": "0.8.94",
+  "version": "0.8.95",
   "license": "UNLICENSED",
   "publishConfig": {
     "access": "public"
