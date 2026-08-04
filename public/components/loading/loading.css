@@ -1,5 +1,8 @@
 #loading {
   border: none;
+  /* Centres the action row: the buttons are inline-level siblings with no row
+     element between them and the dialog. */
+  text-align: center;
   /* Modal dialogs receive focus on showModal(); hide the focus ring. */
   outline: none;
   font-family: sans-serif;
@@ -19,10 +22,17 @@
     color: inherit;
   }
 
-  & #loading__cancel {
-    display: block;
+  /* The dialog's actions. They sit on one centred row: `inline-flex` rather
+     than `block` so that two of them stand side by side, with the gap carried
+     by the buttons themselves — there is no row element to hang a gap on, and
+     inventing one to hold two buttons would be a wrapper that exists only for
+     styling. `text-align` on the dialog is what centres the row; the margin is
+     symmetric so a single visible button stays centred when the other is
+     hidden. */
+  & .loading__control {
+    display: inline-flex;
     margin-block-start: 1.5rem;
-    margin-inline: auto;
+    margin-inline: 0.375rem;
     padding: 0.5em 1.25em;
     font-family: inherit;
     font-size: 1rem;
@@ -35,6 +45,11 @@
       /* Derived from the text colour so it works in both schemes. */
       background: color-mix(in srgb, currentColor 8%, transparent);
     }
+  }
+
+  /* `inline-flex` above would otherwise override the hidden attribute. */
+  & .loading__control[hidden] {
+    display: none;
   }
 
   & #loading__filename {
