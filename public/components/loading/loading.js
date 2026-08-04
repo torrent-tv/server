@@ -2105,11 +2105,17 @@ export class Loading {
         ? Loading.MESSAGES.preparingHlsVideo
         : Loading.MESSAGES.preparingHlsAudio;
       this.setStatus(`${statusMessage}\n${transcodeReason}`);
+      const transcodeAudioTrack =
+        shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec);
       await this.#playWithProxyTranscode(fileIndex, {
         transport,
         sourceKey: prepared.sourceKey,
         transcodeVideo: shouldTranscodeVideo,
-        transcodeAudio: shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec),
+        transcodeAudio: transcodeAudioTrack,
+        segmentFormat: this.#requiredSegmentFormat({
+          audioCodec: prepared.audioCodec,
+          transcodeAudio: transcodeAudioTrack
+        }),
         statusMessage: `${statusMessage}\n${transcodeReason}`
       });
       this.#setActiveMediaFile(fileIndex);
@@ -2168,11 +2174,17 @@ export class Loading {
     }
 
     // WebRTC transport: no direct URL probing possible — go straight to HLS transcode.
+    const transcodeAudioTrack =
+      shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec);
     await this.#playWithProxyTranscode(fileIndex, {
       transport,
       sourceKey: prepared.sourceKey,
       transcodeVideo: shouldTranscodeVideo,
-      transcodeAudio: shouldTranscodeAudio || !this.#canCopyAudioCodecForHls(prepared.audioCodec)
+      transcodeAudio: transcodeAudioTrack,
+      segmentFormat: this.#requiredSegmentFormat({
+        audioCodec: prepared.audioCodec,
+        transcodeAudio: transcodeAudioTrack
+      })
     });
     this.#setActiveMediaFile(fileIndex);
   }
@@ -3195,6 +3207,7 @@ export class Loading {
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
       transcodeVideo: options.transcodeVideo === true,
       transcodeAudio: options.transcodeAudio === true,
+      segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
       audioTrackIndex: this.#selectedAudioTrackIndex,
       ...this.#buildQualityTargetConfig(options.transcodeVideo === true),
       playHls: (videoElement, manifestUrl, playOptions = {}) =>
@@ -4019,7 +4032,42 @@ export class Loading {
    * @returns {boolean}
    */
   #canCopyAudioCodecForHls(codec) {
-    return HLS_AUDIO_COPY_COMPATIBLE_CODECS.has(codec);
+    if (!HLS_AUDIO_COPY_COMPATIBLE_CODECS.has(codec)) {
+      return false;
+    }
+    // Being a codec HLS can carry is not enough — it also has to survive the
+    // trip into MediaSource, and that depends on the container. MP3 is the case
+    // that matters: it cannot be copied into fMP4 at all, but hls.js can carry
+    // it in MPEG-TS, so #requiredSegmentFormat asks the proxy for that
+    // container instead of giving up on the copy.
+    return canAppendCopiedAudio(codec, "fmp4") || canAppendCopiedAudio(codec, "mpegts");
+  }
+
+  /**
+   * The container this browser needs for the tracks it wants copied, or `""`
+   * when it has no preference and the proxy's own setting should stand.
+   *
+   * fMP4 is the better default and stays it: MediaSource takes Opus, FLAC, AV1
+   * and VP9 inside MP4 but has no place for them in MPEG-TS, and an fMP4
+   * segment reaches the decoder without hls.js having to rebuild it. The one
+   * thing MPEG-TS carries that fMP4 cannot is MP3 — measured in Chromium,
+   * `audio/mp4; codecs="mp4a.69"` is refused while `audio/mpeg` is accepted,
+   * and hls.js falls back to exactly that buffer when it demuxes MPEG-TS. A
+   * copied MP3 track in fMP4 therefore loads forever without ever playing.
+   *
+   * @param {{ audioCodec?: string, transcodeAudio: boolean }} plan
+   * @returns {string}
+   */
+  #requiredSegmentFormat({ audioCodec, transcodeAudio }) {
+    if (transcodeAudio) {
+      // The audio is being re-encoded to AAC, which both containers carry.
+      return "";
+    }
+    const codec = typeof audioCodec === "string" ? audioCodec.trim().toLowerCase() : "";
+    if (!codec || canAppendCopiedAudio(codec, "fmp4")) {
+      return "";
+    }
+    return canAppendCopiedAudio(codec, "mpegts") ? "mpegts" : "";
   }
 
   /**
@@ -4117,6 +4165,57 @@ const VIDEO_CODEC_MIME_CANDIDATES = {
 };
 
 const HLS_AUDIO_COPY_COMPATIBLE_CODECS = new Set(["aac", "mp3", "ac3", "eac3"]);
+
+/**
+ * The MediaSource type a copied audio track ends up as, per container.
+ *
+ * hls.js appends everything through MediaSource, so this — not `canPlayType` —
+ * is the question that decides whether a copy plays. Measured in Chromium:
+ * `canPlayType('audio/mp4; codecs="mp4a.69"')` answers "probably" for a type
+ * `MediaSource.isTypeSupported` refuses.
+ *
+ * With fMP4 the proxy's segment reaches the decoder untouched, so the codec has
+ * to be one MediaSource accepts inside MP4. With MPEG-TS hls.js demuxes and
+ * rebuilds the stream itself, which changes the answer in exactly one place:
+ * for MP3 it gives up on MP4 and appends to a plain `audio/mpeg` buffer
+ * (verified in our own `vendor/hls.min.js`).
+ */
+const COPIED_AUDIO_MSE_TYPES = {
+  fmp4: {
+    aac: 'audio/mp4; codecs="mp4a.40.2"',
+    mp3: 'audio/mp4; codecs="mp4a.69"',
+    ac3: 'audio/mp4; codecs="ac-3"',
+    eac3: 'audio/mp4; codecs="ec-3"'
+  },
+  mpegts: {
+    aac: 'audio/mp4; codecs="mp4a.40.2"',
+    mp3: "audio/mpeg",
+    // hls.js remuxes these into MP4 too, so the container buys nothing.
+    ac3: 'audio/mp4; codecs="ac-3"',
+    eac3: 'audio/mp4; codecs="ec-3"'
+  }
+};
+
+/**
+ * Whether a copied audio track can be appended when the proxy produces
+ * `container`.
+ *
+ * @param {string} codec - Lower-case codec name from the playback plan.
+ * @param {"fmp4" | "mpegts"} container
+ * @returns {boolean}
+ */
+function canAppendCopiedAudio(codec, container) {
+  const mime = COPIED_AUDIO_MSE_TYPES[container]?.[codec];
+  if (!mime) {
+    return false;
+  }
+  if (typeof MediaSource !== "function" || typeof MediaSource.isTypeSupported !== "function") {
+    // No MediaSource to ask (iOS native HLS plays the playlist itself, and it
+    // handles every codec HLS defines). Do not block the copy.
+    return true;
+  }
+  return MediaSource.isTypeSupported(mime);
+}
 // Pre-buffer cushion accumulated before the player is revealed, so a transient
 // dip right after start does not immediately stall. Kept under the proxy's
 // look-ahead window (~32 s). The timeout starts playback anyway if a slow
