@@ -1,3 +1,7 @@
+## 0.8.97
+
+- **Fix**: The loading screen's Playlist button sits next to Cancel and looks like it. It was added as an unstyled button and rendered as the browser's default control, left-aligned on a line of its own above Cancel. Both — and the mid-load action button, which had no styling either — now share one rule and one centred row, with the gap carried by the buttons themselves rather than by a wrapper introduced to hold two of them.
+
 ## 0.8.96
 
 - **New**: The proxy is told to start the torrent as soon as one is opened, without waiting for an episode to be chosen. Announcing to trackers, connecting to peers and being unchoked by them takes seconds and does not depend on which file is wanted; on a torrent holding a single video the two pieces the codec probe reads are fetched as well. The request is never waited on and never surfaces a failure: everything it does the ordinary path does again for itself, and both steps are cached, so a warm-up that does not happen costs only the time it would have saved. Most useful on a season pack, where the viewer spends seconds reading the list — a single-file torrent has no such pause to fill.
