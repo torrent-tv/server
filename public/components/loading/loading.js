@@ -160,12 +160,27 @@ export class Loading {
   // or by picking another video.
   static PLAN_WAIT_MS = 180_000;
 
+  // How far back the download-rate trend is measured. Long enough to see the
+  // climb (the swarm takes 6-8 s to reach its plateau), short enough that a
+  // rate which has since levelled off stops being projected upward.
+  static RATE_TREND_WINDOW_MS = 6_000;
+  // The projection may not claim an average faster than this multiple of the
+  // rate being achieved right now, however steep the samples look.
+  static RATE_TREND_MAX_GROWTH = 4;
+
   #dialog;
   #fileName;
   #status;
   #progress;
   #cancelButton;
   #playlistButton;
+  /**
+   * Recent download-speed samples, for projecting a rate that is still rising.
+   * See #projectDownloadEta.
+   *
+   * @type {Array<{ at: number, speed: number }>}
+   */
+  #downloadRateSamples = [];
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
@@ -707,6 +722,11 @@ export class Loading {
     let cushionRemainingSeconds = null;
     let etaSeconds = null;
     let fillRate = null;
+    // Which of the four measurements produced the number the viewer sees. It
+    // is ONE figure — seconds until playback starts — but it is measured
+    // wherever it can be measured best at that instant, and when a shown number
+    // turns out wrong, the first question is always which of them said it.
+    let etaSource = "none";
 
     // Bytes still to arrive before playback can proceed — the proxy's resume
     // window mid-playback, the file header on the very first open. Used only as
@@ -721,7 +741,7 @@ export class Loading {
     if (neededBytes !== null && downloadedBytes !== null && downloadSpeed > 0) {
       const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
       if (remainingBytes > 0) {
-        downloadEtaSeconds = remainingBytes / downloadSpeed;
+        downloadEtaSeconds = this.#projectDownloadEta(remainingBytes, downloadSpeed);
       }
     }
 
@@ -755,8 +775,10 @@ export class Loading {
       //      the only stage that exists before any transcode session does.
       if (cushionRemainingSeconds <= 0) {
         etaSeconds = 0;
+        etaSource = "buffer-full";
       } else if (fillRate !== null && fillRate > 0) {
         etaSeconds = cushionRemainingSeconds / fillRate;
+        etaSource = "buffer-fill-rate";
       } else {
         // (3) Production-side rate, in media-seconds per wall-second. The
         // encode multiplier and the link's carrying capacity are independent
@@ -776,9 +798,11 @@ export class Loading {
           : deliverRate;
         if (pipelineRate !== null && pipelineRate > 0) {
           etaSeconds = cushionRemainingSeconds / pipelineRate;
+          etaSource = "pipeline-rate";
         } else if (downloadEtaSeconds !== null) {
           // (4) Nothing is being produced yet — the wait is still the download.
           etaSeconds = downloadEtaSeconds;
+          etaSource = "download";
         } else {
           // Last resort: no stage has reported a rate yet (the very first
           // moments). Assume the pipeline merely keeps up with realtime — a
@@ -786,6 +810,7 @@ export class Loading {
           // falls as real measurements arrive, rather than promising a speed
           // nothing has demonstrated.
           etaSeconds = cushionRemainingSeconds;
+          etaSource = "realtime-floor";
         }
       }
     }
@@ -834,9 +859,72 @@ export class Loading {
         `remaining=${cushionRemainingSeconds?.toFixed(2) ?? "n/a"} downloadEta=${downloadEtaSeconds?.toFixed(2) ?? "n/a"} ` +
         `proxyProcessed=${processedSeconds} proxyStartPos=${startPositionSeconds} ` +
         `proxyProduced=${producedSinceResume?.toFixed(2) ?? "n/a"} speedRaw=${transcodeProgress?.speed ?? "n/a"} ` +
-        `=> cushionPercent=${cushionPercent?.toFixed(1) ?? "null"} etaSeconds=${etaSeconds?.toFixed(2) ?? "null"}`
+        `dlSpeed=${Math.round(downloadSpeed / 1024)}KB/s ` +
+        `dlRemaining=${neededBytes !== null && downloadedBytes !== null ? Math.round(Math.max(0, neededBytes - downloadedBytes) / 1024) : "n/a"}KB ` +
+        `=> source=${etaSource} cushionPercent=${cushionPercent?.toFixed(1) ?? "null"} ` +
+        `etaSeconds=${etaSeconds?.toFixed(2) ?? "null"}`
     );
     return result;
+  }
+
+  /**
+   * How long the bytes still missing will take, given that the swarm is still
+   * speeding up.
+   *
+   * Dividing what is left by the speed RIGHT NOW is only right once the speed
+   * has settled. A cold torrent does not start at its final rate — measured
+   * 2026-08-04 on one session: 74 KB/s, then 1264, 2635, 3587, 3987 at two
+   * second intervals — so an estimate taken during the climb divides by a
+   * number the rest of the transfer will never see again. Every measured error
+   * was in the same direction, and the largest of them at the moment the viewer
+   * is most likely to be looking:
+   *
+   *   | when            | shown | real |
+   *   |-----------------|-------|------|
+   *   | 4.7 s to go     |  35 s | 4.7 s|
+   *   | 2.5 s to go     | 8.5 s | 2.5 s|
+   *   | 6.2 s to go     |  19 s | 6.2 s|
+   *
+   * So the climb is part of the estimate. With a rate `v` rising at `a` per
+   * second, `R` bytes take the `t` that solves `R = v·t + a·t²/2`. On the three
+   * cases above this gives 10.4 s, 4.8 s and 6.6 s — the last almost exact, the
+   * others still high but no longer wrong by a factor of seven.
+   *
+   * When the rate has levelled off `a` is zero and this is exactly `R / v`
+   * again, so a settled connection is unaffected.
+   *
+   * @param {number} remainingBytes
+   * @param {number} speedNow - Bytes per second, as the proxy reports it.
+   * @returns {number} Seconds.
+   */
+  #projectDownloadEta(remainingBytes, speedNow) {
+    const now = Date.now();
+    this.#downloadRateSamples.push({ at: now, speed: speedNow });
+    while (
+      this.#downloadRateSamples.length > 2 &&
+      now - this.#downloadRateSamples[0].at > Loading.RATE_TREND_WINDOW_MS
+    ) {
+      this.#downloadRateSamples.shift();
+    }
+
+    const oldest = this.#downloadRateSamples[0];
+    const spanSeconds = (now - oldest.at) / 1000;
+    // Only a RISING rate is projected. A falling one is left alone: it may be
+    // the swarm losing peers, and shortening the estimate on the strength of
+    // that would be optimism with nothing behind it.
+    const slope = spanSeconds > 0.5 ? Math.max(0, (speedNow - oldest.speed) / spanSeconds) : 0;
+
+    const steady = remainingBytes / speedNow;
+    if (slope <= 0) {
+      return steady;
+    }
+    const ramped =
+      (-speedNow + Math.sqrt(speedNow * speedNow + 2 * slope * remainingBytes)) / slope;
+    // A noisy pair of samples can imply a climb that will not happen, so the
+    // projection may not claim an average faster than a few times what is
+    // being achieved now.
+    const floor = remainingBytes / (speedNow * Loading.RATE_TREND_MAX_GROWTH);
+    return Math.min(steady, Math.max(ramped, floor));
   }
 
   /**
@@ -1281,6 +1369,8 @@ export class Loading {
     // Per attempt: a new file, or the same one tried again, starts with the
     // ordinary wait rather than the notice left over from the last one.
     this.#longWaitAnnounced = false;
+    // The previous attempt's rate history says nothing about this one.
+    this.#downloadRateSamples = [];
     return this.#playbackEpoch;
   }
 
