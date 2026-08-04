@@ -1,3 +1,7 @@
+## 0.8.96
+
+- **New**: The proxy is told to start the torrent as soon as one is opened, without waiting for an episode to be chosen. Announcing to trackers, connecting to peers and being unchoked by them takes seconds and does not depend on which file is wanted; on a torrent holding a single video the two pieces the codec probe reads are fetched as well. The request is never waited on and never surfaces a failure: everything it does the ordinary path does again for itself, and both steps are cached, so a warm-up that does not happen costs only the time it would have saved. Most useful on a season pack, where the viewer spends seconds reading the list — a single-file torrent has no such pause to fill.
+
 ## 0.8.95
 
 - **Fix**: Picking a video from the error screen works again. "Choose File" reveals the player and opens the playlist, and the entry it highlights is the file that just failed — but a click on the entry already marked active did nothing but close the list, which is right while that file is playing and wrong when it is the thing that broke. The viewer was left looking at an empty player with no way forward. Re-picking the active file is now honoured whenever the application is in its error state.
