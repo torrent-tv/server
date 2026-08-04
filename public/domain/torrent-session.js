@@ -322,7 +322,8 @@ export class TorrentSession {
         targetWidth,
         targetHeight,
         manualQuality,
-        audioTrackIndex
+        audioTrackIndex,
+        segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : ""
       }
     );
     if (!playlistUrl) {
@@ -512,6 +513,13 @@ export class TorrentSession {
           audioTrackIndex:
             Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
               ? options.audioTrackIndex
+              : undefined,
+          // Only sent when this browser needs a specific container to decode
+          // what it asked to be copied; otherwise the proxy's own setting
+          // decides. See #requiredSegmentFormat in loading.js.
+          segmentFormat:
+            typeof options.segmentFormat === "string" && options.segmentFormat.length > 0
+              ? options.segmentFormat
               : undefined
         })
       });
