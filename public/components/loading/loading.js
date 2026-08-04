@@ -181,6 +181,14 @@ export class Loading {
    * @type {Array<{ at: number, speed: number }>}
    */
   #downloadRateSamples = [];
+  /** The last figure shown, and when — so the countdown can only go down. */
+  #etaPromise = null;
+  #etaPromiseAt = 0;
+  /**
+   * What the chosen proxy takes to produce a session's first segment, from the
+   * playback plan. Seconds, or null before it has told us.
+   */
+  #expectedFirstSegmentSeconds = null;
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
@@ -522,6 +530,9 @@ export class Loading {
         return;
       }
       this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
+      // A new destination is a new wait: the countdown for the old one no
+      // longer describes anything, so it may start over from a larger number.
+      this.#resetEtaFloor();
       void this.#session.reportSeek(position);
     }, SEEK_REPORT_DEBOUNCE_MS);
   }
@@ -738,9 +749,15 @@ export class Loading {
     const downloadSpeed = downloadStats && typeof downloadStats.downloadSpeed === "number"
       ? downloadStats.downloadSpeed : 0;
     let downloadEtaSeconds = null;
-    if (neededBytes !== null && downloadedBytes !== null && downloadSpeed > 0) {
+    if (neededBytes !== null && downloadedBytes !== null) {
+      // Recorded even at zero — the very first tick of a cold torrent reads
+      // 0 KB/s, and skipping it left the NEXT tick with a single sample and no
+      // slope, which is why the first figure shown was still the unprojected
+      // one: 21.3 s against a real 7.9 s. With the zero kept, the same moment
+      // projects to 7.6 s.
+      this.#recordDownloadRate(downloadSpeed);
       const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
-      if (remainingBytes > 0) {
+      if (remainingBytes > 0 && downloadSpeed > 0) {
         downloadEtaSeconds = this.#projectDownloadEta(remainingBytes, downloadSpeed);
       }
     }
@@ -754,7 +771,16 @@ export class Loading {
       // grows the real gate's target past what this fixed-15s math assumed,
       // so the display read "100% / starting now" for up to 10s while
       // nothing happened).
-      const cushionTarget = this.#adaptiveCushionTarget(fillRate);
+      // Which cushion actually has to be reached before the viewer sees
+      // motion. On the first open it is ours: #waitForPrebuffer holds the
+      // player back until #adaptiveCushionTarget is met. After a seek there is
+      // no such gate — the player resumes by itself as soon as it has anything
+      // at the new position, measured 2026-08-05 at **0.5 s** buffered. Counting
+      // toward 15 s in that case describes a moment that never arrives:
+      // playback had already resumed while the figure still read 4.9 s.
+      const cushionTarget = this.#isProcessing
+        ? this.#adaptiveCushionTarget(fillRate)
+        : RESUME_TARGET_SECONDS;
       cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / cushionTarget) * 100));
       cushionRemainingSeconds = Math.max(0, cushionTarget - bufferedAhead);
       // A number is ALWAYS produced — "estimating…" is not an acceptable
@@ -803,12 +829,26 @@ export class Loading {
           // (4) Nothing is being produced yet — the wait is still the download.
           etaSeconds = downloadEtaSeconds;
           etaSource = "download";
+        } else if (this.#expectedFirstSegmentSeconds !== null) {
+          // (5) The download is done and no session has produced anything yet.
+          // Two things remain and BOTH count: the proxy has to make the first
+          // segment — which it has just done several times and reports as a
+          // median, 782-1518 ms on the field host — and the browser then has to
+          // collect enough of them. Only the first is measured, so the second
+          // is priced at a deliberately cautious multiple of realtime: the two
+          // sessions measured 2026-08-05 filled the cushion at roughly 10x, and
+          // claiming a tenth of that keeps the figure from ever promising more
+          // than has been demonstrated. Using the host figure ALONE was wrong
+          // in the other direction — it read 0.9 s with 3.6 s left, and the
+          // countdown rule then held it at zero for the rest of the wait.
+          etaSeconds =
+            this.#expectedFirstSegmentSeconds + cushionRemainingSeconds / UNPROVEN_PIPELINE_RATE;
+          etaSource = "host-first-segment";
         } else {
-          // Last resort: no stage has reported a rate yet (the very first
-          // moments). Assume the pipeline merely keeps up with realtime — a
-          // deliberately conservative floor, so the figure starts high and
-          // falls as real measurements arrive, rather than promising a speed
-          // nothing has demonstrated.
+          // Nothing measured anywhere yet — the very first moments, before even
+          // the proxy has a figure. Assume the pipeline keeps up with realtime:
+          // deliberately conservative, so the number starts high and falls as
+          // measurements arrive rather than promising a speed nothing has shown.
           etaSeconds = cushionRemainingSeconds;
           etaSource = "realtime-floor";
         }
@@ -835,6 +875,15 @@ export class Loading {
       producedSinceResume >= ENCODE_SPEED_MIN_PRODUCED_SECONDS
         ? parsedEncodeSpeed
         : null;
+
+    // A countdown that goes UP is worse than no countdown: the viewer reads it
+    // as the wait growing. Twice in the measured session it did — 5.5 -> 15.0
+    // when the download finished and the estimate fell back to an assumption,
+    // and 11.9 -> 13.7 while the buffer sat still and its measured fill rate
+    // decayed. Both were the SAME wait, so the honest figure is the smaller:
+    // whatever was promised, minus the time that has since passed. A real event
+    // — a seek, a new file — clears it (see #resetEtaFloor).
+    etaSeconds = this.#applyMonotonicEta(etaSeconds);
 
     const result = {
       etaSeconds,
@@ -897,17 +946,59 @@ export class Loading {
    * @param {number} speedNow - Bytes per second, as the proxy reports it.
    * @returns {number} Seconds.
    */
-  #projectDownloadEta(remainingBytes, speedNow) {
+  /**
+   * Keep the shown number from ever increasing during one wait.
+   *
+   * Each estimate is compared with the previous one reduced by the time that
+   * has elapsed since it was shown — the promise implied by that previous
+   * number. The smaller of the two wins, so the figure is a countdown. An
+   * estimate is allowed to be revised UP only after {@link #resetEtaFloor}, and
+   * only real events call that.
+   *
+   * @param {number | null} etaSeconds
+   * @returns {number | null}
+   */
+  #applyMonotonicEta(etaSeconds) {
+    if (etaSeconds === null || !Number.isFinite(etaSeconds)) {
+      return etaSeconds;
+    }
     const now = Date.now();
-    this.#downloadRateSamples.push({ at: now, speed: speedNow });
+    if (this.#etaPromise !== null) {
+      const elapsed = (now - this.#etaPromiseAt) / 1000;
+      const promised = Math.max(0, this.#etaPromise - elapsed);
+      etaSeconds = Math.min(etaSeconds, promised);
+    }
+    this.#etaPromise = etaSeconds;
+    this.#etaPromiseAt = now;
+    return etaSeconds;
+  }
+
+  /**
+   * Let the estimate be revised upward again. Called when the thing being
+   * waited for CHANGES — a seek, another file, a fresh attempt — because the
+   * previous countdown was about something else.
+   *
+   * @returns {void}
+   */
+  #resetEtaFloor() {
+    this.#etaPromise = null;
+    this.#etaPromiseAt = 0;
+  }
+
+  #recordDownloadRate(speedNow) {
+    const now = Date.now();
+    this.#downloadRateSamples.push({ at: now, speed: Math.max(0, speedNow) });
     while (
       this.#downloadRateSamples.length > 2 &&
       now - this.#downloadRateSamples[0].at > Loading.RATE_TREND_WINDOW_MS
     ) {
       this.#downloadRateSamples.shift();
     }
+  }
 
-    const oldest = this.#downloadRateSamples[0];
+  #projectDownloadEta(remainingBytes, speedNow) {
+    const now = Date.now();
+    const oldest = this.#downloadRateSamples[0] ?? { at: now, speed: speedNow };
     const spanSeconds = (now - oldest.at) / 1000;
     // Only a RISING rate is projected. A falling one is left alone: it may be
     // the swarm losing peers, and shortening the estimate on the strength of
@@ -962,7 +1053,25 @@ export class Loading {
     if (gained <= 0) {
       return null; // not filling — the honest answer is "unknown", not zero
     }
-    return gained / (spanMs / 1000);
+    // Measured up to the last sample that actually grew, not up to now. The
+    // buffer does not fill smoothly: a segment is ~10 s of media and lands at
+    // once, so between two arrivals the buffer sits still. Dividing by the time
+    // since the oldest sample therefore reports a rate that decays purely
+    // because nothing has arrived YET — measured 2026-08-05: a buffer parked at
+    // 10.37 s took its rate from 1.235 down to 1.070 over 1.3 s of waiting, and
+    // the estimate built on it climbed from 11.9 s to 13.7 s while the real
+    // remaining time fell from 1.6 s to 0.25 s. The gap before the next arrival
+    // is real, but it is not a slowdown, and the countdown rule
+    // (#applyMonotonicEta) is what keeps it from being read as one.
+    let lastGrowthAt = now;
+    for (let index = samples.length - 1; index > 0; index -= 1) {
+      if (samples[index].ahead > samples[index - 1].ahead) {
+        lastGrowthAt = samples[index].at;
+        break;
+      }
+    }
+    const growthSpanMs = Math.max(BUFFER_FILL_MIN_SPAN_MS, lastGrowthAt - oldest.at);
+    return gained / (growthSpanMs / 1000);
   }
 
   /**
@@ -1371,6 +1480,7 @@ export class Loading {
     this.#longWaitAnnounced = false;
     // The previous attempt's rate history says nothing about this one.
     this.#downloadRateSamples = [];
+    this.#resetEtaFloor();
     return this.#playbackEpoch;
   }
 
@@ -2246,6 +2356,13 @@ export class Loading {
     // Source coded resolution — drives the manual quality menu.
     this.#sourceVideoWidth = Number.isFinite(prepared.videoWidth) ? prepared.videoWidth : 0;
     this.#sourceVideoHeight = Number.isFinite(prepared.videoHeight) ? prepared.videoHeight : 0;
+    // What this proxy measured itself taking to produce a first segment. Used
+    // for the gap between the file being downloaded and a segment existing,
+    // where nothing else has a rate yet.
+    this.#expectedFirstSegmentSeconds =
+      Number.isFinite(prepared.expectedFirstSegmentMs) && prepared.expectedFirstSegmentMs > 0
+        ? prepared.expectedFirstSegmentMs / 1000
+        : null;
     if (this.#selectedAudioTrackIndex >= this.#planTracks.audio.length) {
       this.#selectedAudioTrackIndex = 0;
     }
@@ -4491,6 +4608,19 @@ const ENCODE_SPEED_MIN_PRODUCED_SECONDS = 2;
 const BUFFER_FILL_WINDOW_MS = 12_000;
 const BUFFER_FILL_MIN_SPAN_MS = 3_000;
 const PREBUFFER_MIN_SECONDS = 6;
+// What the player needs before it resumes ITSELF after a seek. Nothing of ours
+// gates that moment — hls.js and iOS native both start as soon as the new
+// position is covered, measured 2026-08-05 at 0.5 s buffered. Kept a little
+// above what was measured so the figure does not reach zero before the picture
+// moves, but nowhere near the first-open cushion: counting a seek toward 15 s
+// described a moment that never came, and the number still read 4.9 s when
+// playback had already resumed.
+const RESUME_TARGET_SECONDS = 2;
+// How fast the pipeline is assumed to fill the buffer before it has shown a
+// rate of its own. Measured around 10x realtime on the two sessions of
+// 2026-08-05; a fifth of that is used, so the estimate errs long rather than
+// promising a speed nothing has yet demonstrated.
+const UNPROVEN_PIPELINE_RATE = 2;
 const PREBUFFER_MAX_SECONDS = 25;
 const PREBUFFER_BASE_SECONDS = 12;
 // Start early when the fill rate has sustained a healthy surplus over the FULL
