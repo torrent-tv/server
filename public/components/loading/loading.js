@@ -92,6 +92,7 @@ import {
 export class Loading {
   static SELECTOR = {
     cancelButton: "#loading__cancel",
+    playlistButton: "#loading__playlist",
     actionButton: "#loading__action",
     dialog: "#loading",
     fileName: "#loading__filename",
@@ -125,6 +126,13 @@ export class Loading {
     chooseVideoFile: "Choose a video file from playlist.",
     headerDownloadStalled:
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
+    // Shown INSTEAD of failing once the ordinary wait has been exhausted. There
+    // is nothing wrong on our side and nothing to retry: the file simply has
+    // nobody to download it from, and that can change at any moment or never.
+    // Saying so and waiting on is more useful than an error screen, and the
+    // Cancel and Playlist buttons are there for a viewer who would rather not.
+    noPeersKeepWaiting:
+      "No one is sharing this file yet. Downloading cannot start until someone does — this may take a while, or may not happen at all. You can wait, pick another video, or cancel.",
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
     waitingForNetwork: "Waiting for the network to come back…",
@@ -143,9 +151,13 @@ export class Loading {
       "Could not fetch metadata for this magnet link — no peers reachable. Try again later."
   };
 
-  // How long to keep polling for the file header to download before giving up
-  // (cold torrent / peers connecting). The proxy returns `pending` quickly each
-  // poll, so this is a wall-clock budget, not a single blocking request.
+  // How long to wait for the file header quietly before SAYING that nothing is
+  // arriving (cold torrent / peers connecting). It used to be the point at which
+  // the load failed, which was wrong: a torrent with no seeders is not a fault
+  // to report, it is a fact to state — nothing is broken, nothing would be fixed
+  // by retrying, and someone may start sharing a minute later. Past this point
+  // the wait continues with an honest message; the viewer leaves by cancelling
+  // or by picking another video.
   static PLAN_WAIT_MS = 180_000;
 
   #dialog;
@@ -153,6 +165,11 @@ export class Loading {
   #status;
   #progress;
   #cancelButton;
+  #playlistButton;
+  /** The loading screen stepped aside for the playlist drawer. */
+  #playlistOpenedFromLoading = false;
+  /** The "nobody is sharing this" notice has been shown for this attempt. */
+  #longWaitAnnounced = false;
   #actionButton;
   #videoElement = null;
   #session;
@@ -1198,6 +1215,7 @@ export class Loading {
     this.#status = document.querySelector(Loading.SELECTOR.status);
     this.#progress = document.querySelector(Loading.SELECTOR.progress);
     this.#cancelButton = document.querySelector(Loading.SELECTOR.cancelButton);
+    this.#playlistButton = document.querySelector(Loading.SELECTOR.playlistButton);
     this.#actionButton = document.querySelector(Loading.SELECTOR.actionButton);
 
     if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress || !this.#cancelButton || !this.#actionButton) {
@@ -1234,6 +1252,8 @@ export class Loading {
     window.addEventListener("pagehide", this.#onPageHide);
     window.addEventListener("beforeunload", this.#onBeforeUnload);
     this.#cancelButton.addEventListener("click", this.#onCancelClick);
+    this.#playlistButton?.addEventListener("click", this.#onPlaylistClick);
+    document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClosed);
   }
 
   /**
@@ -1258,6 +1278,9 @@ export class Loading {
    */
   #beginPlaybackAttempt() {
     this.#playbackEpoch += 1;
+    // Per attempt: a new file, or the same one tried again, starts with the
+    // ordinary wait rather than the notice left over from the last one.
+    this.#longWaitAnnounced = false;
     return this.#playbackEpoch;
   }
 
@@ -1284,6 +1307,58 @@ export class Loading {
    * `session.current` and the transport, so a multi-file torrent returns to
    * a usable playlist and the next selection reuses the open data channel.
    */
+  /**
+   * Open the playlist without abandoning the load.
+   *
+   * A load can take a long time for reasons the viewer cannot influence — a
+   * torrent with no seeders is the honest example — and until now the only way
+   * out was Cancel, which throws away the whole session and returns to the
+   * picker. Switching to another episode is usually what the viewer actually
+   * wants, and it needs neither of those things: the playlist's own selection
+   * handler supersedes the attempt in flight.
+   *
+   * @returns {void}
+   */
+  #onPlaylistClick = () => {
+    this.#logEvt("playlist opened from the loading screen");
+    // This dialog is modal, so nothing outside it can be clicked while it is
+    // open. It steps aside for the drawer and comes back if the drawer is
+    // closed without a choice being made — and if a choice IS made, the new
+    // attempt shows it again itself.
+    this.#playlistOpenedFromLoading = true;
+    this.visible = false;
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
+  };
+
+  /**
+   * The playlist drawer closed. If it was opened from here and the load is
+   * still the one that opened it, take the screen back.
+   *
+   * @returns {void}
+   */
+  #onPlaylistClosed = () => {
+    if (!this.#playlistOpenedFromLoading) {
+      return;
+    }
+    this.#playlistOpenedFromLoading = false;
+    if (this.#isProcessing) {
+      this.visible = true;
+    }
+  };
+
+  /**
+   * Show or hide the way out of a long load. Only worth offering when there is
+   * somewhere else to go.
+   *
+   * @param {boolean} visible
+   * @returns {void}
+   */
+  #setPlaylistButtonVisible(visible) {
+    if (this.#playlistButton instanceof HTMLElement) {
+      this.#playlistButton.hidden = !visible;
+    }
+  }
+
   #onCancelClick = () => {
     this.#logEvt("loading cancelled by user");
     this.#cancelRequested = true;
@@ -1430,6 +1505,7 @@ export class Loading {
           detail: mediaFiles
         })
       );
+      this.#setPlaylistButtonVisible(mediaFiles.video.length > 1);
 
       this.visible = true;
       this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
@@ -1590,6 +1666,7 @@ export class Loading {
           detail: mediaFiles
         })
       );
+      this.#setPlaylistButtonVisible(mediaFiles.video.length > 1);
 
       const videoCount = mediaFiles.video.length;
       if (videoCount <= 0) {
@@ -1807,6 +1884,26 @@ export class Loading {
    * @param {string} [message] - Defaults to the data-starvation stall message.
    * @returns {Error}
    */
+  /**
+   * Say, once, that the wait has gone past what is ordinary.
+   *
+   * Called instead of failing. The status line keeps showing live peers, speed
+   * and progress underneath, so a torrent that comes to life is visible
+   * immediately; this only replaces the implication that something must happen
+   * soon.
+   *
+   * @param {number} deadline - When the ordinary wait was to have ended.
+   * @returns {void}
+   */
+  #noteLongWait(deadline) {
+    if (this.#longWaitAnnounced || Date.now() < deadline) {
+      return;
+    }
+    this.#longWaitAnnounced = true;
+    this.#logEvt("no peers after the ordinary wait — saying so and continuing");
+    this.setStatus(Loading.MESSAGES.noPeersKeepWaiting);
+  }
+
   #armRetryableStall(fileIndex, message = Loading.MESSAGES.headerDownloadStalled) {
     if (this.#session.current) {
       this.#resumeState = {
@@ -1964,9 +2061,7 @@ export class Loading {
           // the error screen.
           if (this.#isTransientRequestTimeout(planError) && (this.#proxy?.isOpen ?? true)) {
             this.#logEvt("plan request timed out while waiting on pieces — keep waiting");
-            if (Date.now() >= planDeadline) {
-              throw this.#armRetryableStall(fileIndex);
-            }
+            this.#noteLongWait(planDeadline);
             await new Promise((resolve) => setTimeout(resolve, 2_000));
             continue;
           }
@@ -1981,9 +2076,7 @@ export class Loading {
         if (!prepared.pending) {
           break;
         }
-        if (Date.now() >= planDeadline) {
-          throw this.#armRetryableStall(fileIndex);
-        }
+        this.#noteLongWait(planDeadline);
         await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
     } finally {

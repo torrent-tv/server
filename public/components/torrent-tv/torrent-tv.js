@@ -181,6 +181,13 @@ class TorrentTV {
       throw new Error(`Invalid state transition: ${this.#state} -> ${nextState}`);
     }
     this.#state = nextState;
+    // Announced, because other components need it and were guessing. The
+    // playlist is the case that forced this: re-picking the file that is
+    // already active is meaningless while it plays, and is the only way back
+    // when the same file has just failed.
+    document.dispatchEvent(
+      new CustomEvent(APP_EVENTS.STATE_CHANGED, { detail: { state: nextState } })
+    );
   }
 
   /** @param {string} value */
