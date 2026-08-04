@@ -44,5 +44,12 @@ export const PLAYER_EVENTS = {
 export const APP_EVENTS = {
   RESET_TO_PICKER: "APP:RESET_TO_PICKER",
   BACK_TO_PLAYLIST: "APP:BACK_TO_PLAYLIST",
-  RETRY_PLAYBACK: "APP:RETRY_PLAYBACK"
+  RETRY_PLAYBACK: "APP:RETRY_PLAYBACK",
+  /**
+   * The application's state machine moved. Carries `{ state }` — one of
+   * `TorrentTV.STATE`. Components that must behave differently depending on
+   * where the app is (the playlist, when nothing is playing) listen for this
+   * rather than each inferring it from the events they happen to see.
+   */
+  STATE_CHANGED: "APP:STATE_CHANGED"
 };

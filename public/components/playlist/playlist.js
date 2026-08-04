@@ -21,6 +21,8 @@ export class Playlist {
   #root;
   #videoFiles = [];
   #currentFileIndex = -1;
+  /** Where the application's state machine is; see APP_EVENTS.STATE_CHANGED. */
+  #appState = "";
 
 
   #onAppReset = () => {
@@ -59,6 +61,7 @@ export class Playlist {
 
 
   #setupEventHandlers() {
+    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onSetActiveMediaFile);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
@@ -92,6 +95,17 @@ export class Playlist {
     this.#root.setAttribute('data-open', false);
   }
 
+  /**
+   * Where the application is, so a click can mean different things. Only
+   * `"ERROR"` is acted on; anything else behaves as before.
+   *
+   * @param {CustomEvent} event
+   */
+  #onAppStateChanged = (event) => {
+    const state = event instanceof CustomEvent ? event.detail?.state : null;
+    this.#appState = typeof state === "string" ? state : "";
+  };
+
   /** @param {MouseEvent} event */
   #onListClick = (event) => {
     const target = event.target;
@@ -106,7 +120,13 @@ export class Playlist {
     if (!Number.isInteger(fileIndex)) {
       return;
     }
-    if (fileIndex === this.#currentFileIndex) {
+    // Picking the file that is already playing means nothing, so the list just
+    // closes — EXCEPT when that file is the one that failed. Then re-picking it
+    // is the only way to ask for it again, and swallowing the click left the
+    // viewer looking at an empty player with nothing happening: "Choose File"
+    // on the error screen reveals the player and opens this list, and the file
+    // it highlights is precisely the one that did not load.
+    if (fileIndex === this.#currentFileIndex && this.#appState !== "ERROR") {
       document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.CLOSE_PLAYLIST));
       return;
     }

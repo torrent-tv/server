@@ -51,6 +51,10 @@
            the browser's local-network permission question). Hidden unless a
            flow is waiting on it; label set by the flow. -->
       <button id="loading__action" type="button" hidden></button>
+      <!-- Escape hatch while a load drags on: pick a different episode without
+           cancelling and starting over. Hidden unless the torrent actually has
+           more than one video file. -->
+      <button id="loading__playlist" type="button" hidden>Playlist</button>
       <button id="loading__cancel" type="button">Cancel</button>
     </dialog>
 
