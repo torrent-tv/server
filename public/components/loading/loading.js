@@ -198,6 +198,17 @@ export class Loading {
    * playback plan. Seconds, or null before it has told us.
    */
   #expectedFirstSegmentSeconds = null;
+  /** What the chosen proxy takes to create a session, in seconds, or null. */
+  #expectedSessionCreateSeconds = null;
+  /**
+   * How much buffer this player actually had when it started, the last few
+   * times. Measured at every `playing` event, because how much is enough is a
+   * property of the player and the device, not something we may pick: it was
+   * 0.5 s after one seek, 2.0 s after another and 20.0 s on a cold open.
+   *
+   * @type {number[]}
+   */
+  #playbackStartBuffers = [];
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
@@ -572,6 +583,17 @@ export class Loading {
     // pause with the seek unfinished keeps it visible). Clear only when no seek
     // is in progress.
     if (name === "playing") {
+      // What this player needed before it moved. The estimate's last term
+      // counts toward this, so it is observed rather than chosen.
+      const aheadAtStart = this.#videoElement instanceof HTMLVideoElement
+        ? this.#bufferedAheadSeconds(this.#videoElement)
+        : null;
+      if (typeof aheadAtStart === "number" && aheadAtStart > 0) {
+        this.#playbackStartBuffers.push(aheadAtStart);
+        if (this.#playbackStartBuffers.length > PLAYBACK_START_SAMPLES) {
+          this.#playbackStartBuffers.shift();
+        }
+      }
       // From here on the player gates its own resumes; our prebuffer cushion
       // applies only to the first reveal. Cleared with the rest of the
       // per-attempt state in #beginPlaybackAttempt.
@@ -777,104 +799,20 @@ export class Loading {
       }
     }
 
-    if (bufferedAhead !== null) {
-      fillRate = this.#trackBufferFillRate(bufferedAhead);
-      // Same adaptive target #waitForPrebuffer gates the actual reveal on
-      // (see #adaptiveCushionTarget) — not a fixed constant — so the number
-      // shown here can never claim "ready" while the real gate is still
-      // waiting for a bigger cushion (field bug 2026-08-01: a weak margin
-      // grows the real gate's target past what this fixed-15s math assumed,
-      // so the display read "100% / starting now" for up to 10s while
-      // nothing happened).
-      // Which cushion actually has to be reached before the viewer sees
-      // motion. On the first open it is ours: #waitForPrebuffer holds the
-      // player back until #adaptiveCushionTarget is met. After a seek there is
-      // no such gate — the player resumes by itself as soon as it has anything
-      // at the new position, measured 2026-08-05 at **0.5 s** buffered. Counting
-      // toward 15 s in that case describes a moment that never arrives:
-      // playback had already resumed while the figure still read 4.9 s.
-      const cushionTarget = this.#hasPlayedOnce
-        ? RESUME_TARGET_SECONDS
-        : this.#adaptiveCushionTarget(fillRate);
-      cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / cushionTarget) * 100));
-      cushionRemainingSeconds = Math.max(0, cushionTarget - bufferedAhead);
-      // A number is ALWAYS produced — "estimating…" is not an acceptable
-      // answer to "how long until I can watch". Sources, best first; each
-      // later one is a coarser approximation of the same quantity (seconds of
-      // wall clock until `cushionRemainingSeconds` of media exists in the
-      // buffer), and every one of them is a real measurement of some stage,
-      // never a guess:
-      //   1. the buffer has reached the target — genuinely zero;
-      //   2. the buffer's own measured fill rate (end-to-end, prices in every
-      //      bottleneck at once) — the most honest figure available;
-      //   3. the transcode's delivery rate: how fast the proxy PRODUCES media
-      //      (ffmpeg's own realtime multiplier) capped by how fast the link
-      //      can carry it, both already reported by the proxy. Valid before
-      //      the browser's buffer has moved at all, which is exactly when (2)
-      //      cannot exist yet;
-      //   4. the download stage: bytes still missing / current torrent speed —
-      //      the only stage that exists before any transcode session does.
-      if (cushionRemainingSeconds <= 0) {
-        etaSeconds = 0;
-        etaSource = "buffer-full";
-      } else if (fillRate !== null && fillRate > 0) {
-        etaSeconds = cushionRemainingSeconds / fillRate;
-        etaSource = "buffer-fill-rate";
-      } else {
-        // (3) Production-side rate, in media-seconds per wall-second. The
-        // encode multiplier and the link's carrying capacity are independent
-        // limits on the same pipeline, so the effective rate is the smaller.
-        const produceRate = this.#parseSpeedMultiplier(transcodeProgress?.speed);
-        const outputMbps = typeof transcodeProgress?.outputMbps === "number" && transcodeProgress.outputMbps > 0
-          ? transcodeProgress.outputMbps
-          : null;
-        const linkMbps = getEstimatedLinkMbps();
-        // Media-seconds deliverable per wall-second = link throughput divided
-        // by the stream's own bitrate (both Mbit/s, so the ratio is unitless).
-        const deliverRate = outputMbps !== null && Number.isFinite(linkMbps) && linkMbps > 0
-          ? linkMbps / outputMbps
-          : null;
-        const pipelineRate = Number.isFinite(produceRate) && produceRate > 0
-          ? (deliverRate !== null ? Math.min(produceRate, deliverRate) : produceRate)
-          : deliverRate;
-        if (pipelineRate !== null && pipelineRate > 0) {
-          etaSeconds = cushionRemainingSeconds / pipelineRate;
-          etaSource = "pipeline-rate";
-        } else if (downloadEtaSeconds !== null) {
-          // (4) Nothing is being produced yet — the wait is still the download.
-          etaSeconds = downloadEtaSeconds;
-          etaSource = "download";
-        } else if (this.#expectedFirstSegmentSeconds !== null) {
-          // (5) The download is done and no session has produced anything yet.
-          // Two things remain and BOTH count: the proxy has to make the first
-          // segment — which it has just done several times and reports as a
-          // median, 782-1518 ms on the field host — and the browser then has to
-          // collect enough of them. Only the first is measured, so the second
-          // is priced at a deliberately cautious multiple of realtime: the two
-          // sessions measured 2026-08-05 filled the cushion at roughly 10x, and
-          // claiming a tenth of that keeps the figure from ever promising more
-          // than has been demonstrated. Using the host figure ALONE was wrong
-          // in the other direction — it read 0.9 s with 3.6 s left, and the
-          // countdown rule then held it at zero for the rest of the wait.
-          etaSeconds =
-            this.#expectedFirstSegmentSeconds + cushionRemainingSeconds / UNPROVEN_PIPELINE_RATE;
-          etaSource = "host-first-segment";
-        } else {
-          // Nothing measured anywhere yet — the very first moments, before even
-          // the proxy has a figure. Assume the pipeline keeps up with realtime:
-          // deliberately conservative, so the number starts high and falls as
-          // measurements arrive rather than promising a speed nothing has shown.
-          etaSeconds = cushionRemainingSeconds;
-          etaSource = "realtime-floor";
-        }
-      }
-    }
-
-    // The encoder's own multiplier is kept only as CONTEXT next to the figures
-    // above ("…, 1.4x realtime") — never as the progress or the ETA itself; it
-    // describes work on the proxy, not media in this browser. Ignored until the
-    // run has produced enough content for the cumulative average to mean
-    // anything (see ENCODE_SPEED_MIN_PRODUCED_SECONDS).
+    // ONE number, and it is a SUM of the stages that have not happened yet —
+    // not a choice between figures that each describe only one of them. Choosing
+    // made the number answer "how long until the NEXT stage ends", and its
+    // meaning changed as stages completed: measured 2026-08-05, it jumped from
+    // 5.5 s to 15 s the instant the download finished, and printed 0.00 for four
+    // seconds with an empty buffer. Every term below is a measurement, and each
+    // is zero once its stage is done, so the total can only fall.
+    // Reasoning and the field numbers behind each term:
+    // research/playback-eta-2026-08-05.md.
+    //
+    //   T = bytes still missing / measured download rate
+    //     + creating the session       (0 once it exists)
+    //     + producing a first segment  (0 once one has been produced)
+    //     + media still needed / the rate at which media arrives
     const processedSeconds = transcodeProgress && typeof transcodeProgress.processedSeconds === "number"
       ? transcodeProgress.processedSeconds : null;
     const startPositionSeconds = transcodeProgress && typeof transcodeProgress.startPositionSeconds === "number"
@@ -891,24 +829,66 @@ export class Loading {
         ? parsedEncodeSpeed
         : null;
 
-    // Nothing has reached the browser yet. Whatever rate the stages report,
-    // the wait still contains a whole first segment: the encoder has just been
-    // restarted and has produced nothing the player can use. Skipping that made
-    // the figure read 0.00 — "starting now" — for the entire 13.7 s of a seek
-    // measured 2026-08-05, because the target after a seek is small (2 s) and
-    // dividing it by a healthy pipeline rate rounds to nothing. The floor is
-    // the host's own measured time to a first segment plus a cautious price for
-    // carrying it, i.e. the same two costs as the cold-start branch.
-    if (bufferedAhead !== null && bufferedAhead <= 0 && etaSeconds !== null) {
-      const firstSegment = this.#expectedFirstSegmentSeconds;
-      if (firstSegment !== null) {
-        const floor = firstSegment + (cushionRemainingSeconds ?? 0) / UNPROVEN_PIPELINE_RATE;
-        if (floor > etaSeconds) {
-          etaSeconds = floor;
-          etaSource = `${etaSource}+first-segment-floor`;
-        }
-      }
+    /** @type {string[]} */
+    const terms = [];
+    let total = 0;
+
+    // 1. The data. Zero once the bytes the proxy is waiting for have arrived.
+    if (downloadEtaSeconds !== null && downloadEtaSeconds > 0) {
+      total += downloadEtaSeconds;
+      terms.push(`dl=${downloadEtaSeconds.toFixed(1)}`);
     }
+
+    // 2. Creating the session. Zero once one exists — which is exactly what a
+    //    progress report proves. The figure is this host's own median.
+    const sessionExists = processedSeconds !== null;
+    if (!sessionExists && this.#expectedSessionCreateSeconds !== null) {
+      total += this.#expectedSessionCreateSeconds;
+      terms.push(`create=${this.#expectedSessionCreateSeconds.toFixed(1)}`);
+    }
+
+    // 3. Producing a first segment. Zero once the encoder has produced
+    //    anything at all. Also this host's own median, and it differs by an
+    //    order of magnitude between copying (0.8-1.5 s) and re-encoding (~7 s),
+    //    which is why it is measured per host rather than assumed.
+    const producedAnything = producedSinceResume !== null && producedSinceResume > 0;
+    if (!producedAnything && this.#expectedFirstSegmentSeconds !== null) {
+      total += this.#expectedFirstSegmentSeconds;
+      terms.push(`first=${this.#expectedFirstSegmentSeconds.toFixed(1)}`);
+    }
+
+    // 4. Getting enough media into the player. How much is enough is not a
+    //    number we may choose: it is what THIS player did the last few times it
+    //    started, which the browser already records at every `playing` event
+    //    (0.5 s, 2.0 s and 20.0 s in three measured cases). Before any such
+    //    measurement exists the floor is one segment, because no player starts
+    //    on less than one.
+    const requiredBuffer = this.#requiredBufferSeconds();
+    cushionRemainingSeconds = bufferedAhead === null
+      ? requiredBuffer
+      : Math.max(0, requiredBuffer - bufferedAhead);
+    cushionPercent = bufferedAhead === null
+      ? 0
+      : Math.max(0, Math.min(100, (bufferedAhead / requiredBuffer) * 100));
+    if (cushionRemainingSeconds > 0) {
+      // How fast media can arrive: the slower of what the encoder produces and
+      // what the link can carry. Both measured; when neither has been observed
+      // yet the neutral assumption is exactly realtime, which is the definition
+      // of the pipeline keeping up rather than a tuned value.
+      const linkRate = this.#measuredLinkMediaRate(
+        transcodeProgress && typeof transcodeProgress.outputMbps === "number"
+          ? transcodeProgress.outputMbps
+          : null
+      );
+      const rates = [encodeSpeed, linkRate].filter((rate) => typeof rate === "number" && rate > 0);
+      const arrivalRate = rates.length > 0 ? Math.min(...rates) : 1;
+      const fillSeconds = cushionRemainingSeconds / arrivalRate;
+      total += fillSeconds;
+      terms.push(`fill=${fillSeconds.toFixed(1)}@${arrivalRate.toFixed(2)}x`);
+    }
+
+    etaSeconds = total;
+    etaSource = terms.length > 0 ? terms.join("+") : "ready";
 
     // A countdown that goes UP is worse than no countdown: the viewer reads it
     // as the wait growing. Twice in the measured session it did — 5.5 -> 15.0
@@ -1017,6 +997,41 @@ export class Loading {
   #resetEtaFloor() {
     this.#etaPromise = null;
     this.#etaPromiseAt = 0;
+  }
+
+  /**
+   * How much media the player needs before it starts — the median of what it
+   * actually needed the last few times, or one segment before any such
+   * measurement exists. No player starts on less than one segment, so that is a
+   * property of the playlist rather than a value chosen to make numbers fit.
+   *
+   * @returns {number}
+   */
+  #requiredBufferSeconds() {
+    if (this.#playbackStartBuffers.length === 0) {
+      return SEGMENT_DURATION_SECONDS;
+    }
+    const sorted = [...this.#playbackStartBuffers].sort((left, right) => left - right);
+    return Math.max(SEGMENT_DURATION_SECONDS, sorted[Math.floor(sorted.length / 2)]);
+  }
+
+  /**
+   * How fast media can be carried to the player, as a multiple of realtime:
+   * the measured data-channel throughput divided by the stream's own bitrate.
+   * Null while either is unknown.
+   *
+   * @returns {number | null}
+   */
+  #measuredLinkMediaRate(outputMbps) {
+    const linkMbps = getEstimatedLinkMbps();
+    const mediaMbps = outputMbps;
+    if (!Number.isFinite(linkMbps) || linkMbps <= 0) {
+      return null;
+    }
+    if (!Number.isFinite(mediaMbps) || mediaMbps <= 0) {
+      return null;
+    }
+    return linkMbps / mediaMbps;
   }
 
   #recordDownloadRate(speedNow) {
@@ -2397,6 +2412,10 @@ export class Loading {
     this.#expectedFirstSegmentSeconds =
       Number.isFinite(prepared.expectedFirstSegmentMs) && prepared.expectedFirstSegmentMs > 0
         ? prepared.expectedFirstSegmentMs / 1000
+        : null;
+    this.#expectedSessionCreateSeconds =
+      Number.isFinite(prepared.expectedSessionCreateMs) && prepared.expectedSessionCreateMs > 0
+        ? prepared.expectedSessionCreateMs / 1000
         : null;
     if (this.#selectedAudioTrackIndex >= this.#planTracks.audio.length) {
       this.#selectedAudioTrackIndex = 0;
@@ -4655,7 +4674,14 @@ const RESUME_TARGET_SECONDS = 2;
 // rate of its own. Measured around 10x realtime on the two sessions of
 // 2026-08-05; a fifth of that is used, so the estimate errs long rather than
 // promising a speed nothing has yet demonstrated.
-const UNPROVEN_PIPELINE_RATE = 2;
+// How many recent playback starts are kept to learn how much buffer this
+// player needs before it moves.
+const PLAYBACK_START_SAMPLES = 5;
+// The proxy's nominal segment length. Used only as the floor for "how much
+// media is enough": no player starts on less than one segment, so this is a
+// property of the playlist we serve, not a value chosen to make an estimate
+// come out right.
+const SEGMENT_DURATION_SECONDS = 4;
 const PREBUFFER_MAX_SECONDS = 25;
 const PREBUFFER_BASE_SECONDS = 12;
 // Start early when the fill rate has sustained a healthy surplus over the FULL
