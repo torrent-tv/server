@@ -183,6 +183,15 @@ export class Loading {
   #downloadRateSamples = [];
   /** The last figure shown, and when — so the countdown can only go down. */
   #etaPromise = null;
+  /**
+   * Whether this file has ever actually played. Distinguishes the first open —
+   * where OUR prebuffer gate decides when the player is revealed — from a
+   * later wait, where the player resumes by itself as soon as it has anything.
+   * `#isProcessing` was used for this and is not the same thing: it is still
+   * false for the first ticks of a cold open, which took those ticks down the
+   * resume path and showed a 2 s target where 15 s was going to be enforced.
+   */
+  #hasPlayedOnce = false;
   #etaPromiseAt = 0;
   /**
    * What the chosen proxy takes to produce a session's first segment, from the
@@ -562,6 +571,12 @@ export class Loading {
     // spinner — the target data has not arrived yet (start seek → pause → play →
     // pause with the seek unfinished keeps it visible). Clear only when no seek
     // is in progress.
+    if (name === "playing") {
+      // From here on the player gates its own resumes; our prebuffer cushion
+      // applies only to the first reveal. Cleared with the rest of the
+      // per-attempt state in #beginPlaybackAttempt.
+      this.#hasPlayedOnce = true;
+    }
     if (name === "playing" || name === "pause") {
       const video = this.#videoElement;
       if (!(video instanceof HTMLVideoElement) || !video.seeking) {
@@ -778,9 +793,9 @@ export class Loading {
       // at the new position, measured 2026-08-05 at **0.5 s** buffered. Counting
       // toward 15 s in that case describes a moment that never arrives:
       // playback had already resumed while the figure still read 4.9 s.
-      const cushionTarget = this.#isProcessing
-        ? this.#adaptiveCushionTarget(fillRate)
-        : RESUME_TARGET_SECONDS;
+      const cushionTarget = this.#hasPlayedOnce
+        ? RESUME_TARGET_SECONDS
+        : this.#adaptiveCushionTarget(fillRate);
       cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / cushionTarget) * 100));
       cushionRemainingSeconds = Math.max(0, cushionTarget - bufferedAhead);
       // A number is ALWAYS produced — "estimating…" is not an acceptable
@@ -875,6 +890,25 @@ export class Loading {
       producedSinceResume >= ENCODE_SPEED_MIN_PRODUCED_SECONDS
         ? parsedEncodeSpeed
         : null;
+
+    // Nothing has reached the browser yet. Whatever rate the stages report,
+    // the wait still contains a whole first segment: the encoder has just been
+    // restarted and has produced nothing the player can use. Skipping that made
+    // the figure read 0.00 — "starting now" — for the entire 13.7 s of a seek
+    // measured 2026-08-05, because the target after a seek is small (2 s) and
+    // dividing it by a healthy pipeline rate rounds to nothing. The floor is
+    // the host's own measured time to a first segment plus a cautious price for
+    // carrying it, i.e. the same two costs as the cold-start branch.
+    if (bufferedAhead !== null && bufferedAhead <= 0 && etaSeconds !== null) {
+      const firstSegment = this.#expectedFirstSegmentSeconds;
+      if (firstSegment !== null) {
+        const floor = firstSegment + (cushionRemainingSeconds ?? 0) / UNPROVEN_PIPELINE_RATE;
+        if (floor > etaSeconds) {
+          etaSeconds = floor;
+          etaSource = `${etaSource}+first-segment-floor`;
+        }
+      }
+    }
 
     // A countdown that goes UP is worse than no countdown: the viewer reads it
     // as the wait growing. Twice in the measured session it did — 5.5 -> 15.0
@@ -1478,6 +1512,7 @@ export class Loading {
     // Per attempt: a new file, or the same one tried again, starts with the
     // ordinary wait rather than the notice left over from the last one.
     this.#longWaitAnnounced = false;
+    this.#hasPlayedOnce = false;
     // The previous attempt's rate history says nothing about this one.
     this.#downloadRateSamples = [];
     this.#resetEtaFloor();
