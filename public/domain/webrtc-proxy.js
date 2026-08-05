@@ -90,6 +90,26 @@ export class WebRtcProxy {
   #pc = null;
   /** @type {RTCDataChannel | null} */
   #channel = null;
+
+  /**
+   * A second channel carrying only small control messages.
+   *
+   * One channel used to carry both. SCTP delivers an ordered stream in order,
+   * so a 300-byte seek written after an 8 MB segment waits for that segment to
+   * finish going out. On a fast link that costs nothing — measured on the LAN
+   * 2026-08-05, control responses left in 1-4 ms while 6-11 MB segments were
+   * being pushed and the send buffer never accumulated — but on the 1-5.8
+   * Mbit/s measured on cellular one segment takes 11-64 s to push, and the
+   * proxy would learn about a seek that much later. That is the same failure
+   * the supersede fix (proxy 2.9.89) exists to prevent, one layer down.
+   *
+   * Null until it opens, and it may never open: a browser meets proxies older
+   * than itself, and those accept one channel only. Everything falls back to
+   * {@link #channel} in that case, which is exactly today's behaviour.
+   *
+   * Reasoning, measurements and the staging: research/control-channel-2026-08-05.md
+   */
+  #controlChannel = null;
   /** @type {WebSocket | null} */
   #ws = null;
   /**
@@ -325,6 +345,21 @@ export class WebRtcProxy {
   async #createPeerConnection(_sessionId, settle) {
     this.#pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this.#channel = this.#pc.createDataChannel("proxy", { ordered: true });
+    // Reliable and ordered like the other one: an unreliable control channel
+    // could drop a seek, and a dropped seek is worse than a late one.
+    this.#controlChannel = this.#pc.createDataChannel("proxy-control", { ordered: true });
+    this.#controlChannel.binaryType = "arraybuffer";
+    this.#controlChannel.addEventListener("message", (event) => {
+      this.#onChannelMessage(event.data);
+    });
+    this.#controlChannel.addEventListener("error", () => {
+      // Never fatal: the request simply goes down the media channel instead.
+      console.debug("[dc] control channel error — falling back to the single channel");
+      this.#controlChannel = null;
+    });
+    this.#controlChannel.addEventListener("close", () => {
+      this.#controlChannel = null;
+    });
     // Response bodies arrive as binary frames; receive them as ArrayBuffer
     // rather than Blob so they can be parsed synchronously.
     this.#channel.binaryType = "arraybuffer";
@@ -626,7 +661,7 @@ export class WebRtcProxy {
     if (!payload || payload.length <= REQUEST_CHUNK_THRESHOLD_BYTES) {
       // Legacy single message: small or bodyless requests, one send.
       try {
-        this.#channel.send(JSON.stringify({
+        this.#channelFor(reqPath).send(JSON.stringify({
           type: "request",
           requestId,
           method,
@@ -654,6 +689,30 @@ export class WebRtcProxy {
     void this.#sendChunkedRequest({ requestId, method, path: reqPath, query, headers, payload, signal });
 
     return responsePromise;
+  }
+
+  /**
+   * Which channel a request goes down.
+   *
+   * Media bodies keep the original channel; everything else — seek, session
+   * create and release, progress, stats, the link report — goes down the
+   * control channel when it is open. SCTP delivers one stream in order, so a
+   * 300-byte seek written after an 8 MB segment waits for that segment to
+   * finish; on the 1-5.8 Mbit/s measured on cellular that is 11-64 s, and the
+   * proxy learns about the seek that much later.
+   *
+   * Falls back to the single channel whenever the control one is not open,
+   * which is what happens against a proxy older than this browser.
+   *
+   * @param {string} requestPath
+   * @returns {RTCDataChannel}
+   */
+  #channelFor(requestPath) {
+    const isMedia = requestPath.startsWith("/transcode/") || requestPath.startsWith("/stream");
+    if (isMedia || this.#controlChannel?.readyState !== "open") {
+      return this.#channel;
+    }
+    return this.#controlChannel;
   }
 
   /**
@@ -898,6 +957,8 @@ export class WebRtcProxy {
     // Deliberate close — must not be reported as a lost connection.
     this.#closedByUser = true;
     this.#ws?.close();
+    this.#controlChannel?.close();
+    this.#controlChannel = null;
     this.#channel?.close();
     this.#pc?.close();
     this.#ws = null;
