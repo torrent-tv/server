@@ -3,6 +3,11 @@
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { startNetReporter, stopNetReporter } from "./net-report.js";
 
+// How often the browser re-asserts that it is still watching. Must sit well
+// below the proxy's ten-minute session timeout — 30 s leaves twenty chances to
+// be heard before it expires, and each one costs a 44-byte response.
+const SESSION_KEEPALIVE_MS = 30_000;
+
 export class TorrentSession {
   /** @type {(() => void) | null} */
   #seekCleanup = null;
@@ -18,6 +23,8 @@ export class TorrentSession {
      * @type {Map<string, import("./proxy-transport.js").ProxyTransport>}
      */
     this.activeTranscodeSessions = new Map();
+    /** Timer that re-asserts presence; see #keepSessionsAlive. */
+    this.keepAliveTimer = null;
     /**
      * How to poll the most recently created transcode session's progress.
      * @type {{ progressUrl: string, fetchFn: (url: string, options?: object) => Promise<Response> } | null}
@@ -108,11 +115,59 @@ export class TorrentSession {
     this.abortController = new AbortController();
   }
 
+  /**
+   * Keep telling the proxy that this viewer is still here, for as long as the
+   * browser holds a session.
+   *
+   * The proxy disposes a transcode session after ten minutes with no request
+   * naming it, and that is correct — but it was the ONLY signal of presence,
+   * while the browser asserts presence once, at creation, and never again. The
+   * two agree by accident during playback, because fetching segments keeps the
+   * timer alive; they part the moment the viewer PAUSES. Measured 2026-08-06:
+   * after a pause the browser sent nothing at all for thirteen minutes — 39,
+   * 17, 11, 4, 5 requests in the last five active minutes, then zero — the
+   * session was disposed on schedule, and every request after the resume
+   * answered 404 while the player sat frozen on a spinner. Reproducible at
+   * will: pause and wait ten minutes.
+   *
+   * So presence is re-asserted rather than assumed. The ping is the progress
+   * endpoint, which the proxy already treats as an access, at an interval far
+   * below its timeout; it costs a 44-byte response. It stops on its own when
+   * the last session is released, so a viewer who really has gone still frees
+   * the session — by the proxy's timer, exactly as before.
+   *
+   * @returns {void}
+   */
+  #keepSessionsAlive() {
+    if (this.keepAliveTimer) {
+      return;
+    }
+    this.keepAliveTimer = setInterval(() => {
+      if (this.activeTranscodeSessions.size === 0) {
+        clearInterval(this.keepAliveTimer);
+        this.keepAliveTimer = null;
+        return;
+      }
+      for (const [sessionId, transport] of this.activeTranscodeSessions) {
+        transport
+          .fetch(`/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`)
+          .catch(() => {
+            // A ping that fails says nothing on its own: the transport may be
+            // reconnecting. The session's own error handling owns that.
+          });
+      }
+    }, SESSION_KEEPALIVE_MS);
+  }
+
   releaseActiveTranscodeSessions(options = {}) {
     const preferBeacon = options?.preferBeacon === true;
     const reason = typeof options?.reason === "string" ? options.reason : "";
     // The viewer net reporter lives exactly as long as the session it feeds.
     stopNetReporter();
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
     if (this.activeTranscodeSessions.size === 0) {
       return;
     }
@@ -566,6 +621,7 @@ export class TorrentSession {
 
     if (sessionId) {
       this.activeTranscodeSessions.set(sessionId, transport);
+      this.#keepSessionsAlive();
       // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
       console.debug(`[evt] ${nowHms()} transcode-session create id=${sessionId.slice(0, 8)} fileIndex=${fileIndex}`);
       // Viewer net reporter (adaptive bitrate): feed the proxy's link-deficit
