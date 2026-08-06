@@ -61,5 +61,11 @@ export const APP_EVENTS = {
  * file and continues from where it was.
  */
 export const SESSION_EVENTS = {
-  GONE: "session:gone"
+  GONE: "session:gone",
+  /**
+   * A progress report from the keep-alive poll, which runs for as long as a
+   * session is held. It is the only reading of the proxy's state during steady
+   * playback — the buffering poll runs only while the picture is stopped.
+   */
+  PROGRESS: "session:progress"
 };

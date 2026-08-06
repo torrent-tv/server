@@ -1,3 +1,8 @@
+## 0.8.114
+
+- **New**: Automatic quality says what it currently is — `Auto (720p)` rather than `Auto`. The proxy steps the resolution down when it cannot encode in realtime or the link cannot carry the stream, and the viewer could see the picture soften with no answer anywhere to what they were watching. The label follows a change as it happens; the menu is rebuilt only when the height actually moves, not on every poll.
+- **Chore**: The keep-alive poll's answer is no longer thrown away. It runs for as long as a session is held and is the only reading of the proxy's state during steady playback — everything else polls only while the picture is stopped — so it now carries that reading to whoever needs it.
+
 ## 0.8.113
 
 - **Chore**: The position is written to the address once a second instead of once every two. That is thirty writes per thirty seconds against the hundred at which Safari starts refusing them — three times the margin, which is enough — and it halves the part of a resume's error that comes from the write interval. These writes replace, so the history still does not grow by a single entry however long the film.

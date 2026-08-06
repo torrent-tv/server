@@ -300,6 +300,12 @@ export class Loading {
   #planTracks = null;
   /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
   #selectedQualityHeight = 0;
+  /**
+   * The height automatic quality is producing right now, as reported by the
+   * proxy. Zero when unknown or when the video is copied — then nothing is
+   * being chosen and the source's own height is what plays.
+   */
+  #autoEffectiveHeight = 0;
   /** @type {number} Source coded width/height from the proxy plan (0 = unknown / not proxy-served). */
   #sourceVideoWidth = 0;
   #sourceVideoHeight = 0;
@@ -515,6 +521,9 @@ export class Loading {
     });
     window.addEventListener("pagehide", () => this.#reflectStateInUrl());
     document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
+    document.addEventListener(SESSION_EVENTS.PROGRESS, (event) => {
+      this.#noteEffectiveQuality(event instanceof CustomEvent ? event.detail : null);
+    });
     // Leaving for the picker has to reach the address bar too. Nothing else
     // does it: every other write is driven by an event of the <video> element,
     // and by this point there is no longer anything playing.
@@ -747,6 +756,7 @@ export class Loading {
       if (downloadStats) {
         this.#lastDownloadStats = downloadStats;
       }
+      this.#noteEffectiveQuality(transcodeProgress);
       if (this.#bufferingShown && epoch === this.#bufferingEpoch) {
         this.#dispatchBuffering(true, this.#formatBufferingText(downloadStats, transcodeProgress));
       }
@@ -4751,11 +4761,46 @@ export class Loading {
    *
    * @returns {Array<{ height: number, label: string }>}
    */
+  /**
+   * Take the height the proxy is producing from a progress report, and refresh
+   * the menu when it has changed under automatic quality.
+   *
+   * Only then: a forced resolution does not move, and rebuilding the menu on
+   * every poll would replace its items about once a second for no reason.
+   *
+   * @param {{ currentHeight?: number } | null} progress
+   * @returns {void}
+   */
+  #noteEffectiveQuality(progress) {
+    const height = Number(progress?.currentHeight);
+    const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
+    if (effective === this.#autoEffectiveHeight) {
+      return;
+    }
+    this.#autoEffectiveHeight = effective;
+    if (this.#selectedQualityHeight !== 0) {
+      return;
+    }
+    this.#logEvt(`automatic quality is now ${effective > 0 ? `${effective}p` : "the source's own height"}`);
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_QUALITY_OPTIONS, {
+        detail: { options: this.#buildQualityOptions(), activeHeight: this.#selectedQualityHeight }
+      })
+    );
+  }
+
   #buildQualityOptions() {
     if (!(this.#sourceVideoHeight > 0)) {
       return [];
     }
-    const options = [{ height: 0, label: "Auto" }];
+    // Automatic says what it currently IS. The proxy steps the resolution down
+    // when the host cannot encode in realtime or the viewer's link cannot carry
+    // the stream, and the menu read only "Auto" — so the viewer could see the
+    // picture soften and find no answer anywhere to what they were watching.
+    const options = [{
+      height: 0,
+      label: this.#autoEffectiveHeight > 0 ? `Auto (${this.#autoEffectiveHeight}p)` : "Auto"
+    }];
     const ladder = [2160, 1440, 1080, 720, 540, 480, 360, 240];
     // The source height itself as the top forced rung (labelled), then standard
     // rungs strictly below it. Never offer above the source (no upscaling).
