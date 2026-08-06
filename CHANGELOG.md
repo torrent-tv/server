@@ -1,3 +1,8 @@
+## 0.8.113
+
+- **Chore**: The position is written to the address once a second instead of once every two. That is thirty writes per thirty seconds against the hundred at which Safari starts refusing them — three times the margin, which is enough — and it halves the part of a resume's error that comes from the write interval. These writes replace, so the history still does not grow by a single entry however long the film.
+- **New**: A resume says how far it landed from where it aimed. Reported 2026-08-06 as coming back "about five seconds earlier"; the write interval and its rounding down account for two of those, and nothing in the log accounted for the rest, because the position asked for and the position playback actually began at were never compared. One line per resume, written when playback starts: `resume asked for 5964.50s, playback began at 5959.87s (-4.63s)`.
+
 ## 0.8.112
 
 - **Fix**: Retry after a lost connection returns to where the viewer was. The position stored for it was always zero, so a router reboot forty minutes into a film meant starting the film again. It is now taken from the player, or from the address bar when the player has already been torn down — one of the two always knows. It is also announced before the load rather than applied after it, so it travels the same path as reopening a bookmark: hls.js begins buffering there and the proxy is told to encode from there, instead of loading from the beginning and seeking once the picture is already showing.

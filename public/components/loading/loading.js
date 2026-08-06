@@ -381,6 +381,13 @@ export class Loading {
    */
   #pendingCurrentTime = null;
   /**
+   * The position a resume asked for, held until playback actually begins so the
+   * two can be compared. Null when this start is not a resume.
+   *
+   * @type {number | null}
+   */
+  #resumeAskedFor = null;
+  /**
    * File index from a shared `&fileIndex=` link — which file of a multi-file
    * torrent to open — consumed when the source's file list is known. Null = none.
    * @type {number | null}
@@ -639,6 +646,22 @@ export class Loading {
     // pause with the seek unfinished keeps it visible). Clear only when no seek
     // is in progress.
     if (name === "playing") {
+      // Where a resume ASKED to start against where it actually started. The
+      // two are not the same and the difference was invisible: reported
+      // 2026-08-06 as "about five seconds earlier than where I stopped", of
+      // which the address's two-second write interval and its rounding down
+      // explain three, and nothing in the log accounted for the rest. Written
+      // once per resume, on the edge, and only when a position was asked for.
+      if (this.#resumeAskedFor !== null) {
+        const startedAt = this.#videoElement instanceof HTMLVideoElement
+          ? this.#videoElement.currentTime
+          : 0;
+        this.#logEvt(
+          `resume asked for ${this.#resumeAskedFor.toFixed(2)}s, playback began at ` +
+          `${startedAt.toFixed(2)}s (${(startedAt - this.#resumeAskedFor).toFixed(2)}s)`
+        );
+        this.#resumeAskedFor = null;
+      }
       // What this player needed before it moved. The estimate's last term
       // counts toward this, so it is observed rather than chosen.
       const aheadAtStart = this.#videoElement instanceof HTMLVideoElement
@@ -3924,6 +3947,11 @@ export class Loading {
     // seek a second time.
     const resumeStartPosition = this.#pendingCurrentTime;
     this.#pendingCurrentTime = null;
+    // Held so the `playing` handler can say how far the actual start fell from
+    // what was asked for.
+    this.#resumeAskedFor = typeof resumeStartPosition === "number" && resumeStartPosition > 0
+      ? resumeStartPosition
+      : null;
 
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
       transport,
@@ -4984,13 +5012,12 @@ const RESUME_TARGET_SECONDS = 2;
 // How often the playback position may be written to the address bar. See
 // #reflectStateInUrl for why it is throttled rather than written per tick.
 // The address bar follows the playhead at this interval. Two seconds is
-// fifteen writes per thirty, against the hundred at which Safari — the
-// strictest, and the same engine on iOS — starts refusing; six times the
-// margin, and a bookmark is never more than two seconds out. One second would
-// still fit but spends the margin for a difference nobody can perceive when
-// resuming a film. These writes REPLACE, so no matter how long the film, the
-// history does not grow by a single entry.
-const URL_POSITION_INTERVAL_MS = 2_000;
+// thirty writes per thirty seconds, against the hundred at which Safari — the
+// strictest, and the same engine on iOS — starts refusing: still three times
+// the margin, and a bookmark is never more than a second out. These writes
+// REPLACE, so no matter how long the film, the history does not grow by a
+// single entry.
+const URL_POSITION_INTERVAL_MS = 1_000;
 // How fast the pipeline is assumed to fill the buffer before it has shown a
 // rate of its own. Measured around 10x realtime on the two sessions of
 // 2026-08-05; a fifth of that is used, so the estimate errs long rather than
