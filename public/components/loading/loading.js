@@ -5054,14 +5054,13 @@ const PREBUFFER_MIN_SECONDS = 6;
 // described a moment that never came, and the number still read 4.9 s when
 // playback had already resumed.
 const RESUME_TARGET_SECONDS = 2;
-// How often the playback position may be written to the address bar. See
-// #reflectStateInUrl for why it is throttled rather than written per tick.
-// The address bar follows the playhead at this interval. Two seconds is
-// thirty writes per thirty seconds, against the hundred at which Safari — the
-// strictest, and the same engine on iOS — starts refusing: still three times
-// the margin, and a bookmark is never more than a second out. These writes
-// REPLACE, so no matter how long the film, the history does not grow by a
-// single entry.
+// How often the playback position may be written to the address bar, so a
+// bookmark taken at any moment is at most this far behind the picture.
+// `timeupdate` fires about four times a second, which is far too often to
+// touch history; one second is sixty writes per thirty seconds, against the
+// hundred at which Safari — the strictest, and the same engine on iOS — starts
+// refusing. These writes REPLACE, so however long the film, the history does
+// not grow by a single entry.
 const URL_POSITION_INTERVAL_MS = 1_000;
 // How fast the pipeline is assumed to fill the buffer before it has shown a
 // rate of its own. Measured around 10x realtime on the two sessions of
