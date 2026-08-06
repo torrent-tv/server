@@ -124,7 +124,20 @@ export function createHlsPlayer(onLog) {
           // and restarts ffmpeg, so we must not over-buffer past that window.
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
-          backBufferLength: 30
+          backBufferLength: 30,
+          // Where to begin buffering. It belongs HERE, in the configuration
+          // handed to the constructor: on the instance `startPosition` is a
+          // getter, so assigning to it throws in a module's strict mode —
+          // `Cannot set property startPosition of #<e> which has only a
+          // getter`, which is what a page refresh reported 2026-08-06. The old
+          // assignment below the constructor only ever ran on a resume, so it
+          // stayed hidden until the address bar started carrying the position
+          // on every reload and the throw became the normal case.
+          ...(typeof options.startPosition === "number" &&
+            Number.isFinite(options.startPosition) &&
+            options.startPosition > 0
+            ? { startPosition: options.startPosition }
+            : {})
         };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
@@ -166,12 +179,6 @@ export function createHlsPlayer(onLog) {
             }
           }, 1000);
         };
-
-        // When seeking to a non-zero position (seek-restart), instruct HLS.js
-        // to begin buffering from that offset instead of from t=0.
-        if (typeof options.startPosition === "number" && Number.isFinite(options.startPosition) && options.startPosition > 0) {
-          instance.startPosition = options.startPosition;
-        }
 
         await new Promise((resolve, reject) => {
           const timeoutId = window.setTimeout(() => {
