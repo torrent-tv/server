@@ -6,7 +6,13 @@ import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS } from "../../shared/events.js";
-import { readUrlState, buildUrlSearch, decideHistoryWrite, isAdvanceToNext } from "../../domain/url-state.js";
+import {
+  readUrlState,
+  buildUrlSearch,
+  decideHistoryWrite,
+  isAdvanceToNext,
+  decideNavigation
+} from "../../domain/url-state.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { getEstimatedLinkMbps } from "../../domain/net-report.js";
 
@@ -214,6 +220,8 @@ export class Loading {
   #urlPositionWrittenAt = 0;
   /** A rebuild after the proxy lost the session is in flight. */
   #rebuildingSession = false;
+  /** A Back/Forward navigation is being carried out; see #onHistoryNavigate. */
+  #navigatingHistory = false;
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
@@ -500,6 +508,7 @@ export class Loading {
     });
     window.addEventListener("pagehide", () => this.#reflectStateInUrl());
     document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
+    window.addEventListener("popstate", () => { void this.#onHistoryNavigate(); });
     // Periodic bottleneck classification while playing. Distinguishes, from
     // client-visible symptoms, whether playback is limited by the client's own
     // decode (dropped frames while the buffer holds) or by something upstream
@@ -2139,7 +2148,79 @@ export class Loading {
     }
   }
 
+  /**
+   * Go where the Back or Forward button just pointed.
+   *
+   * The browser restores an address and nothing else — everything the
+   * application held in memory belongs to the state being left — so the address
+   * is the whole instruction. {@link decideNavigation} turns it into the
+   * cheapest correct action for where we already are: another torrent has to be
+   * loaded, another file of the SAME torrent only opened, the same file only
+   * seeked, and a difference of a second is not a navigation at all.
+   *
+   * Nothing here writes history. The rule that decides push-or-replace already
+   * makes that safe — after a restore the address names the state, so a write
+   * replaces — but a `timeupdate` from the file being left can arrive
+   * mid-transition, when the address and the player disagree, and that one
+   * WOULD push. Hence the flag.
+   *
+   * @returns {Promise<void>}
+   */
+  async #onHistoryNavigate() {
+    const target = readUrlState(location.search);
+    const video = this.#videoElement;
+    const current = {
+      magnet: this.#currentMagnetUri(),
+      fileIndex: this.#activeFileIndex >= 0 ? this.#activeFileIndex : -1,
+      currentTime: video instanceof HTMLVideoElement ? Math.floor(video.currentTime) : 0
+    };
+    const { action, fileIndex, currentTime } = decideNavigation(current, target);
+    if (action === "none") {
+      return;
+    }
+    this.#logEvt(`history → ${action} file=${fileIndex} at=${currentTime}s`);
+    this.#navigatingHistory = true;
+    try {
+      if (action === "seek") {
+        if (video instanceof HTMLVideoElement) {
+          video.currentTime = currentTime;
+        }
+        return;
+      }
+      if (action === "picker") {
+        document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
+        return;
+      }
+      if (action === "playlist") {
+        document.dispatchEvent(new CustomEvent(APP_EVENTS.BACK_TO_PLAYLIST));
+        return;
+      }
+      if (action === "load-source") {
+        // The whole source again, with the file and position the entry names —
+        // the same path a shared link takes, which already accepts both.
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PROCESS_MAGNET, {
+          detail: {
+            magnetUri: target.magnet,
+            fileIndex: fileIndex >= 0 ? fileIndex : null,
+            currentTime: currentTime > 0 ? currentTime : null
+          }
+        }));
+        return;
+      }
+      // open-file: the torrent is already loaded, so only the file changes.
+      this.#pendingCurrentTime = currentTime > 0 ? currentTime : null;
+      await this.#playVideoFile(fileIndex);
+    } catch (error) {
+      this.#logEvt(`history navigation failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.#navigatingHistory = false;
+    }
+  }
+
   #reflectStateInUrl() {
+    if (this.#navigatingHistory) {
+      return;
+    }
     const magnet = this.#currentMagnetUri();
     if (magnet.length === 0) {
       return;
