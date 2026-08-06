@@ -3893,13 +3893,20 @@ export class Loading {
       ? createWebRtcHlsLoader(transport)
       : undefined;
 
-    // Shared-link resume: begin the transcode AND the pre-buffer AT the target
-    // position via hls.js `startPosition` (the proxy produces the segment there
-    // through its server-side seek), so there is a SINGLE loading at the resume
-    // point. Without this we loaded from 0, revealed the player, THEN seeked —
-    // which restarted the transcode at the target and showed a SECOND loading
-    // screen. One-shot: consumed here so the post-reveal #applyPendingResume
-    // does not seek a second time.
+    // Resuming: the transcode AND the pre-buffer begin AT the target position,
+    // so there is a SINGLE loading at the resume point. Loading from 0 and
+    // seeking after the reveal showed a second loading screen.
+    //
+    // BOTH sides have to be told. hls.js gets it as `startPosition`, and the
+    // proxy gets it as the position to encode from — this used to rely on the
+    // proxy inferring a seek from a far segment request, which it deliberately
+    // no longer does: a request steers nothing, and every restart comes from a
+    // position the viewer stated. With only hls.js told, a refresh at 1:17:10
+    // asked for segment #446 while the encoder was told to start at #0; the
+    // request was held for 45 s, answered 404, and the viewer got "no data
+    // arrived from the proxy" (field 2026-08-06).
+    // One-shot: consumed here so the post-reveal #applyPendingResume does not
+    // seek a second time.
     const resumeStartPosition = this.#pendingCurrentTime;
     this.#pendingCurrentTime = null;
 
@@ -3910,6 +3917,8 @@ export class Loading {
       transcodeAudio: options.transcodeAudio === true,
       segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
       audioTrackIndex: this.#selectedAudioTrackIndex,
+      startPositionSeconds:
+        typeof resumeStartPosition === "number" && resumeStartPosition > 0 ? resumeStartPosition : 0,
       ...this.#buildQualityTargetConfig(options.transcodeVideo === true),
       playHls: (videoElement, manifestUrl, playOptions = {}) =>
         this.#hlsPlayer.play(videoElement, manifestUrl, {

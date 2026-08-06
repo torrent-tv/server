@@ -391,6 +391,13 @@ export class TorrentSession {
         targetHeight,
         manualQuality,
         audioTrackIndex,
+        // Where the proxy must start encoding. Without it a resume told only
+        // hls.js, which then asked for a segment the encoder had never been
+        // told to make.
+        startPositionSeconds:
+          Number.isFinite(options.startPositionSeconds) && options.startPositionSeconds > 0
+            ? options.startPositionSeconds
+            : 0,
         segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : ""
       }
     );
