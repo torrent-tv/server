@@ -44,6 +44,10 @@
  */
 
 /** Reused decoder for ASCII requestIds in binary response frames. */
+// How often the browser writes its transport counters to the log. The proxy
+// samples its own on the same cadence, so the two lines can be subtracted.
+const TRANSPORT_SAMPLE_MS = 5_000;
+
 const ASCII_DECODER = new TextDecoder();
 
 /**
@@ -90,6 +94,8 @@ export class WebRtcProxy {
   #pc = null;
   /** @type {RTCDataChannel | null} */
   #channel = null;
+  /** Handle of the transport-counter sampler; see #startTransportSampling. */
+  #transportSampler = null;
 
   /**
    * A second channel carrying only small control messages.
@@ -414,6 +420,7 @@ export class WebRtcProxy {
       console.debug(`[ice] connectionState=${state}`);
       if (state === "connected" || state === "failed") {
         void this.#logSelectedPair();
+        this.#startTransportSampling();
       }
       if (state === "failed") {
         settle(new Error("WebRTC connection failed."));
@@ -951,6 +958,68 @@ export class WebRtcProxy {
   }
 
   /**
+   * Write the transport's own counters to the log, for as long as the
+   * connection lives.
+   *
+   * This side had none. The proxy could say how much it handed to its
+   * transport; nothing said how much arrived here, and without both numbers a
+   * loss cannot be placed. Field 2026-08-06: the proxy reported a 9.26 MB
+   * segment fully sent at 274 Mbit/s with an empty send queue, the browser
+   * never saw it, and everything sent afterwards vanished the same way while
+   * requests in the other direction kept working. Whether those bytes reached
+   * this machine at all decides between three quite different faults — lost on
+   * the path, never actually transmitted, or received but not delivered by
+   * SCTP — and only this counter can tell them apart.
+   *
+   * @returns {void}
+   */
+  #startTransportSampling() {
+    this.#stopTransportSampling();
+    let previous = null;
+    this.#transportSampler = window.setInterval(() => {
+      if (!this.#pc) {
+        return;
+      }
+      void this.#pc.getStats().then((stats) => {
+        let transport = null;
+        let pair = null;
+        let channel = null;
+        stats.forEach((report) => {
+          if (report.type === "transport") {
+            transport = report;
+          } else if (report.type === "candidate-pair" && (report.nominated || report.state === "succeeded")) {
+            pair = report;
+          } else if (report.type === "data-channel" && report.label === "proxy") {
+            channel = report;
+          }
+        });
+        const received = transport?.bytesReceived ?? pair?.bytesReceived ?? null;
+        const sent = transport?.bytesSent ?? pair?.bytesSent ?? null;
+        const delta = previous !== null && received !== null ? received - previous : null;
+        previous = received;
+        console.debug(
+          `[dc-transport] received=${received ?? "?"}${delta === null ? "" : ` (+${delta})`} ` +
+            `sent=${sent ?? "?"} chMsgs=${channel?.messagesReceived ?? "?"} ` +
+            `chBytes=${channel?.bytesReceived ?? "?"} state=${this.#pc.connectionState} ` +
+            `ice=${this.#pc.iceConnectionState} rtt=${
+              pair?.currentRoundTripTime === undefined
+                ? "?"
+                : Math.round(pair.currentRoundTripTime * 1000)
+            }ms pair=${pair?.state ?? "?"}`
+        );
+      }).catch(() => {});
+    }, TRANSPORT_SAMPLE_MS);
+  }
+
+  /** @returns {void} */
+  #stopTransportSampling() {
+    if (this.#transportSampler !== null) {
+      window.clearInterval(this.#transportSampler);
+      this.#transportSampler = null;
+    }
+  }
+
+  /**
    * Close the data channel, peer connection, and signalling WebSocket.
    */
   close() {
@@ -959,6 +1028,7 @@ export class WebRtcProxy {
     this.#ws?.close();
     this.#controlChannel?.close();
     this.#controlChannel = null;
+    this.#stopTransportSampling();
     this.#channel?.close();
     this.#pc?.close();
     this.#ws = null;
