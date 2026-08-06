@@ -152,7 +152,22 @@ export class TorrentSession {
       for (const [sessionId, transport] of this.activeTranscodeSessions) {
         transport
           .fetch(`/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`)
-          .then((response) => {
+          .then(async (response) => {
+            // The answer was being thrown away. It is the only reading of the
+            // proxy's state during steady playback — everything else polls only
+            // while the picture is stopped — and it carries the height the
+            // proxy is producing, which is what tells the viewer what automatic
+            // quality has settled on.
+            if (response?.ok) {
+              try {
+                document.dispatchEvent(new CustomEvent(SESSION_EVENTS.PROGRESS, {
+                  detail: await response.json()
+                }));
+              } catch {
+                // A malformed body is not worth interrupting the ping for.
+              }
+              return;
+            }
             // 404 is the proxy saying this session no longer exists — it was
             // disposed, or the proxy restarted. Nothing that polls it will ever
             // succeed again, so stop holding it and say so once; the player
