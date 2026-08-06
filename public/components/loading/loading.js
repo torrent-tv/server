@@ -3959,6 +3959,14 @@ export class Loading {
     // seek a second time.
     const resumeStartPosition = this.#pendingCurrentTime;
     this.#pendingCurrentTime = null;
+    // Said out loud because the two sides have disagreed about it twice: the
+    // position reached hls.js, which duly asked for segment #127, while the
+    // proxy was told to start at zero and the viewer waited 45.6 s for a
+    // segment nobody was making. Whoever drops it, this line and the proxy's
+    // matching `start=` name the moment between them.
+    this.#logEvt(
+      `starting from ${resumeStartPosition == null ? "the beginning" : `${Math.round(resumeStartPosition)}s`}`
+    );
     // Held so the `playing` handler can say how far the actual start fell from
     // what was asked for.
     this.#resumeAskedFor = typeof resumeStartPosition === "number" && resumeStartPosition > 0
