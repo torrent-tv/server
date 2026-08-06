@@ -1,3 +1,7 @@
+## 0.8.106
+
+- **New**: Back and Forward work. The browser restores an address and nothing else, so the address is the whole instruction, and it is turned into the cheapest correct action for wherever the viewer already is: another torrent is loaded from scratch, another file of the same torrent is only opened, the same file is only seeked, and a difference of a second is not a navigation at all. Back from an episode returns to the previous one at the place it was left — or from its start, when it was left by moving on to the next. Back from the first episode shows the file list, and back from there the picker. Nothing in the handler writes history: the push-or-replace rule already makes that safe, since after a restore the address names the state, but a `timeupdate` from the file being left can arrive mid-transition when the address and the player disagree, and that one would have pushed.
+
 ## 0.8.105
 
 - **New**: Browser history now walks what was watched. Changing file or torrent adds an entry, so Back returns to the previous episode — or the previous page of a comic — while the playhead moving only ever rewrites the entry it is in, so a two-hour film leaves exactly one entry behind instead of thousands. The rule is one line and is decided by comparing the address with the state being written, which also makes Back safe by construction: after the browser restores an entry the address already names that state, so the app's own write replaces and cannot bury the history it is walking.
