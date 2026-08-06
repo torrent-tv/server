@@ -522,7 +522,9 @@ export class Loading {
     window.addEventListener("pagehide", () => this.#reflectStateInUrl());
     document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
     document.addEventListener(SESSION_EVENTS.PROGRESS, (event) => {
-      this.#noteEffectiveQuality(event instanceof CustomEvent ? event.detail : null);
+      const detail = event instanceof CustomEvent ? event.detail : null;
+      this.#noteHostTimings(detail);
+      this.#noteEffectiveQuality(detail);
     });
     // Leaving for the picker has to reach the address bar too. Nothing else
     // does it: every other write is driven by an event of the <video> element,
@@ -4771,6 +4773,28 @@ export class Loading {
    * @param {{ currentHeight?: number } | null} progress
    * @returns {void}
    */
+  /**
+   * Take the host's own timings from a progress report.
+   *
+   * They also arrive on the playback plan, but that is read once per file — so
+   * on a proxy that had just restarted, when neither figure existed yet, the
+   * browser kept the nulls for the whole session and every later seek estimated
+   * the wait with one term of four. This response is polled about every 1.5 s.
+   *
+   * @param {{ expectedSessionCreateMs?: number, expectedFirstSegmentMs?: number } | null} progress
+   * @returns {void}
+   */
+  #noteHostTimings(progress) {
+    const create = Number(progress?.expectedSessionCreateMs);
+    if (Number.isFinite(create) && create > 0) {
+      this.#expectedSessionCreateSeconds = create / 1000;
+    }
+    const first = Number(progress?.expectedFirstSegmentMs);
+    if (Number.isFinite(first) && first > 0) {
+      this.#expectedFirstSegmentSeconds = first / 1000;
+    }
+  }
+
   #noteEffectiveQuality(progress) {
     const height = Number(progress?.currentHeight);
     const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
