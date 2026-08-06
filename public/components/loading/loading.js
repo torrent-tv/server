@@ -3957,15 +3957,31 @@ export class Loading {
     // arrived from the proxy" (field 2026-08-06).
     // One-shot: consumed here so the post-reveal #applyPendingResume does not
     // seek a second time.
-    const resumeStartPosition = this.#pendingCurrentTime;
+    // Where to begin. The field is filled by whichever path opened this file,
+    // and it LOSES A RACE: measured 2026-08-06, the position arrived with an
+    // event that fires after the session has been created, so this read saw
+    // null, the proxy was told `start=0s`, the film loaded from the beginning,
+    // and the position was then applied as an ordinary seek once the player was
+    // already on screen — a cold start and an encoder restart for something
+    // that was known all along.
+    //
+    // The address bar does not race. It is written before the load begins, it
+    // survives a reload, and it is the state by design, so it is consulted
+    // whenever the field is empty.
+    const fromField = this.#pendingCurrentTime;
     this.#pendingCurrentTime = null;
+    const fromUrl = readUrlState(location.search).currentTime;
+    const resumeStartPosition = fromField != null && fromField > 0
+      ? fromField
+      : (fromUrl > 0 ? fromUrl : null);
     // Said out loud because the two sides have disagreed about it twice: the
     // position reached hls.js, which duly asked for segment #127, while the
     // proxy was told to start at zero and the viewer waited 45.6 s for a
     // segment nobody was making. Whoever drops it, this line and the proxy's
     // matching `start=` name the moment between them.
     this.#logEvt(
-      `starting from ${resumeStartPosition == null ? "the beginning" : `${Math.round(resumeStartPosition)}s`}`
+      `starting from ${resumeStartPosition == null ? "the beginning" : `${Math.round(resumeStartPosition)}s`}` +
+      ` (field=${fromField == null ? "-" : Math.round(fromField)} url=${fromUrl > 0 ? Math.round(fromUrl) : "-"})`
     );
     // Held so the `playing` handler can say how far the actual start fell from
     // what was asked for.
