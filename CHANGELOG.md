@@ -1,3 +1,8 @@
+## 0.8.108
+
+- **Fix**: Asking for a new torrent now clears the address. The writer returned early when there was no source, so "New Torrent" on the error screen left the previous `?magnet=…` in the address bar — and a reload, or a bookmark taken at that moment, reopened the very torrent that had just been abandoned. Leaving a torrent for the picker is navigation, so it earns a history entry; arriving at an already-empty address does not. Nothing else could have done this: every other write is driven by an event of the `<video>` element, and by then there is nothing playing.
+- **Chore**: Writing the state the address already names is now a no-op rather than a redundant replace.
+
 ## 0.8.107
 
 - **Fix**: Refreshing the page threw `Cannot set property startPosition of #<e> which has only a getter` and nothing played. Where to begin buffering was being assigned to the hls.js instance, where it is a getter — the writable one is the configuration handed to the constructor, and a module runs in strict mode, so the assignment throws rather than being ignored. It only ever ran on a resume, so it stayed hidden until the address bar began carrying the position on every reload and the throw became the normal case.

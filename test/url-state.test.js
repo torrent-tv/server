@@ -80,7 +80,11 @@ test("writing the state the address already names never adds an entry", () => {
   // This is what makes Back safe: the browser restores an entry, the app writes
   // its state, and the write replaces rather than pushes.
   const restored = state(MAGNET_A, 4, 900);
-  assert.equal(decideHistoryWrite(restored, restored), "replace");
+  assert.equal(
+    decideHistoryWrite(restored, restored),
+    "none",
+    "an identical state has nothing to write at all"
+  );
   assert.equal(
     decideHistoryWrite(restored, state(MAGNET_A, 4, 902)),
     "replace",
@@ -164,4 +168,28 @@ test("the target's position is carried to whoever performs the action", () => {
   assert.equal(decision.action, "open-file");
   assert.equal(decision.fileIndex, 4);
   assert.equal(decision.currentTime, 1800, "the file has to open where the entry says");
+});
+
+test("an empty state clears the address instead of leaving the old torrent in it", () => {
+  // Choosing "New Torrent" on the error screen used to leave `?magnet=…`
+  // behind, so a reload reopened the torrent that had just been abandoned.
+  assert.equal(buildUrlSearch({ magnet: "", fileIndex: -1, currentTime: 0 }), "");
+  assert.equal(
+    decideHistoryWrite(
+      { magnet: "magnet:?xt=urn:btih:aaa", fileIndex: 2, currentTime: 90 },
+      { magnet: "", fileIndex: -1, currentTime: 0 }
+    ),
+    "push",
+    "leaving a torrent for the picker is navigation and earns an entry"
+  );
+});
+
+test("arriving at an already-empty address writes nothing", () => {
+  assert.equal(
+    decideHistoryWrite(
+      { magnet: "", fileIndex: -1, currentTime: 0 },
+      { magnet: "", fileIndex: -1, currentTime: 0 }
+    ),
+    "none"
+  );
 });
