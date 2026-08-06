@@ -5,7 +5,7 @@ import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS } from "../../shared/events.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { getEstimatedLinkMbps } from "../../domain/net-report.js";
 
@@ -209,6 +209,10 @@ export class Loading {
    * @type {number[]}
    */
   #playbackStartBuffers = [];
+  /** When the address bar last received the playback position. */
+  #urlPositionWrittenAt = 0;
+  /** A rebuild after the proxy lost the session is in flight. */
+  #rebuildingSession = false;
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
@@ -463,8 +467,38 @@ export class Loading {
         log(name);
         this.#onPlaybackEventForBuffering(name);
         this.#reportSeekIntent(name, videoElement);
+        // The moments where the position has definitely changed and settled.
+        if (name === "seeked" || name === "pause" || name === "playing") {
+          this.#reflectStateInUrl();
+        }
       });
     }
+    // While playing, the position moves continuously and the address bar has to
+    // follow it, or a bookmark taken mid-film reopens at the last discrete
+    // event. `timeupdate` fires about four times a second, which is far too
+    // often to write history — Safari begins throttling around a hundred calls
+    // in thirty seconds — so it is written at most once every
+    // URL_POSITION_INTERVAL_MS. At that rate it is six calls per thirty
+    // seconds, an order of magnitude under any browser's limit, and cheap
+    // enough on a phone.
+    videoElement.addEventListener("timeupdate", () => {
+      const now = Date.now();
+      if (now - this.#urlPositionWrittenAt < URL_POSITION_INTERVAL_MS) {
+        return;
+      }
+      this.#urlPositionWrittenAt = now;
+      this.#reflectStateInUrl();
+    });
+    // Leaving, or being sent to the background, is the last chance to record
+    // where the viewer got to. `pagehide` and `visibilitychange` are the pair
+    // that fire reliably on iOS, where `beforeunload` is ignored.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        this.#reflectStateInUrl();
+      }
+    });
+    window.addEventListener("pagehide", () => this.#reflectStateInUrl());
+    document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
     // Periodic bottleneck classification while playing. Distinguishes, from
     // client-visible symptoms, whether playback is limited by the client's own
     // decode (dropped frames while the buffer holds) or by something upstream
@@ -2045,6 +2079,83 @@ export class Loading {
    *
    * @returns {string}
    */
+  /**
+   * Keep the address bar describing what is on screen: which torrent, which
+   * file, and where in it.
+   *
+   * The requirement it serves is exactly one sentence long — a bookmark must
+   * reopen the same file of the same torrent at the same moment, with no extra
+   * steps — and it decides the shape. The magnet is long and full of characters
+   * that cannot sit in a path segment, so these are query parameters, the same
+   * three the share link already builds and `torrent.js` already parses on
+   * load.
+   *
+   * `replaceState`, never `push`: the position changes constantly, and pushing
+   * would bury the viewer's real history under hundreds of entries of the same
+   * film. The cost is one synchronous call at the rate below.
+   *
+   * Silent when there is nothing to describe — no source, no infohash, or the
+   * player has not started — so the address bar is never half-written.
+   *
+   * @returns {void}
+   */
+  /**
+   * Build a new transcode session for the file already on screen, continuing
+   * from where the viewer was.
+   *
+   * A session can vanish under a player that is otherwise fine: the proxy
+   * disposes it after the browser has been away, or the proxy restarts. Every
+   * request then answers 404, and the player has no way to interpret that — it
+   * polled a dead id indefinitely behind a spinner (field 2026-08-06, eleven
+   * minutes of it). Nothing needs to be fetched again to recover: the source
+   * and the file are in memory and the position is on the video element, so
+   * the honest response to "your session is gone" is to make another one.
+   *
+   * Only ever one rebuild at a time, and never during the loading flow, which
+   * owns its own failure path.
+   *
+   * @returns {Promise<void>}
+   */
+  async #rebuildGoneSession() {
+    if (this.#rebuildingSession || this.#isProcessing) {
+      return;
+    }
+    const fileIndex = this.#activeFileIndex;
+    if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+      return;
+    }
+    const video = this.#videoElement;
+    const position = video instanceof HTMLVideoElement ? video.currentTime : 0;
+    this.#rebuildingSession = true;
+    this.#logEvt(`session gone — rebuilding at ${position.toFixed(1)}s`);
+    try {
+      this.#pendingCurrentTime = position > 0 ? position : null;
+      await this.#playVideoFile(fileIndex);
+    } catch (error) {
+      this.#logEvt(`session rebuild failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.#rebuildingSession = false;
+    }
+  }
+
+  #reflectStateInUrl() {
+    let url = this.#buildShareUrl();
+    if (url.length === 0) {
+      return;
+    }
+    const video = this.#videoElement;
+    const position = video instanceof HTMLVideoElement ? Math.floor(video.currentTime) : 0;
+    if (position > 0) {
+      url += `&currentTime=${position}`;
+    }
+    try {
+      history.replaceState(null, "", url);
+    } catch {
+      // A browser that refuses (rate limit, sandboxed frame) simply keeps the
+      // address it had; nothing about playback depends on this.
+    }
+  }
+
   #buildShareUrl() {
     const current = this.#session.current;
     const base = `${location.origin}${location.pathname}`;
@@ -4670,6 +4781,9 @@ const PREBUFFER_MIN_SECONDS = 6;
 // described a moment that never came, and the number still read 4.9 s when
 // playback had already resumed.
 const RESUME_TARGET_SECONDS = 2;
+// How often the playback position may be written to the address bar. See
+// #reflectStateInUrl for why it is throttled rather than written per tick.
+const URL_POSITION_INTERVAL_MS = 5_000;
 // How fast the pipeline is assumed to fill the buffer before it has shown a
 // rate of its own. Measured around 10x realtime on the two sessions of
 // 2026-08-05; a fifth of that is used, so the estimate errs long rather than

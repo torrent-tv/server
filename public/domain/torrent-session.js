@@ -1,6 +1,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
+import { SESSION_EVENTS } from "../shared/events.js";
 import { startNetReporter, stopNetReporter } from "./net-report.js";
 
 // How often the browser re-asserts that it is still watching. Must sit well
@@ -151,6 +152,18 @@ export class TorrentSession {
       for (const [sessionId, transport] of this.activeTranscodeSessions) {
         transport
           .fetch(`/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`)
+          .then((response) => {
+            // 404 is the proxy saying this session no longer exists — it was
+            // disposed, or the proxy restarted. Nothing that polls it will ever
+            // succeed again, so stop holding it and say so once; the player
+            // rebuilds a session for the same file at the same position.
+            if (response?.status !== 404 || !this.activeTranscodeSessions.has(sessionId)) {
+              return;
+            }
+            this.activeTranscodeSessions.delete(sessionId);
+            console.debug(`[evt] ${nowHms()} transcode-session gone id=${sessionId.slice(0, 8)}`);
+            document.dispatchEvent(new CustomEvent(SESSION_EVENTS.GONE, { detail: { sessionId } }));
+          })
           .catch(() => {
             // A ping that fails says nothing on its own: the transport may be
             // reconnecting. The session's own error handling owns that.
