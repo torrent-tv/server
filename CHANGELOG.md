@@ -1,3 +1,7 @@
+## 0.8.107
+
+- **Fix**: Refreshing the page threw `Cannot set property startPosition of #<e> which has only a getter` and nothing played. Where to begin buffering was being assigned to the hls.js instance, where it is a getter — the writable one is the configuration handed to the constructor, and a module runs in strict mode, so the assignment throws rather than being ignored. It only ever ran on a resume, so it stayed hidden until the address bar began carrying the position on every reload and the throw became the normal case.
+
 ## 0.8.106
 
 - **New**: Back and Forward work. The browser restores an address and nothing else, so the address is the whole instruction, and it is turned into the cheapest correct action for wherever the viewer already is: another torrent is loaded from scratch, another file of the same torrent is only opened, the same file is only seeked, and a difference of a second is not a navigation at all. Back from an episode returns to the previous one at the place it was left — or from its start, when it was left by moving on to the next. Back from the first episode shows the file list, and back from there the picker. Nothing in the handler writes history: the push-or-replace rule already makes that safe, since after a restore the address names the state, but a `timeupdate` from the file being left can arrive mid-transition when the address and the player disagree, and that one would have pushed.
