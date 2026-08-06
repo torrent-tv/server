@@ -918,6 +918,17 @@ export class Loading {
     cushionPercent = bufferedAhead === null
       ? 0
       : Math.max(0, Math.min(100, (bufferedAhead / requiredBuffer) * 100));
+    if (cushionRemainingSeconds <= 0) {
+      // The wait is over — the player has what it needs. Whatever was promised
+      // described THIS wait, and the next one is a different question, so the
+      // countdown is released here. Without it the promise outlived the wait
+      // that made it: measured 2026-08-06, the sum said 3.5 s on an empty
+      // buffer and the viewer was shown 0.00 — "starting now" — for the whole
+      // of it, because an earlier wait had ended at zero and the guard pinned
+      // everything after it there. The reset used to happen only on a seek or a
+      // new attempt, and neither of those is what ends an ordinary wait.
+      this.#resetEtaFloor();
+    }
     if (cushionRemainingSeconds > 0) {
       // How fast media can arrive: the slower of what the encoder produces and
       // what the link can carry. Both measured; when neither has been observed
