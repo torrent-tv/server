@@ -274,9 +274,12 @@ export class Torrent {
     // what arrived; garbage gets the inline validity message).
     const magnet = (params.get("magnet") ?? "").trim();
     if (magnet.length > 0) {
-      params.delete("magnet");
-      const search = params.toString();
-      history.replaceState(null, "", search ? `?${search}` : location.pathname);
+      // The address is NOT wiped any more. It used to be, because the magnet
+      // was treated as a one-shot input from a shared link — but the address
+      // now carries the application's state, and blanking it meant a refresh
+      // showed an empty address bar until playback started and put the magnet
+      // back. Anything done in that window — a second refresh, a bookmark —
+      // lost the torrent entirely.
       this.#magnetInput.value = magnet;
       this.#form.requestSubmit();
       return;
