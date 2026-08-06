@@ -53,3 +53,13 @@ export const APP_EVENTS = {
    */
   STATE_CHANGED: "APP:STATE_CHANGED"
 };
+
+/**
+ * The proxy no longer has the transcode session the player is using — it was
+ * disposed after the browser was away, or the proxy restarted. Detected by the
+ * keep-alive ping getting a 404. The player rebuilds a session for the same
+ * file and continues from where it was.
+ */
+export const SESSION_EVENTS = {
+  GONE: "session:gone"
+};
