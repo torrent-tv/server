@@ -1,3 +1,8 @@
+## 0.8.115
+
+- **Fix**: The estimate keeps the two figures only the proxy can measure — how long this host takes to create a session and to produce a first segment — current for the whole session. They were read once per file from the playback plan, so on a proxy that had just restarted, when neither figure existed yet, the browser kept the nulls and every later seek estimated the wait with one term of four: measured 2026-08-06, the figure reached zero after 3.5 s of an 11.8 s wait and then read "starting now" for the remaining 8.4 s. They now also arrive with the progress report, which is polled about every 1.5 s.
+- **Chore**: The comment beside the address-bar write interval said two seconds where the code says one.
+
 ## 0.8.114
 
 - **New**: Automatic quality says what it currently is — `Auto (720p)` rather than `Auto`. The proxy steps the resolution down when it cannot encode in realtime or the link cannot carry the stream, and the viewer could see the picture soften with no answer anywhere to what they were watching. The label follows a change as it happens; the menu is rebuilt only when the height actually moves, not on every poll.
