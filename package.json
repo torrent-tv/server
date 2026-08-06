@@ -6,6 +6,9 @@
     "access": "public"
   },
   "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "start": "node ./server.js",
     "dev": "node --inspect --experimental-network-inspection ./server.js",
