@@ -1,3 +1,7 @@
+## 0.8.117
+
+- **Fix**: Playback resumes where it left off instead of starting the film again and seeking. The position was carried in a field filled by whichever path opened the file, and it lost a race: measured 2026-08-06, it arrived with an event that fires AFTER the transcode session has been created, so the proxy was told `start=0s`, the film loaded from the beginning, and the position was applied as an ordinary seek once the player was already on screen — a full cold start and an encoder restart for something that was known all along. The address bar does not race: it is written before the load begins, it survives a reload, and it is the state by design, so it is now consulted whenever the field is empty. Both sources are named in the log line beside the figure.
+
 ## 0.8.115
 
 - **Fix**: The estimate keeps the two figures only the proxy can measure — how long this host takes to create a session and to produce a first segment — current for the whole session. They were read once per file from the playback plan, so on a proxy that had just restarted, when neither figure existed yet, the browser kept the nulls and every later seek estimated the wait with one term of four: measured 2026-08-06, the figure reached zero after 3.5 s of an 11.8 s wait and then read "starting now" for the remaining 8.4 s. They now also arrive with the progress report, which is polled about every 1.5 s.
