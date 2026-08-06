@@ -1,3 +1,7 @@
+## 0.8.110
+
+- **New**: The browser records its transport counters every five seconds — bytes received and sent by the transport itself, messages and bytes delivered by the data channel, the round-trip time and the state of the path in use. It had none: the proxy could say how much it handed to its transport, and nothing said how much arrived here, so a loss could not be placed. Field 2026-08-06: the proxy reported a 9.26 MB segment fully sent at 274 Mbit/s with an empty send queue, this side never saw it, and everything sent afterwards vanished the same way while requests in the other direction kept working. Whether those bytes reached the machine at all separates three quite different faults — lost on the path, never actually transmitted, received but not delivered by SCTP — and only this counter tells them apart. The proxy samples on the same cadence (2.9.113), so the two logs subtract.
+
 ## 0.8.109
 
 - **Fix**: "Starting now" was shown for the whole of a wait. The guard that keeps the countdown from increasing caps each estimate at the previous one minus the time since — and once that reached zero it pinned everything after it there, because the reset was wired to a seek and to a new attempt, and neither of those is what ends an ordinary wait. Measured 2026-08-06: the sum said 3.5 s on an empty buffer and the viewer was shown 0.00, unchanged, for dozens of samples in a row. A wait that ends now releases the promise it made, so the next one starts over.
