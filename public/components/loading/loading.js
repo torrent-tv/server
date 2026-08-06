@@ -6,6 +6,7 @@ import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS } from "../../shared/events.js";
+import { readUrlState, buildUrlSearch, decideHistoryWrite, isAdvanceToNext } from "../../domain/url-state.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { getEstimatedLinkMbps } from "../../domain/net-report.js";
 
@@ -2139,21 +2140,87 @@ export class Loading {
   }
 
   #reflectStateInUrl() {
-    let url = this.#buildShareUrl();
-    if (url.length === 0) {
+    const magnet = this.#currentMagnetUri();
+    if (magnet.length === 0) {
       return;
     }
     const video = this.#videoElement;
-    const position = video instanceof HTMLVideoElement ? Math.floor(video.currentTime) : 0;
-    if (position > 0) {
-      url += `&currentTime=${position}`;
+    const next = {
+      magnet,
+      fileIndex: this.#activeFileIndex >= 0 ? this.#activeFileIndex : -1,
+      currentTime: video instanceof HTMLVideoElement ? Math.floor(video.currentTime) : 0
+    };
+    const current = readUrlState(location.search);
+    const how = decideHistoryWrite(current, next);
+    // Moving on to the next episode means this one is finished, so the entry
+    // being left loses its position and Back opens it from the start. Reading
+    // the intention from the DESTINATION avoids having to decide how near the
+    // end counts as the end — credits run for different lengths in every
+    // release, and most people skip them, so no threshold could be right.
+    if (
+      how === "push" &&
+      current.magnet === next.magnet &&
+      isAdvanceToNext(current.fileIndex, next.fileIndex, this.#videoFileIndexes())
+    ) {
+      this.#writeHistory("replace", { ...current, currentTime: 0 });
     }
+    this.#writeHistory(how, next);
+  }
+
+  /**
+   * @param {"push" | "replace"} how
+   * @param {{ magnet: string, fileIndex: number, currentTime: number }} state
+   * @returns {void}
+   */
+  #writeHistory(how, state) {
+    const url = `${location.origin}${location.pathname}${buildUrlSearch(state)}`;
     try {
-      history.replaceState(null, "", url);
+      if (how === "push") {
+        history.pushState(null, "", url);
+      } else {
+        history.replaceState(null, "", url);
+      }
     } catch {
-      // A browser that refuses (rate limit, sandboxed frame) simply keeps the
-      // address it had; nothing about playback depends on this.
+      // A browser that refuses (rate limit, sandboxed frame) keeps the address
+      // it had; nothing about playback depends on this.
     }
+  }
+
+  /**
+   * The magnet for whatever is loaded, or "" when there is nothing to name.
+   *
+   * @returns {string}
+   */
+  #currentMagnetUri() {
+    const current = this.#session.current;
+    if (current?.sourceType === "magnet") {
+      return typeof current.sourceValue === "string" ? current.sourceValue : "";
+    }
+    if (current?.sourceType === "torrent") {
+      return this.#buildMagnetFromCurrent(current);
+    }
+    return "";
+  }
+
+  /**
+   * Indexes of the playable files, in the order the playlist shows them — what
+   * "the next one" means to a viewer, which is not the next index in a pack
+   * that also carries subtitles, samples and artwork.
+   *
+   * @returns {number[]}
+   */
+  #videoFileIndexes() {
+    const files = this.#session.current?.files;
+    if (!Array.isArray(files)) {
+      return [];
+    }
+    const indexes = [];
+    for (let index = 0; index < files.length; index += 1) {
+      if (files[index]?.isVideo === true) {
+        indexes.push(index);
+      }
+    }
+    return indexes;
   }
 
   #buildShareUrl() {
@@ -4783,7 +4850,14 @@ const PREBUFFER_MIN_SECONDS = 6;
 const RESUME_TARGET_SECONDS = 2;
 // How often the playback position may be written to the address bar. See
 // #reflectStateInUrl for why it is throttled rather than written per tick.
-const URL_POSITION_INTERVAL_MS = 5_000;
+// The address bar follows the playhead at this interval. Two seconds is
+// fifteen writes per thirty, against the hundred at which Safari — the
+// strictest, and the same engine on iOS — starts refusing; six times the
+// margin, and a bookmark is never more than two seconds out. One second would
+// still fit but spends the margin for a difference nobody can perceive when
+// resuming a film. These writes REPLACE, so no matter how long the film, the
+// history does not grow by a single entry.
+const URL_POSITION_INTERVAL_MS = 2_000;
 // How fast the pipeline is assumed to fill the buffer before it has shown a
 // rate of its own. Measured around 10x realtime on the two sessions of
 // 2026-08-05; a fifth of that is used, so the estimate errs long rather than
