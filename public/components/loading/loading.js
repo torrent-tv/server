@@ -511,7 +511,15 @@ export class Loading {
     // Leaving for the picker has to reach the address bar too. Nothing else
     // does it: every other write is driven by an event of the <video> element,
     // and by this point there is no longer anything playing.
-    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, () => this.#reflectStateInUrl());
+    // Leaving for the picker is the one moment the address is cleared: the
+    // viewer said so. Every other path that finds no source — a failure, a
+    // teardown — leaves the address alone, because it is what Retry and a
+    // reload read the position from.
+    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, () => {
+      if (location.search.length > 0) {
+        this.#writeHistory("push", { magnet: "", fileIndex: -1, currentTime: 0 });
+      }
+    });
     window.addEventListener("popstate", () => { void this.#onHistoryNavigate(); });
     // Periodic bottleneck classification while playing. Distinguishes, from
     // client-visible symptoms, whether playback is limited by the client's own
@@ -2238,16 +2246,12 @@ export class Loading {
     }
     const magnet = this.#currentMagnetUri();
     if (magnet.length === 0) {
-      // No source: the viewer is at the picker, having closed the torrent or
-      // asked for a new one. The address has to say so — it used to just
-      // return here, so choosing "New Torrent" on the error screen left the old
-      // `?magnet=…` in the address bar, and a reload or a bookmark taken then
-      // reopened the very torrent that had just been abandoned. Leaving a
-      // torrent for the picker is navigation, so it earns an entry; arriving at
-      // an already-empty address is not, so it does not.
-      if (location.search.length > 0) {
-        this.#writeHistory("push", { magnet: "", fileIndex: -1, currentTime: 0 });
-      }
+      // Nothing to say. The address is cleared only when the viewer DELIBERATELY
+      // leaves — see the RESET_TO_PICKER handler — never merely because the
+      // source is momentarily absent. A failure clears the session too, and
+      // wiping the address then threw away the one record of what was being
+      // watched and where: after a router reboot the error screen's Retry had
+      // nothing to return to (reported 2026-08-06).
       return;
     }
     const video = this.#videoElement;
@@ -2503,9 +2507,17 @@ export class Loading {
 
   #armRetryableStall(fileIndex, message = Loading.MESSAGES.headerDownloadStalled) {
     if (this.#session.current) {
+      // Where the viewer actually was. Zero was written here regardless, so
+      // Retry after a lost connection started the film from the beginning —
+      // reported 2026-08-06 after a router reboot forty minutes in. The
+      // position is on the video element until the player is torn down, and
+      // the address bar holds it afterwards, so one of the two always knows.
+      const video = this.#videoElement;
+      const playing = video instanceof HTMLVideoElement ? Math.floor(video.currentTime) : 0;
+      const remembered = readUrlState(location.search).currentTime;
       this.#resumeState = {
         fileIndex,
-        positionSeconds: 0,
+        positionSeconds: playing > 0 ? playing : Math.max(0, remembered),
         sessionCurrent: this.#session.current
       };
     }
@@ -3756,10 +3768,13 @@ export class Loading {
   async #resumePlayback(resume) {
     this.#cancelRequested = false;
     this.#session.current = resume.sessionCurrent;
+    // Announced BEFORE the load, so it travels the same path a resume from the
+    // address does: hls.js begins buffering there and the proxy is told to
+    // encode from there. Setting `currentTime` after the reveal instead meant
+    // loading the film from the beginning, showing it, and only then seeking —
+    // a second wait for something the viewer had already waited through.
+    this.#pendingCurrentTime = resume.positionSeconds > 1 ? resume.positionSeconds : null;
     await this.#switchToVideoFile(resume.fileIndex);
-    if (resume.positionSeconds > 1 && this.#videoElement instanceof HTMLVideoElement) {
-      this.#videoElement.currentTime = resume.positionSeconds;
-    }
   }
 
   /**

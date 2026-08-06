@@ -1,3 +1,8 @@
+## 0.8.112
+
+- **Fix**: Retry after a lost connection returns to where the viewer was. The position stored for it was always zero, so a router reboot forty minutes into a film meant starting the film again. It is now taken from the player, or from the address bar when the player has already been torn down — one of the two always knows. It is also announced before the load rather than applied after it, so it travels the same path as reopening a bookmark: hls.js begins buffering there and the proxy is told to encode from there, instead of loading from the beginning and seeking once the picture is already showing.
+- **Fix**: A failure no longer wipes the address. Clearing it when no source is present was meant for the viewer choosing "New Torrent", but a failure clears the session too — so the address, the one remaining record of what was playing and where, was thrown away at exactly the moment Retry needed it. It is now cleared only when the viewer deliberately leaves for the picker.
+
 ## 0.8.111
 
 - **Fix**: Reopening at a saved position failed with "no data arrived from the proxy". The position was given to hls.js and to nobody else, so the player asked for the segment at 1:17:10 while the proxy had been told to encode from the beginning; the request was held for 45 s, answered 404, and the attempt died — measured 2026-08-06, with the encoder meanwhile producing happily from zero. This used to work by accident: the proxy inferred a seek from a far segment request. It deliberately no longer does — a request steers nothing and every restart comes from a position the viewer stated — so the position now goes to the proxy as well.
