@@ -508,6 +508,10 @@ export class Loading {
     });
     window.addEventListener("pagehide", () => this.#reflectStateInUrl());
     document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
+    // Leaving for the picker has to reach the address bar too. Nothing else
+    // does it: every other write is driven by an event of the <video> element,
+    // and by this point there is no longer anything playing.
+    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, () => this.#reflectStateInUrl());
     window.addEventListener("popstate", () => { void this.#onHistoryNavigate(); });
     // Periodic bottleneck classification while playing. Distinguishes, from
     // client-visible symptoms, whether playback is limited by the client's own
@@ -2223,6 +2227,16 @@ export class Loading {
     }
     const magnet = this.#currentMagnetUri();
     if (magnet.length === 0) {
+      // No source: the viewer is at the picker, having closed the torrent or
+      // asked for a new one. The address has to say so — it used to just
+      // return here, so choosing "New Torrent" on the error screen left the old
+      // `?magnet=…` in the address bar, and a reload or a bookmark taken then
+      // reopened the very torrent that had just been abandoned. Leaving a
+      // torrent for the picker is navigation, so it earns an entry; arriving at
+      // an already-empty address is not, so it does not.
+      if (location.search.length > 0) {
+        this.#writeHistory("push", { magnet: "", fileIndex: -1, currentTime: 0 });
+      }
       return;
     }
     const video = this.#videoElement;
@@ -2254,6 +2268,9 @@ export class Loading {
    * @returns {void}
    */
   #writeHistory(how, state) {
+    if (how === "none") {
+      return;
+    }
     const url = `${location.origin}${location.pathname}${buildUrlSearch(state)}`;
     try {
       if (how === "push") {

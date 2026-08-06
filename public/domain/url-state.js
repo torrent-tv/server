@@ -85,9 +85,20 @@ export function buildUrlSearch(state) {
  *
  * @param {UrlState} current - What the address bar says now.
  * @param {UrlState} next - What it should say.
- * @returns {"push" | "replace"}
+ * @returns {"push" | "replace" | "none"}
  */
 export function decideHistoryWrite(current, next) {
+  if (
+    current.magnet === next.magnet &&
+    current.fileIndex === next.fileIndex &&
+    current.currentTime === next.currentTime
+  ) {
+    // Nothing to say. Writing anyway is harmless on a torrent — the position
+    // moves, so this is rare — but on the empty address it would fire on every
+    // pass and, worse, invite a history entry for arriving where we already
+    // are.
+    return "none";
+  }
   if (current.magnet !== next.magnet) {
     return "push";
   }
