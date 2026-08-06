@@ -15,7 +15,7 @@
     "docker:build": "docker build -t ghcr.io/torrent-tv/server:$npm_package_version -t ghcr.io/torrent-tv/server:latest .",
     "docker:push": "docker push ghcr.io/torrent-tv/server:$npm_package_version && docker push ghcr.io/torrent-tv/server:latest",
     "docker:publish": "npm run docker:build && npm run docker:push",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
