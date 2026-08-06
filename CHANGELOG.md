@@ -1,3 +1,7 @@
+## 0.8.109
+
+- **Fix**: "Starting now" was shown for the whole of a wait. The guard that keeps the countdown from increasing caps each estimate at the previous one minus the time since — and once that reached zero it pinned everything after it there, because the reset was wired to a seek and to a new attempt, and neither of those is what ends an ordinary wait. Measured 2026-08-06: the sum said 3.5 s on an empty buffer and the viewer was shown 0.00, unchanged, for dozens of samples in a row. A wait that ends now releases the promise it made, so the next one starts over.
+
 ## 0.8.108
 
 - **Fix**: Asking for a new torrent now clears the address. The writer returned early when there was no source, so "New Torrent" on the error screen left the previous `?magnet=…` in the address bar — and a reload, or a bookmark taken at that moment, reopened the very torrent that had just been abandoned. Leaving a torrent for the picker is navigation, so it earns a history entry; arriving at an already-empty address does not. Nothing else could have done this: every other write is driven by an event of the `<video>` element, and by then there is nothing playing.
