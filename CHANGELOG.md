@@ -1,3 +1,7 @@
+## 0.8.119
+
+- **Fix**: The quality menu says what automatic quality is playing from its first render. The height came only with a progress report, polled about every second and a half, so the menu was built with a bare "Auto" and gained its height a second or two later — a viewer who opened it in that window was told nothing. When the video is copied the answer is already known before playback starts: nothing is being re-encoded, so what plays is the source's own height, which arrives with the playback plan. It is now used straight away, and a progress report only lowers it if the encoder settles on a smaller rung.
+
 ## 0.8.117
 
 - **Fix**: Playback resumes where it left off instead of starting the film again and seeking. The position was carried in a field filled by whichever path opened the file, and it lost a race: measured 2026-08-06, it arrived with an event that fires AFTER the transcode session has been created, so the proxy was told `start=0s`, the film loaded from the beginning, and the position was applied as an ordinary seek once the player was already on screen — a full cold start and an encoder restart for something that was known all along. The address bar does not race: it is written before the load begins, it survives a reload, and it is the state by design, so it is now consulted whenever the field is empty. Both sources are named in the log line beside the figure.
