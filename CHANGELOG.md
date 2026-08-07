@@ -1,3 +1,7 @@
+## 0.8.119
+
+- **Fix**: Picking another episode starts it from the beginning. One <video> element serves every file and it keeps the position the last one was left at, so attaching the new stream resumed the NEW episode wherever the PREVIOUS one had got to — switch forty minutes into episode one and episode two began forty minutes in. The element is now rewound when the file changes, and only when nothing has asked for a position: a resume from the address, from Retry or from Back sets one first, and that is the case this must not overwrite.
+
 ## 0.8.118
 
 - **Fix**: The quality menu says what automatic quality is playing from its first render. The height came only with a progress report, polled about every second and a half, so the menu was built with a bare "Auto" and gained its height a second or two later — a viewer who opened it in that window was told nothing. When the video is copied the answer is already known before playback starts: nothing is being re-encoded, so what plays is the source's own height, which arrives with the playback plan. It is now used straight away, and a progress report only lowers it if the encoder settles on a smaller rung.

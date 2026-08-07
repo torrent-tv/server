@@ -2584,6 +2584,16 @@ export class Loading {
     try {
       this.#hlsPlayer.clear();
       this.#clearSubtitleTracks();
+      // The same <video> element serves every file, and it keeps the position
+      // the last one was left at. Attaching a new stream to it therefore
+      // resumed the NEW episode wherever the PREVIOUS one had got to — a
+      // viewer who switched forty minutes into episode one began episode two
+      // forty minutes in. Only when nothing has asked for a position: a resume
+      // from the address, from Retry or from Back sets one before getting here,
+      // and that is exactly the case this must not overwrite.
+      if (this.#pendingCurrentTime === null && this.#videoElement.currentTime > 0) {
+        this.#videoElement.currentTime = 0;
+      }
       // Release the previous file's transcode session so the proxy stops its
       // ffmpeg immediately. Otherwise switching episodes leaves the old encode
       // running in parallel with the new one, splitting the (ARM) CPU and
