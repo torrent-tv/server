@@ -306,6 +306,8 @@ export class Loading {
    * being chosen and the source's own height is what plays.
    */
   #autoEffectiveHeight = 0;
+  /** Whether the current stream's video is re-encoded rather than copied. */
+  #videoIsReencoded = false;
   /** @type {number} Source coded width/height from the proxy plan (0 = unknown / not proxy-served). */
   #sourceVideoWidth = 0;
   #sourceVideoHeight = 0;
@@ -2619,6 +2621,9 @@ export class Loading {
     // (a direct webseed play, which cannot be transcoded, leaves it 0 → no menu).
     this.#sourceVideoWidth = 0;
     this.#sourceVideoHeight = 0;
+    // A new file answers the quality question afresh; the previous one's
+    // height must not survive into its menu.
+    this.#autoEffectiveHeight = 0;
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
@@ -3537,6 +3542,17 @@ export class Loading {
         detail: { tracks: audioTracks, activeIndex: this.#selectedAudioTrackIndex }
       })
     );
+    // What automatic quality has settled on, as far as is known BEFORE the
+    // first progress report. When the video is copied the answer is final —
+    // nothing is being re-encoded, so what plays is the source's own height,
+    // and it came with the plan. When it is re-encoded this is the ceiling and
+    // the first report may lower it. Without this the menu's first render
+    // always read a bare "Auto" and only gained its height a second or two
+    // later, on the first poll that carried one; a viewer who opened the menu
+    // in that window was told nothing.
+    if (this.#autoEffectiveHeight === 0 && !this.#videoIsReencoded && this.#sourceVideoHeight > 0) {
+      this.#autoEffectiveHeight = this.#sourceVideoHeight;
+    }
     // Feed the player's quality menu (Auto + forced resolutions <= source).
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_QUALITY_OPTIONS, {
