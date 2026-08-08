@@ -33,6 +33,46 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
   - `components/player/player.js` — player UI; hides the playlist button when
     there is a single media file.
 
+## The state machine — keep it correct, always
+
+`public/components/torrent-tv/torrent-tv.js` is the application state machine:
+four states (IDLE, PROCESSING, PLAYING, ERROR), a declared transition table, and
+a handful of events that drive it. Every flow bug this project has had landed
+here — episode-switch-from-error, mid-loading transport loss.
+
+**Rule: any change that touches application flow keeps the machine correct in
+the SAME change.** That means all three of:
+
+1. The machine itself — states, the transition table, triggers, guards, and
+   which view each state shows.
+2. **The written graph**, `research/state-machine-2026-08-08.md` in the meta
+   repo (mermaid, renders on GitHub). It documents every real transition plus
+   the known hazards; if a change moves an edge or a view, the note moves with
+   it. A graph that has drifted is worse than none.
+3. **Tests, where they are worth writing.** The transition rules are pure and
+   belong in an importable module so `node --test` can exercise them without a
+   DOM — follow `public/domain/url-state.js` + `test/url-state.test.js`, which
+   is exactly that shape.
+
+Do not audit the machine once and move on. It is small enough to hold exactly
+right, and it is the cheapest lever on the product working reliably.
+
+**Decide its shape from theory, never from what the code currently does.** The
+four rules the design is held to, and which any change must respect:
+
+- **Moore** — outputs (which view, the waiting overlay, whether controls accept
+  input) are pure functions of the state, derived by each view. Never command a
+  view alongside a transition; that is how state and screen come to disagree.
+- **Extended state machine** — promote something to a control state only when it
+  changes what is legal or what is shown. Everything else is a variable with a
+  guard. Never mirror another component's state (`<video>.paused`) as a state.
+- **Statechart hierarchy** — an edge shared by several states belongs on their
+  superstate, declared once.
+- **Graph discipline** — deterministic (one target per state and event), total
+  (every pair answered, "ignore" included, never a throw), every state
+  reachable, no dead ends. Absent edges are the machine's content: a
+  near-complete digraph asserts nothing.
+
 ## Notable
 
 - `GET /env.js` (`routes/env/get.js`) serves `window.env.version` from
