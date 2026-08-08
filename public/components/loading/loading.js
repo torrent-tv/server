@@ -1,6 +1,7 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
+import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
@@ -415,6 +416,9 @@ export class Loading extends StateDerivedView {
     // mid-playback buffering notice so it cannot leak onto the next state.
     this.#playbackLive = false;
     this.#clearBuffering();
+    // Cleared with it: otherwise the next stream's first stall compares against
+    // the last stream's answer and is never reported to the machine.
+    this.#bufferingSignalled = false;
     if (typeof payload?.fileName === "string") {
       this.setFileName(payload.fileName);
     }
@@ -498,8 +502,13 @@ export class Loading extends StateDerivedView {
         // application, not merely of the element. Mirrored, never decided here:
         // the element owns the fact and this reports it.
         if (name === "pause") {
-          signalApp(APP_EVENT.PAUSED_BY_VIEWER, { viewerWantsPlayback: false });
+          // A pause we caused ourselves is not a decision by the viewer.
+          if (!consumeOurPause(videoElement)) {
+            this.#viewerPaused = true;
+            signalApp(APP_EVENT.PAUSED_BY_VIEWER, { viewerWantsPlayback: false });
+          }
         } else if (name === "playing") {
+          this.#viewerPaused = false;
           signalApp(APP_EVENT.RESUMED, { viewerWantsPlayback: true });
         }
         this.#reportSeekIntent(name, videoElement);
@@ -1570,6 +1579,15 @@ export class Loading extends StateDerivedView {
   #bufferingSignalled = false;
 
   /**
+   * Whether the VIEWER stopped playback — not whether the element is stopped.
+   * The two differ wherever we pause on our own account, which is the whole of
+   * the pre-buffer gate. See domain/playback-intent.js.
+   *
+   * @type {boolean}
+   */
+  #viewerPaused = false;
+
+  /**
    * Whether the viewer wants the picture to move — read from the element, which
    * owns the fact. Sent with a stream that has just become usable so a rebuild
    * finishing under a pause does not start playing at someone who stopped it.
@@ -1577,8 +1595,7 @@ export class Loading extends StateDerivedView {
    * @returns {boolean}
    */
   #viewerWantsPlayback() {
-    const video = this.#videoElement;
-    return video instanceof HTMLVideoElement ? !video.paused : true;
+    return !this.#viewerPaused;
   }
 
   #onAppReset = () => {
@@ -1595,6 +1612,9 @@ export class Loading extends StateDerivedView {
     this.#isProcessing = false;
     this.#playbackLive = false;
     this.#clearBuffering();
+    // Cleared with it: otherwise the next stream's first stall compares against
+    // the last stream's answer and is never reported to the machine.
+    this.#bufferingSignalled = false;
     this.#session.clear({
       preferBeacon: options?.preferBeacon === true,
       reason: typeof options?.reason === "string" ? options.reason : "",
@@ -1615,7 +1635,14 @@ export class Loading extends StateDerivedView {
   };
 
   constructor() {
-    super(isWaiting);
+    // OPENING only, NOT `isWaiting`. This view is a MODAL dialog: shown for a
+    // stall it covers the video and the whole control bar, and being modal it
+    // makes them inert, so a viewer who seeks into missing data cannot pause,
+    // scrub back or play until the data arrives. A stall is answered by the
+    // small overlay inside the player instead. Collapsing the two waiting
+    // interfaces into one is roadmap item 8; until then they stay separate and
+    // this one keeps the job it can do without trapping anyone.
+    super((state) => state === APP_STATE.OPENING);
     this.#dialog = document.querySelector(Loading.SELECTOR.dialog);
     this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
     this.#status = document.querySelector(Loading.SELECTOR.status);
@@ -4180,7 +4207,10 @@ export class Loading extends StateDerivedView {
     // starts playback in #onShow when revealed.
     if (!videoElement.paused) {
       this.#logEvt("player.pause reason=prebuffer");
-      videoElement.pause();
+      // Ours, not the viewer's — see domain/playback-intent.js. Read as the
+      // viewer's, this single line ended every cold open stopped on its first
+      // frame.
+      pauseWithoutIntent(videoElement);
     }
     const startedAt = Date.now();
     let loggedTarget = -1;
