@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "server.js",
+    "public/components/*/*.js",
+    "public/shared/client-logger.js",
+    "test/*.test.js"
+  ],
+  "project": ["server.js", "routes/**/*.js", "public/**/*.js", "test/**/*.js"],
+  "ignore": ["public/vendor/**"],
+  "ignoreBinaries": ["docker"]
+}

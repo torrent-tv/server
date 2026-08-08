@@ -29,5 +29,8 @@
     "get-port": "^7.1.0",
     "hls.js": "^1.6.0",
     "media-chrome": "^4.19.2"
+  },
+  "devDependencies": {
+    "knip": "^6.32.0"
   }
 }

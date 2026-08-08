@@ -1,6 +1,7 @@
 import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
-import { APP_VIEW, MEDIA_INTENT, mediaIntentForState, viewForState } from "../../domain/app-state.js";
+import { APP_VIEW, MEDIA_INTENT, isWaiting, mediaIntentForState, viewForState } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
+import { pauseWithoutIntent } from "../../domain/playback-intent.js";
 
 /**
  * Player view.
@@ -81,7 +82,7 @@ export class Player extends StateDerivedView {
       // audio.
       this.#closePlaylist();
       this.#hideBuffering();
-      this.#video.pause();
+      pauseWithoutIntent(this.#video);
       this.#video.removeAttribute("src");
       this.#video.load();
     }
@@ -89,6 +90,10 @@ export class Player extends StateDerivedView {
     if (belongsOnScreen) {
       this.#logEvt(`view=player shown state=${state}`);
     }
+    // Whether the viewer is waiting is a property of the state. The text beside
+    // the spinner is not — it is measured (peers, speed) and keeps arriving on
+    // PLAYER:SET_BUFFERING.
+    this.#buffering.hidden = !(belongsOnScreen && isWaiting(state));
     this.#applyMediaIntent(state);
   }
 
@@ -124,7 +129,7 @@ export class Player extends StateDerivedView {
     }
     if (intent === MEDIA_INTENT.PAUSE && !this.#video.paused) {
       this.#logEvt(`player.pause reason=state=${state}`);
-      this.#video.pause();
+      pauseWithoutIntent(this.#video);
     }
   }
 
@@ -155,7 +160,6 @@ export class Player extends StateDerivedView {
   #onSetBuffering = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (detail?.active === true) {
-      this.#buffering.hidden = false;
       const text = typeof detail?.text === "string" ? detail.text : "";
       if (text.length > 0) {
         this.#bufferingPeers.textContent = text;
@@ -525,7 +529,7 @@ export class Player extends StateDerivedView {
     // in #onShow when the player is actually revealed.
     if (!value && this.#video instanceof HTMLVideoElement && !this.#video.paused) {
       this.#logEvt("player.pause reason=hidden");
-      this.#video.pause();
+      pauseWithoutIntent(this.#video);
     }
     if (!value) {
       this.#logEvt("view=player hidden");

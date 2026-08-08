@@ -82,6 +82,16 @@ class TorrentTV {
       return false;
     }
     if (target === this.#state) {
+      // An edge that leads back to where we already are — today only a rebuild
+      // asked for while one is already running. The state does not change, but
+      // the outputs must still be applied: a view that hid itself imperatively
+      // (Cancel, the playlist stepping aside) is otherwise never told to come
+      // back, and the next episode built behind a blank player with no sign of
+      // anything happening.
+      this.#logEvt(`${this.#state} re-entered on ${event}`);
+      document.dispatchEvent(
+        new CustomEvent(APP_EVENTS.STATE_CHANGED, { detail: { state: target } })
+      );
       return false;
     }
     const from = this.#state;
@@ -230,10 +240,13 @@ class TorrentTV {
       return;
     }
     const context = detail?.context && typeof detail.context === "object" ? detail.context : {};
-    if (typeof context.viewerWantsPlayback === "boolean") {
+    // Committed only if the machine ACCEPTS the event. An event it refuses did
+    // not happen as far as the application is concerned, and letting a refused
+    // one move the extended state is the same fault as the old machine's flags
+    // describing a state it had already left.
+    if (this.#send(machineEvent, context) && typeof context.viewerWantsPlayback === "boolean") {
       this.#viewerWantsPlayback = context.viewerWantsPlayback;
     }
-    this.#send(machineEvent, context);
   };
 
   constructor () {
