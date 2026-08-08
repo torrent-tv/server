@@ -21,7 +21,8 @@ import {
   viewForState,
   isWaiting,
   controlsLive,
-  shouldBePlaying,
+  mediaIntentForState,
+  MEDIA_INTENT,
   APP_VIEW,
   INITIAL_STATE,
   declaredEdges
@@ -86,9 +87,27 @@ test("pause is a state of its own, because an output differs", () => {
   assert.equal(nextState(APP_STATE.PAUSED, APP_EVENT.RESUMED), APP_STATE.ADVANCING);
   // The output that forced the split: nothing else about PAUSED differs from
   // ADVANCING, and this does.
-  assert.equal(shouldBePlaying(APP_STATE.ADVANCING), true);
-  assert.equal(shouldBePlaying(APP_STATE.PAUSED), false);
-  assert.equal(shouldBePlaying(APP_STATE.STALLED), true, "a stall is not a decision to stop");
+  assert.equal(mediaIntentForState(APP_STATE.ADVANCING), MEDIA_INTENT.PLAY);
+  assert.equal(mediaIntentForState(APP_STATE.PAUSED), MEDIA_INTENT.PAUSE);
+});
+
+test("a stall commands neither play nor pause", () => {
+  // Both answers are wrong for STALLED, which is why the output has a third
+  // value. A stall during playback must not be paused; a scrub while paused must
+  // not be started. The state covers both cases — correct for the overlay,
+  // useless as a play/pause command — so it issues neither.
+  assert.equal(mediaIntentForState(APP_STATE.STALLED), MEDIA_INTENT.LEAVE);
+  assert.equal(mediaIntentForState(APP_STATE.OPENING), MEDIA_INTENT.LEAVE);
+  // Nothing may play while the player is not on screen: a hidden <video> still
+  // emits audio.
+  assert.equal(mediaIntentForState(APP_STATE.IDLE), MEDIA_INTENT.PAUSE);
+  assert.equal(mediaIntentForState(APP_STATE.ERROR), MEDIA_INTENT.PAUSE);
+  for (const state of ALL_STATES) {
+    assert.ok(
+      Object.values(MEDIA_INTENT).includes(mediaIntentForState(state)),
+      `${state} has no media intent`
+    );
+  }
 });
 
 test("closing and failing are declared once, on the superstate, and reach every state inside it", () => {

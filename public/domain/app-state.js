@@ -73,6 +73,18 @@ export const APP_VIEW = Object.freeze({
 });
 
 /**
+ * What a state implies for the media element. See {@link mediaIntentForState}.
+ *
+ * @readonly
+ */
+export const MEDIA_INTENT = Object.freeze({
+  PLAY: "play",
+  PAUSE: "pause",
+  /** Neither — the element's own behaviour is right and must not be overridden. */
+  LEAVE: "leave"
+});
+
+/**
  * Superstates. Not states themselves — containers, used for two things: to
  * declare a shared edge once, and to express an output over a group.
  *
@@ -372,15 +384,28 @@ export function controlsLive(state) {
 }
 
 /**
- * Whether the picture is meant to be moving. False while paused, and false
- * before a stream exists; true while stalled, because a stall is a frame that is
- * wanted and missing, not a decision to stop.
+ * What the media element should be told, if anything.
+ *
+ * Three values rather than a boolean, and the third is the reason: there are
+ * states where the right action is to touch nothing. A boolean
+ * "should it be playing" forced an answer for STALLED, and both answers are
+ * wrong — a stall during playback must not be paused, and a scrub while paused
+ * must not be started. STALLED covers both, which is correct for the overlay and
+ * useless as a play/pause command, so it commands neither.
  *
  * @param {string} state
- * @returns {boolean}
+ * @returns {string} One of {@link MEDIA_INTENT}.
  */
-export function shouldBePlaying(state) {
-  return state === APP_STATE.ADVANCING || state === APP_STATE.STALLED;
+export function mediaIntentForState(state) {
+  if (state === APP_STATE.ADVANCING) {
+    return MEDIA_INTENT.PLAY;
+  }
+  if (state === APP_STATE.OPENING || state === APP_STATE.STALLED) {
+    return MEDIA_INTENT.LEAVE;
+  }
+  // PAUSED, IDLE, ERROR. The last two keep the standing invariant that nothing
+  // plays while the player is not on screen: a hidden <video> still emits audio.
+  return MEDIA_INTENT.PAUSE;
 }
 
 /**
