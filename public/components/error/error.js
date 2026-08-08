@@ -1,5 +1,6 @@
 import { APP_EVENTS, ERROR_EVENTS } from "../../shared/events.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
+import { StateDerivedView } from "../state-derived-view.js";
 
 /**
  * Error view.
@@ -12,7 +13,7 @@ import { APP_VIEW, viewForState } from "../../domain/app-state.js";
  *   "Choose File" button when the payload includes `canGoBackToPlaylist: true`.
  * - Hide on `LOADING:SHOW`, `PLAYER:SHOW`, `APP:RESET_TO_PICKER`, and `APP:BACK_TO_PLAYLIST`.
  */
-export class ErrorDialog {
+export class ErrorDialog extends StateDerivedView {
   static SELECTOR = {
     dialog: "#error",
     title: "#error__title",
@@ -61,19 +62,6 @@ export class ErrorDialog {
     this.#showError({ title, description });
   };
 
-  /**
-   * On screen exactly while the application is in its error state.
-   *
-   * @param {CustomEvent} event
-   */
-  #onAppStateChanged = (event) => {
-    const state = event instanceof CustomEvent ? event.detail?.state : null;
-    if (typeof state !== "string") {
-      return;
-    }
-    this.visible = viewForState(state) === APP_VIEW.ERROR;
-  };
-
   #onResetClick = () => {
     this.visible = false;
     document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
@@ -90,6 +78,7 @@ export class ErrorDialog {
   };
 
   constructor() {
+    super((state) => viewForState(state) === APP_VIEW.ERROR);
     this.#dialog = document.querySelector(ErrorDialog.SELECTOR.dialog);
     this.#title = document.querySelector(ErrorDialog.SELECTOR.title);
     this.#description = document.querySelector(ErrorDialog.SELECTOR.description);
@@ -107,7 +96,6 @@ export class ErrorDialog {
 
   #setupEventHandlers() {
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
-    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     this.#resetButton.addEventListener("click", this.#onResetClick);
     this.#playlistButton.addEventListener("click", this.#onPlaylistClick);
     this.#retryButton.addEventListener("click", this.#onRetryClick);
