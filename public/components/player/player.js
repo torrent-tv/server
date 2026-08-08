@@ -1,5 +1,6 @@
 import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 import { APP_VIEW, MEDIA_INTENT, mediaIntentForState, viewForState } from "../../domain/app-state.js";
+import { StateDerivedView } from "../state-derived-view.js";
 
 /**
  * Player view.
@@ -10,7 +11,7 @@ import { APP_VIEW, MEDIA_INTENT, mediaIntentForState, viewForState } from "../..
  * - Wire the custom control-bar buttons (close, playlist) that media-chrome
  *   does not provide out of the box.
  */
-export class Player {
+export class Player extends StateDerivedView {
   static SELECTOR = {
     root: "#player",
     controller: "#player__controller",
@@ -69,15 +70,12 @@ export class Player {
    * re-showed the loading view with no transition at all, so the state said one
    * thing and the screen another with nothing able to notice.
    *
-   * @param {CustomEvent} event
+   * @param {string} state
+   * @param {boolean} belongsOnScreen
+   * @returns {void}
    */
-  #onAppStateChanged = (event) => {
-    const state = event instanceof CustomEvent ? event.detail?.state : null;
-    if (typeof state !== "string") {
-      return;
-    }
-    const belongsOnScreen = viewForState(state) === APP_VIEW.PLAYER;
-    if (!belongsOnScreen && this.visible) {
+  applyAppState(state, belongsOnScreen) {
+    if (!belongsOnScreen && this.onScreen) {
       // Leaving the player entirely — the picker or the error screen. Let go of
       // the media: a hidden <video> still holds its source and still emits
       // audio.
@@ -87,12 +85,12 @@ export class Player {
       this.#video.removeAttribute("src");
       this.#video.load();
     }
-    this.visible = belongsOnScreen;
+    super.applyAppState(state, belongsOnScreen);
     if (belongsOnScreen) {
       this.#logEvt(`view=player shown state=${state}`);
     }
     this.#applyMediaIntent(state);
-  };
+  }
 
   /**
    * Start or stop the element according to what the state implies — never
@@ -291,6 +289,7 @@ export class Player {
   };
 
   constructor() {
+    super((state) => viewForState(state) === APP_VIEW.PLAYER);
     this.#root = document.querySelector(Player.SELECTOR.root);
     this.#controller = document.querySelector(Player.SELECTOR.controller);
     this.#video = document.querySelector(Player.SELECTOR.video);
@@ -320,7 +319,6 @@ export class Player {
   }
 
   #setupEventHandlers() {
-    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     document.addEventListener(PLAYER_EVENTS.REQUEST_READY, this.#onRequestReady);
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onBackToPlaylist);
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);

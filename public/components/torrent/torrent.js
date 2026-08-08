@@ -1,6 +1,7 @@
 import { APP_EVENTS, PLAYER_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
 import { parseTorrentBytes } from "../../domain/torrent-parser.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
+import { StateDerivedView } from "../state-derived-view.js";
 
 /**
  * Torrent input view.
@@ -10,7 +11,7 @@ import { APP_VIEW, viewForState } from "../../domain/app-state.js";
  * - Emit a process event for the first valid .torrent file.
  * - Hide itself when loading, player, or error views are shown.
  */
-export class Torrent {
+export class Torrent extends StateDerivedView {
   static SELECTOR = {
     dialog: "#torrent",
     form: "#torrent form",
@@ -225,22 +226,8 @@ export class Torrent {
     }
   };
 
-  /**
-   * The picker is on screen exactly while no source is open. Derived from the
-   * state, not commanded by whichever view happened to appear — see
-   * `domain/app-state.js`.
-   *
-   * @param {CustomEvent} event
-   */
-  #onAppStateChanged = (event) => {
-    const state = event instanceof CustomEvent ? event.detail?.state : null;
-    if (typeof state !== "string") {
-      return;
-    }
-    this.visible = viewForState(state) === APP_VIEW.PICKER;
-  };
-
   constructor() {
+    super((state) => viewForState(state) === APP_VIEW.PICKER);
     this.#setupElements();
     this.#setupEventHandlers();
     this.#setupViewEventHandlers();
@@ -345,7 +332,6 @@ export class Torrent {
   }
 
   #setupViewEventHandlers() {
-    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
   }
 
   /**

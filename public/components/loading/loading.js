@@ -1,12 +1,13 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
-import { APP_STATE, isWaiting } from "../../domain/app-state.js";
+import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
+import { StateDerivedView } from "../state-derived-view.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS, signalApp } from "../../shared/events.js";
 import {
   readUrlState,
   buildUrlSearch,
@@ -97,7 +98,7 @@ import {
  * - Execute playback preparation pipeline on `LOADING:PROCESS_PLAYBACK`.
  * - Hide itself when player or error views are shown.
  */
-export class Loading {
+export class Loading extends StateDerivedView {
   static SELECTOR = {
     cancelButton: "#loading__cancel",
     playlistButton: "#loading__playlist",
@@ -493,6 +494,14 @@ export class Loading {
       videoElement.addEventListener(name, () => {
         log(name);
         this.#onPlaybackEventForBuffering(name);
+        // The viewer stopping or restarting playback is a state of the
+        // application, not merely of the element. Mirrored, never decided here:
+        // the element owns the fact and this reports it.
+        if (name === "pause") {
+          signalApp(APP_EVENT.PAUSED_BY_VIEWER, { viewerWantsPlayback: false });
+        } else if (name === "playing") {
+          signalApp(APP_EVENT.RESUMED, { viewerWantsPlayback: true });
+        }
         this.#reportSeekIntent(name, videoElement);
         // The moments where the position has definitely changed and settled.
         if (name === "seeked" || name === "pause" || name === "playing") {
@@ -1371,6 +1380,22 @@ export class Loading {
         detail: { active, text }
       })
     );
+    // The same fact, told to the state machine. This function already decides
+    // exactly the predicate STALLED is defined by — a frame is wanted and is
+    // not available — so the machine reads it here rather than working it out
+    // a second time somewhere else.
+    //
+    // Only while a stream exists: before that the wait is the cold open, which
+    // is OPENING and is already true. And only on a CHANGE, because this is
+    // called again on every stats poll just to refresh the pill's text.
+    if (!this.#playbackLive || active === this.#bufferingSignalled) {
+      return;
+    }
+    this.#bufferingSignalled = active;
+    const video = this.#videoElement;
+    signalApp(active ? APP_EVENT.FRAME_BLOCKED : APP_EVENT.FRAME_AVAILABLE, {
+      viewerWantsPlayback: video instanceof HTMLVideoElement ? !video.paused : true
+    });
   }
 
   /**
@@ -1427,12 +1452,8 @@ export class Loading {
    *
    * @param {CustomEvent} event
    */
-  #onAppStateChanged = (event) => {
-    const state = event instanceof CustomEvent ? event.detail?.state : null;
-    if (typeof state !== "string") {
-      return;
-    }
-    this.visible = isWaiting(state);
+  applyAppState(state, belongsOnScreen) {
+    super.applyAppState(state, belongsOnScreen);
     if (state === APP_STATE.ADVANCING && !this.#playbackLive) {
       this.#logEvt("playback is live");
       // Playback is live now — buffer-empty events mean data starvation, not
@@ -1440,7 +1461,7 @@ export class Loading {
       this.#playbackLive = true;
       this.#applyPendingResume();
     }
-  };
+  }
 
   /**
    * Seek to the shared-link resume position once, when the player is revealed.
@@ -1540,6 +1561,26 @@ export class Loading {
     this.#stopPlayback({ preferBeacon: true, reason: "beforeunload" });
   };
 
+  /**
+   * The last thing said to the machine about whether a frame is missing, so a
+   * poll that only refreshes the pill's text does not repeat it.
+   *
+   * @type {boolean}
+   */
+  #bufferingSignalled = false;
+
+  /**
+   * Whether the viewer wants the picture to move — read from the element, which
+   * owns the fact. Sent with a stream that has just become usable so a rebuild
+   * finishing under a pause does not start playing at someone who stopped it.
+   *
+   * @returns {boolean}
+   */
+  #viewerWantsPlayback() {
+    const video = this.#videoElement;
+    return video instanceof HTMLVideoElement ? !video.paused : true;
+  }
+
   #onAppReset = () => {
     this.#stopPlayback();
     this.setProgress(0);
@@ -1574,6 +1615,7 @@ export class Loading {
   };
 
   constructor() {
+    super(isWaiting);
     this.#dialog = document.querySelector(Loading.SELECTOR.dialog);
     this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
     this.#status = document.querySelector(Loading.SELECTOR.status);
@@ -1610,7 +1652,6 @@ export class Loading {
     document.addEventListener(PLAYER_EVENTS.SELECT_QUALITY, this.#onSelectQuality);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
-    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     window.addEventListener("pagehide", this.#onPageHide);
@@ -1916,13 +1957,17 @@ export class Loading {
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
-        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
+          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
+        }));
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
         return;
       }
 
       this.setProgress(100);
-      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
+          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
+        }));
     } finally {
       this.#isProcessing = false;
     }
@@ -2122,13 +2167,17 @@ export class Loading {
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
-        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
+          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
+        }));
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
         return;
       }
 
       this.setProgress(100);
-      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
+          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
+        }));
     } finally {
       this.#isProcessing = false;
     }
@@ -2621,7 +2670,9 @@ export class Loading {
         }
       });
       this.setProgress(100);
-      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY));
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
+          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
+        }));
     } finally {
       this.#isProcessing = false;
     }
