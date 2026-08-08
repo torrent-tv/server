@@ -163,10 +163,50 @@ test("an edge on a superstate reaches every state inside it", () => {
   }
 });
 
-test("a rebuild asked for while the stream is still being built restarts it", () => {
-  // The state does not change, so no output changes; the build starting again is
-  // the transition's action, not the state's.
-  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.REBUILD_REQUIRED), APP_STATE.OPENING);
+test("a state's own edge wins over the one it inherits", () => {
+  // The lookup walks the containment chain and must stop at the first hit. No
+  // state currently overrides an inherited edge, so this holds over an empty
+  // set — it is here so that the day one does, the precedence is pinned rather
+  // than discovered. Written as a property over the table for that reason.
+  for (const edge of declaredEdges()) {
+    const isSuperstateRow = !ALL_STATES.includes(edge.from);
+    if (isSuperstateRow) {
+      continue;
+    }
+    const own = nextState(edge.from, edge.event, { viewerWantsPlayback: true });
+    assert.notEqual(own, null, `${edge.from} declares ${edge.event} and must answer with its own target`);
+  }
+});
+
+test("the one edge that leads back to its own state is deliberate", () => {
+  // An earlier version of this file asserted the opposite — that no edge is a
+  // self-loop, so that no event could re-run a state's entry work. That rule was
+  // dropped knowingly, and this test records why rather than letting the two
+  // designs disagree in silence.
+  //
+  // A rebuild can be asked for while the stream is STILL being built: changing
+  // quality during a cold open, and the transport dying mid-load, which is the
+  // failure server 0.8.84 was written for. Answering `null` there would mark a
+  // legitimate event as meaningless, and a driver is entitled to log `null` as a
+  // surprise. Answering OPENING says what is true: the event belongs here and
+  // the state did not change. The build starting again is the transition's
+  // action, driven by the event — outputs, which are what Moore constrains, do
+  // not move.
+  const selfEdges = [];
+  for (const state of ALL_STATES) {
+    for (const event of ALL_EVENTS) {
+      for (const context of ALL_CONTEXTS) {
+        if (nextState(state, event, context) === state) {
+          selfEdges.push(`${state} + ${event}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(
+    [...new Set(selfEdges)],
+    [`${APP_STATE.OPENING} + ${APP_EVENT.REBUILD_REQUIRED}`],
+    "a new edge that leads back to its own state must be argued for, not acquired"
+  );
 });
 
 // --------------------------------------------------------------------- guards
