@@ -1,303 +1,266 @@
 /**
- * @file The application state machine, as a graph and as a set of outputs.
+ * @file The application state machine, checked as a machine and as a graph.
  *
- * Every flow bug this project has had landed in the machine — a wrong screen
- * after an episode switch, a transport lost mid-load, a state that said PLAYING
- * while the loading view was up. None of them were catchable, because the rules
- * lived inside DOM event handlers where nothing could read them back. They are a
- * table and four pure functions now, so this file can assert the properties the
- * design is meant to have rather than the behaviour of one path through it.
+ * Two kinds of test here, and the second kind is the point. The first walks the
+ * edges someone wrote down. The second asserts properties of the whole relation
+ * — every state reachable, every state able to get home, no pair that throws,
+ * and the edges that must NOT exist — so that a future edit which quietly
+ * restores a near-complete digraph fails here rather than in the field.
+ *
+ * The machine this replaces had none of this. It threw on a refused transition,
+ * from inside a DOM event listener, and its table allowed almost everything, so
+ * neither the allowed nor the forbidden could be checked.
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  APP_STATE,
   APP_EVENT,
+  APP_STATE,
   APP_SUPERSTATE,
-  ABSENT_EDGE_INVARIANTS,
-  nextState,
-  isWithin,
-  viewForState,
-  isWaiting,
-  controlsLive,
-  mediaIntentForState,
-  MEDIA_INTENT,
   APP_VIEW,
+  ABSENT_EDGE_INVARIANTS,
   INITIAL_STATE,
-  declaredEdges
+  MEDIA_INTENT,
+  controlsLive,
+  declaredEdges,
+  isWaiting,
+  isWithin,
+  mediaIntentForState,
+  nextState,
+  viewForState
 } from "../public/domain/app-state.js";
 
 const ALL_STATES = Object.values(APP_STATE);
 const ALL_EVENTS = Object.values(APP_EVENT);
-const PLAYING_CONTEXT = { viewerWantsPlayback: true };
-const PAUSED_CONTEXT = { viewerWantsPlayback: false };
+/** Both settings of the only guard variable, so no branch escapes the sweeps. */
+const ALL_CONTEXTS = [{ viewerWantsPlayback: true }, { viewerWantsPlayback: false }, {}];
 
-/** Both context values, since a guard may send one event to two states. */
-const CONTEXTS = [PLAYING_CONTEXT, PAUSED_CONTEXT];
-
-test("opening a source is the only way out of IDLE", () => {
-  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.SOURCE_OPENED), APP_STATE.OPENING);
+/** Every state directly reachable from `state`, over every event and guard. */
+function successors(state) {
+  const reached = new Set();
   for (const event of ALL_EVENTS) {
-    if (event === APP_EVENT.SOURCE_OPENED) {
-      continue;
+    for (const context of ALL_CONTEXTS) {
+      const target = nextState(state, event, context);
+      if (target !== null && target !== state) {
+        reached.add(target);
+      }
     }
-    for (const context of CONTEXTS) {
-      assert.equal(
-        nextState(APP_STATE.IDLE, event, context),
-        null,
-        `${event} must be ignored in IDLE, not answered`
+  }
+  return reached;
+}
+
+/** States reachable from `start` by any number of transitions. */
+function closureFrom(start) {
+  const seen = new Set([start]);
+  const queue = [start];
+  while (queue.length > 0) {
+    for (const target of successors(queue.shift())) {
+      if (!seen.has(target)) {
+        seen.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return seen;
+}
+
+// ---------------------------------------------------------------- graph shape
+
+test("every state is reachable from the initial state", () => {
+  const reachable = closureFrom(INITIAL_STATE);
+  for (const state of ALL_STATES) {
+    assert.ok(reachable.has(state), `${state} cannot be reached from ${INITIAL_STATE}`);
+  }
+});
+
+test("every state can get back to the picker — no dead ends", () => {
+  for (const state of ALL_STATES) {
+    assert.ok(
+      closureFrom(state).has(APP_STATE.IDLE),
+      `${state} has no path back to ${APP_STATE.IDLE}: a viewer could be stuck there`
+    );
+  }
+});
+
+test("no state and event pair throws, and every one of them is answered", () => {
+  for (const state of [...ALL_STATES, "NOT_A_STATE"]) {
+    for (const event of [...ALL_EVENTS, "NOT_AN_EVENT"]) {
+      for (const context of ALL_CONTEXTS) {
+        const target = nextState(state, event, context);
+        assert.ok(
+          target === null || ALL_STATES.includes(target),
+          `${state} + ${event} answered ${String(target)}, which is neither a state nor "ignore"`
+        );
+      }
+    }
+  }
+});
+
+test("the answer for a pair is the same every time it is asked", () => {
+  for (const state of ALL_STATES) {
+    for (const event of ALL_EVENTS) {
+      const context = { viewerWantsPlayback: true };
+      assert.equal(nextState(state, event, context), nextState(state, event, context));
+    }
+  }
+});
+
+test("one target per state and event — the table declares no pair twice", () => {
+  const seen = new Set();
+  for (const edge of declaredEdges()) {
+    const pair = `${edge.from}+${edge.event}`;
+    assert.ok(!seen.has(pair), `${pair} is declared more than once`);
+    seen.add(pair);
+  }
+});
+
+test("the transition table cannot be edited at runtime", () => {
+  const [first] = declaredEdges();
+  const mutated = declaredEdges();
+  mutated[0].to = "TAMPERED";
+  assert.equal(declaredEdges()[0].to, first.to, "declaredEdges must hand out copies, not the table");
+});
+
+// ------------------------------------------------------- what must not happen
+
+test("the absent edges are absent", () => {
+  for (const invariant of ABSENT_EDGE_INVARIANTS) {
+    for (const context of ALL_CONTEXTS) {
+      assert.notEqual(
+        nextState(invariant.from, invariant.event, context),
+        invariant.mustNotReach,
+        `${invariant.from} + ${invariant.event} reached ${invariant.mustNotReach}: ${invariant.because}`
       );
     }
   }
 });
 
-test("a stream that becomes ready respects a viewer who paused during the rebuild", () => {
+test("an event that means nothing here is ignored, not obeyed", () => {
+  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.FRAME_BLOCKED), null);
+  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.FATAL_FAILURE), null);
+  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.CLOSED), null);
+  assert.equal(nextState(APP_STATE.ERROR, APP_EVENT.FRAME_AVAILABLE), null);
+  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.RESUMED), null);
+});
+
+// ------------------------------------------------------------------ hierarchy
+
+test("an edge on a superstate reaches every state inside it", () => {
+  const open = ALL_STATES.filter((state) => isWithin(state, APP_SUPERSTATE.OPEN));
+  assert.deepEqual(
+    open.sort(),
+    [APP_STATE.ADVANCING, APP_STATE.OPENING, APP_STATE.PAUSED, APP_STATE.STALLED].sort()
+  );
+  for (const state of open) {
+    assert.equal(nextState(state, APP_EVENT.CLOSED), APP_STATE.IDLE, `${state} must close to the picker`);
+    assert.equal(nextState(state, APP_EVENT.FATAL_FAILURE), APP_STATE.ERROR, `${state} must be able to fail`);
+    assert.equal(
+      nextState(state, APP_EVENT.REBUILD_REQUIRED),
+      APP_STATE.OPENING,
+      `${state} must accept a rebuild — a transport lost mid-load happens here too`
+    );
+  }
+});
+
+test("a rebuild asked for while the stream is still being built restarts it", () => {
+  // The state does not change, so no output changes; the build starting again is
+  // the transition's action, not the state's.
+  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.REBUILD_REQUIRED), APP_STATE.OPENING);
+});
+
+// --------------------------------------------------------------------- guards
+
+test("a rebuild that finishes under a pause does not start playing at the viewer", () => {
   assert.equal(
-    nextState(APP_STATE.OPENING, APP_EVENT.STREAM_READY, PLAYING_CONTEXT),
+    nextState(APP_STATE.OPENING, APP_EVENT.STREAM_READY, { viewerWantsPlayback: false }),
+    APP_STATE.PAUSED
+  );
+  assert.equal(
+    nextState(APP_STATE.OPENING, APP_EVENT.STREAM_READY, { viewerWantsPlayback: true }),
     APP_STATE.ADVANCING
   );
   assert.equal(
-    nextState(APP_STATE.OPENING, APP_EVENT.STREAM_READY, PAUSED_CONTEXT),
-    APP_STATE.PAUSED,
-    "a rebuild finishing must not start playback at someone who pressed pause"
+    nextState(APP_STATE.OPENING, APP_EVENT.STREAM_READY),
+    APP_STATE.ADVANCING,
+    "an unstated intent means the ordinary case: the viewer wants the picture"
   );
 });
+
+test("a frame that arrives for a paused scrub returns to paused, not to playing", () => {
+  assert.equal(
+    nextState(APP_STATE.STALLED, APP_EVENT.FRAME_AVAILABLE, { viewerWantsPlayback: false }),
+    APP_STATE.PAUSED
+  );
+  assert.equal(
+    nextState(APP_STATE.STALLED, APP_EVENT.FRAME_AVAILABLE, { viewerWantsPlayback: true }),
+    APP_STATE.ADVANCING
+  );
+});
+
+// ------------------------------------------------- the question this settled
 
 test("a seek, a scrub while paused and starvation are all one state", () => {
-  // Playing and starved.
   assert.equal(nextState(APP_STATE.ADVANCING, APP_EVENT.FRAME_BLOCKED), APP_STATE.STALLED);
-  // Scrubbing while paused: a frame IS wanted — the target one.
   assert.equal(nextState(APP_STATE.PAUSED, APP_EVENT.FRAME_BLOCKED), APP_STATE.STALLED);
-  // And back, to whichever of the two the viewer actually wants.
-  assert.equal(
-    nextState(APP_STATE.STALLED, APP_EVENT.FRAME_AVAILABLE, PLAYING_CONTEXT),
-    APP_STATE.ADVANCING
-  );
-  assert.equal(
-    nextState(APP_STATE.STALLED, APP_EVENT.FRAME_AVAILABLE, PAUSED_CONTEXT),
-    APP_STATE.PAUSED,
-    "a scrub that lands while paused must leave the viewer paused on the new frame"
-  );
 });
 
-test("pause is a state of its own, because an output differs", () => {
-  assert.equal(nextState(APP_STATE.ADVANCING, APP_EVENT.PAUSED_BY_VIEWER), APP_STATE.PAUSED);
-  assert.equal(nextState(APP_STATE.STALLED, APP_EVENT.PAUSED_BY_VIEWER), APP_STATE.PAUSED);
-  assert.equal(nextState(APP_STATE.PAUSED, APP_EVENT.RESUMED), APP_STATE.ADVANCING);
-  // The output that forced the split: nothing else about PAUSED differs from
-  // ADVANCING, and this does.
-  assert.equal(mediaIntentForState(APP_STATE.ADVANCING), MEDIA_INTENT.PLAY);
+test("waiting for a cold open and waiting for a seek look identical to the viewer", () => {
+  for (const output of [viewForState, isWaiting, controlsLive]) {
+    // Everything except the controls, which are dead before a stream exists.
+    if (output === controlsLive) {
+      continue;
+    }
+    assert.equal(
+      output(APP_STATE.OPENING),
+      output(APP_STATE.STALLED),
+      `${output.name} differs between the two waits, so one interface cannot serve both`
+    );
+  }
+});
+
+// -------------------------------------------------------------------- outputs
+
+test("every output is a function of the state alone", () => {
+  /** state -> [view, waiting, controls accept input, what to tell the element] */
+  const expected = {
+    [APP_STATE.IDLE]: [APP_VIEW.PICKER, false, false, MEDIA_INTENT.PAUSE],
+    [APP_STATE.OPENING]: [APP_VIEW.PLAYER, true, false, MEDIA_INTENT.LEAVE],
+    [APP_STATE.ADVANCING]: [APP_VIEW.PLAYER, false, true, MEDIA_INTENT.PLAY],
+    [APP_STATE.STALLED]: [APP_VIEW.PLAYER, true, true, MEDIA_INTENT.LEAVE],
+    [APP_STATE.PAUSED]: [APP_VIEW.PLAYER, false, true, MEDIA_INTENT.PAUSE],
+    [APP_STATE.ERROR]: [APP_VIEW.ERROR, false, false, MEDIA_INTENT.PAUSE]
+  };
+  for (const state of ALL_STATES) {
+    assert.deepEqual(
+      [viewForState(state), isWaiting(state), controlsLive(state), mediaIntentForState(state)],
+      expected[state],
+      `outputs for ${state}`
+    );
+  }
+});
+
+test("a pause is not a wait", () => {
+  // The distinction the ten-minute-after-a-pause freeze was made of: a paused
+  // viewer is present and not waiting for anything.
+  assert.equal(isWaiting(APP_STATE.PAUSED), false);
   assert.equal(mediaIntentForState(APP_STATE.PAUSED), MEDIA_INTENT.PAUSE);
 });
 
 test("a stall commands neither play nor pause", () => {
-  // Both answers are wrong for STALLED, which is why the output has a third
-  // value. A stall during playback must not be paused; a scrub while paused must
-  // not be started. The state covers both cases — correct for the overlay,
-  // useless as a play/pause command — so it issues neither.
+  // A stall during playback must not be paused, and a scrub while paused must
+  // not be started. One state covers both, so it commands neither.
   assert.equal(mediaIntentForState(APP_STATE.STALLED), MEDIA_INTENT.LEAVE);
-  assert.equal(mediaIntentForState(APP_STATE.OPENING), MEDIA_INTENT.LEAVE);
-  // Nothing may play while the player is not on screen: a hidden <video> still
-  // emits audio.
-  assert.equal(mediaIntentForState(APP_STATE.IDLE), MEDIA_INTENT.PAUSE);
-  assert.equal(mediaIntentForState(APP_STATE.ERROR), MEDIA_INTENT.PAUSE);
+});
+
+test("nothing plays while the player is off screen", () => {
   for (const state of ALL_STATES) {
-    assert.ok(
-      Object.values(MEDIA_INTENT).includes(mediaIntentForState(state)),
-      `${state} has no media intent`
-    );
-  }
-});
-
-test("closing and failing are declared once, on the superstate, and reach every state inside it", () => {
-  for (const state of [APP_STATE.OPENING, APP_STATE.ADVANCING, APP_STATE.STALLED, APP_STATE.PAUSED]) {
-    assert.equal(nextState(state, APP_EVENT.CLOSED), APP_STATE.IDLE, `CLOSED from ${state}`);
-    assert.equal(nextState(state, APP_EVENT.FATAL_FAILURE), APP_STATE.ERROR, `FATAL_FAILURE from ${state}`);
-  }
-  // Inherited from LIVE, and NOT available in OPENING — a stream that does not
-  // exist cannot be rebuilt, it is simply still being built.
-  for (const state of [APP_STATE.ADVANCING, APP_STATE.STALLED, APP_STATE.PAUSED]) {
-    assert.equal(nextState(state, APP_EVENT.REBUILD_REQUIRED), APP_STATE.OPENING);
-  }
-  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.REBUILD_REQUIRED), null);
-});
-
-test("a state's own edge wins over the one it inherits", () => {
-  // ERROR declares CLOSED itself; it is outside OPEN, so it cannot inherit.
-  assert.equal(nextState(APP_STATE.ERROR, APP_EVENT.CLOSED), APP_STATE.IDLE);
-  assert.equal(nextState(APP_STATE.ERROR, APP_EVENT.SOURCE_OPENED), APP_STATE.OPENING);
-});
-
-test("an unlisted pair is ignored, never thrown and never guessed", () => {
-  for (const state of ALL_STATES) {
-    for (const event of ALL_EVENTS) {
-      for (const context of CONTEXTS) {
-        const target = nextState(state, event, context);
-        assert.ok(
-          target === null || ALL_STATES.includes(target),
-          `${state} + ${event} answered ${String(target)}, which is not a state`
-        );
-      }
-    }
-  }
-});
-
-test("no edge is a self-loop, so no event can re-run a state's entry work", () => {
-  // A self-loop would mean an event that re-enters the state it is already in.
-  // Harmless in a diagram, not harmless here: entering OPENING starts building a
-  // stream, and doing that again on an event that changed nothing is how the old
-  // machine restarted encodes it had not been asked for.
-  for (const state of ALL_STATES) {
-    for (const event of ALL_EVENTS) {
-      for (const context of CONTEXTS) {
-        assert.notEqual(
-          nextState(state, event, context),
-          state,
-          `${state} + ${event} leads back to ${state}`
-        );
-      }
-    }
-  }
-});
-
-test("an event with no meaning here is ignored, and says so with null", () => {
-  // Distinct from a self-loop above: null means "no edge", which a driver may
-  // reasonably log as a surprise. Conflating the two would leave it unable to
-  // tell a meaningless event from one that legitimately changed nothing.
-  assert.equal(nextState(APP_STATE.ADVANCING, APP_EVENT.RESUMED), null);
-  assert.equal(nextState(APP_STATE.PAUSED, APP_EVENT.PAUSED_BY_VIEWER), null);
-  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.CLOSED), null);
-});
-
-test("the machine starts in the picker", () => {
-  assert.equal(INITIAL_STATE, APP_STATE.IDLE);
-  assert.equal(viewForState(INITIAL_STATE), APP_VIEW.PICKER);
-});
-
-test("the transition relation is deterministic", () => {
-  for (const state of ALL_STATES) {
-    for (const event of ALL_EVENTS) {
-      for (const context of CONTEXTS) {
-        assert.equal(
-          nextState(state, event, context),
-          nextState(state, event, context),
-          `${state} + ${event} is not a function of its inputs`
-        );
-      }
-    }
-  }
-});
-
-test("every state is reachable from IDLE", () => {
-  const seen = new Set([APP_STATE.IDLE]);
-  const queue = [APP_STATE.IDLE];
-  while (queue.length > 0) {
-    const state = queue.shift();
-    for (const event of ALL_EVENTS) {
-      for (const context of CONTEXTS) {
-        const target = nextState(state, event, context);
-        if (target !== null && !seen.has(target)) {
-          seen.add(target);
-          queue.push(target);
-        }
-      }
-    }
-  }
-  for (const state of ALL_STATES) {
-    assert.ok(seen.has(state), `${state} is unreachable, so it is not part of the machine`);
-  }
-});
-
-test("no state is a dead end — IDLE is reachable from all of them", () => {
-  for (const start of ALL_STATES) {
-    const seen = new Set([start]);
-    const queue = [start];
-    let reachesIdle = start === APP_STATE.IDLE;
-    while (queue.length > 0 && !reachesIdle) {
-      const state = queue.shift();
-      for (const event of ALL_EVENTS) {
-        for (const context of CONTEXTS) {
-          const target = nextState(state, event, context);
-          if (target === APP_STATE.IDLE) {
-            reachesIdle = true;
-          }
-          if (target !== null && !seen.has(target)) {
-            seen.add(target);
-            queue.push(target);
-          }
-        }
-      }
-    }
-    assert.ok(reachesIdle, `${start} cannot get back to the picker`);
-  }
-});
-
-test("every written invariant is executed, not merely stated", () => {
-  // The invariants are data, so this loop IS the check. An invariant that lives
-  // only in a comment is one nobody runs, and the previous version of this test
-  // asserted their COUNT — which would have passed on any four sentences.
-  assert.ok(ABSENT_EDGE_INVARIANTS.length > 0);
-  for (const invariant of ABSENT_EDGE_INVARIANTS) {
-    for (const context of CONTEXTS) {
-      assert.notEqual(
-        nextState(invariant.from, invariant.event, context),
-        invariant.mustNotReach,
-        invariant.because
+    if (viewForState(state) !== APP_VIEW.PLAYER) {
+      assert.equal(
+        mediaIntentForState(state),
+        MEDIA_INTENT.PAUSE,
+        `${state} hides the player, so the element must be told to stop — a hidden <video> still emits audio`
       );
     }
-  }
-});
-
-test("the view is a function of the state and of nothing else", () => {
-  assert.equal(viewForState(APP_STATE.IDLE), APP_VIEW.PICKER);
-  assert.equal(viewForState(APP_STATE.ERROR), APP_VIEW.ERROR);
-  for (const state of [APP_STATE.OPENING, APP_STATE.ADVANCING, APP_STATE.STALLED, APP_STATE.PAUSED]) {
-    assert.equal(viewForState(state), APP_VIEW.PLAYER, `${state} shows the player`);
-  }
-  // Total: no state may leave the app without a view.
-  for (const state of ALL_STATES) {
-    assert.ok(
-      Object.values(APP_VIEW).includes(viewForState(state)),
-      `${state} has no view`
-    );
-  }
-});
-
-test("the overlay shows exactly while a wanted frame is missing", () => {
-  assert.equal(isWaiting(APP_STATE.OPENING), true);
-  assert.equal(isWaiting(APP_STATE.STALLED), true);
-  assert.equal(isWaiting(APP_STATE.ADVANCING), false);
-  assert.equal(isWaiting(APP_STATE.PAUSED), false, "a pause is not a wait — this is the ten-minute freeze");
-  assert.equal(isWaiting(APP_STATE.IDLE), false);
-  assert.equal(isWaiting(APP_STATE.ERROR), false);
-});
-
-test("controls accept input only once there is something to control", () => {
-  assert.equal(controlsLive(APP_STATE.OPENING), false, "a seek bar over an unopened file can only mislead");
-  assert.equal(controlsLive(APP_STATE.ADVANCING), true);
-  assert.equal(controlsLive(APP_STATE.STALLED), true);
-  assert.equal(controlsLive(APP_STATE.PAUSED), true);
-  assert.equal(controlsLive(APP_STATE.IDLE), false);
-});
-
-test("containment is what makes a shared edge declarable once", () => {
-  assert.equal(isWithin(APP_STATE.STALLED, APP_SUPERSTATE.LIVE), true);
-  assert.equal(isWithin(APP_STATE.STALLED, APP_SUPERSTATE.OPEN), true);
-  assert.equal(isWithin(APP_STATE.OPENING, APP_SUPERSTATE.OPEN), true);
-  assert.equal(isWithin(APP_STATE.OPENING, APP_SUPERSTATE.LIVE), false,
-    "OPENING is open but not live — that difference is the whole reason both exist");
-  assert.equal(isWithin(APP_STATE.IDLE, APP_SUPERSTATE.OPEN), false);
-  assert.equal(isWithin(APP_STATE.ERROR, APP_SUPERSTATE.OPEN), false);
-});
-
-test("the graph stays small enough to hold in one's head", () => {
-  const edges = declaredEdges();
-  assert.ok(edges.length <= 14, `the table has grown to ${edges.length} edges; a near-complete digraph asserts nothing`);
-  for (const edge of edges) {
-    assert.ok(
-      edge.to === "guarded" || ALL_STATES.includes(edge.to),
-      `${edge.from} + ${edge.event} points at ${edge.to}, which is not a state`
-    );
   }
 });

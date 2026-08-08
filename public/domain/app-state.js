@@ -229,14 +229,19 @@ const TRANSITIONS = deepFreeze({
     [APP_EVENT.FRAME_BLOCKED]: APP_STATE.STALLED
   },
 
-  // Declared once for ADVANCING, STALLED and PAUSED.
-  [APP_SUPERSTATE.LIVE]: {
-    [APP_EVENT.REBUILD_REQUIRED]: APP_STATE.OPENING
-  },
-
-  // Declared once for OPENING and everything in LIVE. Written three times each
-  // in the machine this replaces.
+  // Declared once for OPENING and everything in LIVE. `FATAL_FAILURE` and
+  // `CLOSED` are written three times each in the machine this replaces.
+  //
+  // `REBUILD_REQUIRED` sits here rather than on LIVE, and the difference is not
+  // cosmetic: OPENING's parent is OPEN, not LIVE, so on LIVE it would not reach
+  // a rebuild asked for while the stream is still being built. Two real cases
+  // live in that window — changing quality during a cold open, and the transport
+  // dying mid-load, which is the failure server 0.8.84 was written for. From
+  // OPENING it is an EXTERNAL SELF-TRANSITION: the state does not change, so no
+  // output changes, while the build itself starts again. Whether the rebuild
+  // action re-runs is decided by the event, not by the state changing.
   [APP_SUPERSTATE.OPEN]: {
+    [APP_EVENT.REBUILD_REQUIRED]: APP_STATE.OPENING,
     [APP_EVENT.FATAL_FAILURE]: APP_STATE.ERROR,
     [APP_EVENT.CLOSED]: APP_STATE.IDLE
   },

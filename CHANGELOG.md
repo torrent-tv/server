@@ -1,3 +1,7 @@
+## 0.8.120
+
+- **Chore**: The application state machine now exists as a pure module with tests (`public/domain/app-state.js`). States, the transition relation, the superstate hierarchy and the outputs derived from a state, with no DOM and no side effects. Not wired in yet — the component still carries its own table — so nothing behaves differently. Derived from four rules rather than from what the code did: outputs are a function of the state alone (Moore), something becomes a state only when it changes what is legal or what is shown, an edge shared by several states is declared once on their superstate, and the relation is checked as a graph. The tests assert the properties, not just the edges: every state reachable, every state able to return to the picker, no state-and-event pair that throws, and the edges that must NOT exist. Design and the drawn graph in `research/state-machine-2026-08-08.md`.
+
 ## 0.8.119
 
 - **Fix**: Picking another episode starts it from the beginning. One <video> element serves every file and it keeps the position the last one was left at, so attaching the new stream resumed the NEW episode wherever the PREVIOUS one had got to — switch forty minutes into episode one and episode two began forty minutes in. The element is now rewound when the file changes, and only when nothing has asked for a position: a resume from the address, from Retry or from Back sets one first, and that is the case this must not overwrite.
