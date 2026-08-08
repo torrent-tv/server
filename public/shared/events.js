@@ -51,8 +51,32 @@ export const APP_EVENTS = {
    * where the app is (the playlist, when nothing is playing) listen for this
    * rather than each inferring it from the events they happen to see.
    */
-  STATE_CHANGED: "APP:STATE_CHANGED"
+  STATE_CHANGED: "APP:STATE_CHANGED",
+  /**
+   * The single way anything feeds the state machine something it did not
+   * already learn from a domain event. Carries
+   * `{ event, context }` — `event` one of `APP_EVENT` in
+   * `domain/app-state.js`, `context` the extended state a guard may need.
+   *
+   * One channel rather than one DOM event per machine event: the machine has a
+   * single entry point, so "who can move the app" is answerable by grepping for
+   * one name.
+   */
+  SIGNAL: "APP:SIGNAL"
 };
+
+/**
+ * Feed the state machine an event.
+ *
+ * @param {string} event - One of `APP_EVENT` in `domain/app-state.js`.
+ * @param {object} [context] - Extended state for guards (`viewerWantsPlayback`).
+ * @returns {void}
+ */
+export function signalApp(event, context = {}) {
+  document.dispatchEvent(
+    new CustomEvent(APP_EVENTS.SIGNAL, { detail: { event, context } })
+  );
+}
 
 /**
  * The proxy no longer has the transcode session the player is using — it was
