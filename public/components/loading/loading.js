@@ -1,4 +1,5 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
+import { APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
@@ -405,8 +406,10 @@ export class Loading {
   /** @param {CustomEvent} event */
   #onShow = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
-    this.#logEvt(`view=loading shown cause=LOADING:SHOW`);
-    this.visible = true;
+    this.#logEvt(`loading content set cause=LOADING:SHOW`);
+    // Content and pipeline state only — whether this view is on screen follows
+    // from the application state (`#onAppStateChanged`). This event now means
+    // "a build is starting", which is what the machine reads it as.
     // The loading view is back in front — playback is no longer live; drop any
     // mid-playback buffering notice so it cannot leak onto the next state.
     this.#playbackLive = false;
@@ -1417,13 +1420,26 @@ export class Loading {
     }
   }
 
-  #onPlayerShow = () => {
-    this.#logEvt(`view=loading hidden cause=PLAYER:SHOW`);
-    this.visible = false;
-    // Playback is live now — buffer-empty events mean data starvation, not the
-    // pre-buffer fill, so the mid-playback buffering notice applies.
-    this.#playbackLive = true;
-    this.#applyPendingResume();
+  /**
+   * The waiting view is on screen exactly while a wanted frame is missing —
+   * a cold open or a stall — and off screen otherwise. Derived from the state;
+   * see `domain/app-state.js`.
+   *
+   * @param {CustomEvent} event
+   */
+  #onAppStateChanged = (event) => {
+    const state = event instanceof CustomEvent ? event.detail?.state : null;
+    if (typeof state !== "string") {
+      return;
+    }
+    this.visible = isWaiting(state);
+    if (state === APP_STATE.ADVANCING && !this.#playbackLive) {
+      this.#logEvt("playback is live");
+      // Playback is live now — buffer-empty events mean data starvation, not
+      // the pre-buffer fill, so the mid-playback buffering notice applies.
+      this.#playbackLive = true;
+      this.#applyPendingResume();
+    }
   };
 
   /**
@@ -1514,7 +1530,6 @@ export class Loading {
     // otherwise `session.current` is null and #onSelectMediaFile bails out,
     // leaving an empty player.
     this.#stopPlayback({ keepSource: this.#videoFileCount() > 1 });
-    this.visible = false;
   };
 
   #onPageHide = () => {
@@ -1527,7 +1542,6 @@ export class Loading {
 
   #onAppReset = () => {
     this.#stopPlayback();
-    this.visible = false;
     this.setProgress(0);
     this.setStatus("");
     this.setFileName("Waiting for a .torrent file...");
@@ -1596,7 +1610,7 @@ export class Loading {
     document.addEventListener(PLAYER_EVENTS.SELECT_QUALITY, this.#onSelectQuality);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
-    document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
+    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     window.addEventListener("pagehide", this.#onPageHide);
