@@ -1,5 +1,6 @@
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, PLAYER_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
 import { parseTorrentBytes } from "../../domain/torrent-parser.js";
+import { APP_VIEW, viewForState } from "../../domain/app-state.js";
 
 /**
  * Torrent input view.
@@ -224,20 +225,19 @@ export class Torrent {
     }
   };
 
-  #onErrorShow = () => {
-    this.visible = false;
-  };
-
-  #onLoadingShow = () => {
-    this.visible = false;
-  };
-
-  #onPlayerShow = () => {
-    this.visible = false;
-  };
-
-  #onAppReset = () => {
-    this.visible = true;
+  /**
+   * The picker is on screen exactly while no source is open. Derived from the
+   * state, not commanded by whichever view happened to appear — see
+   * `domain/app-state.js`.
+   *
+   * @param {CustomEvent} event
+   */
+  #onAppStateChanged = (event) => {
+    const state = event instanceof CustomEvent ? event.detail?.state : null;
+    if (typeof state !== "string") {
+      return;
+    }
+    this.visible = viewForState(state) === APP_VIEW.PICKER;
   };
 
   constructor() {
@@ -345,10 +345,7 @@ export class Torrent {
   }
 
   #setupViewEventHandlers() {
-    document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
-    document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
-    document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
-    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
+    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
   }
 
   /**

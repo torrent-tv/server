@@ -1,4 +1,5 @@
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, ERROR_EVENTS } from "../../shared/events.js";
+import { APP_VIEW, viewForState } from "../../domain/app-state.js";
 
 /**
  * Error view.
@@ -53,20 +54,24 @@ export class ErrorDialog {
     this.#resetButton.hidden = false;
     this.#playlistButton.hidden = !canGoBackToPlaylist;
 
+    // Content only. Whether this view is on screen follows from the state — the
+    // machine has already moved to ERROR by the time this arrives, and a view
+    // that both paints itself and decides to appear is how the screen and the
+    // state came to be able to disagree.
     this.#showError({ title, description });
-    this.visible = true;
   };
 
-  #onLoadingShow = () => {
-    this.visible = false;
-  };
-
-  #onPlayerShow = () => {
-    this.visible = false;
-  };
-
-  #onHide = () => {
-    this.visible = false;
+  /**
+   * On screen exactly while the application is in its error state.
+   *
+   * @param {CustomEvent} event
+   */
+  #onAppStateChanged = (event) => {
+    const state = event instanceof CustomEvent ? event.detail?.state : null;
+    if (typeof state !== "string") {
+      return;
+    }
+    this.visible = viewForState(state) === APP_VIEW.ERROR;
   };
 
   #onResetClick = () => {
@@ -102,10 +107,7 @@ export class ErrorDialog {
 
   #setupEventHandlers() {
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
-    document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
-    document.addEventListener(PLAYER_EVENTS.SHOW, this.#onPlayerShow);
-    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onHide);
-    document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onHide);
+    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     this.#resetButton.addEventListener("click", this.#onResetClick);
     this.#playlistButton.addEventListener("click", this.#onPlaylistClick);
     this.#retryButton.addEventListener("click", this.#onRetryClick);

@@ -1,4 +1,5 @@
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_VIEW, MEDIA_INTENT, mediaIntentForState, viewForState } from "../../domain/app-state.js";
 
 /**
  * Player view.
@@ -59,23 +60,75 @@ export class Player {
   #audioAvailable = false;
   #qualityAvailable = false;
 
-  #onShow = () => {
-    this.#logEvt("view=player shown cause=PLAYER:SHOW");
-    this.visible = true;
-    // Start playback only now, when the player is actually revealed — not during
-    // the loading / pre-buffer screen. This guarantees the first frame and the
-    // audio start together (previously hls.js auto-played under the loading
-    // overlay, so audio was heard while only the buffering UI was visible).
-    // On iOS autoplay is blocked outside a user gesture; play() rejects and the
-    // user starts it from the play button — harmless, hence the catch.
-    if (this.#video instanceof HTMLVideoElement) {
-      this.#logEvt("player.play reason=show");
+  /**
+   * The player derives itself from the application's state and from nothing
+   * else. It is not told to appear: under a Moore machine an output is a
+   * function of the state, so being on screen is read from the state rather
+   * than commanded on the edge that led there. The design this replaces was
+   * commanded — and four flows (quality switch, audio switch, reconnect, Retry)
+   * re-showed the loading view with no transition at all, so the state said one
+   * thing and the screen another with nothing able to notice.
+   *
+   * @param {CustomEvent} event
+   */
+  #onAppStateChanged = (event) => {
+    const state = event instanceof CustomEvent ? event.detail?.state : null;
+    if (typeof state !== "string") {
+      return;
+    }
+    const belongsOnScreen = viewForState(state) === APP_VIEW.PLAYER;
+    if (!belongsOnScreen && this.visible) {
+      // Leaving the player entirely — the picker or the error screen. Let go of
+      // the media: a hidden <video> still holds its source and still emits
+      // audio.
+      this.#closePlaylist();
+      this.#hideBuffering();
+      this.#video.pause();
+      this.#video.removeAttribute("src");
+      this.#video.load();
+    }
+    this.visible = belongsOnScreen;
+    if (belongsOnScreen) {
+      this.#logEvt(`view=player shown state=${state}`);
+    }
+    this.#applyMediaIntent(state);
+  };
+
+  /**
+   * Start or stop the element according to what the state implies — never
+   * according to which edge arrived.
+   *
+   * `LEAVE` is the third answer and the reason this is not a boolean: while a
+   * frame is being waited for, both commands are wrong. A stall during playback
+   * must not be paused, and a scrub while paused must not be started.
+   *
+   * @param {string} state
+   * @returns {void}
+   */
+  #applyMediaIntent(state) {
+    if (!(this.#video instanceof HTMLVideoElement)) {
+      return;
+    }
+    const intent = mediaIntentForState(state);
+    if (intent === MEDIA_INTENT.PLAY) {
+      // Playback starts when the machine says the picture is meant to move,
+      // which is the moment the stream became usable — not while the waiting
+      // view is up. That ordering is what keeps the first frame and the audio
+      // together; hls.js auto-playing under the overlay used to be heard before
+      // anything was shown. On iOS autoplay outside a user gesture is refused
+      // and the viewer starts it from the play button, hence the catch.
+      this.#logEvt("player.play reason=state");
       const started = this.#video.play();
       if (started && typeof started.catch === "function") {
         started.catch(() => undefined);
       }
+      return;
     }
-  };
+    if (intent === MEDIA_INTENT.PAUSE && !this.#video.paused) {
+      this.#logEvt(`player.pause reason=state=${state}`);
+      this.#video.pause();
+    }
+  }
 
   /**
    * Emit a timestamped `[evt]` diagnostic line (UTC, same zone as the proxy
@@ -92,29 +145,6 @@ export class Player {
     this.#emitReady();
   };
 
-  #onLoadingShow = () => {
-    this.#closePlaylist();
-    this.#hideBuffering();
-    this.visible = false;
-  };
-
-  #onErrorShow = () => {
-    this.#closePlaylist();
-    this.#hideBuffering();
-    this.#video.pause();
-    this.#video.removeAttribute("src");
-    this.#video.load();
-    this.visible = false;
-  };
-
-  #onAppReset = () => {
-    this.#closePlaylist();
-    this.#hideBuffering();
-    this.#video.pause();
-    this.#video.removeAttribute("src");
-    this.#video.load();
-    this.visible = false;
-  };
 
   /**
    * Show/hide the transient buffering/seeking indicator (data starvation): the
@@ -290,11 +320,8 @@ export class Player {
   }
 
   #setupEventHandlers() {
-    document.addEventListener(PLAYER_EVENTS.SHOW, this.#onShow);
+    document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     document.addEventListener(PLAYER_EVENTS.REQUEST_READY, this.#onRequestReady);
-    document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
-    document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
-    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onBackToPlaylist);
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);

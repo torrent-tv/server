@@ -4,8 +4,11 @@
     {
       "name": "ttv-server",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
-      "port": 8080
+      "runtimeArgs": [
+        "server.js"
+      ],
+      "port": 8099,
+      "autoPort": true
     }
   ]
 }
