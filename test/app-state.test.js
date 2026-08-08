@@ -21,14 +21,16 @@ import {
   viewForState,
   isWaiting,
   controlsLive,
-  playbackWanted,
+  shouldBePlaying,
+  APP_VIEW,
+  INITIAL_STATE,
   declaredEdges
 } from "../public/domain/app-state.js";
 
 const ALL_STATES = Object.values(APP_STATE);
 const ALL_EVENTS = Object.values(APP_EVENT);
-const PLAYING_CONTEXT = { wantsPlayback: true };
-const PAUSED_CONTEXT = { wantsPlayback: false };
+const PLAYING_CONTEXT = { viewerWantsPlayback: true };
+const PAUSED_CONTEXT = { viewerWantsPlayback: false };
 
 /** Both context values, since a guard may send one event to two states. */
 const CONTEXTS = [PLAYING_CONTEXT, PAUSED_CONTEXT];
@@ -84,9 +86,9 @@ test("pause is a state of its own, because an output differs", () => {
   assert.equal(nextState(APP_STATE.PAUSED, APP_EVENT.RESUMED), APP_STATE.ADVANCING);
   // The output that forced the split: nothing else about PAUSED differs from
   // ADVANCING, and this does.
-  assert.equal(playbackWanted(APP_STATE.ADVANCING), true);
-  assert.equal(playbackWanted(APP_STATE.PAUSED), false);
-  assert.equal(playbackWanted(APP_STATE.STALLED), true, "a stall is not a decision to stop");
+  assert.equal(shouldBePlaying(APP_STATE.ADVANCING), true);
+  assert.equal(shouldBePlaying(APP_STATE.PAUSED), false);
+  assert.equal(shouldBePlaying(APP_STATE.STALLED), true, "a stall is not a decision to stop");
 });
 
 test("closing and failing are declared once, on the superstate, and reach every state inside it", () => {
@@ -122,12 +124,36 @@ test("an unlisted pair is ignored, never thrown and never guessed", () => {
   }
 });
 
-test("a transition to the state already occupied is not a transition", () => {
-  // Entering PROCESSING twice used to re-run entry work. Re-entry is reported as
-  // "nothing happened" so a caller cannot repeat it by accident.
+test("no edge is a self-loop, so no event can re-run a state's entry work", () => {
+  // A self-loop would mean an event that re-enters the state it is already in.
+  // Harmless in a diagram, not harmless here: entering OPENING starts building a
+  // stream, and doing that again on an event that changed nothing is how the old
+  // machine restarted encodes it had not been asked for.
+  for (const state of ALL_STATES) {
+    for (const event of ALL_EVENTS) {
+      for (const context of CONTEXTS) {
+        assert.notEqual(
+          nextState(state, event, context),
+          state,
+          `${state} + ${event} leads back to ${state}`
+        );
+      }
+    }
+  }
+});
+
+test("an event with no meaning here is ignored, and says so with null", () => {
+  // Distinct from a self-loop above: null means "no edge", which a driver may
+  // reasonably log as a surprise. Conflating the two would leave it unable to
+  // tell a meaningless event from one that legitimately changed nothing.
   assert.equal(nextState(APP_STATE.ADVANCING, APP_EVENT.RESUMED), null);
   assert.equal(nextState(APP_STATE.PAUSED, APP_EVENT.PAUSED_BY_VIEWER), null);
   assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.CLOSED), null);
+});
+
+test("the machine starts in the picker", () => {
+  assert.equal(INITIAL_STATE, APP_STATE.IDLE);
+  assert.equal(viewForState(INITIAL_STATE), APP_VIEW.PICKER);
 });
 
 test("the transition relation is deterministic", () => {
@@ -188,23 +214,34 @@ test("no state is a dead end — IDLE is reachable from all of them", () => {
   }
 });
 
-test("the absent edges assert what they are supposed to assert", () => {
-  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.STREAM_READY), null,
-    "nothing plays that was not opened first");
-  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.FATAL_FAILURE), null,
-    "a failure needs an open source — this is the edge a late event from an abandoned attempt used to take");
-  assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.FRAME_BLOCKED), null,
-    "a stall presupposes a stream");
-  assert.notEqual(nextState(APP_STATE.ERROR, APP_EVENT.SOURCE_OPENED), APP_STATE.ADVANCING,
-    "a file cannot start advancing without being opened");
-  assert.equal(ABSENT_EDGE_INVARIANTS.length, 4, "the written invariants and the asserted ones must not drift");
+test("every written invariant is executed, not merely stated", () => {
+  // The invariants are data, so this loop IS the check. An invariant that lives
+  // only in a comment is one nobody runs, and the previous version of this test
+  // asserted their COUNT — which would have passed on any four sentences.
+  assert.ok(ABSENT_EDGE_INVARIANTS.length > 0);
+  for (const invariant of ABSENT_EDGE_INVARIANTS) {
+    for (const context of CONTEXTS) {
+      assert.notEqual(
+        nextState(invariant.from, invariant.event, context),
+        invariant.mustNotReach,
+        invariant.because
+      );
+    }
+  }
 });
 
 test("the view is a function of the state and of nothing else", () => {
-  assert.equal(viewForState(APP_STATE.IDLE), "picker");
-  assert.equal(viewForState(APP_STATE.ERROR), "error");
+  assert.equal(viewForState(APP_STATE.IDLE), APP_VIEW.PICKER);
+  assert.equal(viewForState(APP_STATE.ERROR), APP_VIEW.ERROR);
   for (const state of [APP_STATE.OPENING, APP_STATE.ADVANCING, APP_STATE.STALLED, APP_STATE.PAUSED]) {
-    assert.equal(viewForState(state), "player", `${state} shows the player`);
+    assert.equal(viewForState(state), APP_VIEW.PLAYER, `${state} shows the player`);
+  }
+  // Total: no state may leave the app without a view.
+  for (const state of ALL_STATES) {
+    assert.ok(
+      Object.values(APP_VIEW).includes(viewForState(state)),
+      `${state} has no view`
+    );
   }
 });
 
