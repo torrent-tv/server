@@ -42,7 +42,7 @@
  *
  * @readonly
  */
-export const APP_STATE = {
+export const APP_STATE = Object.freeze({
   /** No source is open. */
   IDLE: "IDLE",
   /** A source is open; no playable stream exists yet. */
@@ -55,7 +55,22 @@ export const APP_STATE = {
   PAUSED: "PAUSED",
   /** A failure the pipeline declared unrecoverable. */
   ERROR: "ERROR"
-};
+});
+
+/** Where the machine starts. Exported so no driver has to hardcode it. */
+export const INITIAL_STATE = APP_STATE.IDLE;
+
+/**
+ * The views the app can show. An enum rather than bare strings so a typo is a
+ * missing export instead of a silently wrong screen.
+ *
+ * @readonly
+ */
+export const APP_VIEW = Object.freeze({
+  PICKER: "picker",
+  PLAYER: "player",
+  ERROR: "error"
+});
 
 /**
  * Superstates. Not states themselves — containers, used for two things: to
@@ -63,12 +78,31 @@ export const APP_STATE = {
  *
  * @readonly
  */
-export const APP_SUPERSTATE = {
+export const APP_SUPERSTATE = Object.freeze({
   /** A stream exists: ADVANCING, STALLED, PAUSED. */
   LIVE: "LIVE",
   /** A source is open: OPENING plus everything in LIVE. */
   OPEN: "OPEN"
-};
+});
+
+/**
+ * Freeze an object and everything under it. `Object.freeze` is shallow, so a
+ * frozen table of tables leaves the inner rows writable — and a transition
+ * relation that can be edited at runtime is not a specification.
+ *
+ * @template T
+ * @param {T} value
+ * @returns {T}
+ */
+function deepFreeze(value) {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const inner of Object.values(value)) {
+      deepFreeze(inner);
+    }
+  }
+  return value;
+}
 
 /**
  * Containment: which superstate each state sits in, innermost first. This is the
@@ -95,7 +129,7 @@ const PARENT = Object.freeze({
  *
  * @readonly
  */
-export const APP_EVENT = {
+export const APP_EVENT = Object.freeze({
   /** A torrent or magnet was opened, or a file within one was chosen. */
   SOURCE_OPENED: "SOURCE_OPENED",
   /** Enough media is ready for the picture to start. */
@@ -114,21 +148,30 @@ export const APP_EVENT = {
   FATAL_FAILURE: "FATAL_FAILURE",
   /** The viewer closed the source and went back to the picker. */
   CLOSED: "CLOSED"
-};
+});
 
 /**
  * Extended state — the variables transitions are allowed to consult. Everything
  * here was deliberately NOT made a state.
  *
- * `wantsPlayback` mirrors the media element (`!video.paused`); the element owns
+ * `viewerWantsPlayback` mirrors the media element (`!video.paused`); the element owns
  * the fact and the machine only projects it, so there is one source of truth and
  * not two. It decides where a stream that has just become ready goes: a viewer
  * who paused during a rebuild must not have their pause overridden by the
  * rebuild finishing.
  *
+ * The field is `viewerWantsPlayback` and the output below is `shouldBePlaying`;
+ * they are deliberately not the same word, because they are not the same fact.
+ * One is what the viewer asked for, the other is what the state implies. One
+ * concept, one name — and two concepts, two names.
+ *
+ * Omitting the field reads as "wants playback", which is right for every path
+ * except a rebuild finishing under a pause. That one path is exactly where a
+ * caller must pass it, and it is documented at both guards.
+ *
  * @typedef {object} StateContext
- * @property {boolean} [wantsPlayback] - Whether the viewer wants the picture to
- *   move. Defaults to true: everything except a deliberate pause wants it.
+ * @property {boolean} [viewerWantsPlayback] - Whether the viewer wants the
+ *   picture to move — `!video.paused`. Defaults to true.
  */
 
 /**
@@ -141,7 +184,7 @@ export const APP_EVENT = {
  *
  * @type {Readonly<Record<string, Record<string, string | ((context: StateContext) => string)>>>}
  */
-const TRANSITIONS = Object.freeze({
+const TRANSITIONS = deepFreeze({
   [APP_STATE.IDLE]: {
     [APP_EVENT.SOURCE_OPENED]: APP_STATE.OPENING
   },
@@ -150,7 +193,7 @@ const TRANSITIONS = Object.freeze({
     // A rebuild that finishes while the viewer is paused must land in PAUSED,
     // not start playing at them.
     [APP_EVENT.STREAM_READY]: (context) =>
-      context.wantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING
+      context.viewerWantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING
   },
 
   [APP_STATE.ADVANCING]: {
@@ -160,7 +203,7 @@ const TRANSITIONS = Object.freeze({
 
   [APP_STATE.STALLED]: {
     [APP_EVENT.FRAME_AVAILABLE]: (context) =>
-      context.wantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING,
+      context.viewerWantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING,
     [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.PAUSED
   },
 
@@ -195,31 +238,64 @@ const TRANSITIONS = Object.freeze({
 });
 
 /**
- * What the missing edges assert. Kept as text beside the table because an
- * invariant nobody wrote down is one nobody checks; the tests below read this
- * list back.
+ * What the MISSING edges assert — as data, so the tests execute them instead of
+ * reading prose. An invariant written only in a comment is one nobody checks,
+ * and this list is the machine's actual content: the edges present in a
+ * near-complete digraph say nothing, the absent ones say everything.
  *
- * @readonly
+ * Each entry: from this state, this event must never produce this target.
+ *
+ * @type {ReadonlyArray<{ from: string, event: string, mustNotReach: string, because: string }>}
  */
 export const ABSENT_EDGE_INVARIANTS = Object.freeze([
-  "nothing plays that was not opened first: no IDLE to ADVANCING",
-  "a failure needs an open source: no IDLE to ERROR",
-  "a stall presupposes a stream: no IDLE to STALLED",
-  "a file cannot advance without being opened: no ERROR to ADVANCING"
+  {
+    from: APP_STATE.IDLE,
+    event: APP_EVENT.STREAM_READY,
+    mustNotReach: APP_STATE.ADVANCING,
+    because: "nothing plays that was not opened first"
+  },
+  {
+    from: APP_STATE.IDLE,
+    event: APP_EVENT.FATAL_FAILURE,
+    mustNotReach: APP_STATE.ERROR,
+    because: "a failure needs an open source — this is the edge a late event from an abandoned attempt used to take"
+  },
+  {
+    from: APP_STATE.IDLE,
+    event: APP_EVENT.FRAME_BLOCKED,
+    mustNotReach: APP_STATE.STALLED,
+    because: "a stall presupposes a stream"
+  },
+  {
+    from: APP_STATE.ERROR,
+    event: APP_EVENT.SOURCE_OPENED,
+    mustNotReach: APP_STATE.ADVANCING,
+    because: "a file cannot start advancing without being opened"
+  }
 ]);
 
 /**
- * The state after `event`, or `null` when the machine ignores it.
+ * The state `event` leads to, or `null` when the event means nothing here.
  *
- * Ignoring is a real answer and the only one for an unlisted pair. The machine
- * this replaces threw instead, from inside a DOM event listener, so a wrong
- * transition abandoned the rest of the handler and left flags set for a state
- * the app was no longer in — the safety check was itself the failure mode.
+ * Two different facts, deliberately given two different answers:
+ *
+ *   - `null` — no edge exists for this pair. The event is IGNORED. This is a
+ *     real, expected answer, and a driver may reasonably log it as a surprise.
+ *   - the state that was passed in — an edge exists and it leads back here.
+ *     Nothing changed; the driver must not re-run entry work. Returning `null`
+ *     for this too, as the first version did, threw away the distinction
+ *     between "meaningless" and "no-op", which are the two things a driver most
+ *     needs to tell apart when something looks wrong.
+ *
+ * Never throws. The machine this replaces did, from inside a DOM event
+ * listener, so a refused transition abandoned the rest of the handler and left
+ * flags describing a state the app was no longer in — its safety check was
+ * itself the failure mode.
  *
  * @param {string} state - Current state.
  * @param {string} event - One of {@link APP_EVENT}.
  * @param {StateContext} [context] - Extended state consulted by guards.
- * @returns {string | null} The next state, or null to ignore the event.
+ * @returns {string | null} The next state (possibly `state` itself), or null.
  */
 export function nextState(state, event, context = {}) {
   // Walk the containment chain: the state itself, then its superstates. An edge
@@ -229,10 +305,7 @@ export function nextState(state, event, context = {}) {
   while (scope) {
     const target = TRANSITIONS[scope]?.[event];
     if (target !== undefined) {
-      const resolved = typeof target === "function" ? target(context) : target;
-      // A transition to the state already occupied is not a transition. Callers
-      // must not re-run entry work for it.
-      return resolved === state ? null : resolved;
+      return typeof target === "function" ? target(context) : target;
     }
     scope = PARENT[scope] ?? null;
   }
@@ -262,13 +335,13 @@ export function isWithin(state, superstate) {
  * state and of nothing else.
  *
  * @param {string} state
- * @returns {"picker" | "player" | "error"}
+ * @returns {string} One of {@link APP_VIEW}.
  */
 export function viewForState(state) {
   if (state === APP_STATE.ERROR) {
-    return "error";
+    return APP_VIEW.ERROR;
   }
-  return isWithin(state, APP_SUPERSTATE.OPEN) ? "player" : "picker";
+  return isWithin(state, APP_SUPERSTATE.OPEN) ? APP_VIEW.PLAYER : APP_VIEW.PICKER;
 }
 
 /**
@@ -306,7 +379,7 @@ export function controlsLive(state) {
  * @param {string} state
  * @returns {boolean}
  */
-export function playbackWanted(state) {
+export function shouldBePlaying(state) {
   return state === APP_STATE.ADVANCING || state === APP_STATE.STALLED;
 }
 
