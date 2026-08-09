@@ -439,38 +439,3 @@ function assToVtt(text) {
   return "WEBVTT\n\n" + cues.join("\n\n");
 }
 
-/**
- * Convert subtitle text to WebVTT based on the file extension.
- *
- * Returns `null` for formats that cannot be converted (e.g. image-based `.sup`).
- *
- * @param {string} text - Raw subtitle content (UTF-8 decoded).
- * @param {string} ext  - Lowercase file extension including the dot, e.g. `".srt"`.
- * @returns {string | null} WebVTT string, or `null` if the format is unsupported.
- */
-export function convertSubtitleToVtt(text, ext) {
-  // Strip a leading UTF-8 BOM so it does not leak into the first cue's
-  // identifier (Russian .srt files are commonly saved with a BOM) or, for a
-  // .vtt, sit before the WEBVTT signature.
-  const clean = typeof text === "string" && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  switch (ext) {
-    case ".vtt":
-    case ".webvtt":
-      // Already WebVTT — ensure the header is present.
-      return clean.trimStart().startsWith("WEBVTT") ? clean : `WEBVTT\n\n${clean}`;
-
-    case ".srt":
-      return srtToVtt(clean);
-
-    case ".ass":
-    case ".ssa":
-      return assToVtt(clean);
-
-    // .sub can be MicroDVD (frame-based, no reliable conversion without fps)
-    // or SubViewer (timestamp-based). Too ambiguous to convert reliably.
-    // .sup is binary PGS image subtitles — not convertible in the browser.
-    // .ttml requires XML parsing beyond the scope of this module.
-    default:
-      return null;
-  }
-}

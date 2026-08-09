@@ -4,17 +4,12 @@ This component is the dedicated error presentation layer.
 
 ## Responsibilities
 
-- Show error title and description on `ERROR:SHOW`.
-- Hide itself on `LOADING:SHOW` and `PLAYER:SHOW`.
 - Use native `<dialog>` modal behavior for visibility (`showModal` / `close`) with inert-safe toggling.
 
 ## State Machine
 
-```mermaid
-stateDiagram-v2
-  [*] --> Hidden
-  Hidden --> Visible: ERROR:SHOW
-  Visible --> Visible: ERROR:SHOW
-  Visible --> Hidden: LOADING:SHOW
-  Visible --> Hidden: PLAYER:SHOW
-```
+Visibility is derived from the application state, not commanded: see
+`public/domain/app-state.js` for the machine and the outputs, and
+`research/state-machine-2026-08-08.md` in the meta repo for the graph and the
+reasoning. A per-component state diagram would only duplicate it, and the two
+would drift.

@@ -28,16 +28,11 @@ Event groups:
 
 ## Application FSM (Orchestrator)
 
-```mermaid
-stateDiagram-v2
-  [*] --> IDLE
-  IDLE --> PROCESSING: TORRENT:FILE_DETAILS_READY
-  PROCESSING --> PLAYING: LOADING:PLAYBACK_READY
-  PROCESSING --> ERROR: LOADING:PLAYBACK_FAILED
-  PLAYING --> PROCESSING: new TORRENT:FILE_DETAILS_READY
-  PLAYING --> ERROR: runtime playback failure
-  ERROR --> PROCESSING: new TORRENT:FILE_DETAILS_READY
-```
+Visibility is derived from the application state, not commanded: see
+`public/domain/app-state.js` for the machine and the outputs, and
+`research/state-machine-2026-08-08.md` in the meta repo for the graph and the
+reasoning. A per-component state diagram would only duplicate it, and the two
+would drift.
 
 ## Module Coupling Rules
 

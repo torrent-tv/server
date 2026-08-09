@@ -16,19 +16,12 @@ This component owns the torrent file input dialog.
   - subtitles
 - Emit `TORRENT:FILE_DETAILS_READY` with parsed torrent details and media groups.
 - Emit `ERROR:SHOW` when no valid torrent file is selected.
-- Hide on `LOADING:SHOW`, `PLAYER:SHOW`, and `ERROR:SHOW`.
 - Show by default on app start and on `APP:RESET_TO_PICKER`.
 
 ## State Machine
 
-```mermaid
-stateDiagram-v2
-  [*] --> Visible
-  Visible --> Hidden: TORRENT:FILE_DETAILS_READY
-  Visible --> Hidden: ERROR:SHOW
-  Visible --> Hidden: LOADING:SHOW
-  Visible --> Hidden: PLAYER:SHOW
-  Hidden --> Hidden: ERROR:SHOW
-  Hidden --> Hidden: LOADING:SHOW
-  Hidden --> Hidden: PLAYER:SHOW
-```
+Visibility is derived from the application state, not commanded: see
+`public/domain/app-state.js` for the machine and the outputs, and
+`research/state-machine-2026-08-08.md` in the meta repo for the graph and the
+reasoning. A per-component state diagram would only duplicate it, and the two
+would drift.
