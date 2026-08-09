@@ -60,7 +60,6 @@ export class WaitingOverlay {
     }
     document.addEventListener(PROXY_EVENTS.MEASURED, this.#onProxyMeasured);
     document.addEventListener(PLAYER_EVENTS.BUFFER, this.#onBuffer);
-    document.addEventListener(WAITING_EVENTS.MEASURED, this.#onMeasured);
     document.addEventListener(WAITING_EVENTS.STEP, this.#onStep);
     document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onStateChanged);
   }
@@ -118,20 +117,6 @@ export class WaitingOverlay {
     this.#render();
   };
 
-  #onMeasured = (event) => {
-    const detail = event instanceof CustomEvent ? event.detail : null;
-    if (!detail || typeof detail !== "object") {
-      return;
-    }
-    for (const [key, value] of Object.entries(detail)) {
-      if (value === undefined) {
-        delete this.#measurements[key];
-      } else {
-        this.#measurements[key] = value;
-      }
-    }
-    this.#render();
-  };
 
   /**
    * The pipeline moved to a named step.

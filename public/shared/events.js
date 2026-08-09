@@ -15,8 +15,6 @@ export const TORRENT_EVENTS = {
  * line grew off the screen.
  */
 export const WAITING_EVENTS = {
-  /** Detail: a partial `WaitingMeasurements`; absent fields are left alone. */
-  MEASURED: "WAITING:MEASURED",
   /** Detail: `{ value }` — the name of the step the pipeline has reached. */
   STEP: "WAITING:STEP"
 };

@@ -840,28 +840,10 @@ export class Loading extends StateDerivedView {
     if (!this.#stageFromPipeline) {
       measurements.stage = stepForMeasurements(measurements) ?? undefined;
     }
-    this.#noteWaiting(measurements);
   }
 
 
 
-  /**
-   * Record measurements and put the resulting words on screen — the ONE writer
-   * to the overlay's line, and the one place its text is composed.
-   *
-   * A field given `undefined` is FORGOTTEN rather than stored, so a measurement
-   * that stops being available stops being talked about instead of freezing at
-   * its last value.
-   *
-   * @param {import("../../domain/waiting-text.js").WaitingMeasurements} measurements
-   * @returns {string} The text now on screen.
-   */
-  #noteWaiting(measurements) {
-    // Reported, not drawn. The overlay is a separate component that subscribes
-    // to these facts and rebuilds itself; nothing here knows what ends up on
-    // screen, which is what makes it impossible to hand it back its own text.
-    document.dispatchEvent(new CustomEvent(WAITING_EVENTS.MEASURED, { detail: measurements }));
-  }
 
 
 
