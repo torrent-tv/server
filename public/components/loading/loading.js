@@ -2,7 +2,7 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { formatBytes, stepForMeasurements } from "../../domain/waiting-text.js";
+import { formatBytes } from "../../domain/waiting-text.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -796,51 +796,6 @@ export class Loading extends StateDerivedView {
     }
   }
 
-  /**
-   * The single "how close am I to watching" block, used EVERYWHERE that
-   * question is answered — the first open, the pre-buffer tail, and a
-   * mid-playback seek — so all three show the same figures, in the same
-   * order, from the same data.
-   *
-   * Both stages are always described, in pipeline order, one per line:
-   * supply (peers / speed / bytes still needed) and then playback readiness
-   * (percent of the required cushion / seconds of media still needed), with
-   * the single end-to-end time last. A stage with nothing to report is
-   * omitted rather than shown empty, but it is never REPLACED by the other —
-   * they answer different questions and the viewer needs both.
-   *
-   * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} downloadStats
-   * @param {{ percent?: number | null, remainingSeconds?: number | null, speed?: string, state?: string, processedSeconds?: number, startPositionSeconds?: number, outputMbps?: number | null } | null} transcodeProgress
-   * @returns {string}
-   */
-  #formatBufferingText(downloadStats, transcodeProgress) {
-    const unified = this.#waitingModel.update({ bufferedAhead: bufferedAheadSeconds(this.#videoElement), downloadStats: downloadStats, transcodeProgress: transcodeProgress });
-    const usable = transcodeProgress !== null && transcodeProgress?.state !== "failed";
-    const buffered = this.#videoElement instanceof HTMLVideoElement
-      ? bufferedAheadSeconds(this.#videoElement)
-      : null;
-    const needed = downloadStats?.resumeNeededBytes;
-    const got = downloadStats?.resumeDownloadedBytes;
-    const measurements = {
-      peers: downloadStats?.numPeers,
-      downloadBytesPerSecond: downloadStats?.downloadSpeed,
-      remainingBytes: typeof needed === "number" && typeof got === "number"
-        ? Math.max(0, needed - got)
-        : undefined,
-      bufferedSeconds: buffered ?? undefined,
-      cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
-      cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
-      encodingRuns: usable ? this.#waitingModel.describeEncodingRuns(transcodeProgress, unified) : [],
-      etaSeconds: unified.etaSeconds ?? undefined
-    };
-    // A seek runs no pipeline step, so nothing calls setStatus and the step row
-    // would be empty — leaving three different waits (pieces, the encoder being
-    // moved, the first segment out of it) looking identical. Name it from what
-    // is being measured. This used to sit AFTER the return and never ran at all.
-    if (!this.#stageFromPipeline) {
-      measurements.stage = stepForMeasurements(measurements) ?? undefined;
-    }
-  }
 
 
 
@@ -3971,7 +3926,13 @@ export class Loading extends StateDerivedView {
       // next render appended the supply, readiness and time rows to it: exactly
       // three rows per pass, measured 2026-08-09 growing 21 rows/771 chars to
       // 24/830 to 27/… until the line ran off the screen.
-      this.#formatBufferingText(this.#lastDownloadStats, cachedProgress);
+      // Published, not drawn: the overlay keeps its own model and renders from
+      // these facts. This used to call the formatter directly, which is how a
+      // component that no longer talks to the overlay went on computing text
+      // nobody read.
+      document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+        detail: { downloadStats: this.#lastDownloadStats, transcodeProgress: cachedProgress }
+      }));
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     // Timed out. If NOTHING buffered, the stream never started (dead transport /
@@ -4094,7 +4055,9 @@ export class Loading extends StateDerivedView {
       this.#stageFromPipeline = true;
       this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%`);
     }
-    this.#formatBufferingText(this.#lastDownloadStats, progress);
+    document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+      detail: { downloadStats: this.#lastDownloadStats, transcodeProgress: progress }
+    }));
   }
 
 

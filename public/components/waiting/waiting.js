@@ -1,6 +1,6 @@
 import { APP_EVENTS, PLAYER_EVENTS, PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { APP_STATE, isWaiting } from "../../domain/app-state.js";
-import { formatWaitingText } from "../../domain/waiting-text.js";
+import { formatWaitingText, stepForMeasurements } from "../../domain/waiting-text.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 
 /**
@@ -53,6 +53,16 @@ export class WaitingOverlay {
   /** @type {number | null} Latest reading from the component that owns the element. */
   #bufferedAhead = null;
 
+  /**
+   * The step the pipeline named, if it named one. A seek runs no pipeline step,
+   * so on a seek this stays empty and the step is worked out from the numbers
+   * instead — otherwise three different waits (pieces, the encoder being moved,
+   * the first segment out of it) look identical on screen.
+   *
+   * @type {string}
+   */
+  #pipelineStep = "";
+
   constructor() {
     this.#text = document.querySelector(WaitingOverlay.SELECTOR.text);
     if (!this.#text) {
@@ -99,6 +109,7 @@ export class WaitingOverlay {
       encodingRuns: usable ? this.#model.describeEncodingRuns(transcodeProgress, unified) : [],
       etaSeconds: unified.etaSeconds ?? undefined
     });
+    this.#applyStep();
     this.#render();
   };
 
@@ -125,10 +136,8 @@ export class WaitingOverlay {
    */
   #onStep = (event) => {
     const value = event instanceof CustomEvent ? event.detail?.value : "";
-    this.#measurements.stage = typeof value === "string" && value.length > 0 ? value : undefined;
-    if (this.#measurements.stage === undefined) {
-      delete this.#measurements.stage;
-    }
+    this.#pipelineStep = typeof value === "string" ? value : "";
+    this.#applyStep();
     this.#render();
   };
 
@@ -145,8 +154,26 @@ export class WaitingOverlay {
       return;
     }
     this.#measurements = {};
+    this.#pipelineStep = "";
     this.#render();
   };
+
+  /**
+   * What the pipeline said if it said anything, and what the numbers say
+   * otherwise. A named step always wins: it knows things no measurement does.
+   *
+   * @returns {void}
+   */
+  #applyStep() {
+    const step = this.#pipelineStep.length > 0
+      ? this.#pipelineStep
+      : stepForMeasurements(this.#measurements);
+    if (typeof step === "string" && step.length > 0) {
+      this.#measurements.stage = step;
+    } else {
+      delete this.#measurements.stage;
+    }
+  }
 
   #render() {
     const text = formatWaitingText(this.#measurements);
