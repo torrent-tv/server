@@ -67,6 +67,18 @@ export class Player extends StateDerivedView {
    * @type {Array<{ atMs: number, aheadSeconds: number }>}
    */
   #bufferSamples = [];
+
+  /**
+   * Ticks while the viewer is waiting. The element's own events only fire once
+   * it has a source and data moving, so through the whole of a cold open there
+   * were no readings at all — and with nothing measured the estimate has
+   * nothing to say, which is why the one figure the viewer actually wants was
+   * missing exactly when they were waiting for it. An unattached element
+   * reading zero is a true reading, not a guess.
+   *
+   * @type {number | null}
+   */
+  #bufferTimer = null;
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -104,6 +116,7 @@ export class Player extends StateDerivedView {
     // the spinner is not — it is measured (peers, speed) and keeps arriving on
     // PLAYER:SET_BUFFERING.
     this.#buffering.hidden = !(belongsOnScreen && isWaiting(state));
+    this.#measureWhileWaiting(belongsOnScreen && isWaiting(state));
     this.#applyMediaIntent(state);
   }
 
@@ -169,6 +182,25 @@ export class Player extends StateDerivedView {
       detail: { bufferedAhead: aheadSeconds, fillRate: fillRateFromSamples(this.#bufferSamples) }
     }));
   };
+
+  /**
+   * Keep a reading arriving for as long as the viewer is waiting, and stop the
+   * moment they are not.
+   *
+   * @param {boolean} waiting
+   * @returns {void}
+   */
+  #measureWhileWaiting(waiting) {
+    if (waiting && this.#bufferTimer === null) {
+      this.#onBufferChanged();
+      this.#bufferTimer = window.setInterval(this.#onBufferChanged, 500);
+      return;
+    }
+    if (!waiting && this.#bufferTimer !== null) {
+      window.clearInterval(this.#bufferTimer);
+      this.#bufferTimer = null;
+    }
+  }
 
   #onRequestReady = () => {
     this.#emitReady();
