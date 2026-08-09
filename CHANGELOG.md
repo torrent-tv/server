@@ -1,3 +1,10 @@
+## 0.8.139
+
+- **New**: The player measures its own element. How much media is buffered and how fast that is filling are facts about the media, and the component that owns the `<video>` is the one that may read them — nobody else touches `video.buffered` now. It publishes both on `PLAYER:BUFFER` as the element's own events fire.
+- **New**: The proxy's poll answers are published raw on `PROXY:MEASURED`, exactly as the proxy gave them. Whoever needs a figure works it out for itself; handing round conclusions is how the overlay came to be told what to display in the first place.
+- **New**: The waiting overlay holds its own model and works its own figures out from those two facts. It is no longer given a conclusion by anything.
+- **Chore**: Eleven tests on `domain/buffer-metrics.js`, including the two readings that have been wrong in the field and could not be seen: a range after a gap counted as cushion, and a buffer holding steady while the picture plays — which is filling at 1x, not at 0.
+
 ## 0.8.138
 
 - **New**: The figures behind the waiting overlay moved out of the pipeline into `domain/waiting-model.js` — a Humble Object split. A view with arithmetic in it can only be checked by looking at it; everything that decides what the numbers ARE now lives in a class with no DOM, no events and no element, so `node --test` can reach it. Two consumers, one implementation: the overlay reads the figures to show them, the pre-buffer gate reads them to decide when the picture may start, and neither computes anything itself — so they cannot disagree about what "enough buffered" means.

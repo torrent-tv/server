@@ -39,6 +39,12 @@ export const ERROR_EVENTS = {
 
 /** Player view events. */
 export const PLAYER_EVENTS = {
+  /**
+   * `{ bufferedAhead, fillRate }` — what the element itself holds, measured by
+   * the component that owns it. Nobody else may read `video.buffered`: one
+   * owner per fact.
+   */
+  BUFFER: "PLAYER:BUFFER",
   SHOW: "PLAYER:SHOW",
   SET_MEDIA_FILES: "PLAYER:SET_MEDIA_FILES",
   SET_ACTIVE_MEDIA_FILE: "PLAYER:SET_ACTIVE_MEDIA_FILE",
@@ -108,4 +114,14 @@ export const SESSION_EVENTS = {
    * playback — the buffering poll runs only while the picture is stopped.
    */
   PROGRESS: "session:progress"
+};
+
+/**
+ * Raw answers from the proxy, published as they arrive. Facts, not decisions:
+ * whoever needs them interprets them itself. This is what lets the waiting
+ * overlay work its own figures out instead of being handed conclusions.
+ */
+export const PROXY_EVENTS = {
+  /** `{ downloadStats, transcodeProgress }` — the two poll answers. */
+  MEASURED: "PROXY:MEASURED"
 };

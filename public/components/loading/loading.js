@@ -3,7 +3,7 @@ import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { formatBytes, stepForMeasurements } from "../../domain/waiting-text.js";
-import { WAITING_EVENTS } from "../../shared/events.js";
+import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
@@ -782,9 +782,13 @@ export class Loading extends StateDerivedView {
         this.#lastDownloadStats = downloadStats;
       }
       this.#noteEffectiveQuality(transcodeProgress);
-      if (this.#bufferingShown && epoch === this.#bufferingEpoch) {
-        this.#dispatchBuffering(true, this.#formatBufferingText(downloadStats, transcodeProgress));
-      }
+      // Publish what the proxy said, exactly as it said it. Who needs a figure
+      // out of this works it out for themselves — the overlay from its own
+      // model, this component from its own. Handing round conclusions is how
+      // one of them came to be told what to display.
+      document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+        detail: { downloadStats, transcodeProgress }
+      }));
     };
     await poll();
     if (this.#bufferingShown && epoch === this.#bufferingEpoch && this.#bufferingPollTimer === null) {

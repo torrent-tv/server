@@ -2,6 +2,7 @@ import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 import { APP_VIEW, MEDIA_INTENT, isWaiting, mediaIntentForState, viewForState } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { pauseWithoutIntent } from "../../domain/playback-intent.js";
+import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
 
 /**
  * Player view.
@@ -57,6 +58,15 @@ export class Player extends StateDerivedView {
   #shareUrl = "";
   /** @type {ReturnType<typeof setTimeout> | null} Copied-feedback reset timer. */
   #shareCopiedTimer = null;
+
+  /**
+   * Recent buffer readings, for the fill rate. Held here because this component
+   * owns the element: how much is buffered and how fast it is filling are facts
+   * about the media, and a fact has one owner.
+   *
+   * @type {Array<{ atMs: number, aheadSeconds: number }>}
+   */
+  #bufferSamples = [];
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -143,6 +153,22 @@ export class Player extends StateDerivedView {
   #logEvt(message) {
     console.debug(`[evt] ${new Date().toISOString().slice(11, 23)} ${message}`);
   }
+
+  /**
+   * Measure the element and publish what it says. Driven by the element's own
+   * events, so a reading is only taken when something about the buffer can
+   * actually have changed.
+   */
+  #onBufferChanged = () => {
+    if (!(this.#video instanceof HTMLVideoElement)) {
+      return;
+    }
+    const aheadSeconds = bufferedAheadSeconds(this.#video);
+    this.#bufferSamples = withSample(this.#bufferSamples, { atMs: Date.now(), aheadSeconds });
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER, {
+      detail: { bufferedAhead: aheadSeconds, fillRate: fillRateFromSamples(this.#bufferSamples) }
+    }));
+  };
 
   #onRequestReady = () => {
     this.#emitReady();
@@ -274,6 +300,14 @@ export class Player extends StateDerivedView {
     this.#root = document.querySelector(Player.SELECTOR.root);
     this.#controller = document.querySelector(Player.SELECTOR.controller);
     this.#video = document.querySelector(Player.SELECTOR.video);
+    if (this.#video instanceof HTMLVideoElement) {
+      // Every event after which the buffer can differ. `progress` covers data
+      // arriving, `timeupdate` covers it being consumed, and the last three are
+      // the moments a viewer is most likely to be looking at the figure.
+      for (const name of ["progress", "timeupdate", "waiting", "seeking", "seeked"]) {
+        this.#video.addEventListener(name, this.#onBufferChanged);
+      }
+    }
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
     this.#settingsButton = document.querySelector(Player.SELECTOR.settingsButton);
