@@ -37,7 +37,7 @@
  * @param {number | null} predictedMs
  * @returns {number | null}
  */
-export function predictionError(actualMs, predictedMs) {
+function predictionError(actualMs, predictedMs) {
   if (typeof predictedMs !== "number" || !Number.isFinite(predictedMs) || predictedMs <= 0) {
     return null;
   }

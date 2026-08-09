@@ -108,6 +108,10 @@ export class WaitingModel {
 
   /** A wait that has ended takes its history with it. */
   reset() {
+    // The buffer reading goes with it. A new wait has measured nothing yet, and
+    // keeping the last one made the first render of the next wait state a
+    // cushion that belonged to the wait before it.
+    this.#bufferedAhead = null;
     this.#downloadRateSamples = [];
     this.#resetEtaFloor();
   }
@@ -266,12 +270,17 @@ export class WaitingModel {
     //    measurement exists the floor is one segment, because no player starts
     //    on less than one.
     const requiredBuffer = this.#requiredBufferSeconds();
-    cushionRemainingSeconds = bufferedAhead === null
-      ? requiredBuffer
-      : Math.max(0, requiredBuffer - bufferedAhead);
-    cushionPercent = bufferedAhead === null
-      ? 0
-      : Math.max(0, Math.min(100, (bufferedAhead / requiredBuffer) * 100));
+    // Nothing measured is NOT the same as measured and empty, and both used to
+    // answer 0%. The difference shows: before the player has produced a single
+    // reading, "Buffering — 0%" is a figure nobody took, printed as though it
+    // had been. Not knowing is said by saying nothing.
+    if (bufferedAhead === null) {
+      cushionRemainingSeconds = requiredBuffer;
+      cushionPercent = null;
+    } else {
+      cushionRemainingSeconds = Math.max(0, requiredBuffer - bufferedAhead);
+      cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / requiredBuffer) * 100));
+    }
     if (cushionRemainingSeconds <= 0) {
       // The wait is over — the player has what it needs. Whatever was promised
       // described THIS wait, and the next one is a different question, so the

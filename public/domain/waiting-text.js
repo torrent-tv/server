@@ -97,7 +97,7 @@ export function formatBytes(bytes) {
  * @param {number} seconds
  * @returns {string}
  */
-export function formatDuration(seconds) {
+function formatDuration(seconds) {
   const plural = (value, unit) => `${value} ${unit}${value === 1 ? "" : "s"}`;
   if (!Number.isFinite(seconds) || seconds < 0) {
     return plural(0, "second");
@@ -176,7 +176,7 @@ export function stepForMeasurements({ remainingBytes, cushionPercent, cushionRem
  * @returns {string} Empty when nothing about this run is worth a line — it is
  *   copying rather than encoding, so there is no encoder to describe.
  */
-export function describeEncodingRun(run) {
+function describeEncodingRun(run) {
   if (!run || (run.video !== true && run.audio !== true)) {
     return "";
   }
