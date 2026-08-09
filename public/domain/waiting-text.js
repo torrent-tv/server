@@ -141,27 +141,6 @@ function supplyLine({ peers, downloadBytesPerSecond, remainingBytes, bufferedSec
 }
 
 /**
- * How close the picture is to moving: the cushion, and what is still missing.
- *
- * @param {WaitingMeasurements} measurements
- * @returns {string} Empty until a cushion has been measured.
- */
-function readinessLine({ cushionPercent, cushionRemainingSeconds, encodeSpeedText }) {
-  if (!isNumber(cushionPercent)) {
-    return "";
-  }
-  const details = [];
-  if (isNumber(cushionRemainingSeconds) && cushionRemainingSeconds > 0) {
-    details.push(`${Math.ceil(cushionRemainingSeconds)}s of video still needed`);
-  }
-  if (typeof encodeSpeedText === "string" && encodeSpeedText.length > 0) {
-    details.push(encodeSpeedText);
-  }
-  const head = `Buffering — ${Math.round(cushionPercent)}%`;
-  return details.length > 0 ? `${head} (${details.join(", ")})` : head;
-}
-
-/**
  * A name for what is being waited for, worked out from the measurements alone.
  *
  * The pipeline names its own steps, but a seek runs none of them: it shows a
@@ -239,10 +218,6 @@ export function formatWaitingText(measurements = {}) {
   if (supply.length > 0) {
     lines.push(supply);
   }
-  const readiness = readinessLine(measurements);
-  if (readiness.length > 0) {
-    lines.push(readiness);
-  }
   // One line per encoder still running. With a single run — every session today
   // — this is the one line it always was. With several, which is what quality
   // switching without an interruption will bring, each says what it is making
@@ -254,19 +229,16 @@ export function formatWaitingText(measurements = {}) {
       lines.push(line);
     }
   }
-  // The time comes last and is always present once anything else is: it is the
-  // answer to the only question actually being asked. "starting now" is
-  // reserved for a measured zero — a cushion that genuinely reached its target
-  // — and is never printed for an estimate nobody could take. When the rate
-  // cannot be measured the honest answer is that it is not known yet.
-  if (lines.length > 0 || isNumber(measurements.etaSeconds)) {
-    if (!isNumber(measurements.etaSeconds)) {
-      lines.push("estimating…");
-    } else if (measurements.etaSeconds > 0) {
-      lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
-    } else {
-      lines.push("starting now");
-    }
+  // The time comes last, and it is the answer to the only question actually
+  // being asked. ONE number, always the same number, whatever stage the wait is
+  // in — never "estimating…" and never "starting now". Those two were a
+  // different kind of statement dressed as the same line: one admitted the
+  // formula had nothing, the other announced an event. The viewer asked how
+  // long, so they are told how long; when it is nearly over, that is zero
+  // seconds, which is a duration like any other. Before the first measurement
+  // there is no line at all rather than a word standing in for a number.
+  if (isNumber(measurements.etaSeconds)) {
+    lines.push(`${formatDuration(Math.max(0, measurements.etaSeconds))} until playback`);
   }
   return lines.join("\n");
 }
