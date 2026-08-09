@@ -4325,7 +4325,12 @@ export class Loading extends StateDerivedView {
         );
       }
       this.#setPhaseProgress(2, unified.cushionPercent ?? 0); // phase 2 (buffering) fills the final third
-      this.setStatus(this.#formatBufferingText(this.#lastDownloadStats, cachedProgress));
+      // Renders on its own — its return value must NOT be fed back through
+      // setStatus. Doing that stored the finished text as the STEP, and the
+      // next render appended the supply, readiness and time rows to it: exactly
+      // three rows per pass, measured 2026-08-09 growing 21 rows/771 chars to
+      // 24/830 to 27/… until the line ran off the screen.
+      this.#formatBufferingText(this.#lastDownloadStats, cachedProgress);
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     // Timed out. If NOTHING buffered, the stream never started (dead transport /
