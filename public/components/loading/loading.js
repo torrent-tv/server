@@ -1107,6 +1107,7 @@ export class Loading extends StateDerivedView {
     // whatever was promised, minus the time that has since passed. A real event
     // — a seek, a new file — clears it (see #resetEtaFloor).
     etaSeconds = this.#applyMonotonicEta(etaSeconds);
+    this.#etaSamples.push({ atMs: Date.now(), predicted: etaSeconds, terms: etaSource });
 
     const result = {
       etaSeconds,
@@ -1203,6 +1204,42 @@ export class Loading extends StateDerivedView {
    *
    * @returns {void}
    */
+  /**
+   * Score every estimate of the wait that has just ended against what actually
+   * happened, and write the result to the log.
+   *
+   * An estimate made `N` seconds before the picture started should have said
+   * `N`. The error is signed on purpose: negative means the figure was
+   * optimistic, which is the failure the viewer notices, because it promises a
+   * start that does not come. The first estimate and the worst one are named
+   * with the terms that produced them, so the term at fault is identifiable
+   * without replaying the session.
+   *
+   * @returns {void}
+   */
+  #reportEtaAccuracy() {
+    const samples = this.#etaSamples;
+    this.#etaSamples = [];
+    if (samples.length === 0) {
+      return;
+    }
+    const endedAt = Date.now();
+    const scored = samples.map((sample) => ({
+      ...sample,
+      actual: (endedAt - sample.atMs) / 1000
+    })).map((sample) => ({ ...sample, error: sample.predicted - sample.actual }));
+    const worst = scored.reduce((a, b) => (Math.abs(b.error) > Math.abs(a.error) ? b : a));
+    const errors = scored.map((sample) => Math.abs(sample.error)).sort((a, b) => a - b);
+    const median = errors[Math.floor(errors.length / 2)];
+    const first = scored[0];
+    this.#logEvt(
+      `[eta-accuracy] wait=${((endedAt - first.atMs) / 1000).toFixed(1)}s samples=${scored.length} ` +
+      `medianErr=${median.toFixed(1)}s ` +
+      `first: said=${first.predicted.toFixed(1)}s was=${first.actual.toFixed(1)}s err=${first.error.toFixed(1)}s [${first.terms}] ` +
+      `worst: said=${worst.predicted.toFixed(1)}s was=${worst.actual.toFixed(1)}s err=${worst.error.toFixed(1)}s [${worst.terms}]`
+    );
+  }
+
   #resetEtaFloor() {
     this.#etaPromise = null;
     this.#etaPromiseAt = 0;
@@ -1547,6 +1584,12 @@ export class Loading extends StateDerivedView {
    * @param {boolean} belongsOnScreen
    */
   applyAppState(state, belongsOnScreen) {
+    // The picture has actually started. Score every estimate shown during the
+    // wait that just ended against what really happened — the only moment at
+    // which that comparison is possible.
+    if (state === APP_STATE.ADVANCING) {
+      this.#reportEtaAccuracy();
+    }
     super.applyAppState(state, belongsOnScreen);
     if (state === APP_STATE.ADVANCING && !this.#playbackLive) {
       this.#logEvt("playback is live");
@@ -1683,6 +1726,19 @@ export class Loading extends StateDerivedView {
    * @type {{ video: boolean, audio: boolean }}
    */
   #encodingTracks = { video: false, audio: false };
+
+  /**
+   * Every estimate shown during the current wait, with the moment it was shown.
+   *
+   * The figure on screen is a prediction, and nothing has ever checked it
+   * against what happened. Once the picture starts, each of these can be scored
+   * exactly: an estimate made N seconds before playback began should have said
+   * N. Kept per wait and reported once, so the log carries the shape of the
+   * error — which term is optimistic, and when — rather than a single anecdote.
+   *
+   * @type {Array<{ atMs: number, predicted: number, terms: string }>}
+   */
+  #etaSamples = [];
 
   /**
    * Whether the step now shown was named by the PIPELINE rather than worked out
