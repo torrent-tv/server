@@ -5,6 +5,22 @@ export const TORRENT_EVENTS = {
 };
 
 /** Loading view events. */
+/**
+ * Facts about a wait, for the overlay that shows it.
+ *
+ * Deliberately NOT "show this text": the overlay is told what was measured and
+ * which step began, and decides for itself what that adds up to on screen. The
+ * shape it replaces — handing it finished text — produced the same defect three
+ * times, a caller feeding back what the overlay had just rendered until the
+ * line grew off the screen.
+ */
+export const WAITING_EVENTS = {
+  /** Detail: a partial `WaitingMeasurements`; absent fields are left alone. */
+  MEASURED: "WAITING:MEASURED",
+  /** Detail: `{ value }` — the name of the step the pipeline has reached. */
+  STEP: "WAITING:STEP"
+};
+
 export const LOADING_EVENTS = {
   SHOW: "LOADING:SHOW",
   SET_FILE_NAME: "LOADING:SET_FILE_NAME",
