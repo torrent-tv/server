@@ -1,3 +1,8 @@
+## 0.8.143
+
+- **Fix**: The end-to-end estimate is on screen again, and from the first moment of a wait. It is measured AT THE BUFFER, and the buffer was only read when the media element raised an event of its own — which through a cold open it does not, because there is no source yet. So nothing was measured, and 0.8.141 had just made the estimate say nothing rather than say zero, which turned "wrong" into "absent". The player now takes a reading every half second for as long as the state says the viewer is waiting, and stops the moment it does not. An unattached element reading zero is a true reading.
+- **Fix**: The estimate is recomputed the instant a reading arrives, not on the next proxy poll. The cushion and the time left are both measured at the buffer, so a new reading is exactly when they change; waiting for the poll left the one figure the viewer actually wants up to a second and a half stale.
+
 ## 0.8.142
 
 - **Fix**: The step is shown again, and a seek gets one for the first time. Working the step out from the measurements — which is the only way a seek can have one, since a seek runs no pipeline step — was still being done inside the component that had stopped talking to the overlay, so it computed a name and threw it away. It now happens where the measurements are. A step the pipeline names still wins; the numbers only answer when it is silent, which tells a wait for pieces apart from a wait for the encoder.

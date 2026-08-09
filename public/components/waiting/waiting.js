@@ -125,6 +125,16 @@ export class WaitingOverlay {
     }
     this.#bufferedAhead = ahead;
     this.#measurements.bufferedSeconds = ahead;
+    // Recomputed here too, not only when the proxy answers. The cushion and the
+    // estimate are measured AT THE BUFFER, so a new reading is exactly the
+    // moment they change; waiting for the next poll left the one figure the
+    // viewer wants a second and a half stale, and left it missing altogether
+    // until the first poll after a reading ever arrived.
+    const unified = this.#model.update({ bufferedAhead: ahead });
+    this.#measurements.cushionPercent = unified.cushionPercent ?? undefined;
+    this.#measurements.cushionRemainingSeconds = unified.cushionRemainingSeconds ?? undefined;
+    this.#measurements.etaSeconds = unified.etaSeconds ?? undefined;
+    this.#applyStep();
     this.#render();
   };
 
