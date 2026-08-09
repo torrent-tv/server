@@ -1,3 +1,7 @@
+## 0.8.125
+
+- **Fix**: The waiting overlay's text is styled again. Every rule in `loading.css` described the dialog that 0.8.121 removed, so the file name and the status line moved into the player's overlay with no styling at all. The overlay keeps the appearance it already had for a seek; this only dresses the two lines of text that joined it.
+
 ## 0.8.124
 
 - **Chore**: The subtitle converter the browser stopped using is gone rather than hidden. The linter's automatic fix had renamed two unused functions with a leading underscore, which silences the warning and leaves the code — so they are deleted instead, along with the five helpers that only they called. `subtitle-utils.js` loses 117 lines; the proxy converts subtitles now, and nothing here called this path.
