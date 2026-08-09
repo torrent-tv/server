@@ -1,3 +1,7 @@
+## 0.8.132
+
+- **Fix**: The waiting line stops growing. `#waitForPrebuffer` passed the buffering formatter's return value back into `setStatus`, and since 0.8.128 that formatter renders the finished text itself — so the whole line was stored as the STEP, and the next render appended the supply, readiness and time rows to it. Exactly three rows per pass: measured 2026-08-09 going 21 rows/771 characters to 24/830 to 27/…, until the text ran off the screen. The formatter is now called for its effect, not its value. Found by the instrument added in 0.8.131, which named the field and its growth after reading the code twice had not.
+
 ## 0.8.131
 
 - **Chore**: When the waiting line comes out longer than the formatter can produce, the log names the field carrying the excess. The formatter emits at most four rows; measured 2026-08-09 it produced 53, with the step holding a dozen repeats of the readiness and time rows — and no call site composes a step that way, so reading the code has not explained it. A `MutationObserver` established that only our own writer touches the node, which rules out the DOM and leaves the data. This reports the shape of every measurement, once per over-long render, instead of the question being reasoned about a third time.
