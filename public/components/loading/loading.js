@@ -850,7 +850,15 @@ export class Loading extends StateDerivedView {
       }
     }
     const text = formatWaitingText(this.#waiting);
-    this.#status.textContent = text;
+    // `replaceChildren` rather than `textContent =`, and the difference is not
+    // cosmetic: it removes every child the node holds, whoever put them there.
+    // Field 2026-08-09, in a private window with no cache, this line grew to 53
+    // rows — successive renders stacked on top of each other — while the served
+    // code had exactly one writer doing a plain assignment, which cannot
+    // accumulate. The mechanism was never identified. This makes the writer
+    // authoritative over the node's whole contents instead of over its text, so
+    // the outcome no longer depends on knowing who else touched it.
+    this.#status.replaceChildren(document.createTextNode(text));
     // The player hides this line with an inline `visibility` when a stall ends
     // with nothing to say. Writing words into it has to undo that, or the first
     // load after a seek says nothing at all.
