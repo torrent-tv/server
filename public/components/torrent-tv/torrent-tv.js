@@ -214,11 +214,13 @@ class TorrentTV {
   };
 
   #onBackToPlaylist = () => {
-    // Meaningful only from the error screen, where it reopens the source so the
-    // viewer can pick another episode. Everywhere else the source is already
-    // open and only the playlist panel needs to appear, which is a view matter
-    // and not a transition — the machine ignores it, by having no such edge.
-    this.#send(APP_EVENT.SOURCE_OPENED);
+    // Returning to the CHOICE, which is not the same as opening a file. Sent as
+    // SOURCE_OPENED it claimed a build nobody had started, and the modal waiting
+    // view came up over the episode list carrying the failed file's name.
+    // Meaningful only from the error screen; while a source is already playing
+    // the panel opening is a view matter and not a transition, and the machine
+    // ignores it by having no such edge.
+    this.#send(APP_EVENT.FILE_CHOICE_REQUESTED);
   };
 
   #onAppReset = () => {
