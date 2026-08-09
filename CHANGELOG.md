@@ -1,3 +1,8 @@
+## 0.8.130
+
+- **Fix**: The waiting line replaces its whole contents instead of assigning its text. Measured 2026-08-09 in a private window with no cache: the line grew to 53 rows, successive renders stacked on top of one another, while the code being served had exactly one writer doing a plain `textContent` assignment — which cannot accumulate. The mechanism was not identified. `replaceChildren` removes every child the node holds whoever put them there, so the writer is authoritative over the node rather than over its text, and the outcome no longer depends on knowing who else touched it.
+- **Chore**: `console.trace` is not among the levels forwarded to the server log, so a diagnostic written with it never leaves the browser. Noted here because it cost a round trip; use `warn` with an explicit stack.
+
 ## 0.8.129
 
 - **Fix**: The failure message no longer invents a cause. "No data arrived from the proxy — allow local network access" was shown on 2026-08-09 while ICE was complete over global IPv6, nothing was queued on the data channel and progress polls were being answered in 9-43 ms: it named as the cause the one thing known to be in order, and cost real time on the way to the actual fault, which was on the proxy. It now says what was observed — the proxy took the request and sent no video — and says outright that nothing here explains why.
