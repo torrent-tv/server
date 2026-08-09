@@ -2,7 +2,7 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { stepForMeasurements } from "../../domain/waiting-text.js";
+import { formatBytes, stepForMeasurements } from "../../domain/waiting-text.js";
 import { WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -1368,82 +1368,7 @@ export class Loading extends StateDerivedView {
     return Math.min(target, PREBUFFER_MAX_SECONDS);
   }
 
-  /**
-   * The "how close am I to watching" line, e.g.
-   * `Buffering — 42% (9s of video still needed, 2.4x realtime)`.
-   *
-   * Every figure describes the BUFFER — the thing that gates playback — not the
-   * proxy's encode progress (see #computeUnifiedEta for why that distinction is
-   * the whole point). The encoder's multiplier is appended only as context, and
-   * only once it is a real measurement.
-   *
-   * Returns null when there is no active/progressing transcode session; the
-   * caller then falls back to the download-stage display.
-   *
-   * @param {{ state?: string } | null} progress
-   * @param {{
-   *   cushionPercent: number | null,
-   *   cushionRemainingSeconds: number | null,
-   *   encodeSpeedText: string | null
-   * }} unified - As returned by #computeUnifiedEta.
-   * @returns {string | null}
-   */
-  #formatTranscodeStageText(progress, unified) {
-    if (!progress || progress.state === "failed" || typeof unified?.cushionPercent !== "number") {
-      return null;
-    }
-    const parts = [`Buffering — ${Math.round(unified.cushionPercent)}%`];
-    const details = [];
-    if (typeof unified.cushionRemainingSeconds === "number" && unified.cushionRemainingSeconds > 0) {
-      details.push(`${Math.ceil(unified.cushionRemainingSeconds)}s of video still needed`);
-    }
-    // Encoder speed is context only, already validated + rounded upstream
-    // (null while it would still be a start-up artefact).
-    if (unified.encodeSpeedText) {
-      details.push(unified.encodeSpeedText);
-    }
-    if (details.length > 0) {
-      parts.push(`(${details.join(", ")})`);
-    }
-    return parts.join(" ");
-  }
 
-  /**
-   * Download-stage text: peers, download speed, and how much is left to
-   * download (with the time to get it) before playback can resume — from the
-   * proxy's resume window.
-   *
-   * @param {{ numPeers?: number, downloadSpeed?: number, resumeNeededBytes?: number | null, resumeDownloadedBytes?: number | null } | null} stats
-   * @returns {string}
-   */
-  #formatDownloadStageText(stats) {
-    const parts = [];
-    if (stats && typeof stats.numPeers === "number") {
-      parts.push(`peers: ${stats.numPeers}`);
-    }
-    if (stats && typeof stats.downloadSpeed === "number" && stats.downloadSpeed > 0) {
-      parts.push(`${this.#formatBytes(stats.downloadSpeed)}/s`);
-    }
-
-    // Amount still to download before playback can resume, from the proxy's
-    // resume window (bytes needed vs downloaded ahead of the read head). A
-    // magnitude only — the TIME estimate is the single unified three-stage ETA
-    // appended by the caller, not a separate per-stage one here.
-    const neededBytes = stats && typeof stats.resumeNeededBytes === "number" ? stats.resumeNeededBytes : null;
-    const downloadedBytes = stats && typeof stats.resumeDownloadedBytes === "number" ? stats.resumeDownloadedBytes : null;
-    if (neededBytes !== null && downloadedBytes !== null) {
-      const remainingBytes = Math.max(0, neededBytes - downloadedBytes);
-      parts.push(`${this.#formatBytes(remainingBytes)} left`);
-    } else if (this.#videoElement instanceof HTMLVideoElement) {
-      // Proxy did not report the resume window (older proxy / read position not
-      // known yet) — fall back to how many seconds are already buffered.
-      const readySeconds = this.#bufferedAheadSeconds(this.#videoElement);
-      if (readySeconds > 0) {
-        parts.push(`${Math.round(readySeconds)}s buffered`);
-      }
-    }
-    return parts.join(" • ");
-  }
 
   /**
    * Cancel a pending buffering check + the stats poll, and hide the notice if
@@ -4530,7 +4455,7 @@ export class Loading extends StateDerivedView {
    * waits for before playback starts. Shows transcoder warmup while ffmpeg
    * spins up, then the SAME cushion percent / cushion-remaining-seconds /
    * unified "time to playback" estimate the mid-playback buffering pill shows
-   * (#computeUnifiedEta + #formatTranscodeStageText) — not a separate,
+   * (#computeUnifiedEta) — not a separate,
    * narrower "just the first 4s segment" calculation, which used to disagree
    * with what the buffering pill shows for the exact same session (field-
    * reported: this screen was never migrated when the pill moved off the
@@ -4886,64 +4811,15 @@ export class Loading extends StateDerivedView {
     let fileLine = "";
     if (fileProgress !== null && fileLength !== null && fileLength > 0) {
       const pct = (fileProgress * 100).toFixed(1);
-      const downloaded = this.#formatBytes(fileDownloaded ?? 0);
-      const total = this.#formatBytes(fileLength);
+      const downloaded = formatBytes(fileDownloaded ?? 0);
+      const total = formatBytes(fileLength);
       fileLine = `\nFile: ${pct}% (${downloaded} / ${total})`;
     }
 
     this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${sharedLine}${fileLine}`);
   }
 
-  /**
-   * Format a byte count as a human-readable string (e.g. "1.2 MB").
-   *
-   * @param {number} bytes
-   * @returns {string}
-   */
-  #formatBytes(bytes) {
-    if (!Number.isFinite(bytes) || bytes < 0) {
-      return "0 B";
-    }
-    if (bytes === 0) {
-      return "0 B";
-    }
-    const units = ["B", "KB", "MB", "GB"];
-    const index = Math.min(Math.floor(Math.log2(bytes) / 10), units.length - 1);
-    const value = bytes / Math.pow(1024, index);
-    return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
-  }
 
-  /**
-   * A short WAITING duration, spelled out in words. Used for every "how long
-   * until X" figure the viewer reads.
-   *
-   * Clock notation (`00:08`) is wrong here: it reads as a position in a
-   * timeline, not a wait, and eight seconds shown as `00:08` has no unit at
-   * all (field-reported 2026-08-01). Abbreviations (`2m 30s`) were tried next
-   * and also rejected — spelled out in full instead. Minutes are always paired
-   * with their seconds, never given as a fraction. Nothing is ever shown below
-   * whole seconds.
-   *
-   * @param {number} seconds
-   * @returns {string} e.g. "8 seconds", "2 minutes 30 seconds", "1 hour 5 minutes"
-   */
-  #formatDuration(seconds) {
-    const plural = (value, unit) => `${value} ${unit}${value === 1 ? "" : "s"}`;
-    if (!Number.isFinite(seconds) || seconds < 0) {
-      return plural(0, "second");
-    }
-    const total = Math.round(seconds);
-    if (total < 60) {
-      return plural(total, "second");
-    }
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const rest = total % 60;
-    if (hours > 0) {
-      return minutes > 0 ? `${plural(hours, "hour")} ${plural(minutes, "minute")}` : plural(hours, "hour");
-    }
-    return rest > 0 ? `${plural(minutes, "minute")} ${plural(rest, "second")}` : plural(minutes, "minute");
-  }
 
   /**
    * @param {{
