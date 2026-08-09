@@ -1,0 +1,177 @@
+/**
+ * @file What the waiting overlay says — the whole of it, from one function.
+ *
+ * A cold open and a seek into data that has not arrived are the same thing to
+ * the viewer and very nearly the same to the system: the picture cannot move
+ * and data is being fetched. They are one state group in the machine and one
+ * interface on screen, so they are one text as well.
+ *
+ * Two writers used to share that line — the pipeline's stage string and the
+ * buffering formatter — which is how the same wait could read one way while it
+ * was opening and another way once it stalled, with no single place to look at
+ * to find out why. This function is that place. It takes measurements and
+ * returns words; it reads nothing, touches no DOM, and has no idea which of the
+ * two situations produced its input, because that is exactly the distinction
+ * that should not exist here.
+ *
+ * Pure, so `node --test` can pin every line of it without a browser.
+ */
+
+/**
+ * Everything the overlay is allowed to say something about. Every field is
+ * optional: a measurement that has not been taken yet is absent, and the line
+ * that would have described it is left out rather than shown empty.
+ *
+ * @typedef {object} WaitingMeasurements
+ * @property {string}  [stage] - What the pipeline is doing right now, in words
+ *   ("Selecting proxy…"). The one input that is not a number: it names the step,
+ *   which no measurement can.
+ * @property {number}  [peers] - Peers connected for this torrent.
+ * @property {number}  [downloadBytesPerSecond] - Current download rate.
+ * @property {number}  [remainingBytes] - Bytes still needed before the picture
+ *   can move, from the proxy's read window.
+ * @property {number}  [bufferedSeconds] - Media already buffered ahead of the
+ *   playhead. Used only when `remainingBytes` is unknown.
+ * @property {number}  [cushionPercent] - How much of the required cushion is
+ *   present, 0-100.
+ * @property {number}  [cushionRemainingSeconds] - Media still needed.
+ * @property {string}  [encodeSpeedText] - The encoder's speed, already
+ *   validated and rounded by whoever measured it.
+ * @property {number}  [etaSeconds] - The single end-to-end estimate. Zero means
+ *   a cushion that genuinely reached its target — never a guess.
+ */
+
+/** @param {unknown} value @returns {value is number} */
+function isNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
+ * A byte count in the largest unit that keeps it readable.
+ *
+ * @param {number} bytes
+ * @returns {string}
+ */
+export function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log2(bytes) / 10), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+/**
+ * A short waiting duration, spelled out in words rather than as a clock face:
+ * `00:43` is a position in a film, `43 seconds` is a wait, and the overlay is
+ * always talking about the second one.
+ *
+ * @param {number} seconds
+ * @returns {string}
+ */
+export function formatDuration(seconds) {
+  const plural = (value, unit) => `${value} ${unit}${value === 1 ? "" : "s"}`;
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return plural(0, "second");
+  }
+  const total = Math.round(seconds);
+  if (total < 60) {
+    return plural(total, "second");
+  }
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  if (hours > 0) {
+    return minutes > 0 ? `${plural(hours, "hour")} ${plural(minutes, "minute")}` : plural(hours, "hour");
+  }
+  return rest > 0 ? `${plural(minutes, "minute")} ${plural(rest, "second")}` : plural(minutes, "minute");
+}
+
+/**
+ * Where the data is coming from: peers, rate, and how much is still to arrive.
+ *
+ * @param {WaitingMeasurements} measurements
+ * @returns {string} Empty when nothing about supply is known yet.
+ */
+function supplyLine({ peers, downloadBytesPerSecond, remainingBytes, bufferedSeconds }) {
+  const parts = [];
+  if (isNumber(peers)) {
+    parts.push(`peers: ${peers}`);
+  }
+  if (isNumber(downloadBytesPerSecond) && downloadBytesPerSecond > 0) {
+    parts.push(`${formatBytes(downloadBytesPerSecond)}/s`);
+  }
+  if (isNumber(remainingBytes)) {
+    parts.push(`${formatBytes(Math.max(0, remainingBytes))} left`);
+  } else if (isNumber(bufferedSeconds) && bufferedSeconds > 0) {
+    // The proxy did not report its read window — an older proxy, or a read
+    // position it does not know yet. What the player already holds is the next
+    // best answer to the same question.
+    parts.push(`${Math.round(bufferedSeconds)}s buffered`);
+  }
+  return parts.join(" • ");
+}
+
+/**
+ * How close the picture is to moving: the cushion, and what is still missing.
+ *
+ * @param {WaitingMeasurements} measurements
+ * @returns {string} Empty until a cushion has been measured.
+ */
+function readinessLine({ cushionPercent, cushionRemainingSeconds, encodeSpeedText }) {
+  if (!isNumber(cushionPercent)) {
+    return "";
+  }
+  const details = [];
+  if (isNumber(cushionRemainingSeconds) && cushionRemainingSeconds > 0) {
+    details.push(`${Math.ceil(cushionRemainingSeconds)}s of video still needed`);
+  }
+  if (typeof encodeSpeedText === "string" && encodeSpeedText.length > 0) {
+    details.push(encodeSpeedText);
+  }
+  const head = `Buffering — ${Math.round(cushionPercent)}%`;
+  return details.length > 0 ? `${head} (${details.join(", ")})` : head;
+}
+
+/**
+ * The overlay's entire text, one line per thing worth saying, in pipeline
+ * order: what step it is on, where the data is coming from, how close the
+ * picture is to moving, and finally the one end-to-end time.
+ *
+ * A stage with nothing to report is omitted rather than shown empty, and is
+ * never REPLACED by another — they answer different questions and the viewer
+ * needs all of them.
+ *
+ * @param {WaitingMeasurements} [measurements]
+ * @returns {string}
+ */
+export function formatWaitingText(measurements = {}) {
+  const lines = [];
+  if (typeof measurements.stage === "string" && measurements.stage.length > 0) {
+    lines.push(measurements.stage);
+  }
+  const supply = supplyLine(measurements);
+  if (supply.length > 0) {
+    lines.push(supply);
+  }
+  const readiness = readinessLine(measurements);
+  if (readiness.length > 0) {
+    lines.push(readiness);
+  }
+  // The time comes last and is always present once anything else is: it is the
+  // answer to the only question actually being asked. "starting now" is
+  // reserved for a measured zero — a cushion that genuinely reached its target
+  // — and is never printed for an estimate nobody could take. When the rate
+  // cannot be measured the honest answer is that it is not known yet.
+  if (lines.length > 0 || isNumber(measurements.etaSeconds)) {
+    if (!isNumber(measurements.etaSeconds)) {
+      lines.push("estimating…");
+    } else if (measurements.etaSeconds > 0) {
+      lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
+    } else {
+      lines.push("starting now");
+    }
+  }
+  return lines.join("\n");
+}

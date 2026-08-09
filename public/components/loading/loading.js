@@ -2,6 +2,7 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
+import { formatWaitingText } from "../../domain/waiting-text.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
@@ -803,24 +804,52 @@ export class Loading extends StateDerivedView {
    */
   #formatBufferingText(downloadStats, transcodeProgress) {
     const unified = this.#computeUnifiedEta(downloadStats, transcodeProgress);
-    const lines = [];
-    const downloadLine = this.#formatDownloadStageText(downloadStats);
-    if (downloadLine.length > 0) {
-      lines.push(downloadLine);
+    const usable = transcodeProgress !== null && transcodeProgress?.state !== "failed";
+    const buffered = this.#videoElement instanceof HTMLVideoElement
+      ? this.#bufferedAheadSeconds(this.#videoElement)
+      : null;
+    const needed = downloadStats?.resumeNeededBytes;
+    const got = downloadStats?.resumeDownloadedBytes;
+    return this.#noteWaiting({
+      peers: downloadStats?.numPeers,
+      downloadBytesPerSecond: downloadStats?.downloadSpeed,
+      remainingBytes: typeof needed === "number" && typeof got === "number"
+        ? Math.max(0, needed - got)
+        : undefined,
+      bufferedSeconds: buffered ?? undefined,
+      cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
+      cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
+      encodeSpeedText: usable ? unified.encodeSpeedText ?? undefined : undefined,
+      etaSeconds: unified.etaSeconds ?? undefined
+    });
+  }
+
+  /**
+   * Record measurements and put the resulting words on screen — the ONE writer
+   * to the overlay's line, and the one place its text is composed.
+   *
+   * A field given `undefined` is FORGOTTEN rather than stored, so a measurement
+   * that stops being available stops being talked about instead of freezing at
+   * its last value.
+   *
+   * @param {import("../../domain/waiting-text.js").WaitingMeasurements} measurements
+   * @returns {string} The text now on screen.
+   */
+  #noteWaiting(measurements) {
+    for (const [key, value] of Object.entries(measurements)) {
+      if (value === undefined) {
+        delete this.#waiting[key];
+      } else {
+        this.#waiting[key] = value;
+      }
     }
-    const readinessLine = this.#formatTranscodeStageText(transcodeProgress, unified);
-    if (readinessLine !== null) {
-      lines.push(readinessLine);
-    }
-    // Always a number: #computeUnifiedEta never returns null (see its source
-    // ladder). "starting now" is still reserved for a measured zero — a
-    // buffer that has genuinely reached the target.
-    lines.push(
-      unified.etaSeconds !== null && unified.etaSeconds > 0
-        ? `${this.#formatDuration(unified.etaSeconds)} until playback`
-        : "starting now"
-    );
-    return lines.join("\n");
+    const text = formatWaitingText(this.#waiting);
+    this.#status.textContent = text;
+    // The player hides this line with an inline `visibility` when a stall ends
+    // with nothing to say. Writing words into it has to undo that, or the first
+    // load after a seek says nothing at all.
+    this.#status.style.visibility = text.length > 0 ? "visible" : "hidden";
+    return text;
   }
 
   /**
@@ -1572,6 +1601,18 @@ export class Loading extends StateDerivedView {
   #bufferingSignalled = false;
 
   /**
+   * Everything the waiting overlay is allowed to say something about, in one
+   * object. Two writers used to share that line — the pipeline's stage string
+   * and the buffering formatter — so the same wait read one way while opening
+   * and another once it stalled, and there was no single place to look to find
+   * out why. Measurements accumulate here; the words are made from them in one
+   * function, `formatWaitingText`.
+   *
+   * @type {import("../../domain/waiting-text.js").WaitingMeasurements}
+   */
+  #waiting = {};
+
+  /**
    * Whether the VIEWER stopped playback — not whether the element is stopped.
    * The two differ wherever we pause on our own account, which is the whole of
    * the pre-buffer gate. See domain/playback-intent.js.
@@ -1829,11 +1870,10 @@ export class Loading extends StateDerivedView {
 
   /** @param {string} value */
   setStatus(value) {
-    this.#status.textContent = value;
-    // The player hides this line with an inline `visibility` when a stall ends
-    // with nothing to say. Writing words into it has to undo that, or the first
-    // load after a seek says nothing at all.
-    this.#status.style.visibility = value.length > 0 ? "visible" : "hidden";
+    // Which step the pipeline is on is one measurement among the others — the
+    // only one that is words rather than a number, because no measurement can
+    // name a step. It goes through the same function as the rest.
+    this.#noteWaiting({ stage: value.length > 0 ? value : undefined });
   }
 
   /**

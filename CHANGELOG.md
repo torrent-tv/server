@@ -1,3 +1,7 @@
+## 0.8.128
+
+- **New**: The waiting overlay's text comes from one function. `domain/waiting-text.js` takes an object of measurements — peers, rate, bytes still needed, the cushion, the estimate — plus the step the pipeline is on, and returns every line of it. Two writers used to share that line: the pipeline's status string and the buffering formatter. So the same wait could read one way while it was opening and another once it stalled, with nowhere to look to find out why. A seek and a cold open are the same wait, so they are now the same words, made the same way. The function is pure, which is what lets a test pin it without a browser.
+
 ## 0.8.127
 
 - **Fix**: The waiting overlay is on screen for the whole of a cold open. Whether it showed had two gates — the state, and a `SET_BUFFERING(false)` from the pipeline — and the second could hide it during the opening wait, which is when the viewer has least else to look at. Visibility now follows the state alone; the buffering event carries text and nothing more. A seek and a cold open are the same thing to the viewer and very nearly the same to the system, so they get the one interface, shown by the one rule.
