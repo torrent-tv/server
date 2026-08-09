@@ -1,3 +1,9 @@
+## 0.8.138
+
+- **New**: The figures behind the waiting overlay moved out of the pipeline into `domain/waiting-model.js` — a Humble Object split. A view with arithmetic in it can only be checked by looking at it; everything that decides what the numbers ARE now lives in a class with no DOM, no events and no element, so `node --test` can reach it. Two consumers, one implementation: the overlay reads the figures to show them, the pre-buffer gate reads them to decide when the picture may start, and neither computes anything itself — so they cannot disagree about what "enough buffered" means.
+- **New**: `domain/buffer-metrics.js` — how much media is buffered ahead of the playhead, and how fast that is filling. Both derive from `video.buffered` and from nothing else: the proxy knows what it SENT, and the two disagree exactly when it matters. Pure functions, with the sample history held by whoever measures, so there is no state and no class.
+- **Chore**: `loading.js` is 399 lines smaller and no longer holds a second copy of the buffer reading.
+
 ## 0.8.136
 
 - **New**: The waiting overlay is its own component (`components/waiting/waiting.js`) and nobody tells it what to display. It subscribes to facts — `WAITING:MEASURED` as measurements are taken, `WAITING:STEP` when the pipeline reaches a named step — accumulates them, and rebuilds its own text. The pipeline no longer touches that element at all; it reports and forgets.
