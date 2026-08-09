@@ -10,7 +10,6 @@
     <link rel="stylesheet" href="css/layout.css" layer="base">
     <link rel="stylesheet" href="components/error/error.css" layer="components">
     <link rel="stylesheet" href="components/torrent/torrent.css" layer="components">
-    <link rel="stylesheet" href="components/loading/loading.css" layer="components">
     <link rel="stylesheet" href="components/player/player.css" layer="components" >
     <link rel="stylesheet" href="components/playlist/playlist.css" layer="components" >
   </head>
@@ -73,8 +72,6 @@
              known fraction of a known whole, and what is being waited for is a
              time, which is stated here in words. -->
         <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" noautohide hidden>
-          <p id="loading__filename">Waiting for a .torrent file...</p>
-          <p id="loading__status">Idle.</p>
           <span id="player__buffering-peers"></span>
           <button id="loading__action" class="loading__control" type="button" hidden></button>
         </div>

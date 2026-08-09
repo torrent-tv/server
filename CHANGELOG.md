@@ -1,3 +1,7 @@
+## 0.8.126
+
+- **Fix**: The waiting overlay uses the text line it already had, instead of two paragraphs of its own. 0.8.121 moved the removed dialog's file name and status into the overlay as new elements needing new styling; the overlay had a styled line all along — the one the seek case has always used. One waiting interface means one spinner and one line of words. The file name is no longer repeated there: the playlist and the address bar both name it, and repeating it cost the status its own line. `loading.css` is gone entirely.
+
 ## 0.8.125
 
 - **Fix**: The waiting overlay's text is styled again. Every rule in `loading.css` described the dialog that 0.8.121 removed, so the file name and the status line moved into the player's overlay with no styling at all. The overlay keeps the appearance it already had for a seek; this only dresses the two lines of text that joined it.

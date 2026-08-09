@@ -102,8 +102,9 @@ import {
 export class Loading extends StateDerivedView {
   static SELECTOR = {
     actionButton: "#loading__action",
-    fileName: "#loading__filename",
-    status: "#loading__status"
+    // The overlay's own text line — the one the seek case already used. There
+    // is one waiting interface, so there is one place its words go.
+    status: "#player__buffering-peers"
   };
 
   static MESSAGES = {
@@ -174,7 +175,6 @@ export class Loading extends StateDerivedView {
   // rate being achieved right now, however steep the samples look.
   static RATE_TREND_MAX_GROWTH = 4;
 
-  #fileName;
   #status;
   /**
    * Recent download-speed samples, for projecting a rate that is still rising.
@@ -1636,11 +1636,10 @@ export class Loading extends StateDerivedView {
     // interfaces into one is roadmap item 8; until then they stay separate and
     // this one keeps the job it can do without trapping anyone.
     super((state) => state === APP_STATE.OPENING);
-    this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
     this.#status = document.querySelector(Loading.SELECTOR.status);
     this.#actionButton = document.querySelector(Loading.SELECTOR.actionButton);
 
-    if (!this.#fileName || !this.#status || !this.#actionButton) {
+    if (!this.#status || !this.#actionButton) {
       throw new Error(Loading.MESSAGES.missingDomNodes);
     }
 
@@ -1818,13 +1817,23 @@ export class Loading extends StateDerivedView {
   set visible(_value) {}
 
   /** @param {string} value */
-  setFileName(value) {
-    this.#fileName.textContent = value;
-  }
+  /**
+   * Nothing on screen. The overlay carries one line of text and it says what is
+   * happening, not which file it is happening to — the file is named in the
+   * playlist and in the address bar, and repeating it here cost the status its
+   * own line.
+   *
+   * @param {string} _value
+   */
+  setFileName(_value) {}
 
   /** @param {string} value */
   setStatus(value) {
     this.#status.textContent = value;
+    // The player hides this line with an inline `visibility` when a stall ends
+    // with nothing to say. Writing words into it has to undo that, or the first
+    // load after a seek says nothing at all.
+    this.#status.style.visibility = value.length > 0 ? "visible" : "hidden";
   }
 
   /**
