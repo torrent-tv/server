@@ -308,7 +308,7 @@ function srtTsToVtt(ts) {
  * @param {string} text - Raw SRT content.
  * @returns {string} WebVTT content.
  */
-function srtToVtt(text) {
+function _srtToVtt(text) {
   const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   const out = ["WEBVTT", ""];
 
@@ -373,7 +373,7 @@ function stripAssTags(text) {
  * @param {string} text - Raw ASS/SSA content.
  * @returns {string} WebVTT content.
  */
-function assToVtt(text) {
+function _assToVtt(text) {
   const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 
   let inEvents = false;

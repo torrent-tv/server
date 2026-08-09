@@ -1,3 +1,8 @@
+## 0.8.123
+
+- **Fix**: Opening anything failed at once with `applied is not defined`. Removing the progress bar in 0.8.121 took out the two lines that computed the value while leaving the line that logged it, so the first progress report of every load threw and the load was reported as a failure. Field log 2026-08-09: `IDLE -> OPENING`, then the throw 2 ms later, then `OPENING -> ERROR`.
+- **Chore**: The server has a linter. It had none — which is why an undeclared name could ship at all, the same way it did in proxy 2.9.124 before that repo got one. Biome, correctness rules only, and `npm test` now runs it before the tests. Its first run found nine more: a missing `ERROR_EVENTS` import in the torrent component, four unused imports and four functions nobody calls.
+
 ## 0.8.121
 
 - **New**: One waiting interface instead of two. A cold open and a seek into data that has not arrived ask the viewer the same question and were answered by two different screens — a full-screen modal dialog for the first, a small overlay in the player for the second. The dialog is gone; what it carried (the file name, the status line, Cancel, Playlist) now lives in the player's own overlay, which is shown whenever the state says the viewer is waiting.
