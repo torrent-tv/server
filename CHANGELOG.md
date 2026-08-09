@@ -1,6 +1,7 @@
 ## 0.8.121
 
 - **New**: One waiting interface instead of two. A cold open and a seek into data that has not arrived ask the viewer the same question and were answered by two different screens — a full-screen modal dialog for the first, a small overlay in the player for the second. The dialog is gone; what it carried (the file name, the status line, Cancel, Playlist) now lives in the player's own overlay, which is shown whenever the state says the viewer is waiting.
+- **New**: The waiting overlay carries no buttons of its own. Cancel and Playlist duplicated the player's own close and playlist controls, which are on screen throughout — one waiting interface means one set of controls too.
 - **New**: The progress bar is gone with it. A bar promises a known fraction of a known whole; what is being waited for is a time, and it is already stated in words.
 
 ## 0.8.120
