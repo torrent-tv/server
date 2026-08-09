@@ -1,4 +1,4 @@
-## 0.8.138
+## 0.8.144
 
 - **Fix**: The one figure the viewer wants — how long until playback — is shown for the whole of the wait. The cushion and the estimate are measured at the browser's own buffer, and the only readings came from the media element's own events, which do not fire before it has a source. So through an entire cold open nothing was measured, and with nothing measured there was nothing honest to say. The player now takes a reading twice a second for as long as the state says the viewer is waiting, and stops the moment it does not; an element reading zero is a true reading, not a guess.
 - **Fix**: An estimate is no longer stated when the cushion has not been measured. It read "0 seconds until playback" over a picture that had not started and was not about to — measured 2026-08-09 with 29 peers and 5.9 MB/s. Zero now means only what it always should have: a cushion that genuinely reached its target.
