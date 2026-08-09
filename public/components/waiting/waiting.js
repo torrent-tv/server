@@ -1,6 +1,7 @@
-import { APP_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, PLAYER_EVENTS, PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { formatWaitingText } from "../../domain/waiting-text.js";
+import { WaitingModel } from "../../domain/waiting-model.js";
 
 /**
  * The waiting overlay's text.
@@ -39,11 +40,26 @@ export class WaitingOverlay {
    */
   #measurements = {};
 
+  /**
+   * Its own. Nobody hands this component a conclusion: it is given what was
+   * measured and works out what that means itself. The pipeline holds a second
+   * instance for its own decision about when the picture may start — same
+   * class, so the two answers cannot drift apart.
+   *
+   * @type {WaitingModel}
+   */
+  #model = new WaitingModel();
+
+  /** @type {number | null} Latest reading from the component that owns the element. */
+  #bufferedAhead = null;
+
   constructor() {
     this.#text = document.querySelector(WaitingOverlay.SELECTOR.text);
     if (!this.#text) {
       return;
     }
+    document.addEventListener(PROXY_EVENTS.MEASURED, this.#onProxyMeasured);
+    document.addEventListener(PLAYER_EVENTS.BUFFER, this.#onBuffer);
     document.addEventListener(WAITING_EVENTS.MEASURED, this.#onMeasured);
     document.addEventListener(WAITING_EVENTS.STEP, this.#onStep);
     document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onStateChanged);
@@ -56,6 +72,52 @@ export class WaitingOverlay {
    *
    * @param {CustomEvent} event
    */
+  /**
+   * The proxy answered. Raw figures in, this component's own conclusions out.
+   *
+   * @param {CustomEvent} event
+   */
+  #onProxyMeasured = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const downloadStats = detail?.downloadStats ?? null;
+    const transcodeProgress = detail?.transcodeProgress ?? null;
+    const unified = this.#model.update({
+      bufferedAhead: this.#bufferedAhead ?? undefined,
+      downloadStats,
+      transcodeProgress
+    });
+    const needed = downloadStats?.resumeNeededBytes;
+    const got = downloadStats?.resumeDownloadedBytes;
+    const usable = transcodeProgress && transcodeProgress.state !== "failed";
+    Object.assign(this.#measurements, {
+      peers: downloadStats?.numPeers,
+      downloadBytesPerSecond: downloadStats?.downloadSpeed,
+      remainingBytes: typeof needed === "number" && typeof got === "number"
+        ? Math.max(0, needed - got)
+        : undefined,
+      cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
+      cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
+      encodingRuns: usable ? this.#model.describeEncodingRuns(transcodeProgress, unified) : [],
+      etaSeconds: unified.etaSeconds ?? undefined
+    });
+    this.#render();
+  };
+
+  /**
+   * The player measured its own element.
+   *
+   * @param {CustomEvent} event
+   */
+  #onBuffer = (event) => {
+    const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
+    if (typeof ahead !== "number") {
+      return;
+    }
+    this.#bufferedAhead = ahead;
+    this.#measurements.bufferedSeconds = ahead;
+    this.#render();
+  };
+
   #onMeasured = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (!detail || typeof detail !== "object") {
