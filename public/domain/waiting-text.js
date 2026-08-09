@@ -122,6 +122,13 @@ function formatDuration(seconds) {
  * @returns {string} Empty when nothing about supply is known yet.
  */
 function supplyLine({ peers, downloadBytesPerSecond, remainingBytes, bufferedSeconds }) {
+  // Only while something still has to come off the swarm. With nothing left to
+  // fetch, peers and a download rate answer a question the viewer is no longer
+  // asking — and the row stayed up through a whole seek reading "0 B left",
+  // which says plainly that it had nothing to report.
+  if (isNumber(remainingBytes) && remainingBytes <= 0) {
+    return "";
+  }
   const parts = [];
   if (isNumber(peers)) {
     parts.push(`peers: ${peers}`);
@@ -237,8 +244,11 @@ export function formatWaitingText(measurements = {}) {
   // long, so they are told how long; when it is nearly over, that is zero
   // seconds, which is a duration like any other. Before the first measurement
   // there is no line at all rather than a word standing in for a number.
-  if (isNumber(measurements.etaSeconds)) {
-    lines.push(`${formatDuration(Math.max(0, measurements.etaSeconds))} until playback`);
+  // Only while there is a wait to describe. Zero is not a duration worth
+  // printing: it says the wait is over, and it was on screen through seeks that
+  // had plainly not finished.
+  if (isNumber(measurements.etaSeconds) && measurements.etaSeconds > 0) {
+    lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
   }
   return lines.join("\n");
 }

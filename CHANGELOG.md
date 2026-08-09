@@ -1,3 +1,10 @@
+## 0.8.141
+
+- **Fix**: The word "undefined" no longer appears on the waiting overlay. A step was being composed out of measurements — `${message}
+${sharedLine}${fileLine}` — and the call that produced the middle piece stopped returning text when the figures moved into their own model, so the placeholder rendered literally. The step is a NAME again; peers, rate and what is left are measurements and reach the overlay by themselves.
+- **Fix**: "0 seconds until playback" is gone from screens where playback was not about to start. Two separate causes, both saying a wait was over when it was not: the estimate answered zero while the cushion had never been measured at all — measured 2026-08-09 with 29 peers and 5.9 MB/s behind a stopped picture — and the row was printed even when the figure was zero. Nothing measured now yields no figure, and a zero yields no row.
+- **Fix**: Peers and download rate show only while something still has to come off the swarm. The row sat through entire seeks reading "0 B left", which is the row itself saying it had nothing to report.
+
 ## 0.8.139
 
 - **New**: The player measures its own element. How much media is buffered and how fast that is filling are facts about the media, and the component that owns the `<video>` is the one that may read them — nobody else touches `video.buffered` now. It publishes both on `PLAYER:BUFFER` as the element's own events fire.

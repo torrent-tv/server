@@ -4388,7 +4388,10 @@ export class Loading extends StateDerivedView {
     // Retained so the later transcode/pre-buffer screens can keep showing the
     // supply stage instead of dropping it the moment a session appears.
     this.#lastDownloadStats = statsForShared;
-    const sharedLine = this.#formatBufferingText(statsForShared, null);
+    // The step is a NAME. Peers, rate and what is left are measurements and
+    // they reach the overlay on their own; composing them into the step here is
+    // what put the word "undefined" on screen when this call stopped returning
+    // text.
 
     if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
       // The bar still advances on header progress; the text does not show this
@@ -4405,7 +4408,7 @@ export class Loading extends StateDerivedView {
       fileLine = `\nFile: ${pct}% (${downloaded} / ${total})`;
     }
 
-    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}\n${sharedLine}${fileLine}`);
+    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}${fileLine}`);
   }
 
 
