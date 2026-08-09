@@ -281,6 +281,14 @@ export class WaitingModel {
       cushionRemainingSeconds = Math.max(0, requiredBuffer - bufferedAhead);
       cushionPercent = Math.max(0, Math.min(100, (bufferedAhead / requiredBuffer) * 100));
     }
+    if (cushionPercent === null) {
+      // Nothing measured about the cushion means nothing may be said about how
+      // long it will take to fill. Reported as zero, it read "0 seconds until
+      // playback" over a picture that had not started and was not about to —
+      // measured 2026-08-09 with 29 peers and 5.9 MB/s, so the wait looked
+      // finished while the only figure that ends it had never been taken.
+      return { etaSeconds: null, cushionPercent: null, cushionRemainingSeconds, encodeSpeedText: null };
+    }
     if (cushionRemainingSeconds <= 0) {
       // The wait is over — the player has what it needs. Whatever was promised
       // described THIS wait, and the next one is a different question, so the
