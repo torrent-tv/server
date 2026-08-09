@@ -135,6 +135,34 @@ function readinessLine({ cushionPercent, cushionRemainingSeconds, encodeSpeedTex
 }
 
 /**
+ * A name for what is being waited for, worked out from the measurements alone.
+ *
+ * The pipeline names its own steps, but a seek runs none of them: it shows a
+ * number of seconds with nothing saying whether the wait is for pieces, for the
+ * encoder to be moved to the new position, or for the first segment out of it.
+ * Three unrelated waits, one appearance. These are the same distinctions the
+ * numbers already carry, so they cost nothing to name.
+ *
+ * @param {WaitingMeasurements} measurements
+ * @returns {string | null} Null when the measurements say nothing yet.
+ */
+export function stepForMeasurements({ remainingBytes, cushionPercent, cushionRemainingSeconds, encodeSpeedText }) {
+  if (isNumber(remainingBytes) && remainingBytes > 0) {
+    return "Fetching video data";
+  }
+  if (isNumber(cushionRemainingSeconds) && cushionRemainingSeconds > 0) {
+    const seconds = Math.ceil(cushionRemainingSeconds);
+    return typeof encodeSpeedText === "string" && encodeSpeedText.length > 0
+      ? `Encoding the last ${seconds}s at ${encodeSpeedText}`
+      : `Preparing the last ${seconds}s of video`;
+  }
+  if (isNumber(cushionPercent)) {
+    return "Starting the picture";
+  }
+  return null;
+}
+
+/**
  * The overlay's entire text, one line per thing worth saying, in pipeline
  * order: what step it is on, where the data is coming from, how close the
  * picture is to moving, and finally the one end-to-end time.

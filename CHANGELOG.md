@@ -1,3 +1,7 @@
+## 0.8.133
+
+- **New**: Every step of a wait is timed, and a seek's steps are named. `domain/stage-timeline.js` opens a stage whenever the viewer is shown a new step and writes one line when it closes: how long it took, and — once something predicts it — by how far the prediction was out. Every step goes through it, so the connect, which used to be one opaque `Connecting to proxy…` over a health poll, a full ICE and DTLS exchange and a liveness check, now reports where its seconds went. A seek runs no pipeline step at all, so it showed a number with nothing saying whether the wait was for pieces, for the encoder to be moved, or for the first segment out of it — three unrelated waits with one appearance. The step is now worked out from the measurements already being taken and timed like any other.
+
 ## 0.8.132
 
 - **Fix**: The waiting line stops growing. `#waitForPrebuffer` passed the buffering formatter's return value back into `setStatus`, and since 0.8.128 that formatter renders the finished text itself — so the whole line was stored as the STEP, and the next render appended the supply, readiness and time rows to it. Exactly three rows per pass: measured 2026-08-09 going 21 rows/771 characters to 24/830 to 27/…, until the text ran off the screen. The formatter is now called for its effect, not its value. Found by the instrument added in 0.8.131, which named the field and its growth after reading the code twice had not.

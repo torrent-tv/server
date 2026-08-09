@@ -2,7 +2,8 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { formatWaitingText } from "../../domain/waiting-text.js";
+import { formatWaitingText, stepForMeasurements } from "../../domain/waiting-text.js";
+import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
 import { ProxySelector } from "../proxy-selector/proxy-selector.js";
@@ -828,6 +829,17 @@ export class Loading extends StateDerivedView {
       encodeSpeedText: usable ? unified.encodeSpeedText ?? undefined : undefined,
       etaSeconds: unified.etaSeconds ?? undefined
     });
+    // A seek runs no pipeline step, so nothing calls setStatus and the step row
+    // would be empty — leaving three different waits (pieces, the encoder being
+    // moved, the first segment out of it) looking identical. Name it from what
+    // is being measured, and time it like any other step.
+    if (!this.#stageFromPipeline) {
+      const derived = stepForMeasurements(this.#waiting);
+      if (derived !== null) {
+        this.#stages.begin(derived);
+        this.#noteWaiting({ stage: derived });
+      }
+    }
   }
 
   /**
@@ -1640,6 +1652,28 @@ export class Loading extends StateDerivedView {
   #waiting = {};
 
   /**
+   * Whether the step now shown was named by the PIPELINE rather than worked out
+   * from the measurements. Without it a derived step froze at its first value:
+   * it is stored in the same field, so the next poll saw a step already present
+   * and left it alone, and "Fetching video data" stayed on screen through the
+   * encoding that followed.
+   *
+   * @type {boolean}
+   */
+  #stageFromPipeline = false;
+
+  /**
+   * The stages of the wait in progress. Every step the viewer is shown opens
+   * one, so closing it logs how long that step took and how far that was from
+   * what was predicted — for the connect, which used to be a single opaque
+   * label over a health poll, an ICE exchange and a liveness check, and for a
+   * seek, which used to show a number of seconds with no name at all.
+   *
+   * @type {StageTimeline}
+   */
+  #stages = new StageTimeline({ log: (message) => this.#logEvt(message) });
+
+  /**
    * Whether the VIEWER stopped playback — not whether the element is stopped.
    * The two differ wherever we pause on our own account, which is the whole of
    * the pre-buffer gate. See domain/playback-intent.js.
@@ -1900,6 +1934,15 @@ export class Loading extends StateDerivedView {
     // Which step the pipeline is on is one measurement among the others — the
     // only one that is words rather than a number, because no measurement can
     // name a step. It goes through the same function as the rest.
+    //
+    // And it opens a stage: every step the viewer is shown is therefore timed,
+    // without a single begin/end having to be placed by hand. A step that
+    // repeats is not re-opened, so a poll running every 1.5 s does not chop one
+    // wait into dozens of entries.
+    this.#stageFromPipeline = value.length > 0;
+    if (value.length > 0) {
+      this.#stages.begin(value);
+    }
     this.#noteWaiting({ stage: value.length > 0 ? value : undefined });
   }
 
