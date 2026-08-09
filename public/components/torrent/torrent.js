@@ -230,7 +230,6 @@ export class Torrent extends StateDerivedView {
     super((state) => viewForState(state) === APP_VIEW.PICKER);
     this.#setupElements();
     this.#setupEventHandlers();
-    this.#setupViewEventHandlers();
     this.visible = true;
     // Defer URL-source loading to the next macrotask so every other component
     // (torrent-tv, loading, player) has finished bootstrapping and registered
@@ -331,8 +330,6 @@ export class Torrent extends StateDerivedView {
     document.addEventListener("paste", this.#onDocumentPaste);
   }
 
-  #setupViewEventHandlers() {
-  }
 
   /**
    * @param {File} file

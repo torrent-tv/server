@@ -28,7 +28,8 @@
     "fastify": "^5.8.5",
     "get-port": "^7.1.0",
     "hls.js": "^1.6.0",
-    "media-chrome": "^4.19.2"
+    "media-chrome": "^4.19.2",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "knip": "^6.32.0"

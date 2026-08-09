@@ -21,25 +21,11 @@ This component renders processing progress while playback is being prepared and 
 - Emit:
   - `LOADING:PLAYBACK_READY` when playback is ready,
   - `LOADING:PLAYBACK_FAILED` when preparation fails.
-- Hide on `PLAYER:SHOW` or `ERROR:SHOW`.
 
 ## State Machine
 
-```mermaid
-stateDiagram-v2
-  [*] --> Hidden
-  Hidden --> Processing: LOADING:PROCESS_PLAYBACK
-  Processing --> Visible: update file/status/progress
-  Processing --> Hidden: PLAYER:SHOW
-  Processing --> Hidden: ERROR:SHOW
-  Processing --> Hidden: LOADING:PLAYBACK_READY
-  Processing --> Hidden: LOADING:PLAYBACK_FAILED
-  Processing --> Hidden: APP:RESET_TO_PICKER
-  Hidden --> Visible: LOADING:SHOW
-  Visible --> Visible: LOADING:SET_FILE_NAME
-  Visible --> Visible: LOADING:SET_STATUS
-  Visible --> Visible: LOADING:SET_PROGRESS
-  Visible --> Hidden: PLAYER:SHOW
-  Visible --> Hidden: ERROR:SHOW
-  Visible --> Hidden: APP:RESET_TO_PICKER
-```
+Visibility is derived from the application state, not commanded: see
+`public/domain/app-state.js` for the machine and the outputs, and
+`research/state-machine-2026-08-08.md` in the meta repo for the graph and the
+reasoning. A per-component state diagram would only duplicate it, and the two
+would drift.

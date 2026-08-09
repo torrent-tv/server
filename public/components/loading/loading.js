@@ -1459,7 +1459,8 @@ export class Loading extends StateDerivedView {
    * a cold open or a stall — and off screen otherwise. Derived from the state;
    * see `domain/app-state.js`.
    *
-   * @param {CustomEvent} event
+   * @param {string} state
+   * @param {boolean} belongsOnScreen
    */
   applyAppState(state, belongsOnScreen) {
     super.applyAppState(state, belongsOnScreen);
@@ -4203,8 +4204,8 @@ export class Loading extends StateDerivedView {
     }
     // The player is hidden during pre-buffer, so the video MUST stay paused.
     // If it plays here it drains the buffer, so `ahead` never reaches the
-    // target — the loading screen sticks while audio is heard. The player
-    // starts playback in #onShow when revealed.
+    // target — the loading screen sticks while audio is heard. The player starts
+    // playback when the machine reaches ADVANCING.
     if (!videoElement.paused) {
       this.#logEvt("player.pause reason=prebuffer");
       // Ours, not the viewer's — see domain/playback-intent.js. Read as the

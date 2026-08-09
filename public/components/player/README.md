@@ -5,8 +5,6 @@ This component owns the visible video area, player menu controls, and player-sid
 ## Responsibilities
 
 - Emit `PLAYER:READY` with `videoElement`.
-- Show on `PLAYER:SHOW`.
-- Hide on `LOADING:SHOW` and `ERROR:SHOW`.
 - Re-emit `PLAYER:READY` on `PLAYER:REQUEST_READY`.
 - Reset media element on `APP:RESET_TO_PICKER`.
 - Stop and clear media element on `ERROR:SHOW`.
@@ -20,14 +18,8 @@ This component owns the visible video area, player menu controls, and player-sid
 
 ## State Machine
 
-```mermaid
-stateDiagram-v2
-  [*] --> Hidden
-  Hidden --> Hidden: PLAYER:READY
-  Hidden --> Visible: PLAYER:SHOW
-  Visible --> Hidden: APP:RESET_TO_PICKER
-  Visible --> Hidden: LOADING:SHOW
-  Visible --> Hidden: ERROR:SHOW
-  Hidden --> Hidden: PLAYER:REQUEST_READY / PLAYER:READY
-  Visible --> Visible: PLAYER:REQUEST_READY / PLAYER:READY
-```
+Visibility is derived from the application state, not commanded: see
+`public/domain/app-state.js` for the machine and the outputs, and
+`research/state-machine-2026-08-08.md` in the meta repo for the graph and the
+reasoning. A per-component state diagram would only duplicate it, and the two
+would drift.
