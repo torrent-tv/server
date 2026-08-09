@@ -1,3 +1,7 @@
+## 0.8.124
+
+- **Chore**: The subtitle converter the browser stopped using is gone rather than hidden. The linter's automatic fix had renamed two unused functions with a leading underscore, which silences the warning and leaves the code — so they are deleted instead, along with the five helpers that only they called. `subtitle-utils.js` loses 117 lines; the proxy converts subtitles now, and nothing here called this path.
+
 ## 0.8.123
 
 - **Fix**: Opening anything failed at once with `applied is not defined`. Removing the progress bar in 0.8.121 took out the two lines that computed the value while leaving the line that logged it, so the first progress report of every load threw and the load was reported as a failure. Field log 2026-08-09: `IDLE -> OPENING`, then the throw 2 ms later, then `OPENING -> ERROR`.
