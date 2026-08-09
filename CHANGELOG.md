@@ -1,3 +1,7 @@
+## 0.8.127
+
+- **Fix**: The waiting overlay is on screen for the whole of a cold open. Whether it showed had two gates — the state, and a `SET_BUFFERING(false)` from the pipeline — and the second could hide it during the opening wait, which is when the viewer has least else to look at. Visibility now follows the state alone; the buffering event carries text and nothing more. A seek and a cold open are the same thing to the viewer and very nearly the same to the system, so they get the one interface, shown by the one rule.
+
 ## 0.8.126
 
 - **Fix**: The waiting overlay uses the text line it already had, instead of two paragraphs of its own. 0.8.121 moved the removed dialog's file name and status into the overlay as new elements needing new styling; the overlay had a styled line all along — the one the seek case has always used. One waiting interface means one spinner and one line of words. The file name is no longer repeated there: the playlist and the address bar both name it, and repeating it cost the status its own line. `loading.css` is gone entirely.

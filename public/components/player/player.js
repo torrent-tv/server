@@ -159,6 +159,9 @@ export class Player extends StateDerivedView {
    */
   #onSetBuffering = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
+    // Text only. Whether this is on screen is a function of the state and is
+    // applied in applyAppState — a second gate here could hide the overlay
+    // during a cold open, which is exactly when the viewer most needs it.
     if (detail?.active === true) {
       const text = typeof detail?.text === "string" ? detail.text : "";
       if (text.length > 0) {
@@ -173,7 +176,8 @@ export class Player extends StateDerivedView {
       }
       return;
     }
-    this.#hideBuffering();
+    this.#bufferingPeers.style.visibility = "hidden";
+    this.#bufferingPeers.textContent = " ";
   };
 
   #hideBuffering() {
