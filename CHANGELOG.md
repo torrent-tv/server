@@ -1,5 +1,10 @@
 ## 0.8.133
 
+- **New**: The waiting overlay gives every encoder run still going its own line — which tracks of which rendition, how much it still has to make, and how fast: `Encoding 720p video and audio - 4s left, 2.6x realtime`. One run today, so one line; the shape is an array because switching quality without interrupting playback will mean several at once, and two runs sharing the same cores slow each other down — a single averaged figure would hide precisely that. A session that copies both tracks has no encoder and gets no line.
+- **Fix**: A seek names what it is waiting for. The code that derived a step from the measurements sat after a `return` and had never run once, so a seek showed a number of seconds with nothing saying whether the wait was for pieces, for the encoder to be moved, or for the first segment out of it — three unrelated waits with one appearance.
+
+## 0.8.133
+
 - **New**: Every step of a wait is timed, and a seek's steps are named. `domain/stage-timeline.js` opens a stage whenever the viewer is shown a new step and writes one line when it closes: how long it took, and — once something predicts it — by how far the prediction was out. Every step goes through it, so the connect, which used to be one opaque `Connecting to proxy…` over a health poll, a full ICE and DTLS exchange and a liveness check, now reports where its seconds went. A seek runs no pipeline step at all, so it showed a number with nothing saying whether the wait was for pieces, for the encoder to be moved, or for the first segment out of it — three unrelated waits with one appearance. The step is now worked out from the measurements already being taken and timed like any other.
 
 ## 0.8.132
