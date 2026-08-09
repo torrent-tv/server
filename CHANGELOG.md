@@ -1,3 +1,9 @@
+## 0.8.142
+
+- **Fix**: The step is shown again, and a seek gets one for the first time. Working the step out from the measurements — which is the only way a seek can have one, since a seek runs no pipeline step — was still being done inside the component that had stopped talking to the overlay, so it computed a name and threw it away. It now happens where the measurements are. A step the pipeline names still wins; the numbers only answer when it is silent, which tells a wait for pieces apart from a wait for the encoder.
+- **Fix**: Two calls to a formatter that no longer exists would have thrown on the pre-buffer path and on the warm-up poll. They published their figures instead, which is what the overlay reads now.
+- **Chore**: The dead formatter and its unused import are gone. It assembled a full set of measurements on every poll and returned them to nobody.
+
 ## 0.8.141
 
 - **Fix**: The word "undefined" no longer appears on the waiting overlay. A step was being composed out of measurements — `${message}
