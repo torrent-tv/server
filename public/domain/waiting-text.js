@@ -37,8 +37,35 @@
  * @property {number}  [cushionRemainingSeconds] - Media still needed.
  * @property {string}  [encodeSpeedText] - The encoder's speed, already
  *   validated and rounded by whoever measured it.
+ * @property {EncodingRun[]} [encodingRuns] - Every encoder run still going, one
+ *   line each. An array rather than "the encoder" because once quality can be
+ *   switched without interrupting playback there will be several at once, and
+ *   deciding which of them is "the" one would be a judgement this module has no
+ *   business making — and would hide the very case worth seeing, two runs
+ *   competing for the same cores.
  * @property {number}  [etaSeconds] - The single end-to-end estimate. Zero means
  *   a cushion that genuinely reached its target — never a guess.
+ */
+
+/**
+ * One encoder run, as far as the overlay is concerned.
+ *
+ * Both tracks can be encoded at once, and they are encoded by ONE ffmpeg run —
+ * so there is one speed for the pair, never one each, and it must not be
+ * doubled or summed. What differs is the cost: audio is fractions of a core,
+ * video is whole cores, so the two predict very different durations and a step
+ * that does not say which is being encoded cannot be checked against reality.
+ *
+ * `height` tells two simultaneous runs apart: with quality switching the viewer
+ * needs to know which rendition each line is about.
+ *
+ * @typedef {object} EncodingRun
+ * @property {boolean} [video] - The video track is being re-encoded.
+ * @property {boolean} [audio] - The audio track is being re-encoded.
+ * @property {number}  [height] - The rendition being produced, in lines.
+ * @property {number}  [remainingSeconds] - Media this run still has to produce.
+ * @property {number}  [speedRealtime] - How many seconds of media it makes per
+ *   second of wall clock. Below 1 means it cannot keep up.
  */
 
 /** @param {unknown} value @returns {value is number} */
@@ -146,20 +173,49 @@ function readinessLine({ cushionPercent, cushionRemainingSeconds, encodeSpeedTex
  * @param {WaitingMeasurements} measurements
  * @returns {string | null} Null when the measurements say nothing yet.
  */
-export function stepForMeasurements({ remainingBytes, cushionPercent, cushionRemainingSeconds, encodeSpeedText }) {
+export function stepForMeasurements({ remainingBytes, cushionPercent, cushionRemainingSeconds }) {
   if (isNumber(remainingBytes) && remainingBytes > 0) {
     return "Fetching video data";
   }
   if (isNumber(cushionRemainingSeconds) && cushionRemainingSeconds > 0) {
-    const seconds = Math.ceil(cushionRemainingSeconds);
-    return typeof encodeSpeedText === "string" && encodeSpeedText.length > 0
-      ? `Encoding the last ${seconds}s at ${encodeSpeedText}`
-      : `Preparing the last ${seconds}s of video`;
+    // What is being encoded, and how fast, is said by the per-run lines — one
+    // each, so two runs competing for the same cores are two visible lines
+    // rather than one averaged fiction.
+    return `Preparing the last ${Math.ceil(cushionRemainingSeconds)}s of video`;
   }
   if (isNumber(cushionPercent)) {
     return "Starting the picture";
   }
   return null;
+}
+
+/**
+ * One line describing one encoder run: which tracks of which rendition, how
+ * much it still has to make, and how fast it is making it.
+ *
+ * @param {EncodingRun} run
+ * @returns {string} Empty when nothing about this run is worth a line — it is
+ *   copying rather than encoding, so there is no encoder to describe.
+ */
+export function describeEncodingRun(run) {
+  if (!run || (run.video !== true && run.audio !== true)) {
+    return "";
+  }
+  const rendition = isNumber(run.height) && run.height > 0 ? `${run.height}p ` : "";
+  const tracks = run.video === true && run.audio === true
+    ? `${rendition}video and audio`
+    : run.video === true ? `${rendition}video` : "audio";
+  const details = [];
+  if (isNumber(run.remainingSeconds) && run.remainingSeconds > 0) {
+    details.push(`${Math.ceil(run.remainingSeconds)}s left`);
+  }
+  if (isNumber(run.speedRealtime) && run.speedRealtime > 0) {
+    // One decimal: the difference between 0.9x and 1.1x is the difference
+    // between falling behind and keeping up, and rounding to whole numbers
+    // hides it.
+    details.push(`${run.speedRealtime.toFixed(1)}x realtime`);
+  }
+  return details.length > 0 ? `Encoding ${tracks} — ${details.join(", ")}` : `Encoding ${tracks}`;
 }
 
 /**
@@ -186,6 +242,17 @@ export function formatWaitingText(measurements = {}) {
   const readiness = readinessLine(measurements);
   if (readiness.length > 0) {
     lines.push(readiness);
+  }
+  // One line per encoder still running. With a single run — every session today
+  // — this is the one line it always was. With several, which is what quality
+  // switching without an interruption will bring, each says what it is making
+  // and how fast, because two runs sharing the same cores slow each other down
+  // and an averaged single figure would hide exactly that.
+  for (const run of Array.isArray(measurements.encodingRuns) ? measurements.encodingRuns : []) {
+    const line = describeEncodingRun(run);
+    if (line.length > 0) {
+      lines.push(line);
+    }
   }
   // The time comes last and is always present once anything else is: it is the
   // answer to the only question actually being asked. "starting now" is

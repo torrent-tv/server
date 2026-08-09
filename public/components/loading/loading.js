@@ -817,7 +817,7 @@ export class Loading extends StateDerivedView {
       : null;
     const needed = downloadStats?.resumeNeededBytes;
     const got = downloadStats?.resumeDownloadedBytes;
-    return this.#noteWaiting({
+    const measurements = {
       peers: downloadStats?.numPeers,
       downloadBytesPerSecond: downloadStats?.downloadSpeed,
       remainingBytes: typeof needed === "number" && typeof got === "number"
@@ -826,21 +826,45 @@ export class Loading extends StateDerivedView {
       bufferedSeconds: buffered ?? undefined,
       cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
       cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
-      encodeSpeedText: usable ? unified.encodeSpeedText ?? undefined : undefined,
+      encodingRuns: usable ? this.#describeEncodingRuns(transcodeProgress, unified) : [],
       etaSeconds: unified.etaSeconds ?? undefined
-    });
+    };
     // A seek runs no pipeline step, so nothing calls setStatus and the step row
     // would be empty — leaving three different waits (pieces, the encoder being
     // moved, the first segment out of it) looking identical. Name it from what
-    // is being measured, and time it like any other step.
+    // is being measured. This used to sit AFTER the return and never ran at all.
     if (!this.#stageFromPipeline) {
-      const derived = stepForMeasurements(this.#waiting);
-      if (derived !== null) {
-        this.#stages.begin(derived);
-        this.#noteWaiting({ stage: derived });
-      }
+      measurements.stage = stepForMeasurements(measurements) ?? undefined;
     }
+    return this.#noteWaiting(measurements);
   }
+
+  /**
+   * Every encoder run still going, one entry each.
+   *
+   * One today. Several once quality can be switched without interrupting
+   * playback — and then each needs its own line, because runs sharing the same
+   * cores slow one another down and a single averaged figure would hide the one
+   * thing worth seeing.
+   *
+   * @param {object | null} progress
+   * @param {{ cushionRemainingSeconds: number | null }} unified
+   * @returns {Array<import("../../domain/waiting-text.js").EncodingRun>}
+   */
+  #describeEncodingRuns(progress, unified) {
+    if (!this.#encodingTracks.video && !this.#encodingTracks.audio) {
+      return [];
+    }
+    const speed = typeof progress?.speed === "string" ? Number.parseFloat(progress.speed) : Number.NaN;
+    return [{
+      video: this.#encodingTracks.video,
+      audio: this.#encodingTracks.audio,
+      height: typeof progress?.height === "number" && progress.height > 0 ? progress.height : undefined,
+      remainingSeconds: unified.cushionRemainingSeconds ?? undefined,
+      speedRealtime: Number.isFinite(speed) && speed > 0 ? speed : undefined
+    }];
+  }
+
 
   /**
    * Record measurements and put the resulting words on screen — the ONE writer
@@ -1650,6 +1674,15 @@ export class Loading extends StateDerivedView {
    * @type {import("../../domain/waiting-text.js").WaitingMeasurements}
    */
   #waiting = {};
+
+  /**
+   * Which tracks the proxy is re-encoding for this session. Copied tracks cost
+   * nothing and have no encoder to describe, so a session that copies both
+   * contributes no encoder line at all.
+   *
+   * @type {{ video: boolean, audio: boolean }}
+   */
+  #encodingTracks = { video: false, audio: false };
 
   /**
    * Whether the step now shown was named by the PIPELINE rather than worked out
@@ -4140,6 +4173,13 @@ export class Loading extends StateDerivedView {
    */
   async #playWithProxyTranscode(fileIndex, options = {}) {
     this.#throwIfCancelled();
+    // Which tracks this session re-encodes. A copied track has no encoder and
+    // therefore no line on the waiting overlay; both copied means no encoder
+    // line at all, which is the truth about a direct-play session.
+    this.#encodingTracks = {
+      video: options.transcodeVideo === true,
+      audio: options.transcodeAudio !== false
+    };
     let transport = options.transport ?? this.#transport ?? null;
     if (!transport) {
       transport = await this.#acquireTransport();
