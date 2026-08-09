@@ -1,3 +1,8 @@
+## 0.8.129
+
+- **Fix**: The failure message no longer invents a cause. "No data arrived from the proxy — allow local network access" was shown on 2026-08-09 while ICE was complete over global IPv6, nothing was queued on the data channel and progress polls were being answered in 9-43 ms: it named as the cause the one thing known to be in order, and cost real time on the way to the actual fault, which was on the proxy. It now says what was observed — the proxy took the request and sent no video — and says outright that nothing here explains why.
+- **Fix**: The waiting overlay has one writer again. The player was also putting text in that line, and clearing it to a space when it thought the wait was over, so the words composed from the measurements were overwritten and the line grew until it ran off the screen. The player owns whether the overlay is up — that is a function of the state; the loading component owns what it says. The line is also given a ceiling and somewhere to wrap, because it now carries several rows rather than a short chip.
+
 ## 0.8.128
 
 - **New**: The waiting overlay's text comes from one function. `domain/waiting-text.js` takes an object of measurements — peers, rate, bytes still needed, the cushion, the estimate — plus the step the pipeline is on, and returns every line of it. Two writers used to share that line: the pipeline's status string and the buffering formatter. So the same wait could read one way while it was opening and another once it stalled, with nowhere to look to find out why. A seek and a cold open are the same wait, so they are now the same words, made the same way. The function is pure, which is what lets a test pin it without a browser.

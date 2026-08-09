@@ -157,35 +157,8 @@ export class Player extends StateDerivedView {
    *
    * @param {CustomEvent} event
    */
-  #onSetBuffering = (event) => {
-    const detail = event instanceof CustomEvent ? event.detail : null;
-    // Text only. Whether this is on screen is a function of the state and is
-    // applied in applyAppState — a second gate here could hide the overlay
-    // during a cold open, which is exactly when the viewer most needs it.
-    if (detail?.active === true) {
-      const text = typeof detail?.text === "string" ? detail.text : "";
-      if (text.length > 0) {
-        this.#bufferingPeers.textContent = text;
-        this.#bufferingPeers.style.visibility = "visible";
-      } else {
-        // Keep the pill in the layout — a non-breaking space reserves its line
-        // and `visibility:hidden` (not display:none) keeps its box — so the
-        // centered spinner does not jump when the peer count appears/disappears.
-        this.#bufferingPeers.textContent = " ";
-        this.#bufferingPeers.style.visibility = "hidden";
-      }
-      return;
-    }
-    this.#bufferingPeers.style.visibility = "hidden";
-    this.#bufferingPeers.textContent = " ";
-  };
-
   #hideBuffering() {
     this.#buffering.hidden = true;
-    // The whole overlay is display:none while off; keep the pill reserved +
-    // invisible so it never causes a layout jump when it reappears.
-    this.#bufferingPeers.style.visibility = "hidden";
-    this.#bufferingPeers.textContent = " ";
   }
 
   /**
@@ -333,7 +306,6 @@ export class Player extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
-    document.addEventListener(PLAYER_EVENTS.SET_BUFFERING, this.#onSetBuffering);
     document.addEventListener(PLAYER_EVENTS.SET_SHARE_LINK, this.#onSetShareLink);
     this.#share.addEventListener("click", this.#onShareClick);
     this.#shareMenu.addEventListener("click", this.#onShareMenuClick);
