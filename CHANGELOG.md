@@ -1,3 +1,7 @@
+## 0.8.136
+
+- **Fix**: The waiting line stops growing, and this time the shape that let it grow is gone. A second call site took the rendered text and passed it back in as the STEP, so every later render appended its own rows to it — the same fault as 0.8.132, at a different line, found by the same instrument. The render now returns nothing at all: a function that hands back what it has just drawn invites exactly this, and three occurrences is enough. Removing the return value is what makes a fourth impossible, not the fix to the call site.
+
 ## 0.8.135
 
 - **New**: One number, always. The time until playback no longer alternates with "estimating…" and "starting now". Those were a different kind of statement wearing the same line: one admitted the formula had nothing, the other announced an event. The viewer asked how long, so they are told how long — and when the wait is nearly over that is zero seconds, which is a duration like any other. Before the first measurement there is no line rather than a word standing in for a number.
