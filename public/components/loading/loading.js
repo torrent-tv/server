@@ -2,7 +2,8 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { formatWaitingText, stepForMeasurements } from "../../domain/waiting-text.js";
+import { stepForMeasurements } from "../../domain/waiting-text.js";
+import { WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
 import { TorrentSession } from "../../domain/torrent-session.js";
@@ -106,7 +107,6 @@ export class Loading extends StateDerivedView {
     actionButton: "#loading__action",
     // The overlay's own text line — the one the seek case already used. There
     // is one waiting interface, so there is one place its words go.
-    status: "#player__buffering-peers"
   };
 
   static MESSAGES = {
@@ -183,7 +183,6 @@ export class Loading extends StateDerivedView {
   // rate being achieved right now, however steep the samples look.
   static RATE_TREND_MAX_GROWTH = 4;
 
-  #status;
   /**
    * Recent download-speed samples, for projecting a rate that is still rising.
    * See #projectDownloadEta.
@@ -878,42 +877,12 @@ export class Loading extends StateDerivedView {
    * @returns {string} The text now on screen.
    */
   #noteWaiting(measurements) {
-    for (const [key, value] of Object.entries(measurements)) {
-      if (value === undefined) {
-        delete this.#waiting[key];
-      } else {
-        this.#waiting[key] = value;
-      }
-    }
-    const text = formatWaitingText(this.#waiting);
-    // The formatter emits at most four rows — the step, the supply, the
-    // readiness and the time — so anything longer means one of the MEASUREMENTS
-    // already carries rendered text. Measured 2026-08-09: 53 rows, with the
-    // step holding a dozen repeats of the readiness and time lines, and no call
-    // site in this file composes a step that way. Report the offender's own
-    // field and length once per render rather than reasoning about it again.
-    const rowCount = text.split("\n").length;
-    if (rowCount > 6) {
-      const shape = Object.entries(this.#waiting)
-        .map(([key, value]) => `${key}=${typeof value === "string" ? `${value.split("\n").length}rows/${value.length}ch` : value}`)
-        .join(" ");
-      console.warn(`[waiting] composed ${rowCount} rows from: ${shape}`, new Error().stack);
-    }
-    // `replaceChildren` rather than `textContent =`, and the difference is not
-    // cosmetic: it removes every child the node holds, whoever put them there.
-    // Field 2026-08-09, in a private window with no cache, this line grew to 53
-    // rows — successive renders stacked on top of each other — while the served
-    // code had exactly one writer doing a plain assignment, which cannot
-    // accumulate. The mechanism was never identified. This makes the writer
-    // authoritative over the node's whole contents instead of over its text, so
-    // the outcome no longer depends on knowing who else touched it.
-    this.#status.replaceChildren(document.createTextNode(text));
-    // The player hides this line with an inline `visibility` when a stall ends
-    // with nothing to say. Writing words into it has to undo that, or the first
-    // load after a seek says nothing at all.
-    this.#status.style.visibility = text.length > 0 ? "visible" : "hidden";
-    return text;
+    // Reported, not drawn. The overlay is a separate component that subscribes
+    // to these facts and rebuilds itself; nothing here knows what ends up on
+    // screen, which is what makes it impossible to hand it back its own text.
+    document.dispatchEvent(new CustomEvent(WAITING_EVENTS.MEASURED, { detail: measurements }));
   }
+
 
   /**
    * How close playback is to (re)starting, and how long that will take.
@@ -1827,10 +1796,9 @@ export class Loading extends StateDerivedView {
     // interfaces into one is roadmap item 8; until then they stay separate and
     // this one keeps the job it can do without trapping anyone.
     super((state) => state === APP_STATE.OPENING);
-    this.#status = document.querySelector(Loading.SELECTOR.status);
     this.#actionButton = document.querySelector(Loading.SELECTOR.actionButton);
 
-    if (!this.#status || !this.#actionButton) {
+    if (!this.#actionButton) {
       throw new Error(Loading.MESSAGES.missingDomNodes);
     }
 
@@ -2020,19 +1988,9 @@ export class Loading extends StateDerivedView {
 
   /** @param {string} value */
   setStatus(value) {
-    // Which step the pipeline is on is one measurement among the others — the
-    // only one that is words rather than a number, because no measurement can
-    // name a step. It goes through the same function as the rest.
-    //
-    // And it opens a stage: every step the viewer is shown is therefore timed,
-    // without a single begin/end having to be placed by hand. A step that
-    // repeats is not re-opened, so a poll running every 1.5 s does not chop one
-    // wait into dozens of entries.
-    this.#stageFromPipeline = value.length > 0;
-    if (value.length > 0) {
-      this.#stages.begin(value);
-    }
-    this.#noteWaiting({ stage: value.length > 0 ? value : undefined });
+    document.dispatchEvent(
+      new CustomEvent(WAITING_EVENTS.STEP, { detail: { value: typeof value === "string" ? value : "" } })
+    );
   }
 
   /**

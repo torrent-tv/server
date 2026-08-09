@@ -1,5 +1,11 @@
 ## 0.8.136
 
+- **New**: The waiting overlay is its own component (`components/waiting/waiting.js`) and nobody tells it what to display. It subscribes to facts — `WAITING:MEASURED` as measurements are taken, `WAITING:STEP` when the pipeline reaches a named step — accumulates them, and rebuilds its own text. The pipeline no longer touches that element at all; it reports and forgets.
+- **Fix**: The line cannot grow again. Three times now a caller took the text the overlay had just rendered and passed it back as the step, after which every later render appended its own rows to it — 53 rows and off the screen, measured 2026-08-09. Each time the call site was fixed and each time another appeared. There is no longer any way to say "display this", only "this was measured" and "this step began", so the fault has nowhere to live. The node is also rebuilt with `replaceChildren`, which removes whatever is there first, whoever put it there.
+- **Fix**: A finished wait takes its measurements with it, instead of the next one opening on the last one's peers and estimate until its own first poll answers.
+
+## 0.8.136
+
 - **Fix**: The waiting line stops growing, and this time the shape that let it grow is gone. A second call site took the rendered text and passed it back in as the STEP, so every later render appended its own rows to it — the same fault as 0.8.132, at a different line, found by the same instrument. The render now returns nothing at all: a function that hands back what it has just drawn invites exactly this, and three occurrences is enough. Removing the return value is what makes a fourth impossible, not the fix to the call site.
 
 ## 0.8.135
