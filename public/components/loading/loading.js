@@ -850,6 +850,19 @@ export class Loading extends StateDerivedView {
       }
     }
     const text = formatWaitingText(this.#waiting);
+    // The formatter emits at most four rows — the step, the supply, the
+    // readiness and the time — so anything longer means one of the MEASUREMENTS
+    // already carries rendered text. Measured 2026-08-09: 53 rows, with the
+    // step holding a dozen repeats of the readiness and time lines, and no call
+    // site in this file composes a step that way. Report the offender's own
+    // field and length once per render rather than reasoning about it again.
+    const rowCount = text.split("\n").length;
+    if (rowCount > 6) {
+      const shape = Object.entries(this.#waiting)
+        .map(([key, value]) => `${key}=${typeof value === "string" ? `${value.split("\n").length}rows/${value.length}ch` : value}`)
+        .join(" ");
+      console.warn(`[waiting] composed ${rowCount} rows from: ${shape}`, new Error().stack);
+    }
     // `replaceChildren` rather than `textContent =`, and the difference is not
     // cosmetic: it removes every child the node holds, whoever put them there.
     // Field 2026-08-09, in a private window with no cache, this line grew to 53
