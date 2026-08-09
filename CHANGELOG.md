@@ -1,3 +1,8 @@
+## 0.8.121
+
+- **New**: One waiting interface instead of two. A cold open and a seek into data that has not arrived ask the viewer the same question and were answered by two different screens — a full-screen modal dialog for the first, a small overlay in the player for the second. The dialog is gone; what it carried (the file name, the status line, Cancel, Playlist) now lives in the player's own overlay, which is shown whenever the state says the viewer is waiting.
+- **New**: The progress bar is gone with it. A bar promises a known fraction of a known whole; what is being waited for is a time, and it is already stated in words.
+
 ## 0.8.120
 
 - **Fix**: A cold open plays by itself again. Whether the viewer wants playback was read as `!video.paused` at the one moment the pipeline itself holds the element paused — the pre-buffer gate, one line before a stream is announced ready — so every open reported "the viewer stopped it" and ended on a frozen first frame, with the starvation indicator never arming and a shared link's position never applied. A pause we cause is now marked as ours before it is issued (`domain/playback-intent.js`) and only an unmarked one counts as the viewer's.
