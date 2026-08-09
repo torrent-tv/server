@@ -1,3 +1,7 @@
+## 0.8.131
+
+- **Chore**: When the waiting line comes out longer than the formatter can produce, the log names the field carrying the excess. The formatter emits at most four rows; measured 2026-08-09 it produced 53, with the step holding a dozen repeats of the readiness and time rows — and no call site composes a step that way, so reading the code has not explained it. A `MutationObserver` established that only our own writer touches the node, which rules out the DOM and leaves the data. This reports the shape of every measurement, once per over-long render, instead of the question being reasoned about a third time.
+
 ## 0.8.130
 
 - **Fix**: The waiting line replaces its whole contents instead of assigning its text. Measured 2026-08-09 in a private window with no cache: the line grew to 53 rows, successive renders stacked on top of one another, while the code being served had exactly one writer doing a plain `textContent` assignment — which cannot accumulate. The mechanism was not identified. `replaceChildren` removes every child the node holds whoever put them there, so the writer is authoritative over the node rather than over its text, and the outcome no longer depends on knowing who else touched it.
