@@ -1,5 +1,5 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
-import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
+import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -1827,17 +1827,15 @@ export class Loading extends StateDerivedView {
     this.#status.textContent = value;
   }
 
-  /** @param {number} value */
-  setProgress(value) {
-    const safeValue = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
-    // Monotonic: the bar only moves forward, except an explicit reset to 0 (new
-    // file / new playback). This keeps it stable across within-phase
-    // fluctuations (header pieces, warmup→first-segment) and phase boundaries.
-    // A bar promised a known fraction of a known whole; what the viewer waits
-    // for is a time, and it is said in words. Kept as a no-op so the pipeline's
-    // many progress reports need no unpicking.
-    this.#logEvt(`progress bar=${applied.toFixed(1)}% req=${safeValue.toFixed(1)}%`);
-  }
+  /**
+   * Nothing. The progress bar is gone: a bar promises a known fraction of a
+   * known whole, and what the viewer waits for is a time, which is stated in
+   * words beside it. Kept as an accepted call so the pipeline's many progress
+   * reports need no unpicking.
+   *
+   * @param {number} _value
+   */
+  setProgress(_value) {}
 
   /**
    * Set the progress bar from a single phase's own 0–100% progress, mapped onto
@@ -5206,7 +5204,7 @@ const PREBUFFER_MIN_SECONDS = 6;
 // moves, but nowhere near the first-open cushion: counting a seek toward 15 s
 // described a moment that never came, and the number still read 4.9 s when
 // playback had already resumed.
-const RESUME_TARGET_SECONDS = 2;
+const _RESUME_TARGET_SECONDS = 2;
 // How often the playback position may be written to the address bar, so a
 // bookmark taken at any moment is at most this far behind the picture.
 // `timeupdate` fires about four times a second, which is far too often to

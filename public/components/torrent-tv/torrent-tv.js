@@ -1,7 +1,6 @@
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
 import {
   APP_EVENT,
-  APP_STATE,
   APP_SUPERSTATE,
   INITIAL_STATE,
   isWithin,

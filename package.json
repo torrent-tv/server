@@ -18,7 +18,8 @@
     "docker:build": "docker build -t ghcr.io/torrent-tv/server:$npm_package_version -t ghcr.io/torrent-tv/server:latest .",
     "docker:push": "docker push ghcr.io/torrent-tv/server:$npm_package_version && docker push ghcr.io/torrent-tv/server:latest",
     "docker:publish": "npm run docker:build && npm run docker:push",
-    "test": "node --test"
+    "test": "npm run lint && node --test",
+    "lint": "biome lint ."
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
@@ -32,6 +33,7 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.7",
     "knip": "^6.32.0"
   }
 }
