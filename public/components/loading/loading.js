@@ -836,7 +836,7 @@ export class Loading extends StateDerivedView {
     if (!this.#stageFromPipeline) {
       measurements.stage = stepForMeasurements(measurements) ?? undefined;
     }
-    return this.#noteWaiting(measurements);
+    this.#noteWaiting(measurements);
   }
 
   /**
@@ -4598,13 +4598,18 @@ export class Loading extends StateDerivedView {
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
     this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
 
-    const text = this.#formatBufferingText(this.#lastDownloadStats, progress);
-    // Before ffmpeg has produced anything the readiness line has no percent to
-    // report, so name what IS happening — the transcoder starting — above the
-    // shared block, rather than leaving the screen silent about it.
-    const isWarmingUp =
-      this.#formatTranscodeStageText(progress, unified) === null && Number.isFinite(warmupPercent);
-    this.setStatus(isWarmingUp ? `Starting transcoder... ${Math.round(warmupPercent)}%\n${text}` : text);
+    // Before ffmpeg has produced anything there is no cushion to report, so name
+    // what IS happening — the transcoder starting — rather than leaving the
+    // screen silent about it. The STEP only: the rest of the block renders
+    // itself, and feeding its rendered output back in here is what grew the
+    // line by two rows a pass until it ran off the screen. Third occurrence of
+    // that fault, so the render now returns nothing and there cannot be a
+    // fourth.
+    if (Number.isFinite(warmupPercent) && (unified.cushionPercent ?? 0) <= 0) {
+      this.#stageFromPipeline = true;
+      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%`);
+    }
+    this.#formatBufferingText(this.#lastDownloadStats, progress);
   }
 
   /**
