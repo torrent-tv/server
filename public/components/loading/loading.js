@@ -146,7 +146,13 @@ export class Loading extends StateDerivedView {
     waitingForNetwork: "Waiting for the network to come back…",
     switchingAudio: "Switching audio track...",
     switchingQuality: "Switching quality...",
-    prebufferStalled: "Could not start playback — no data arrived from the proxy. If it is on your network, allow local network access for this site and try again.",
+    // Says what was observed and nothing else. It used to name the local
+    // network as the cause, and on 2026-08-09 it did so while ICE was complete
+    // over global IPv6, the send queue was empty and progress polls were being
+    // answered in 9-43 ms — the one thing known to be in order. The real fault
+    // was on the proxy, and this message cost real time on the way to finding
+    // it. A message must not name a cause it has not established.
+    prebufferStalled: "Could not start playback: the proxy accepted the request but sent no video. Nothing here says why — the proxy's own log will.",
     lanPermissionExplainer:
       "The video source is a device on your own network. Your browser asks for permission before a website may talk to it — press Allow and confirm the browser's question.",
     lanPermissionWaiting: "Waiting for the browser's local network permission...",

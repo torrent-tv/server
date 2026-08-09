@@ -140,6 +140,12 @@
        theme-aware plate over the video (light override below). */
     padding: 0.4rem 0.7rem;
     line-height: 1.35;
+    /* The line carries several rows now — the step, the supply, the readiness
+       and the time — so it needs a ceiling and somewhere to wrap. Without one
+       it grew past the viewport on a long file name. */
+    max-inline-size: min(90vw, 34rem);
+    overflow-wrap: anywhere;
+    text-align: center;
     border-radius: 0.5rem;
     background: rgb(20 20 22 / 0.5);
     color: var(--media-primary-color);
