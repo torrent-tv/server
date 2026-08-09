@@ -8,7 +8,7 @@
  *
  * 1. **Moore, not Mealy.** An output depends on the state alone, never on the
  *    edge taken to reach it. So which view is on screen, whether the waiting
- *    overlay shows, and whether the controls accept input are FUNCTIONS OF THE
+ *    overlay shows, and what the media element is told are FUNCTIONS OF THE
  *    STATE, computed by each view from {@link viewForState} and friends. The old
  *    design hung them on the edges — entering PLAYING dispatched "show the
  *    player" — and four flows (quality switch, audio switch, reconnect, Retry)
@@ -45,6 +45,17 @@
 export const APP_STATE = Object.freeze({
   /** No source is open. */
   IDLE: "IDLE",
+  /**
+   * A source is open, no file is being built, and the viewer is choosing which
+   * one to play.
+   *
+   * Named for the situation, not for the thing on screen. A state called
+   * PLAYLIST would name a widget, and the machine exists so that the view
+   * follows the state rather than the other way round — when the choice is
+   * offered as a gallery of frames instead of a list, the widget changes and
+   * this does not.
+   */
+  CHOOSING_FILE: "CHOOSING_FILE",
   /** A source is open; no playable stream exists yet. */
   OPENING: "OPENING",
   /** The picture is moving. */
@@ -125,6 +136,7 @@ function deepFreeze(value) {
 const PARENT = Object.freeze({
   [APP_STATE.IDLE]: null,
   [APP_STATE.ERROR]: null,
+  [APP_STATE.CHOOSING_FILE]: APP_SUPERSTATE.OPEN,
   [APP_STATE.OPENING]: APP_SUPERSTATE.OPEN,
   [APP_STATE.ADVANCING]: APP_SUPERSTATE.LIVE,
   [APP_STATE.STALLED]: APP_SUPERSTATE.LIVE,
@@ -159,7 +171,12 @@ export const APP_EVENT = Object.freeze({
   /** A failure the pipeline says cannot be recovered from. */
   FATAL_FAILURE: "FATAL_FAILURE",
   /** The viewer closed the source and went back to the picker. */
-  CLOSED: "CLOSED"
+  CLOSED: "CLOSED",
+  /**
+   * The viewer asked to choose a different file of the source that is already
+   * open — "Back to episodes" on the error screen.
+   */
+  FILE_CHOICE_REQUESTED: "FILE_CHOICE_REQUESTED"
 });
 
 /**
@@ -198,6 +215,11 @@ export const APP_EVENT = Object.freeze({
  */
 const TRANSITIONS = deepFreeze({
   [APP_STATE.IDLE]: {
+    [APP_EVENT.SOURCE_OPENED]: APP_STATE.OPENING
+  },
+
+  [APP_STATE.CHOOSING_FILE]: {
+    // Choosing one starts building it.
     [APP_EVENT.SOURCE_OPENED]: APP_STATE.OPENING
   },
 
@@ -250,6 +272,11 @@ const TRANSITIONS = deepFreeze({
     // Retrying, or picking another episode from the error screen, OPENS a
     // source. It does not resume one: there is nothing to resume.
     [APP_EVENT.SOURCE_OPENED]: APP_STATE.OPENING,
+    // "Back to episodes" opens no file: it returns to the choice. Sending this
+    // to OPENING instead left the machine claiming a build that nobody had
+    // started, and the modal waiting view came up over the episode list with
+    // the failed file's name still on it.
+    [APP_EVENT.FILE_CHOICE_REQUESTED]: APP_STATE.CHOOSING_FILE,
     [APP_EVENT.CLOSED]: APP_STATE.IDLE
   }
 });
@@ -374,18 +401,6 @@ export function viewForState(state) {
  */
 export function isWaiting(state) {
   return state === APP_STATE.OPENING || state === APP_STATE.STALLED;
-}
-
-/**
- * Whether the player's controls should accept input. Nothing is worth
- * controlling before a stream exists — a seek bar over a file that has not been
- * opened can only mislead.
- *
- * @param {string} state
- * @returns {boolean}
- */
-export function controlsLive(state) {
-  return isWithin(state, APP_SUPERSTATE.LIVE);
 }
 
 /**

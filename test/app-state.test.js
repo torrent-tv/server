@@ -22,7 +22,6 @@ import {
   ABSENT_EDGE_INVARIANTS,
   INITIAL_STATE,
   MEDIA_INTENT,
-  controlsLive,
   declaredEdges,
   isWaiting,
   isWithin,
@@ -150,7 +149,13 @@ test("an edge on a superstate reaches every state inside it", () => {
   const open = ALL_STATES.filter((state) => isWithin(state, APP_SUPERSTATE.OPEN));
   assert.deepEqual(
     open.sort(),
-    [APP_STATE.ADVANCING, APP_STATE.OPENING, APP_STATE.PAUSED, APP_STATE.STALLED].sort()
+    [
+      APP_STATE.ADVANCING,
+      APP_STATE.CHOOSING_FILE,
+      APP_STATE.OPENING,
+      APP_STATE.PAUSED,
+      APP_STATE.STALLED
+    ].sort()
   );
   for (const state of open) {
     assert.equal(nextState(state, APP_EVENT.CLOSED), APP_STATE.IDLE, `${state} must close to the picker`);
@@ -246,11 +251,7 @@ test("a seek, a scrub while paused and starvation are all one state", () => {
 });
 
 test("waiting for a cold open and waiting for a seek look identical to the viewer", () => {
-  for (const output of [viewForState, isWaiting, controlsLive]) {
-    // Everything except the controls, which are dead before a stream exists.
-    if (output === controlsLive) {
-      continue;
-    }
+  for (const output of [viewForState, isWaiting]) {
     assert.equal(
       output(APP_STATE.OPENING),
       output(APP_STATE.STALLED),
@@ -262,18 +263,19 @@ test("waiting for a cold open and waiting for a seek look identical to the viewe
 // -------------------------------------------------------------------- outputs
 
 test("every output is a function of the state alone", () => {
-  /** state -> [view, waiting, controls accept input, what to tell the element] */
+  /** state -> [view, waiting, what to tell the element] */
   const expected = {
-    [APP_STATE.IDLE]: [APP_VIEW.PICKER, false, false, MEDIA_INTENT.PAUSE],
-    [APP_STATE.OPENING]: [APP_VIEW.PLAYER, true, false, MEDIA_INTENT.LEAVE],
-    [APP_STATE.ADVANCING]: [APP_VIEW.PLAYER, false, true, MEDIA_INTENT.PLAY],
-    [APP_STATE.STALLED]: [APP_VIEW.PLAYER, true, true, MEDIA_INTENT.LEAVE],
-    [APP_STATE.PAUSED]: [APP_VIEW.PLAYER, false, true, MEDIA_INTENT.PAUSE],
-    [APP_STATE.ERROR]: [APP_VIEW.ERROR, false, false, MEDIA_INTENT.PAUSE]
+    [APP_STATE.IDLE]: [APP_VIEW.PICKER, false, MEDIA_INTENT.PAUSE],
+    [APP_STATE.CHOOSING_FILE]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PAUSE],
+    [APP_STATE.OPENING]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.LEAVE],
+    [APP_STATE.ADVANCING]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PLAY],
+    [APP_STATE.STALLED]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.LEAVE],
+    [APP_STATE.PAUSED]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PAUSE],
+    [APP_STATE.ERROR]: [APP_VIEW.ERROR, false, MEDIA_INTENT.PAUSE]
   };
   for (const state of ALL_STATES) {
     assert.deepEqual(
-      [viewForState(state), isWaiting(state), controlsLive(state), mediaIntentForState(state)],
+      [viewForState(state), isWaiting(state), mediaIntentForState(state)],
       expected[state],
       `outputs for ${state}`
     );
