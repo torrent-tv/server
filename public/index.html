@@ -43,20 +43,6 @@
       </form>
     </dialog>
 
-    <dialog id="loading" aria-live="polite" aria-busy="true">
-      <progress id="loading__progress" max="100" value="0"></progress>
-      <p id="loading__filename">Waiting for a .torrent file...</p>
-      <p id="loading__status">Idle.</p>
-      <!-- Action for flows that need one user click mid-load (e.g. triggering
-           the browser's local-network permission question). Hidden unless a
-           flow is waiting on it; label set by the flow. -->
-      <button id="loading__action" class="loading__control" type="button" hidden></button>
-      <!-- Escape hatch while a load drags on: pick a different episode without
-           cancelling and starting over. Hidden unless the torrent actually has
-           more than one video file. -->
-      <button id="loading__playlist" class="loading__control" type="button" hidden>Playlist</button>
-      <button id="loading__cancel" class="loading__control" type="button">Cancel</button>
-    </dialog>
 
     <dialog id="error" aria-live="assertive">
       <h1 id="error__title">.torrent</h1>
@@ -80,8 +66,19 @@
              fullscreen. iPhone fullscreen is the OS-native video player, which
              shows no page DOM — iOS renders its own native spinner there (same
              limitation as Picture-in-Picture). -->
+        <!-- The ONE waiting interface. A cold open and a seek into data that
+             has not arrived are the same question to the viewer, and used to be
+             answered by two different screens — a modal dialog for the first, a
+             spinner for the second. There is no progress bar: a bar promises a
+             known fraction of a known whole, and what is being waited for is a
+             time, which is stated here in words. -->
         <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" noautohide hidden>
+          <p id="loading__filename">Waiting for a .torrent file...</p>
+          <p id="loading__status">Idle.</p>
           <span id="player__buffering-peers"></span>
+          <button id="loading__action" class="loading__control" type="button" hidden></button>
+          <button id="loading__playlist" class="loading__control" type="button" hidden>Playlist</button>
+          <button id="loading__cancel" class="loading__control" type="button">Cancel</button>
         </div>
 
         <media-control-bar id="player__top-bar" slot="top-chrome">

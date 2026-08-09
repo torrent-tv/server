@@ -104,10 +104,8 @@ export class Loading extends StateDerivedView {
     cancelButton: "#loading__cancel",
     playlistButton: "#loading__playlist",
     actionButton: "#loading__action",
-    dialog: "#loading",
     fileName: "#loading__filename",
-    status: "#loading__status",
-    progress: "#loading__progress"
+    status: "#loading__status"
   };
 
   static MESSAGES = {
@@ -178,10 +176,8 @@ export class Loading extends StateDerivedView {
   // rate being achieved right now, however steep the samples look.
   static RATE_TREND_MAX_GROWTH = 4;
 
-  #dialog;
   #fileName;
   #status;
-  #progress;
   #cancelButton;
   #playlistButton;
   /**
@@ -1644,18 +1640,15 @@ export class Loading extends StateDerivedView {
     // interfaces into one is roadmap item 8; until then they stay separate and
     // this one keeps the job it can do without trapping anyone.
     super((state) => state === APP_STATE.OPENING);
-    this.#dialog = document.querySelector(Loading.SELECTOR.dialog);
     this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
     this.#status = document.querySelector(Loading.SELECTOR.status);
-    this.#progress = document.querySelector(Loading.SELECTOR.progress);
     this.#cancelButton = document.querySelector(Loading.SELECTOR.cancelButton);
     this.#playlistButton = document.querySelector(Loading.SELECTOR.playlistButton);
     this.#actionButton = document.querySelector(Loading.SELECTOR.actionButton);
 
-    if (!this.#dialog || !this.#fileName || !this.#status || !this.#progress || !this.#cancelButton || !this.#actionButton) {
+    if (!this.#fileName || !this.#status || !this.#cancelButton || !this.#actionButton) {
       throw new Error(Loading.MESSAGES.missingDomNodes);
     }
-    this.#dialog.inert = true;
 
     this.#session = new TorrentSession(() => undefined);
     this.#proxySelector = new ProxySelector();
@@ -1820,20 +1813,18 @@ export class Loading extends StateDerivedView {
     document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
   };
 
-  /** @param {boolean} value */
-  set visible(value) {
-    if (value) {
-      this.#dialog.inert = false;
-      if (!this.#dialog.open) {
-        this.#dialog.showModal();
-      }
-      return;
-    }
-    if (this.#dialog.open) {
-      this.#dialog.close();
-    }
-    this.#dialog.inert = true;
-  }
+  /**
+   * Nothing. The waiting interface lives inside the player now, and whether it
+   * is on screen is a function of the state, applied by `Player` from
+   * `isWaiting`. This component owns what that interface SAYS and never whether
+   * it is shown — which is the whole point of deriving outputs from the state.
+   *
+   * Kept as a no-op so the call sites that used to hide a dialog by hand are
+   * harmless rather than having to be found and unpicked one by one.
+   *
+   * @param {boolean} _value
+   */
+  set visible(_value) {}
 
   /** @param {string} value */
   setFileName(value) {
@@ -1851,8 +1842,9 @@ export class Loading extends StateDerivedView {
     // Monotonic: the bar only moves forward, except an explicit reset to 0 (new
     // file / new playback). This keeps it stable across within-phase
     // fluctuations (header pieces, warmup→first-segment) and phase boundaries.
-    const applied = safeValue === 0 ? 0 : Math.max(safeValue, this.#progress.value);
-    this.#progress.value = applied;
+    // A bar promised a known fraction of a known whole; what the viewer waits
+    // for is a time, and it is said in words. Kept as a no-op so the pipeline's
+    // many progress reports need no unpicking.
     this.#logEvt(`progress bar=${applied.toFixed(1)}% req=${safeValue.toFixed(1)}%`);
   }
 
