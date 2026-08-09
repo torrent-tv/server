@@ -101,8 +101,6 @@ import {
  */
 export class Loading extends StateDerivedView {
   static SELECTOR = {
-    cancelButton: "#loading__cancel",
-    playlistButton: "#loading__playlist",
     actionButton: "#loading__action",
     fileName: "#loading__filename",
     status: "#loading__status"
@@ -178,8 +176,6 @@ export class Loading extends StateDerivedView {
 
   #fileName;
   #status;
-  #cancelButton;
-  #playlistButton;
   /**
    * Recent download-speed samples, for projecting a rate that is still rising.
    * See #projectDownloadEta.
@@ -1642,11 +1638,9 @@ export class Loading extends StateDerivedView {
     super((state) => state === APP_STATE.OPENING);
     this.#fileName = document.querySelector(Loading.SELECTOR.fileName);
     this.#status = document.querySelector(Loading.SELECTOR.status);
-    this.#cancelButton = document.querySelector(Loading.SELECTOR.cancelButton);
-    this.#playlistButton = document.querySelector(Loading.SELECTOR.playlistButton);
     this.#actionButton = document.querySelector(Loading.SELECTOR.actionButton);
 
-    if (!this.#fileName || !this.#status || !this.#cancelButton || !this.#actionButton) {
+    if (!this.#fileName || !this.#status || !this.#actionButton) {
       throw new Error(Loading.MESSAGES.missingDomNodes);
     }
 
@@ -1677,8 +1671,6 @@ export class Loading extends StateDerivedView {
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     window.addEventListener("pagehide", this.#onPageHide);
     window.addEventListener("beforeunload", this.#onBeforeUnload);
-    this.#cancelButton.addEventListener("click", this.#onCancelClick);
-    this.#playlistButton?.addEventListener("click", this.#onPlaylistClick);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClosed);
   }
 
@@ -1784,9 +1776,8 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #setPlaylistButtonVisible(visible) {
-    if (this.#playlistButton instanceof HTMLElement) {
-      this.#playlistButton.hidden = !visible;
-    }
+    // The player's own playlist button is on screen throughout, so the waiting
+    // interface does not carry a second one.
   }
 
   #onCancelClick = () => {
