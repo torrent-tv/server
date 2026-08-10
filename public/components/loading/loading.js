@@ -4376,15 +4376,14 @@ export class Loading extends StateDerivedView {
       this.#setPhaseProgress(0, Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100)));
     }
 
-    let fileLine = "";
-    if (fileProgress !== null && fileLength !== null && fileLength > 0) {
-      const pct = (fileProgress * 100).toFixed(1);
-      const downloaded = formatBytes(fileDownloaded ?? 0);
-      const total = formatBytes(fileLength);
-      fileLine = `\nFile: ${pct}% (${downloaded} / ${total})`;
-    }
+    // How much of the WHOLE file has been downloaded is not a thing anyone is
+    // waiting for: the file is read as a stream, and playback starts on a
+    // cushion of seconds, not on a percentage of gigabytes. Shown beside the
+    // real figures it invited exactly the wrong question — "why is it still
+    // downloading if it is already transcoding" — about a number that was never
+    // going to reach 100 before the picture started.
 
-    this.setStatus(`${Loading.MESSAGES.fetchingMetadata}${fileLine}`);
+    this.setStatus(Loading.MESSAGES.fetchingMetadata);
   }
 
 
