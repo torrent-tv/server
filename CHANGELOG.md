@@ -1,3 +1,7 @@
+## 0.8.161
+
+- **New**: The browser checks the tracks it received against the tracks the proxy said it would send. The proxy now states its output's track set when a session is created — it knows the set exactly, because it chose it — and the player compares that statement with what its media element actually holds. Until now a lost track was noticed only by its absence: measured 2026-08-10, sixty-five seconds of playing audio with `videoWidth=0` and not one frame decoded, and nothing anywhere saying that video had been promised. The two facts are reported separately on purpose, because "no picture" alone cannot tell a file that genuinely has no video from a session that lost the track on the way, and those are opposite problems with opposite fixes.
+
 ## 0.8.160
 
 - **Fix**: The stage decomposition reports an out-of-order stage as such instead of as a negative duration. Marks do not always fall in pipeline order — after a seek the buffer still holds media from the previous position, so "the first bytes arrived" can be observed before "the encoder produced anything". Measured backwards that read `first-bytes=-5.7s`, which is not a small negative number but a stage that did not happen in this wait. The 0.8.159 entry claimed this was already fixed; it was not, and this is the fix.

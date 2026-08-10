@@ -82,6 +82,14 @@ export class Player extends StateDerivedView {
 
   /** Ticks while the picture is meant to be moving. See #reportDecodedFrames. */
   #decodeTimer = null;
+
+  /**
+   * The track set the proxy said this session would carry, or null before it
+   * has said. Compared against what actually arrives — see #reportDecodedFrames.
+   *
+   * @type {{ video: boolean, audio: boolean } | null}
+   */
+  #declaredTracks = null;
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -247,8 +255,24 @@ export class Player extends StateDerivedView {
       `size=${this.#video.videoWidth}x${this.#video.videoHeight} ` +
       `frames=${frames ?? "n/a"} dropped=${quality?.droppedVideoFrames ?? "n/a"} ` +
       `readyState=${this.#video.readyState}`;
-    if (this.#video.currentTime > 3 && (frames === 0 || this.#video.videoWidth === 0)) {
-      console.warn(`[evt] ${line} — sound is playing and no picture has been decoded`);
+    // What arrived, against what the proxy said it would send. The two are
+    // stated separately on purpose: "no picture" alone cannot tell a file that
+    // genuinely has no video from a session that lost the track on the way, and
+    // those are opposite problems.
+    const hasPicture = this.#video.videoWidth > 0 && (frames ?? 0) > 0;
+    const declared = this.#declaredTracks;
+    if (this.#video.currentTime > 3 && declared !== null && declared.video && !hasPicture) {
+      console.warn(
+        `[evt] ${line} — the proxy declared video and audio, this element has audio only: ` +
+        "a track was lost between the encoder and the browser"
+      );
+      return;
+    }
+    if (this.#video.currentTime > 3 && !hasPicture) {
+      console.warn(
+        `[evt] ${line} — no picture decoded` +
+        (declared === null ? " (the proxy declared nothing to compare against)" : " (no video was declared)")
+      );
       return;
     }
     this.#logEvt(line);
@@ -274,6 +298,14 @@ export class Player extends StateDerivedView {
       this.#decodeTimer = null;
     }
   }
+
+  #onDeclaredTracks = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    this.#declaredTracks = detail && typeof detail === "object"
+      ? { video: detail.video === true, audio: detail.audio === true }
+      : null;
+    this.#logEvt(`declared tracks video=${this.#declaredTracks?.video} audio=${this.#declaredTracks?.audio}`);
+  };
 
   #onRequestReady = () => {
     this.#emitReady();
@@ -444,6 +476,7 @@ export class Player extends StateDerivedView {
 
   #setupEventHandlers() {
     document.addEventListener(PLAYER_EVENTS.REQUEST_READY, this.#onRequestReady);
+    document.addEventListener(PLAYER_EVENTS.DECLARED_TRACKS, this.#onDeclaredTracks);
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onBackToPlaylist);
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
