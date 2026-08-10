@@ -1,3 +1,7 @@
+## 0.8.148
+
+- **Fix**: The time until playback is measured again. The rate at which the browser's buffer fills is the only end-to-end figure there is — it prices in the torrent, the encoder, the data channel and the decoding together — and it was being measured on every reading, delivered to the model, and thrown away: the model declared the variable, printed it in the diagnostic and never assigned it. `fillRate=n/a` therefore stood in every line of every session while the buffer visibly moved (measured 2026-08-09: 35.99 s to 35.17 s over four readings, the rate never once computed). Every estimate the viewer was shown rested on the weaker terms instead, which is why none of the four figures reported from the field held.
+
 ## 0.8.147
 
 - **New**: The browser says whether it actually decoded a picture. A track chosen to be COPIED is one we judged the browser able to play, and when that judgement is wrong the result is a black frame with working sound — indistinguishable, from every other reading we take, from data simply arriving too slowly. Those are different faults with different fixes and the log could not tell them apart. Every five seconds while the picture is meant to be moving it now records the decoded frame count, the frame size and the dropped count; time advancing with the counter at zero is reported as a warning that says what it means.
