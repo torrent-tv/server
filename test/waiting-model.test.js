@@ -169,3 +169,20 @@ test("a reading that arrives alone does not blank what the proxy last said", () 
   const after = model.update({ bufferedAhead: 2 });
   assert.notEqual(after.cushionPercent, null, "the cushion is still measurable from the retained answer");
 });
+
+test("with nothing measured, the estimate rests on the host's median rather than an assumed 1.0x", () => {
+  const model = new WaitingModel();
+  // A cold open on a host that reports it usually takes 30 s to produce a first
+  // segment. Dividing the shortfall by an assumed realtime rate said 4.0s of a
+  // wait that ran 46.8s — measured 2026-08-09, median error 21.8s over 164
+  // samples, and not one figure borne out.
+  const result = model.update({
+    bufferedAhead: 0,
+    expectedFirstSegmentSeconds: 30,
+    transcodeProgress: { state: "ready" }
+  });
+  assert.ok(
+    result.etaSeconds !== null && result.etaSeconds >= 30,
+    `an unmeasured wait must not be estimated below what this host is known to take (got ${result.etaSeconds})`
+  );
+});
