@@ -634,8 +634,18 @@ export class WaitingModel {
    */
   #describeStages(endedAt) {
     const { startedAt, sessionAt, producedAt, fillingAt } = this.#stageMarks;
-    const span = (from, to) =>
-      from === null || to === null ? "never" : `${((to - from) / 1000).toFixed(1)}s`;
+    // Marks are not guaranteed to fall in pipeline order: after a seek the
+    // buffer still holds media from the previous position, so "first bytes
+    // arrived" can be observed before "the encoder produced anything". A
+    // duration measured backwards through that is not a small negative number,
+    // it is a stage that did not happen in this wait — and saying so is the
+    // difference between a reading and a puzzle.
+    const span = (from, to) => {
+      if (from === null || to === null) {
+        return "never";
+      }
+      return to < from ? "not-in-order" : `${((to - from) / 1000).toFixed(1)}s`;
+    };
     return (
       `create=${span(startedAt, sessionAt)} ` +
       `first-segment=${span(sessionAt, producedAt)} ` +
