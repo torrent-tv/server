@@ -216,13 +216,19 @@ export class Player extends StateDerivedView {
       return;
     }
     const aheadSeconds = bufferedAheadSeconds(this.#video);
-    this.#bufferSamples = withSample(this.#bufferSamples, { atMs: Date.now(), aheadSeconds });
+    this.#bufferSamples = withSample(this.#bufferSamples, {
+      atMs: Date.now(),
+      aheadSeconds,
+      // The playhead, so the rate can tell media that was PLAYED from time that
+      // merely passed. A stalled element is not paused and plays nothing.
+      playheadSeconds: this.#video.currentTime
+    });
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER, {
       detail: {
         bufferedAhead: aheadSeconds,
         // Whether the picture is moving decides whether playback consumption
         // counts toward the rate. This element knows; nothing else does.
-        fillRate: fillRateFromSamples(this.#bufferSamples, Date.now(), !this.#video.paused)
+        fillRate: fillRateFromSamples(this.#bufferSamples)
       }
     }));
   };

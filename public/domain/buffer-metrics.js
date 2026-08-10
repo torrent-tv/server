@@ -43,6 +43,9 @@ export function bufferedAheadSeconds(video) {
  * @typedef {object} BufferSample
  * @property {number} atMs - When it was taken.
  * @property {number} aheadSeconds - What {@link bufferedAheadSeconds} said.
+ * @property {number} [playheadSeconds] - Where the playhead stood. The rate
+ *   credits media consumed by playback, and only the playhead can say how much
+ *   was consumed — a stalled element is not paused, yet plays nothing.
  */
 
 /** Samples older than this say nothing about the rate right now. */
@@ -69,12 +72,10 @@ const FILL_RATE_MIN_SAMPLES = 3;
  * @param {BufferSample[]} samples - In the order taken, oldest first.
  * @param {number} [nowMs] - Present time; samples older than the window are
  *   ignored.
- * @param {boolean} [playing] - Whether the picture is moving. Only then is the
- *   media consumed by playback credited to the rate.
  * @returns {number | null} Null when there is not enough to say — which is a
  *   real answer, and must not be replaced by a guess.
  */
-export function fillRateFromSamples(samples, nowMs = Date.now(), playing = false) {
+export function fillRateFromSamples(samples, nowMs = Date.now()) {
   if (!Array.isArray(samples)) {
     return null;
   }
@@ -100,8 +101,13 @@ export function fillRateFromSamples(samples, nowMs = Date.now(), playing = false
   // seconds. A buffer that is not moving is filling at zero, and the honest
   // consequence is that no time can be given, not that it is the shortfall.
   const gained = last.aheadSeconds - first.aheadSeconds;
-  const consumed = playing ? elapsedSeconds : 0;
-  return (gained + consumed) / elapsedSeconds;
+  // How much was actually PLAYED, taken from the playhead itself rather than
+  // from a flag. `!video.paused` says the element intends to play, which during
+  // a stall is true while the picture stands still — so crediting a wait by that
+  // flag put `@1.00x` back on frozen buffers. The playhead cannot be wrong about
+  // this: if it did not move, nothing was consumed, whatever the element intended.
+  const played = Math.max(0, (last.playheadSeconds ?? 0) - (first.playheadSeconds ?? 0));
+  return (gained + played) / elapsedSeconds;
 }
 
 /**
