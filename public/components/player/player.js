@@ -149,7 +149,22 @@ export class Player extends StateDerivedView {
       this.#logEvt("player.play reason=state");
       const started = this.#video.play();
       if (started && typeof started.catch === "function") {
-        started.catch(() => undefined);
+        started.catch((error) => {
+          // A refused autoplay leaves the element paused, which raises a `pause`
+          // event — and that event was being read as the VIEWER stopping
+          // playback. The machine went to PAUSED, resumed, called play() again,
+          // was refused again: measured 2026-08-09 as a loop of
+          // `play reason=state` / `PAUSED on PAUSED_BY_VIEWER` / `ADVANCING on
+          // RESUMED`, which is exactly why a cold open never started until a
+          // seek — a seek is a user gesture, and a gesture lifts the refusal.
+          // Marked as ours so it is not mistaken for a decision, and said out
+          // loud so it is never again invisible.
+          pauseWithoutIntent(this.#video);
+          console.warn(
+            `[evt] player.play refused: ${error?.name ?? "error"} — ` +
+            "the browser will not start playback without a gesture from the viewer"
+          );
+        });
       }
       return;
     }
