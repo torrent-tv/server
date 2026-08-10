@@ -1,3 +1,9 @@
+## 0.8.163
+
+- **Fix**: A buffer that is not filling reads as zero rather than as 1x. The fill rate credited the media consumed by playing — correct while the picture moves, because a buffer holding steady during playback is genuinely being filled at exactly 1x — but it credited it during WAITS too, when nothing is being consumed. So a completely frozen buffer reported 1.00x, and a shortfall divided by that came back as the shortfall itself. Measured 2026-08-10: six consecutive waits, every one tagged `@1.00x-measured`, every one short — promised 15.0, 25.0, 14.9, 0.7, 0.0 and 5.9 seconds against real waits of 55.4, 47.0, 23.1, 11.0, 14.4 and 9.7. The same formula at the other end produced a single estimate of 586.9 seconds.
+- **Fix**: A rate of zero no longer divides anything. It is a true statement about the link and is kept, but it cannot answer "how long", so the estimate falls through to what this host has historically taken instead of returning an absurd figure.
+- **Chore**: Both are pinned by tests, including one asserting that the same three readings mean zero while waiting and 1x while playing.
+
 ## 0.8.162
 
 - **Fix**: The time until playback estimates the event that actually starts the picture. The gate opens on the full cushion OR early, once the buffer holds a healthy amount and the rate has sustained a surplus — and the estimate was measured against the full target regardless, so it described something nobody was waiting for. Measured 2026-08-10 across six waits: three promised 25.0, 20.2 and 24.8 seconds and ended after 7.1, 1.7 and 0.6. The figure also never moved during any of them, which was honest arithmetic on an unchanging input and still the wrong answer. The gate's own thresholds are now the estimate's, in one place, so the two cannot drift apart.

@@ -75,7 +75,7 @@ test("a buffer holding steady while the picture plays is filling at 1x, not 0", 
     { atMs: now - 2000, aheadSeconds: 10 },
     { atMs: now, aheadSeconds: 10 }
   ];
-  assert.equal(fillRateFromSamples(samples, now), 1);
+  assert.equal(fillRateFromSamples(samples, now, true), 1);
 });
 
 test("a buffer growing by four seconds over four is filling at 2x", () => {
@@ -85,7 +85,7 @@ test("a buffer growing by four seconds over four is filling at 2x", () => {
     { atMs: now - 2000, aheadSeconds: 8 },
     { atMs: now, aheadSeconds: 10 }
   ];
-  assert.equal(fillRateFromSamples(samples, now), 2);
+  assert.equal(fillRateFromSamples(samples, now, true), 2);
 });
 
 test("a buffer losing ground reads below 1", () => {
@@ -95,7 +95,7 @@ test("a buffer losing ground reads below 1", () => {
     { atMs: now - 2000, aheadSeconds: 8 },
     { atMs: now, aheadSeconds: 6 }
   ];
-  assert.equal(fillRateFromSamples(samples, now), 0);
+  assert.equal(fillRateFromSamples(samples, now, true), 0);
 });
 
 test("samples older than the window say nothing about the rate now", () => {
@@ -120,4 +120,19 @@ test("adding a sample drops the ones that have aged out and does not mutate", ()
     [9_000, 10_000],
     "the sample from ten seconds back is outside the window"
   );
+});
+
+test("a frozen buffer during a wait is filling at zero, not at 1x", () => {
+  const now = Date.now();
+  const frozen = [
+    { atMs: now - 4000, aheadSeconds: 3 },
+    { atMs: now - 2000, aheadSeconds: 3 },
+    { atMs: now, aheadSeconds: 3 }
+  ];
+  // While waiting nothing is consumed, so nothing may be credited. Crediting it
+  // made a completely stalled buffer read 1.00x — measured 2026-08-10 across six
+  // consecutive waits, every one of them underestimated because the shortfall
+  // was divided by a rate that described nothing at all.
+  assert.equal(fillRateFromSamples(frozen, now, false), 0);
+  assert.equal(fillRateFromSamples(frozen, now, true), 1, "during playback the same readings do mean 1x");
 });

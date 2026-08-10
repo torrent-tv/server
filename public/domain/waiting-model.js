@@ -739,7 +739,10 @@ export class WaitingModel {
    * @returns {void}
    */
   #recordFillRate(rate) {
-    if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+    // Zero is recorded, not discarded: a buffer that is not filling is a
+    // measurement, and the most important one. Dropping it left the last
+    // optimistic reading standing while nothing arrived.
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
       return;
     }
     const now = Date.now();
@@ -756,7 +759,12 @@ export class WaitingModel {
     if (this.#fillRateSamples.length === 0) {
       return null;
     }
-    return Math.min(...this.#fillRateSamples.map((each) => each.rate));
+    const slowest = Math.min(...this.#fillRateSamples.map((each) => each.rate));
+    // A rate of zero cannot divide a shortfall — that is how 586.9 seconds
+    // reached the screen. It is still the truth about the link, so it is not
+    // ignored: it means this measurement can say nothing, and the estimate
+    // falls through to what this host has historically taken.
+    return slowest > 0 ? slowest : null;
   }
 
   #requiredBufferSeconds() {

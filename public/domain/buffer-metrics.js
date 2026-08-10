@@ -69,10 +69,12 @@ const FILL_RATE_MIN_SAMPLES = 3;
  * @param {BufferSample[]} samples - In the order taken, oldest first.
  * @param {number} [nowMs] - Present time; samples older than the window are
  *   ignored.
+ * @param {boolean} [playing] - Whether the picture is moving. Only then is the
+ *   media consumed by playback credited to the rate.
  * @returns {number | null} Null when there is not enough to say — which is a
  *   real answer, and must not be replaced by a guess.
  */
-export function fillRateFromSamples(samples, nowMs = Date.now()) {
+export function fillRateFromSamples(samples, nowMs = Date.now(), playing = false) {
   if (!Array.isArray(samples)) {
     return null;
   }
@@ -86,10 +88,20 @@ export function fillRateFromSamples(samples, nowMs = Date.now()) {
   if (elapsedSeconds <= 0) {
     return null;
   }
-  // Media gained, plus media consumed by playing: a buffer holding steady while
-  // the picture moves is being filled at exactly 1x, not at 0.
+  // Media gained, plus — ONLY while the picture is moving — the media consumed
+  // by playing it: a buffer holding steady during playback is being filled at
+  // exactly 1x, not at 0.
+  //
+  // While the viewer is WAITING nothing is consumed, and crediting the wait as
+  // if it were is what made a completely frozen buffer report 1.00x. Measured
+  // 2026-08-10: six waits in a row, every one tagged `@1.00x-measured`, every
+  // one underestimated — because the shortfall was divided by a rate that
+  // described nothing. The same formula at the other extreme produced 586.9
+  // seconds. A buffer that is not moving is filling at zero, and the honest
+  // consequence is that no time can be given, not that it is the shortfall.
   const gained = last.aheadSeconds - first.aheadSeconds;
-  return (gained + elapsedSeconds) / elapsedSeconds;
+  const consumed = playing ? elapsedSeconds : 0;
+  return (gained + consumed) / elapsedSeconds;
 }
 
 /**
