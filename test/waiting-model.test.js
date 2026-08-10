@@ -186,3 +186,24 @@ test("with nothing measured, the estimate rests on the host's median rather than
     `an unmeasured wait must not be estimated below what this host is known to take (got ${result.etaSeconds})`
   );
 });
+
+test("the cushion the estimate counts down to is the one the gate releases on", () => {
+  const model = new WaitingModel();
+  // Two figures for one decision is what made the estimate useless at the only
+  // moment anyone reads it: the model asked for one segment while the gate held
+  // out for fifteen seconds, so it announced "ready, nothing to wait for" and
+  // the picture stayed still. Measured 2026-08-09: said=0.0s, was=11.9s.
+  assert.equal(
+    model.requiredBufferSeconds(),
+    15,
+    "with no rate measured, both must want the same fallback cushion"
+  );
+  // A cushion that fills fast needs to be smaller, because the surplus above
+  // realtime is what stops it draining.
+  model.update({ bufferedAhead: 0, fillRate: 3 });
+  const fast = model.requiredBufferSeconds();
+  model.update({ bufferedAhead: 0, fillRate: 1.2 });
+  const slow = model.requiredBufferSeconds();
+  assert.ok(fast < slow, `a faster fill must need less banked (${fast} vs ${slow})`);
+  assert.ok(fast >= 6 && slow <= 25, "and both must stay inside the bounds the gate uses");
+});

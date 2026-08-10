@@ -1,3 +1,8 @@
+## 0.8.156
+
+- **Fix**: The cushion the estimate counts down to is now the one the pre-buffer gate actually releases on. There were two figures for one decision: the model wanted a single segment, about four seconds, while the gate held out for fifteen. So the model announced "ready, nothing left to wait for" and the picture stayed still for another six to twelve seconds. Scored against what happened, 2026-08-09: `said=0.0s was=11.9s`, `said=0.0s was=5.6s`, and in the worst case `said=0.7s was=54.5s` — because with the cushion believed met, the fill term was dropped from the sum altogether and only a download term remained. The gate now asks the model for the figure instead of computing its own, so an estimate that reaches zero and a picture that starts are the same moment by construction. Covered by a test: with nothing measured both want the same fallback, and a faster fill needs less banked because the surplus over realtime is what stops it draining.
+- **Fix**: The estimate is scored where it is made. The report was asked of the pipeline's model, which computes twice in a whole wait, while the model that estimates for the screen recomputes on every buffer reading — so the one question that matters went unanswered in the log.
+
 ## 0.8.155
 
 - **Fix**: The estimate is scored against what actually happened, by the model that made it. The report was asked of the pipeline's model, which computes twice in a whole wait; the model that estimates for the SCREEN recomputes on every buffer reading and is the one holding enough samples to score. So the one question that matters — were the figures true — went unanswered in the log while the wait it described had just ended. It is now reported the moment a wait ends, from the same place the numbers came from.
