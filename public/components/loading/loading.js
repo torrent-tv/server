@@ -4777,7 +4777,13 @@ function canAppendCopiedAudio(codec, container) {
     // handles every codec HLS defines). Do not block the copy.
     return true;
   }
-  return MediaSource.isTypeSupported(mime);
+  const supported = MediaSource.isTypeSupported(mime);
+  // Both sides of the answer, because this decision is why a track is copied
+  // rather than re-encoded, and a wrong "yes" here is indistinguishable at
+  // playback from a file that is simply arriving too slowly — the two need very
+  // different fixes and the log could not tell them apart.
+  console.debug(`[evt] codec-support audio ${codec}/${container} asked "${mime}" -> ${supported}`);
+  return supported;
 }
 // Pre-buffer cushion accumulated before the player is revealed, so a transient
 // dip right after start does not immediately stall. Kept under the proxy's
