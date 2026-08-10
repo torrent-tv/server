@@ -218,7 +218,12 @@ export class Player extends StateDerivedView {
     const aheadSeconds = bufferedAheadSeconds(this.#video);
     this.#bufferSamples = withSample(this.#bufferSamples, { atMs: Date.now(), aheadSeconds });
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER, {
-      detail: { bufferedAhead: aheadSeconds, fillRate: fillRateFromSamples(this.#bufferSamples) }
+      detail: {
+        bufferedAhead: aheadSeconds,
+        // Whether the picture is moving decides whether playback consumption
+        // counts toward the rate. This element knows; nothing else does.
+        fillRate: fillRateFromSamples(this.#bufferSamples, Date.now(), !this.#video.paused)
+      }
     }));
   };
 
