@@ -327,7 +327,14 @@ export class WaitingModel {
     // decayed. Both were the SAME wait, so the honest figure is the smaller:
     // whatever was promised, minus the time that has since passed. A real event
     // — a seek, a new file — clears it (see #resetEtaFloor).
-    etaSeconds = this.#applyMonotonicEta(etaSeconds);
+    // No floor. A guard that capped each estimate at "the previous one minus
+    // the time since" was removed in server 0.8.109 and came back with this
+    // extraction. Its arithmetic ends one way: once a promise has run down to
+    // zero, `min(actual, 0)` is zero for ever. Measured 2026-08-09 — the source
+    // line read `fill=4.0@1.00x` while the screen read `0 seconds until
+    // playback`, for the whole of a wait in which the buffer never moved. It
+    // existed to hide jumps between estimate sources; there is one source now,
+    // so a rise means the wait genuinely got longer, and saying so is the point.
     this.#etaSamples.push({ atMs: Date.now(), predicted: etaSeconds, terms: etaSource });
 
     const result = {
@@ -413,32 +420,6 @@ export class WaitingModel {
     return linkMbps / mediaMbps;
   }
 
-  /**
-   * Keep the shown number from ever increasing during one wait.
-   *
-   * Each estimate is compared with the previous one reduced by the time that
-   * has elapsed since it was shown — the promise implied by that previous
-   * number. The smaller of the two wins, so the figure is a countdown. An
-   * estimate is allowed to be revised UP only after {@link #resetEtaFloor}, and
-   * only real events call that.
-   *
-   * @param {number | null} etaSeconds
-   * @returns {number | null}
-   */
-  #applyMonotonicEta(etaSeconds) {
-    if (etaSeconds === null || !Number.isFinite(etaSeconds)) {
-      return etaSeconds;
-    }
-    const now = Date.now();
-    if (this.#etaPromise !== null) {
-      const elapsed = (now - this.#etaPromiseAt) / 1000;
-      const promised = Math.max(0, this.#etaPromise - elapsed);
-      etaSeconds = Math.min(etaSeconds, promised);
-    }
-    this.#etaPromise = etaSeconds;
-    this.#etaPromiseAt = now;
-    return etaSeconds;
-  }
 
   #resetEtaFloor() {
     this.#etaPromise = null;
