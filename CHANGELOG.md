@@ -1,3 +1,8 @@
+## 0.8.158
+
+- **Fix**: A measured fill rate is the whole answer, not one term added to the others. It is taken at the buffer, which is the far end of the chain — the torrent, the encoder, the data channel and the browser's own decoding are all already inside that one number — so adding the stage terms on top of it adds a part to a whole. Measured 2026-08-09: an estimate of 28.7 s for a wait that lasted 1.6 s. The stage terms are still computed and still logged as evidence of where the time is expected to go; they are simply no longer summed into a figure that already contains them.
+- **New**: Every wait reports how long each of its stages actually took — creating the session, producing a first segment, the first bytes reaching the buffer, and filling the cushion — beside the score of what was predicted. "Said 4 s, took 47" says nothing about where the 43 went; "predicted 4 s to produce a first segment, it took 7.5" is a defect with an address. A stage that was never reached is named as such rather than reported as zero, because the two mean different things when the question is which prediction was wrong. The viewer still sees one total.
+
 ## 0.8.157
 
 - **Fix**: Buffer readings taken across a seek are thrown away instead of being read as a collapse in throughput. A seek discards the buffer, so a rate measured from before it to after it describes the flush and not the pipeline. Trusted as a fill rate it came out at 0.08x, and dividing the shortfall by that announced a 296-second wait for one that lasted 1.0 s; another read 719.7 s against 11.2 s. Those spikes are what drove the median error to 16-20 s on waits of 2-22 s. The history is cleared the moment the element starts seeking, before the reading that same event triggers is taken.

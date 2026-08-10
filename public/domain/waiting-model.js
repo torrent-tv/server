@@ -96,6 +96,20 @@ export class WaitingModel {
   #stageFromPipeline = false;
 
   /**
+   * When each stage of THIS wait was first observed to have completed.
+   *
+   * The point is to make a miss name the term that caused it. "Said 4 s, took
+   * 47" says nothing about where the 43 went; "predicted 4 s to produce a first
+   * segment, it took 7.5" is a defect with an address. Every stage below is
+   * something the facts already report — the estimate predicts each one, so
+   * each one can be scored on its own, and the viewer still sees a single
+   * total.
+   *
+   * @type {{ startedAt: number, sessionAt: number | null, producedAt: number | null, fillingAt: number | null }}
+   */
+  #stageMarks = { startedAt: Date.now(), sessionAt: null, producedAt: null, fillingAt: null };
+
+  /**
    * Take in whatever has just been measured, and answer with the figures.
    * Fields absent from `facts` keep their previous value: readings arrive at
    * different rates and from different places, and one of them being late must
@@ -187,6 +201,7 @@ export class WaitingModel {
     // cushion that belonged to the wait before it.
     this.#bufferedAhead = null;
     this.#downloadRateSamples = [];
+    this.#stageMarks = { startedAt: Date.now(), sessionAt: null, producedAt: null, fillingAt: null };
     this.#resetEtaFloor();
   }
 
@@ -309,6 +324,18 @@ export class WaitingModel {
         ? parsedEncodeSpeed
         : null;
 
+    // Stage boundaries of the wait actually happening, recorded once each.
+    const nowMs = Date.now();
+    if (this.#stageMarks.sessionAt === null && processedSeconds !== null) {
+      this.#stageMarks.sessionAt = nowMs;
+    }
+    if (this.#stageMarks.producedAt === null && producedSinceResume !== null && producedSinceResume > 0) {
+      this.#stageMarks.producedAt = nowMs;
+    }
+    if (this.#stageMarks.fillingAt === null && typeof bufferedAhead === "number" && bufferedAhead > 0) {
+      this.#stageMarks.fillingAt = nowMs;
+    }
+
     /** @type {string[]} */
     const terms = [];
     let total = 0;
@@ -390,10 +417,26 @@ export class WaitingModel {
       const rates = [encodeSpeed, linkRate].filter((rate) => typeof rate === "number" && rate > 0);
       const arrivalRate = measured ?? (rates.length > 0 ? Math.min(...rates) : null);
 
-      if (arrivalRate !== null) {
+      if (measured !== null) {
+        // MEASURED at the buffer, which is the far end of the whole chain: the
+        // torrent, the encoder, the data channel and the browser's own decoding
+        // are all already inside this one number. Adding the stage terms on top
+        // of it adds a part to a whole — measured 2026-08-09, that produced an
+        // estimate of 28.7 s for a wait that lasted 1.6 s. So when it exists it
+        // is the entire answer, and the stage terms are kept only as evidence
+        // of where the time is expected to go.
+        const fillSeconds = cushionRemainingSeconds / measured;
+        terms.push(`stages-superseded=${total.toFixed(1)}`);
+        total = fillSeconds;
+        terms.push(`fill=${fillSeconds.toFixed(1)}@${measured.toFixed(2)}x-measured`);
+      } else if (arrivalRate !== null) {
+        // Nothing measured end to end yet; the slower of what the encoder
+        // reports and what the link carries is the best available, and the
+        // stage terms above are still needed because this rate describes only
+        // the stage it came from.
         const fillSeconds = cushionRemainingSeconds / arrivalRate;
         total += fillSeconds;
-        terms.push(`fill=${fillSeconds.toFixed(1)}@${arrivalRate.toFixed(2)}x`);
+        terms.push(`fill=${fillSeconds.toFixed(1)}@${arrivalRate.toFixed(2)}x-stage`);
       } else {
         // NOTHING has been measured yet. The previous version divided by an
         // assumed 1.0 — "the pipeline is keeping up" — and produced a confident
@@ -578,6 +621,30 @@ export class WaitingModel {
    *
    * @returns {void}
    */
+  /**
+   * How long each stage of the wait that just ended actually took.
+   *
+   * Printed beside the score so a miss points at a term rather than at the
+   * total. A stage that never happened is named as such: it did not take zero
+   * seconds, it was never reached, and the two mean different things when the
+   * question is which prediction was wrong.
+   *
+   * @param {number} endedAt
+   * @returns {string}
+   */
+  #describeStages(endedAt) {
+    const { startedAt, sessionAt, producedAt, fillingAt } = this.#stageMarks;
+    const span = (from, to) =>
+      from === null || to === null ? "never" : `${((to - from) / 1000).toFixed(1)}s`;
+    return (
+      `create=${span(startedAt, sessionAt)} ` +
+      `first-segment=${span(sessionAt, producedAt)} ` +
+      `first-bytes=${span(producedAt, fillingAt)} ` +
+      `cushion=${span(fillingAt, endedAt)} ` +
+      `total=${((endedAt - startedAt) / 1000).toFixed(1)}s`
+    );
+  }
+
   #reportEtaAccuracy() {
     const samples = this.#etaSamples;
     this.#etaSamples = [];
@@ -594,6 +661,8 @@ export class WaitingModel {
     const median = errors[Math.floor(errors.length / 2)];
     const first = scored[0];
     this.#logEvt(
+      `[eta-stages] ${this.#describeStages(endedAt)}
+` +
       `[eta-accuracy] wait=${((endedAt - first.atMs) / 1000).toFixed(1)}s samples=${scored.length} ` +
       `medianErr=${median.toFixed(1)}s ` +
       `first: said=${first.predicted.toFixed(1)}s was=${first.actual.toFixed(1)}s err=${first.error.toFixed(1)}s [${first.terms}] ` +
