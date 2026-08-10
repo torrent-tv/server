@@ -243,17 +243,23 @@ export class Torrent extends StateDerivedView {
     const params = new URLSearchParams(location.search);
 
     // Optional playback position (`&currentTime=<seconds>`) and file index
-    // (`&fileIndex=<n>`) from a shared link. Parsed once, consumed by the next
-    // source dispatch (magnet or torrent) so the receiver opens the right file
-    // and seeks there after playback starts. Removed from the address bar below
-    // with the source param.
+    // (`&fileIndex=<n>`) from a shared link, consumed by the next source
+    // dispatch so the receiver opens the right file and seeks there.
+    //
+    // NEITHER IS DELETED FROM THE ADDRESS. They are state, exactly as the
+    // magnet is — the note below records why the magnet stopped being wiped,
+    // and the same reasoning was never applied to these two. Deleting them left
+    // a window between the load and the first playhead write in which the
+    // address named a torrent and nothing else: a refresh landing there found
+    // no file to open and showed the playlist instead of resuming, and with a
+    // single-file torrent it still demanded a choice. Reported from the field
+    // 2026-08-09. The writer replaces these values as playback proceeds, so
+    // keeping them costs nothing and closes the window.
     const currentTimeRaw = Number.parseInt(params.get("currentTime") ?? "", 10);
     this.#pendingCurrentTime = Number.isFinite(currentTimeRaw) && currentTimeRaw > 0 ? currentTimeRaw : null;
-    params.delete("currentTime");
 
     const fileIndexRaw = Number.parseInt(params.get("fileIndex") ?? "", 10);
     this.#pendingFileIndex = Number.isFinite(fileIndexRaw) && fileIndexRaw >= 0 ? fileIndexRaw : null;
-    params.delete("fileIndex");
 
     // Magnet link in the URL: ?magnet=<encoded magnet URI>. Routed through
     // the field + form like every other magnet entry point (the user sees
