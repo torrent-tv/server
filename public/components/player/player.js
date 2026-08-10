@@ -190,6 +190,19 @@ export class Player extends StateDerivedView {
    * events, so a reading is only taken when something about the buffer can
    * actually have changed.
    */
+  /**
+   * A seek throws the buffer away, so readings taken across one are not a
+   * measurement of anything — the drop is the flush, not the pipeline slowing
+   * down. Trusted as a rate it produced 0.08x, and dividing the shortfall by
+   * that announced a 296-second wait for one that lasted 1.0 s (measured
+   * 2026-08-09; another read 719.7 s against 11.2 s).
+   *
+   * @returns {void}
+   */
+  #onSeeking = () => {
+    this.#bufferSamples = [];
+  };
+
   #onBufferChanged = () => {
     if (!(this.#video instanceof HTMLVideoElement)) {
       return;
@@ -399,6 +412,10 @@ export class Player extends StateDerivedView {
       for (const name of ["progress", "timeupdate", "waiting", "seeking", "seeked"]) {
         this.#video.addEventListener(name, this.#onBufferChanged);
       }
+      // Registered AFTER, so the history is thrown away before the reading this
+      // same event triggers is taken — otherwise the first sample of the new
+      // position is compared against the old one across the flush.
+      this.#video.addEventListener("seeking", this.#onSeeking);
     }
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);

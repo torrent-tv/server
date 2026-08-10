@@ -1,3 +1,7 @@
+## 0.8.157
+
+- **Fix**: Buffer readings taken across a seek are thrown away instead of being read as a collapse in throughput. A seek discards the buffer, so a rate measured from before it to after it describes the flush and not the pipeline. Trusted as a fill rate it came out at 0.08x, and dividing the shortfall by that announced a 296-second wait for one that lasted 1.0 s; another read 719.7 s against 11.2 s. Those spikes are what drove the median error to 16-20 s on waits of 2-22 s. The history is cleared the moment the element starts seeking, before the reading that same event triggers is taken.
+
 ## 0.8.156
 
 - **Fix**: The cushion the estimate counts down to is now the one the pre-buffer gate actually releases on. There were two figures for one decision: the model wanted a single segment, about four seconds, while the gate held out for fifteen. So the model announced "ready, nothing left to wait for" and the picture stayed still for another six to twelve seconds. Scored against what happened, 2026-08-09: `said=0.0s was=11.9s`, `said=0.0s was=5.6s`, and in the worst case `said=0.7s was=54.5s` — because with the cushion believed met, the fill term was dropped from the sum altogether and only a download term remained. The gate now asks the model for the figure instead of computing its own, so an estimate that reaches zero and a picture that starts are the same moment by construction. Covered by a test: with nothing measured both want the same fallback, and a faster fill needs less banked because the surplus over realtime is what stops it draining.
