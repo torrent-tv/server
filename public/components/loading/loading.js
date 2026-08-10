@@ -2,7 +2,6 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { formatBytes } from "../../domain/waiting-text.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -4375,9 +4374,9 @@ export class Loading extends StateDerivedView {
    * }} stats
    */
   #updateMetadataStatus(stats) {
-    const fileProgress = typeof stats?.fileProgress === "number" ? stats.fileProgress : null;
-    const fileDownloaded = typeof stats?.fileDownloaded === "number" ? stats.fileDownloaded : null;
-    const fileLength = typeof stats?.fileLength === "number" ? stats.fileLength : null;
+    const _fileProgress = typeof stats?.fileProgress === "number" ? stats.fileProgress : null;
+    const _fileDownloaded = typeof stats?.fileDownloaded === "number" ? stats.fileDownloaded : null;
+    const _fileLength = typeof stats?.fileLength === "number" ? stats.fileLength : null;
     const headerBytes = typeof stats?.headerBytes === "number" ? stats.headerBytes : null;
     const headerDownloadedBytes =
       typeof stats?.headerDownloadedBytes === "number" ? stats.headerDownloadedBytes : null;

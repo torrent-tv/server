@@ -338,20 +338,45 @@ export class WaitingModel {
       this.#resetEtaFloor();
     }
     if (cushionRemainingSeconds > 0) {
-      // How fast media can arrive: the slower of what the encoder produces and
-      // what the link can carry. Both measured; when neither has been observed
-      // yet the neutral assumption is exactly realtime, which is the definition
-      // of the pipeline keeping up rather than a tuned value.
+      // How fast media is actually arriving. The buffer's own fill rate first,
+      // because it is the end result of the whole chain and prices every
+      // bottleneck at once; then the slower of what the encoder reports and what
+      // the link can carry.
       const linkRate = this.#measuredLinkMediaRate(
         transcodeProgress && typeof transcodeProgress.outputMbps === "number"
           ? transcodeProgress.outputMbps
           : null
       );
+      const measured = typeof this.#fillRate === "number" && this.#fillRate > 0
+        ? this.#fillRate
+        : null;
       const rates = [encodeSpeed, linkRate].filter((rate) => typeof rate === "number" && rate > 0);
-      const arrivalRate = rates.length > 0 ? Math.min(...rates) : 1;
-      const fillSeconds = cushionRemainingSeconds / arrivalRate;
-      total += fillSeconds;
-      terms.push(`fill=${fillSeconds.toFixed(1)}@${arrivalRate.toFixed(2)}x`);
+      const arrivalRate = measured ?? (rates.length > 0 ? Math.min(...rates) : null);
+
+      if (arrivalRate !== null) {
+        const fillSeconds = cushionRemainingSeconds / arrivalRate;
+        total += fillSeconds;
+        terms.push(`fill=${fillSeconds.toFixed(1)}@${arrivalRate.toFixed(2)}x`);
+      } else {
+        // NOTHING has been measured yet. The previous version divided by an
+        // assumed 1.0 — "the pipeline is keeping up" — and produced a confident
+        // small number out of nothing: measured 2026-08-09, it said 4.0 s of a
+        // wait that ran 46.8 s, with a median error of 21.8 s over 164 samples.
+        // Not one figure shown to the viewer was borne out.
+        //
+        // The honest substitute is another MEASUREMENT: how long this host has
+        // historically taken to produce a first segment, which the proxy reports
+        // from the median of its own recent sessions. It is not a measurement of
+        // THIS wait, and it is displaced by one the moment the buffer moves —
+        // but it is a fact about the machine doing the work, not an assumption
+        // about it.
+        const hostPrior = this.#expectedFirstSegmentSeconds;
+        const fillSeconds = typeof hostPrior === "number" && hostPrior > 0
+          ? hostPrior
+          : cushionRemainingSeconds;
+        total += fillSeconds;
+        terms.push(`fill=${fillSeconds.toFixed(1)}@host-median`);
+      }
     }
 
     etaSeconds = total;
