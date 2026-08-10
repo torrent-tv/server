@@ -120,6 +120,7 @@ export class WaitingOverlay {
    */
   #onBuffer = (event) => {
     const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
+    const fillRate = event instanceof CustomEvent ? event.detail?.fillRate : null;
     if (typeof ahead !== "number") {
       return;
     }
@@ -130,7 +131,10 @@ export class WaitingOverlay {
     // moment they change; waiting for the next poll left the one figure the
     // viewer wants a second and a half stale, and left it missing altogether
     // until the first poll after a reading ever arrived.
-    const unified = this.#model.update({ bufferedAhead: ahead });
+    const unified = this.#model.update({
+      bufferedAhead: ahead,
+      fillRate: typeof fillRate === "number" ? fillRate : undefined
+    });
     this.#measurements.cushionPercent = unified.cushionPercent ?? undefined;
     this.#measurements.cushionRemainingSeconds = unified.cushionRemainingSeconds ?? undefined;
     this.#measurements.etaSeconds = unified.etaSeconds ?? undefined;

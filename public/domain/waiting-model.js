@@ -46,6 +46,23 @@ const RATE_TREND_MAX_GROWTH = 4;
 export class WaitingModel {
   /** @type {number | null} Seconds of media ahead of the playhead. */
   #bufferedAhead = null;
+
+  /**
+   * Seconds of media gained per second of wall clock, measured at the buffer by
+   * whoever owns the element.
+   *
+   * This is the END-TO-END rate — torrent, encoder, data channel and decoding,
+   * all at once — so it is the only term that prices in every bottleneck
+   * together, including ones no single stage can see. It was being delivered on
+   * every reading and thrown away: the model declared it, logged it, and never
+   * assigned it, so `fillRate=n/a` stood in every line of the diagnostic while
+   * the buffer visibly moved (measured 2026-08-09: 35.99 to 35.17 over four
+   * readings, rate never once computed). Every estimate the viewer was shown
+   * therefore rested on the weaker terms, which is why none of them held.
+   *
+   * @type {number | null}
+   */
+  #fillRate = null;
   /** @type {Array<{ atMs: number, bytes: number }>} Recent download readings. */
   #downloadRateSamples = [];
   /** @type {number | null} The smallest figure promised so far, in seconds. */
@@ -82,6 +99,9 @@ export class WaitingModel {
   update(facts = {}) {
     if (typeof facts.bufferedAhead === "number") {
       this.#bufferedAhead = facts.bufferedAhead;
+    }
+    if (typeof facts.fillRate === "number" && Number.isFinite(facts.fillRate)) {
+      this.#fillRate = facts.fillRate;
     }
     if (typeof facts.expectedFirstSegmentSeconds === "number") {
       this.#expectedFirstSegmentSeconds = facts.expectedFirstSegmentSeconds;
@@ -192,7 +212,7 @@ export class WaitingModel {
     let cushionPercent = null;
     let cushionRemainingSeconds = null;
     let etaSeconds = null;
-    let fillRate = null;
+    let fillRate = this.#fillRate;
     // Which of the four measurements produced the number the viewer sees. It
     // is ONE figure — seconds until playback starts — but it is measured
     // wherever it can be measured best at that instant, and when a shown number
