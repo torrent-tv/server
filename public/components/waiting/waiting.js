@@ -167,6 +167,15 @@ export class WaitingOverlay {
     if (typeof state !== "string" || isWaiting(state) || state === APP_STATE.PAUSED) {
       return;
     }
+    // Score what was promised against what happened, before the evidence is
+    // dropped. This model is the one that estimates for the screen — it
+    // recomputes on every buffer reading — so it is the one holding enough
+    // samples to score. The report used to be asked of the pipeline's model,
+    // which computes twice in a whole wait and therefore printed nothing at
+    // all, leaving the one question that matters — were the figures true —
+    // without an answer.
+    this.#model.reportEtaAccuracy();
+    this.#model.reset();
     this.#measurements = {};
     this.#pipelineStep = "";
     this.#render();
