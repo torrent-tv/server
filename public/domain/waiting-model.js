@@ -22,6 +22,15 @@ const ENCODE_SPEED_MIN_PRODUCED_SECONDS = 2;
 
 const SEGMENT_DURATION_SECONDS = 4;
 
+/** The cushion to bank when no fill rate has been measured yet. */
+const PREBUFFER_TARGET_SECONDS = 15;
+/** Never bank less than this, however healthy the surplus looks. */
+const PREBUFFER_MIN_SECONDS = 6;
+/** Never bank more than this, however thin the surplus. */
+const PREBUFFER_MAX_SECONDS = 25;
+/** Seconds of cushion per unit of surplus over realtime. */
+const PREBUFFER_BASE_SECONDS = 12;
+
 /** How long the download-rate trend is worth extrapolating from. */
 const RATE_TREND_WINDOW_MS = 6_000;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
@@ -133,9 +142,37 @@ export class WaitingModel {
     return this.#describeEncodingRuns(transcodeProgress, unified);
   }
 
-  /** How much cushion this viewer needs before the picture may start. */
+  /**
+   * How much cushion the picture needs before it may start — THE figure the
+   * pre-buffer gate releases on, so the estimate and the gate cannot disagree.
+   *
+   * They did, and it is what made the estimate useless at the only moment
+   * anyone reads it. The model asked for one segment (4 s) while the gate held
+   * out for fifteen, so the model announced "ready, nothing to wait for" and
+   * the picture stayed still for another six to twelve seconds. Measured
+   * 2026-08-09: `said=0.0s was=11.9s` and `said=0.0s was=5.6s`, and in the worst
+   * case an estimate of 0.7 s against a wait of 54.5 s, because with the cushion
+   * believed met the fill term was left out of the sum altogether.
+   *
+   * A cushion that fills fast needs to be smaller: the surplus above realtime is
+   * what keeps it from draining, so the greater the surplus the less has to be
+   * banked before starting. With no surplus at all, bank the maximum.
+   *
+   * @returns {number} Seconds.
+   */
   requiredBufferSeconds() {
-    return this.#requiredBufferSeconds();
+    const fillRate = this.#fillRate;
+    if (!Number.isFinite(fillRate)) {
+      return PREBUFFER_TARGET_SECONDS;
+    }
+    const margin = fillRate - 1;
+    if (margin <= 0) {
+      return PREBUFFER_MAX_SECONDS;
+    }
+    return Math.min(
+      PREBUFFER_MAX_SECONDS,
+      Math.max(PREBUFFER_MIN_SECONDS, PREBUFFER_BASE_SECONDS / margin)
+    );
   }
 
   /** Score the estimates of the wait that just ended. */
@@ -306,7 +343,7 @@ export class WaitingModel {
     //    (0.5 s, 2.0 s and 20.0 s in three measured cases). Before any such
     //    measurement exists the floor is one segment, because no player starts
     //    on less than one.
-    const requiredBuffer = this.#requiredBufferSeconds();
+    const requiredBuffer = this.requiredBufferSeconds();
     // Nothing measured is NOT the same as measured and empty, and both used to
     // answer 0%. The difference shows: before the player has produced a single
     // reading, "Buffering — 0%" is a figure nobody took, printed as though it

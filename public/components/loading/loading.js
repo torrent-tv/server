@@ -901,35 +901,6 @@ export class Loading extends StateDerivedView {
     return gained / (growthSpanMs / 1000);
   }
 
-  /**
-   * The buffer-ahead cushion required before playback may (re)start, adaptive
-   * to the measured end-to-end fill rate `R` (media-seconds gained per wall
-   * second — see #trackBufferFillRate). At `R` = 1 the buffer neither grows
-   * nor drains once playing, so ANY cushion is fragile against a dip — the
-   * target grows to the maximum. A comfortable surplus over 1x needs only a
-   * small cushion (it refills fast after a dip).
-   *
-   * SHARED by #computeUnifiedEta (the percent/ETA shown to the viewer) and
-   * #waitForPrebuffer (the actual gate that reveals the player) — they must
-   * use the identical target at the same instant, or the display can claim
-   * "ready" while the real gate is still waiting (see the call site comment
-   * in #computeUnifiedEta for the field bug this caused).
-   *
-   * @param {number | null} fillRate - As returned by #trackBufferFillRate.
-   * @returns {number} Seconds, in [PREBUFFER_MIN_SECONDS, PREBUFFER_MAX_SECONDS].
-   */
-  #adaptiveCushionTarget(fillRate) {
-    if (!Number.isFinite(fillRate)) {
-      // Not yet measurable (first moments, or the buffer is not growing) —
-      // the fallback used before any real rate exists.
-      return PREBUFFER_TARGET_SECONDS;
-    }
-    const margin = fillRate - 1;
-    const target = margin <= 0
-      ? PREBUFFER_MAX_SECONDS
-      : Math.min(PREBUFFER_MAX_SECONDS, Math.max(PREBUFFER_MIN_SECONDS, PREBUFFER_BASE_SECONDS / margin));
-    return Math.min(target, PREBUFFER_MAX_SECONDS);
-  }
 
 
 
@@ -3927,7 +3898,10 @@ export class Loading extends StateDerivedView {
         transcodeProgress: cachedProgress
       });
       const fillRate = unified.fillRate;
-      const target = this.#adaptiveCushionTarget(fillRate);
+      // The model owns this figure now: the gate releases on it and the estimate
+      // counts down to it, so they cannot describe different moments.
+      this.#waitingModel.update({ fillRate: Number.isFinite(fillRate) ? fillRate : undefined });
+      const target = this.#waitingModel.requiredBufferSeconds();
 
       // Start early when the fill rate has SUSTAINED a healthy surplus over
       // the FULL rolling window (not just the shorter span that makes the
@@ -4839,7 +4813,7 @@ function canAppendCopiedAudio(codec, container) {
 // Long enough to collapse a drag into one report, short enough that the encoder
 // starts on the real target promptly.
 const SEEK_REPORT_DEBOUNCE_MS = 300;
-const PREBUFFER_TARGET_SECONDS = 15;
+const _PREBUFFER_TARGET_SECONDS = 15;
 // ffmpeg's `speed` is a CUMULATIVE average over the whole run, so the first
 // samples after a (re)start are dominated by process start-up and input open —
 // not by encoding. Field-observed on a seek-restart: `0.00757x` a second in,
@@ -4855,7 +4829,7 @@ const PREBUFFER_TARGET_SECONDS = 15;
 // from a window too short to have seen a segment arrive at all.
 const BUFFER_FILL_WINDOW_MS = 12_000;
 const BUFFER_FILL_MIN_SPAN_MS = 3_000;
-const PREBUFFER_MIN_SECONDS = 6;
+const _PREBUFFER_MIN_SECONDS = 6;
 // What the player needs before it resumes ITSELF after a seek. Nothing of ours
 // gates that moment — hls.js and iOS native both start as soon as the new
 // position is covered, measured 2026-08-05 at 0.5 s buffered. Kept a little
@@ -4883,8 +4857,8 @@ const PLAYBACK_START_SAMPLES = 5;
 // media is enough": no player starts on less than one segment, so this is a
 // property of the playlist we serve, not a value chosen to make an estimate
 // come out right.
-const PREBUFFER_MAX_SECONDS = 25;
-const PREBUFFER_BASE_SECONDS = 12;
+const _PREBUFFER_MAX_SECONDS = 25;
+const _PREBUFFER_BASE_SECONDS = 12;
 // Start early when the fill rate has sustained a healthy surplus over the FULL
 // buffer-fill window (BUFFER_FILL_WINDOW_MS above — not merely the shorter
 // span that makes the rate trustworthy at all). The full-window requirement
