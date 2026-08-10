@@ -1,3 +1,7 @@
+## 0.8.141
+
+- **Fix**: The time until playback stops reading zero while the picture is not moving. A floor capped every estimate at "the previous one minus the time since", and that arithmetic ends one way: once a promise has run down, `min(actual, 0)` is zero for ever. Measured 2026-08-09 across a whole wait — the diagnostic line read `fill=4.0@1.00x` while the screen read `0 seconds until playback`, with the buffer at 0.00 and not moving. The guard had been removed once already, in 0.8.109, and came back when the estimate was moved into its own model. It existed to hide jumps between estimate sources; there is one source now, so a rise means the wait genuinely got longer and saying so is the whole point. Covered by a test that fails with the floor in place.
+
 ## 0.8.144
 
 - **Fix**: The one figure the viewer wants — how long until playback — is shown for the whole of the wait. The cushion and the estimate are measured at the browser's own buffer, and the only readings came from the media element's own events, which do not fire before it has a source. So through an entire cold open nothing was measured, and with nothing measured there was nothing honest to say. The player now takes a reading twice a second for as long as the state says the viewer is waiting, and stops the moment it does not; an element reading zero is a true reading, not a guess.

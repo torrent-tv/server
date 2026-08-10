@@ -140,3 +140,17 @@ test("figures survive a fact arriving without the others", () => {
     "the buffer reading from the previous update must still be in force"
   );
 });
+
+test("an estimate may rise: nothing floors it at a figure promised earlier", () => {
+  const model = new WaitingModel();
+  // A first answer, then a wait in which the buffer does not move at all.
+  const first = model.update({ bufferedAhead: 1, transcodeProgress: { state: "ready" } });
+  assert.ok(first.etaSeconds === null || first.etaSeconds >= 0);
+  const later = model.update({ bufferedAhead: 1, transcodeProgress: { state: "ready" } });
+  assert.notEqual(
+    later.etaSeconds,
+    0,
+    "a cushion that is still 4s short must never read as no wait at all — " +
+    "the floor that produced that was measured on 2026-08-09 saying `fill=4.0@1.00x` and showing zero"
+  );
+});
