@@ -211,6 +211,40 @@ export function createHlsPlayer(onLog) {
           // that HLS.js fires synchronously inside attachMedia() (e.g. MEDIA_ATTACHED
           // fires synchronously in HLS.js v1+, meaning a listener registered after
           // attachMedia() would be called too late and loadSource() would never run).
+          // Why a fragment was asked for. The proxy sees only the number, so a
+          // request for segment #0 is indistinguishable there from an ordinary
+          // one — and the encoder obediently restarts at the top of the film,
+          // which is what the viewer sees as the picture jumping to the
+          // beginning (reported 2026-08-10). The answer is on this side: what
+          // hls.js last did, and where the viewer actually was.
+          let lastPlayerEvent = "none";
+          for (const name of ["MEDIA_ATTACHED", "MEDIA_DETACHED", "MANIFEST_PARSED",
+            "LEVEL_LOADED", "BUFFER_RESET", "BUFFER_FLUSHED", "ERROR"]) {
+            const event = HlsClass.Events[name];
+            if (event) {
+              instance.on(event, () => { lastPlayerEvent = name; });
+            }
+          }
+          instance.on(HlsClass.Events.FRAG_LOADING, (_event, data) => {
+            const start = data?.frag?.start;
+            const sn = data?.frag?.sn;
+            const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : null;
+            if (typeof start !== "number" || typeof at !== "number") {
+              return;
+            }
+            // A fragment far from where the viewer is standing is either a seek
+            // they made or something restarting the stream behind their back.
+            // Only the second is a defect, and only this line can tell them
+            // apart.
+            if (Math.abs(start - at) > 30) {
+              console.warn(
+                `[evt] frag-far sn=${sn} fragStart=${start.toFixed(1)}s ` +
+                `currentTime=${at.toFixed(1)}s seeking=${videoElement.seeking} ` +
+                `lastPlayerEvent=${lastPlayerEvent}`
+              );
+            }
+          });
+
           instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
             instance.loadSource(manifestUrl);
           });
