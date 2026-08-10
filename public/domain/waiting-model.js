@@ -33,6 +33,9 @@ const PREBUFFER_BASE_SECONDS = 12;
 
 /** How long the download-rate trend is worth extrapolating from. */
 const RATE_TREND_WINDOW_MS = 6_000;
+/** The gate's own early-start thresholds. Must stay equal to the player's. */
+const GATE_HEALTHY_FILL_RATE = 1.35;
+const GATE_HEALTHY_AHEAD_SECONDS = 10;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const RATE_TREND_MAX_GROWTH = 4;
 
@@ -72,6 +75,9 @@ export class WaitingModel {
    * @type {number | null}
    */
   #fillRate = null;
+
+  /** @type {Array<{ atMs: number, rate: number }>} Recent fill-rate readings. */
+  #fillRateSamples = [];
   /** @type {Array<{ atMs: number, bytes: number }>} Recent download readings. */
   #downloadRateSamples = [];
   /** @type {number | null} The smallest figure promised so far, in seconds. */
@@ -370,7 +376,17 @@ export class WaitingModel {
     //    (0.5 s, 2.0 s and 20.0 s in three measured cases). Before any such
     //    measurement exists the floor is one segment, because no player starts
     //    on less than one.
-    const requiredBuffer = this.requiredBufferSeconds();
+    // What the viewer waits for is PLAYBACK STARTING, and that is not the same
+    // event as the cushion filling. The gate starts early when the buffer holds
+    // a healthy amount AND the rate has sustained a surplus — so on a healthy
+    // link the picture begins at ten seconds, not at the full target.
+    //
+    // Estimating the full target regardless is where the large overestimates
+    // came from: measured 2026-08-10, three waits promised 25.0, 20.2 and 24.8
+    // seconds and ended after 7.1, 1.7 and 0.6. The figure never moved during
+    // any of them either, which is honest arithmetic on an unchanging input and
+    // still the wrong answer — it was answering a question nobody had asked.
+    const requiredBuffer = this.#gateTargetSeconds();
     // Nothing measured is NOT the same as measured and empty, and both used to
     // answer 0%. The difference shows: before the player has produced a single
     // reading, "Buffering — 0%" is a figure nobody took, printed as though it
@@ -411,9 +427,14 @@ export class WaitingModel {
           ? transcodeProgress.outputMbps
           : null
       );
-      const measured = typeof this.#fillRate === "number" && this.#fillRate > 0
-        ? this.#fillRate
-        : null;
+      // The slowest rate seen recently, not the latest one. Dividing a
+      // shortfall by the instantaneous rate assumes that rate will hold, and it
+      // does not: measured 2026-08-10, a cushion 1.3 s short at 2.04x was
+      // promised in 1.3 s and took 34.6, because the rate collapsed immediately
+      // after. A wait is governed by its worst stretch, not its best, so the
+      // honest divisor is the floor of what has actually been observed.
+      this.#recordFillRate(this.#fillRate);
+      const measured = this.#conservativeFillRate();
       const rates = [encodeSpeed, linkRate].filter((rate) => typeof rate === "number" && rate > 0);
       const arrivalRate = measured ?? (rates.length > 0 ? Math.min(...rates) : null);
 
@@ -688,6 +709,56 @@ export class WaitingModel {
    *
    * @returns {number}
    */
+  /**
+   * The cushion that will actually open the gate, which is what an estimate of
+   * "time until playback" has to be measured against.
+   *
+   * Mirrors the gate's own rule: the full target, or the healthy-early amount
+   * once the measured rate is comfortably above realtime. The thresholds are
+   * the gate's, and they belong in one place — if they drift apart the estimate
+   * silently starts describing a different event again.
+   *
+   * @returns {number}
+   */
+  #gateTargetSeconds() {
+    // The PUBLIC one: the adaptive target the gate itself compares against.
+    // The private namesake is the one-segment floor, and using it here made an
+    // empty buffer ask for four seconds instead of fifteen.
+    const target = this.requiredBufferSeconds();
+    const rate = this.#fillRate;
+    if (typeof rate === "number" && Number.isFinite(rate) && rate >= GATE_HEALTHY_FILL_RATE) {
+      return Math.min(target, GATE_HEALTHY_AHEAD_SECONDS);
+    }
+    return target;
+  }
+
+  /**
+   * Remember a rate reading, keeping only the recent window.
+   *
+   * @param {number | null} rate
+   * @returns {void}
+   */
+  #recordFillRate(rate) {
+    if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+      return;
+    }
+    const now = Date.now();
+    this.#fillRateSamples.push({ atMs: now, rate });
+    this.#fillRateSamples = this.#fillRateSamples.filter((each) => now - each.atMs <= RATE_TREND_WINDOW_MS);
+  }
+
+  /**
+   * The slowest rate observed in the recent window, or null when none has been.
+   *
+   * @returns {number | null}
+   */
+  #conservativeFillRate() {
+    if (this.#fillRateSamples.length === 0) {
+      return null;
+    }
+    return Math.min(...this.#fillRateSamples.map((each) => each.rate));
+  }
+
   #requiredBufferSeconds() {
     if (this.#playbackStartBuffers.length === 0) {
       return SEGMENT_DURATION_SECONDS;

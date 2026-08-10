@@ -207,3 +207,28 @@ test("the cushion the estimate counts down to is the one the gate releases on", 
   assert.ok(fast < slow, `a faster fill must need less banked (${fast} vs ${slow})`);
   assert.ok(fast >= 6 && slow <= 25, "and both must stay inside the bounds the gate uses");
 });
+
+test("the estimate targets the cushion that actually opens the gate", () => {
+  const model = new WaitingModel();
+  // A healthy, sustained rate: the player starts early, at ten seconds, so an
+  // estimate measured against the full target answers a question nobody asked.
+  // Measured 2026-08-10: three waits promised 25.0, 20.2 and 24.8 seconds and
+  // ended after 7.1, 1.7 and 0.6.
+  const healthy = model.update({ bufferedAhead: 0, fillRate: 2.0, transcodeProgress: { state: "ready" } });
+  assert.ok(
+    healthy.cushionRemainingSeconds <= 10,
+    `a healthy link starts early, so at most ten seconds are needed; got ${healthy.cushionRemainingSeconds}`
+  );
+});
+
+test("a shortfall is divided by the slowest recent rate, not the fastest", () => {
+  const model = new WaitingModel();
+  model.update({ bufferedAhead: 5, fillRate: 4.0, transcodeProgress: { state: "ready" } });
+  const afterCollapse = model.update({ bufferedAhead: 5, fillRate: 0.5, transcodeProgress: { state: "ready" } });
+  const optimistic = new WaitingModel();
+  const fastOnly = optimistic.update({ bufferedAhead: 5, fillRate: 4.0, transcodeProgress: { state: "ready" } });
+  assert.ok(
+    afterCollapse.etaSeconds > fastOnly.etaSeconds,
+    "a rate that collapsed must lengthen the estimate, not be forgotten in favour of the earlier fast one"
+  );
+});
