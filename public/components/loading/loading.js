@@ -1006,7 +1006,14 @@ export class Loading extends StateDerivedView {
       }
       const sourceKey = await this.#session.registerSourceOnProxy(this.#transport);
       const anchorParam = this.#bufferingResumeAnchorByteStart !== null
-        ? `&resumeAnchorByteStart=${this.#bufferingResumeAnchorByteStart}`
+        // Pinned no longer. The anchor freezes the point the window is measured
+        // ahead of, which is right for a stable progress denominator and wrong
+        // for "how much is still needed before the picture can move": within
+        // seconds it describes a stretch already passed. Field 2026-08-09 —
+        // "16.0 MB left" stood unchanged across three phases at 4.2 MB/s, a
+        // rate that would clear 16 MB in four seconds. Measured against the
+        // live read position it answers the question actually being asked.
+        ? ""
         : "";
       const response = await this.#transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${this.#activeFileIndex}${anchorParam}`,
@@ -2418,6 +2425,12 @@ export class Loading extends StateDerivedView {
       throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
     }
     this.#coldStart.t1 = performance.now();
+    // The connection is made, so stop saying it is being made. Nothing cleared
+    // this step before, and the next one was published much later — so the
+    // overlay read "Connecting to proxy…" while showing peers and a download
+    // rate, which can only come FROM a proxy that is already connected. A step
+    // that has finished must be replaced at the moment it finishes.
+    this.setStatus(Loading.MESSAGES.fetchingMetadata);
 
     // Register the torrent source early so we can poll live stats while
     // the proxy pre-fetches file metadata (MOOV atom / EBML headers).

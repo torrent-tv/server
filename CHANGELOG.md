@@ -1,3 +1,8 @@
+## 0.8.149
+
+- **Fix**: "Connecting to proxy…" stops being shown after the connection is made. The step was set when the connect began and nothing replaced it until much later, so the overlay named that step while showing peers and a download rate — figures that can only come FROM a proxy already connected. A step that has finished is now replaced at the moment it finishes.
+- **Fix**: "N MB left" moves. It was measured ahead of a FROZEN anchor pinned for the whole episode, which is right for a stable progress denominator and wrong for "how much is still needed before the picture can move" — within seconds it describes a stretch already passed. Field 2026-08-09: it read "16.0 MB left" unchanged across three phases at 4.2 MB/s, a rate that clears 16 MB in four seconds. It is now measured from where the reader actually is.
+
 ## 0.8.148
 
 - **Fix**: The time until playback is measured again. The rate at which the browser's buffer fills is the only end-to-end figure there is — it prices in the torrent, the encoder, the data channel and the decoding together — and it was being measured on every reading, delivered to the model, and thrown away: the model declared the variable, printed it in the diagnostic and never assigned it. `fillRate=n/a` therefore stood in every line of every session while the buffer visibly moved (measured 2026-08-09: 35.99 s to 35.17 s over four readings, the rate never once computed). Every estimate the viewer was shown rested on the weaker terms instead, which is why none of the four figures reported from the field held.
