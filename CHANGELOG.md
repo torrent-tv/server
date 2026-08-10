@@ -1,3 +1,8 @@
+## 0.8.159
+
+- **New**: A fragment requested far from where the viewer is standing says so, and says what preceded it. The proxy sees only a segment number, so a request for #0 is indistinguishable there from an ordinary one — it restarts the encoder at the top of the film, which is what the viewer sees as the picture jumping back to the beginning (reported 2026-08-10, with the encoder observed restarting at #0 mid-session). Whether that was a seek the viewer made or something restarting the stream behind their back can only be answered on this side, so any fragment more than thirty seconds from the playhead is now logged with the position asked for, the position the viewer is at, whether the element is seeking, and the last thing hls.js did — a media re-attach, a level reload, a buffer reset or an error.
+- **Fix**: The stage decomposition no longer reports a negative duration. The mark for the first bytes reaching the buffer could precede the mark for the encoder producing anything, because after a seek the buffer still holds media from the previous position.
+
 ## 0.8.158
 
 - **Fix**: A measured fill rate is the whole answer, not one term added to the others. It is taken at the buffer, which is the far end of the chain — the torrent, the encoder, the data channel and the browser's own decoding are all already inside that one number — so adding the stage terms on top of it adds a part to a whole. Measured 2026-08-09: an estimate of 28.7 s for a wait that lasted 1.6 s. The stage terms are still computed and still logged as evidence of where the time is expected to go; they are simply no longer summed into a figure that already contains them.
