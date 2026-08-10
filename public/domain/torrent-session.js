@@ -1,5 +1,6 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
+import { PLAYER_EVENTS } from "../shared/events.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
 import { startNetReporter, stopNetReporter } from "./net-report.js";
@@ -653,6 +654,20 @@ export class TorrentSession {
       ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`
       : "";
     const progressUrl = progressPath ? transport.url(progressPath) : "";
+
+    // What the proxy says this session's output will carry. Announced so the
+    // player can check what it ACTUALLY received against it: a track that never
+    // arrives is otherwise noticed only by its absence, minutes later, as a
+    // black picture with working sound (measured 2026-08-10 — sixty-five
+    // seconds of audio with videoWidth=0 and not one frame decoded).
+    const declaredTracks = payload?.tracks && typeof payload.tracks === "object"
+      ? { video: payload.tracks.video === true, audio: payload.tracks.audio === true }
+      : null;
+    if (declaredTracks) {
+      document.dispatchEvent(
+        new CustomEvent(PLAYER_EVENTS.DECLARED_TRACKS, { detail: declaredTracks })
+      );
+    }
 
     if (sessionId) {
       this.activeTranscodeSessions.set(sessionId, transport);
