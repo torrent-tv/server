@@ -60,6 +60,10 @@ export class WaitingModel {
   #expectedSessionCreateSeconds = null;
   /** @type {Array<number>} Cushions at which playback actually began. */
   #playbackStartBuffers = [];
+  /** @type {object | null} The proxy's last word about the torrent. */
+  #downloadStats = null;
+  /** @type {object | null} The proxy's last word about the encode. */
+  #transcodeProgress = null;
   /** @type {{ video: boolean, audio: boolean }} */
   #encodingTracks = { video: false, audio: false };
   /** @type {boolean} Whether the step on screen came from the pipeline. */
@@ -88,7 +92,20 @@ export class WaitingModel {
     if (facts.encodingTracks) {
       this.#encodingTracks = facts.encodingTracks;
     }
-    return this.#computeUnifiedEta(facts.downloadStats ?? null, facts.transcodeProgress ?? null);
+    // Kept between calls, because the callers do not all know everything. The
+    // buffer is read four times a second by the component that owns the
+    // element; the proxy answers about once every second and a half. A reading
+    // that arrives on its own must not blank what the proxy last said — it did,
+    // and the diagnostic line then alternated `proxyProcessed=4208.333` with
+    // `proxyProcessed=null` and `13823KB/s` with `0KB/s`, every other line, so
+    // half of every session's evidence described a state that never existed.
+    if (facts.downloadStats) {
+      this.#downloadStats = facts.downloadStats;
+    }
+    if (facts.transcodeProgress) {
+      this.#transcodeProgress = facts.transcodeProgress;
+    }
+    return this.#computeUnifiedEta(this.#downloadStats, this.#transcodeProgress);
   }
 
   /** Every encoder run still going, for the overlay to list one line each. */
