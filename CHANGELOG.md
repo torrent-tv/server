@@ -1,3 +1,7 @@
+## 0.8.146
+
+- **Fix**: The estimate keeps what the proxy last said between readings. The buffer is measured four times a second by the component that owns the element, and the proxy answers about once every second and a half; a reading arriving on its own reset both of the proxy's figures to nothing. The diagnostic line then alternated `proxyProcessed=4208.333` with `null` and `13823KB/s` with `0KB/s`, every other line — so half of every session's evidence described a state that never existed, and every second estimate was computed from an empty picture. Covered by a test.
+
 ## 0.8.145
 
 - **Fix**: The time until playback stops reading zero while the picture is not moving. A floor capped every estimate at "the previous one minus the time since", and that arithmetic ends one way: once a promise has run down, `min(actual, 0)` is zero for ever. Measured 2026-08-09 across a whole wait — the diagnostic line read `fill=4.0@1.00x` while the screen read `0 seconds until playback`, with the buffer at 0.00 and not moving. The guard had been removed once already, in 0.8.109, and came back when the estimate was moved into its own model. It existed to hide jumps between estimate sources; there is one source now, so a rise means the wait genuinely got longer and saying so is the whole point. Covered by a test that fails with the floor in place.

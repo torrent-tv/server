@@ -154,3 +154,18 @@ test("an estimate may rise: nothing floors it at a figure promised earlier", () 
     "the floor that produced that was measured on 2026-08-09 saying `fill=4.0@1.00x` and showing zero"
   );
 });
+
+test("a reading that arrives alone does not blank what the proxy last said", () => {
+  const model = new WaitingModel();
+  model.update({
+    bufferedAhead: 1,
+    downloadStats: { numPeers: 29, downloadSpeed: 13_823_000 },
+    transcodeProgress: { state: "ready", processedSeconds: 4208, startPositionSeconds: 4200, speed: "9.01x" }
+  });
+  // The component that owns the element reads the buffer several times a second
+  // and knows nothing about the proxy. Its call used to reset both answers.
+  const runs = model.describeEncodingRuns(null, model.update({ bufferedAhead: 2 }));
+  assert.ok(Array.isArray(runs), "the model must still know what the proxy said");
+  const after = model.update({ bufferedAhead: 2 });
+  assert.notEqual(after.cushionPercent, null, "the cushion is still measurable from the retained answer");
+});
