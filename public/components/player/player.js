@@ -79,6 +79,9 @@ export class Player extends StateDerivedView {
    * @type {number | null}
    */
   #bufferTimer = null;
+
+  /** Ticks while the picture is meant to be moving. See #reportDecodedFrames. */
+  #decodeTimer = null;
   // The settings button is shared by the Audio and Quality submenus; it shows
   // when either has something to offer.
   #audioAvailable = false;
@@ -190,15 +193,57 @@ export class Player extends StateDerivedView {
    * @param {boolean} waiting
    * @returns {void}
    */
+  /**
+   * Whether the picture is actually being decoded, said plainly.
+   *
+   * A track we chose to COPY is one we told ourselves the browser can play. If
+   * that judgement was wrong the result is a black frame with working sound —
+   * and from every other measurement it is indistinguishable from data arriving
+   * too slowly, which is a completely different fault with a completely
+   * different fix. Frames decoded is the one reading that separates them: time
+   * advancing with the frame counter at zero can only mean the picture was
+   * never decodable.
+   *
+   * @returns {void}
+   */
+  #reportDecodedFrames = () => {
+    if (!(this.#video instanceof HTMLVideoElement) || this.#video.paused) {
+      return;
+    }
+    const quality = typeof this.#video.getVideoPlaybackQuality === "function"
+      ? this.#video.getVideoPlaybackQuality()
+      : null;
+    const frames = quality?.totalVideoFrames ?? null;
+    const line =
+      `decode t=${this.#video.currentTime.toFixed(1)}s ` +
+      `size=${this.#video.videoWidth}x${this.#video.videoHeight} ` +
+      `frames=${frames ?? "n/a"} dropped=${quality?.droppedVideoFrames ?? "n/a"} ` +
+      `readyState=${this.#video.readyState}`;
+    if (this.#video.currentTime > 3 && (frames === 0 || this.#video.videoWidth === 0)) {
+      console.warn(`[evt] ${line} — sound is playing and no picture has been decoded`);
+      return;
+    }
+    this.#logEvt(line);
+  };
+
   #measureWhileWaiting(waiting) {
     if (waiting && this.#bufferTimer === null) {
       this.#onBufferChanged();
       this.#bufferTimer = window.setInterval(this.#onBufferChanged, 500);
       return;
     }
+    if (!waiting && this.#decodeTimer === null) {
+      // Only while the picture is meant to be moving.
+      this.#decodeTimer = window.setInterval(this.#reportDecodedFrames, 5_000);
+      return;
+    }
     if (!waiting && this.#bufferTimer !== null) {
       window.clearInterval(this.#bufferTimer);
       this.#bufferTimer = null;
+    }
+    if (waiting && this.#decodeTimer !== null) {
+      window.clearInterval(this.#decodeTimer);
+      this.#decodeTimer = null;
     }
   }
 

@@ -1,3 +1,8 @@
+## 0.8.147
+
+- **New**: The browser says whether it actually decoded a picture. A track chosen to be COPIED is one we judged the browser able to play, and when that judgement is wrong the result is a black frame with working sound — indistinguishable, from every other reading we take, from data simply arriving too slowly. Those are different faults with different fixes and the log could not tell them apart. Every five seconds while the picture is meant to be moving it now records the decoded frame count, the frame size and the dropped count; time advancing with the counter at zero is reported as a warning that says what it means.
+- **New**: The codec support question is logged with both halves — the exact MIME string asked about and the answer — so a wrong "yes" is visible at the moment it is given rather than inferred later from a black screen.
+
 ## 0.8.146
 
 - **Fix**: The estimate keeps what the proxy last said between readings. The buffer is measured four times a second by the component that owns the element, and the proxy answers about once every second and a half; a reading arriving on its own reset both of the proxy's figures to nothing. The diagnostic line then alternated `proxyProcessed=4208.333` with `null` and `13823KB/s` with `0KB/s`, every other line — so half of every session's evidence described a state that never existed, and every second estimate was computed from an empty picture. Covered by a test.
