@@ -1182,6 +1182,21 @@ export class Loading extends StateDerivedView {
   #waitingModel = new WaitingModel();
 
   /**
+   * The buffer's fill rate, as measured by the component that owns the element.
+   *
+   * There are two models — this one decides when the picture may start, the
+   * overlay's decides what to show — and only the overlay's was being given
+   * this reading. The diagnostic is printed by THIS one, which is why every
+   * line of it read `fillRate=n/a` while the buffer was visibly filling to 27
+   * seconds. The rate is the one figure that prices the whole chain at once, so
+   * the model that gates playback is precisely the one that must not be without
+   * it.
+   *
+   * @type {number | null}
+   */
+  #lastFillRate = null;
+
+  /**
    * Everything the waiting overlay is allowed to say something about, in one
    * object. Two writers used to share that line — the pipeline's stage string
    * and the buffering formatter — so the same wait read one way while opening
@@ -1333,6 +1348,10 @@ export class Loading extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
+    document.addEventListener(PLAYER_EVENTS.BUFFER, (event) => {
+      const rate = event instanceof CustomEvent ? event.detail?.fillRate : null;
+      this.#lastFillRate = typeof rate === "number" && Number.isFinite(rate) ? rate : null;
+    });
     window.addEventListener("pagehide", this.#onPageHide);
     window.addEventListener("beforeunload", this.#onBeforeUnload);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClosed);
@@ -3902,7 +3921,12 @@ export class Loading extends StateDerivedView {
         }
       }
       const ahead = bufferedAheadSeconds(videoElement);
-      const unified = this.#waitingModel.update({ bufferedAhead: bufferedAheadSeconds(this.#videoElement), downloadStats: this.#lastDownloadStats, transcodeProgress: cachedProgress });
+      const unified = this.#waitingModel.update({
+        bufferedAhead: bufferedAheadSeconds(this.#videoElement),
+        fillRate: this.#lastFillRate ?? undefined,
+        downloadStats: this.#lastDownloadStats,
+        transcodeProgress: cachedProgress
+      });
       const fillRate = unified.fillRate;
       const target = this.#adaptiveCushionTarget(fillRate);
 
@@ -4053,7 +4077,12 @@ export class Loading extends StateDerivedView {
     // the supply line must not vanish here just because a transcode session
     // now exists (field-reported: the first-open screen and the seek overlay
     // showed different information for the same underlying state).
-    const unified = this.#waitingModel.update({ bufferedAhead: bufferedAheadSeconds(this.#videoElement), downloadStats: this.#lastDownloadStats, transcodeProgress: progress });
+    const unified = this.#waitingModel.update({
+      bufferedAhead: bufferedAheadSeconds(this.#videoElement),
+      fillRate: this.#lastFillRate ?? undefined,
+      downloadStats: this.#lastDownloadStats,
+      transcodeProgress: progress
+    });
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
     this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
 
