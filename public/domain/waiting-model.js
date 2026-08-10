@@ -760,6 +760,13 @@ export class WaitingModel {
       return null;
     }
     const slowest = Math.min(...this.#fillRateSamples.map((each) => each.rate));
+    // Anything at or below a crawl answers as badly as zero: a rate of 0.0002
+    // turned a twenty-five second shortfall into thirty hours on screen
+    // (measured 2026-08-10, 107 095 s). A link this slow is a fact worth
+    // keeping and a divisor worth refusing.
+    if (slowest < 0.05) {
+      return null;
+    }
     // A rate of zero cannot divide a shortfall — that is how 586.9 seconds
     // reached the screen. It is still the truth about the link, so it is not
     // ignored: it means this measurement can say nothing, and the estimate

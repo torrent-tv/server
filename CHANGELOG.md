@@ -1,3 +1,8 @@
+## 0.8.164
+
+- **Fix**: The fill rate credits media that was actually PLAYED, read from the playhead, instead of trusting a flag. 0.8.163 credited playback consumption whenever the element was not paused — but a stalled element is not paused either, and plays nothing, so `@1.00x` came straight back on frozen buffers and turned into overestimates of 17.4 and 3.7 seconds (measured 2026-08-10). The playhead cannot be wrong about this: if it did not move, nothing was consumed, whatever the element intended. The flag is gone; each buffer reading now carries the playhead beside it, and one formula is correct while playing, while paused and while stalled.
+- **Fix**: A crawling rate no longer divides a shortfall. Refusing only an exact zero let 0.0002 through, which turned a twenty-five second shortfall into thirty hours on screen — 107 095 seconds, measured the same day. Anything below a twentieth of realtime is now treated as unable to answer, and the estimate falls through to what this host has historically taken.
+
 ## 0.8.163
 
 - **Fix**: A buffer that is not filling reads as zero rather than as 1x. The fill rate credited the media consumed by playing — correct while the picture moves, because a buffer holding steady during playback is genuinely being filled at exactly 1x — but it credited it during WAITS too, when nothing is being consumed. So a completely frozen buffer reported 1.00x, and a shortfall divided by that came back as the shortfall itself. Measured 2026-08-10: six consecutive waits, every one tagged `@1.00x-measured`, every one short — promised 15.0, 25.0, 14.9, 0.7, 0.0 and 5.9 seconds against real waits of 55.4, 47.0, 23.1, 11.0, 14.4 and 9.7. The same formula at the other end produced a single estimate of 586.9 seconds.
