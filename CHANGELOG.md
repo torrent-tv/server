@@ -1,3 +1,8 @@
+## 0.8.150
+
+- **Fix**: A refused `play()` is no longer mistaken for the viewer pausing, and no longer swallowed by an empty catch. When the browser declines to start playback the element stays paused and raises a `pause` event, which the machine read as a decision by the viewer. Whether that is what produced the black screen reported on 2026-08-09 is NOT established — the viewer was pressing play/pause themselves at the time, which accounts for the same log — so this is a correctness fix and an instrument, not a diagnosis. A refusal is now marked as ours and written to the log with its reason.
+- **Chore**: The picture itself is confirmed working from the field: `1920x1080, 197 frames, 0 dropped`. Whatever the black screen was, it was not the codec and not the decoder.
+
 ## 0.8.149
 
 - **Fix**: "Connecting to proxy…" stops being shown after the connection is made. The step was set when the connect began and nothing replaced it until much later, so the overlay named that step while showing peers and a download rate — figures that can only come FROM a proxy already connected. A step that has finished is now replaced at the moment it finishes.
