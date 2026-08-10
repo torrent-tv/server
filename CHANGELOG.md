@@ -1,3 +1,7 @@
+## 0.8.160
+
+- **Fix**: The stage decomposition reports an out-of-order stage as such instead of as a negative duration. Marks do not always fall in pipeline order — after a seek the buffer still holds media from the previous position, so "the first bytes arrived" can be observed before "the encoder produced anything". Measured backwards that read `first-bytes=-5.7s`, which is not a small negative number but a stage that did not happen in this wait. The 0.8.159 entry claimed this was already fixed; it was not, and this is the fix.
+
 ## 0.8.159
 
 - **New**: A fragment requested far from where the viewer is standing says so, and says what preceded it. The proxy sees only a segment number, so a request for #0 is indistinguishable there from an ordinary one — it restarts the encoder at the top of the film, which is what the viewer sees as the picture jumping back to the beginning (reported 2026-08-10, with the encoder observed restarting at #0 mid-session). Whether that was a seek the viewer made or something restarting the stream behind their back can only be answered on this side, so any fragment more than thirty seconds from the playhead is now logged with the position asked for, the position the viewer is at, whether the element is seeking, and the last thing hls.js did — a media re-attach, a level reload, a buffer reset or an error.
