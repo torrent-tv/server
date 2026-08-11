@@ -221,6 +221,12 @@ export class WaitingModel {
     this.#bufferedAhead = null;
     this.#downloadRateSamples = [];
     this.#stageMarks = { startedAt: Date.now(), sessionAt: null, producedAt: null, fillingAt: null };
+    // The wait's own start, which the timeout clamp measures from. Left behind,
+    // it anchored to the FIRST wait of the page: 45 s later the remaining time
+    // to the gate's timeout was permanently zero, so every later wait computed
+    // an estimate of exactly nought. That was hidden only by the formatter
+    // refusing to print a zero, and became visible the moment it stopped.
+    this.#waitStart = null;
     this.#resetEtaFloor();
   }
 
@@ -484,7 +490,24 @@ export class WaitingModel {
         // THIS wait, and it is displaced by one the moment the buffer moves —
         // but it is a fact about the machine doing the work, not an assumption
         // about it.
-        const hostPrior = this.#expectedFirstSegmentSeconds;
+        // Only once something HAS been produced. While nothing has, the term
+        // above is already carrying this same figure, and taking it here as
+        // well counted one measurement twice — `first=30.0+fill=30.0@host-median`,
+        // sixty seconds from a host that takes thirty.
+        // The rate at which this host PRODUCES media, derived from its own
+        // measurement: it made one segment's worth of media in
+        // `expectedFirstSegmentSeconds`, so it produces
+        // `segmentDuration / thatTime` seconds of media per second. Nothing is
+        // assumed — the same measurement, used for the quantity it actually
+        // describes. Dividing the shortfall by an assumed 1.0 said 4.0 s of a
+        // wait that ran 46.8 s.
+        const hostFirstSegment = this.#expectedFirstSegmentSeconds;
+        const producedRate = typeof hostFirstSegment === "number" && hostFirstSegment > 0
+          ? SEGMENT_DURATION_SECONDS / hostFirstSegment
+          : null;
+        const hostPrior = producedRate !== null && producedRate > 0
+          ? cushionRemainingSeconds / producedRate
+          : null;
         const measured = typeof hostPrior === "number" && hostPrior > 0;
         // Without the host's own figure the fallback is the shortfall itself,
         // which is the shortfall divided by an assumed rate of exactly one.

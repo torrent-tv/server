@@ -1,3 +1,11 @@
+## 0.8.170
+
+- **Fix**: The time until playback stops reading zero for every wait after the first. The estimate is capped by the time remaining before the gate's own timeout, and the point that was measured from was set once and never cleared — so it stayed anchored to the first wait of the page, and 45 seconds into the session the remaining time was permanently nought. Every later seek then computed exactly zero. It was invisible only because the display refused to print a zero.
+- **Fix**: The time is shown during a seek. It appeared only when the figure was above zero, and a seek is precisely the case where nothing else is on screen — nothing is being fetched, no pipeline step is running — so the one line the viewer wants was the one that vanished.
+- **Fix**: A host's measured segment time is counted once. It was reaching the estimate through two terms at the same time — `first=30.0+fill=30.0` — turning one thirty-second measurement into sixty seconds of predicted wait.
+- **Fix**: With nothing measured about the current wait, the shortfall is divided by a rate DERIVED from this host's own measurement — it produced one segment's worth of media in a known time, so its production rate follows — instead of by an assumed 1.0. The assumption said 4.0 s of a wait that ran 46.8 s.
+- **New**: The two figures only the proxy can know — what this host takes to create a session and to produce a first segment — now reach the model that estimates for the screen. It was holding null for both and silently omitting the terms.
+
 ## 0.8.169
 
 - **Fix**: The estimate predicts the event that is actually going to happen. The gate has three ways out — the cushion being reached, the early path on a healthy rate, and a timeout after which playback starts regardless — and the estimate modelled two. That is why the figure never counted down to zero: measured 2026-08-11, four separate waits whose last reading was 25.0 s, 30.5 s, 21.4 s and 33.4 s, each within two seconds of the picture starting. It now takes the nearest of the three, and says so in the diagnostic when the timeout is the binding one.

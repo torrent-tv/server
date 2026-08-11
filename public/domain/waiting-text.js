@@ -244,10 +244,13 @@ export function formatWaitingText(measurements = {}) {
   // long, so they are told how long; when it is nearly over, that is zero
   // seconds, which is a duration like any other. Before the first measurement
   // there is no line at all rather than a word standing in for a number.
-  // Only while there is a wait to describe. Zero is not a duration worth
-  // printing: it says the wait is over, and it was on screen through seeks that
-  // had plainly not finished.
-  if (isNumber(measurements.etaSeconds) && measurements.etaSeconds > 0) {
+  // ALWAYS, whenever there is a figure — zero included. Suppressing zero left
+  // the line missing during a seek, which is exactly when it is the only thing
+  // on screen the viewer wants: nothing is being fetched, so the supply row is
+  // empty, no pipeline step is running, and the cushion has not been measured
+  // yet. Reported 2026-08-11 as "during a seek the time is not shown at all".
+  // Zero is a duration like any other and says the wait is ending.
+  if (isNumber(measurements.etaSeconds)) {
     lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
   }
   return lines.join("\n");

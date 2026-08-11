@@ -90,10 +90,21 @@ export class WaitingOverlay {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const downloadStats = detail?.downloadStats ?? null;
     const transcodeProgress = detail?.transcodeProgress ?? null;
+    // The two figures only the PROXY can know: what this host takes to create a
+    // session and to produce a first segment. They ride on every progress
+    // response, and this component was not reading them — so the model held
+    // null for both and its estimate simply omitted the terms. That is why a
+    // cold open whose session creation took 19.8 s counted none of it, and why
+    // the first-segment term fell back to an assumed rate instead of the host's
+    // own measurement. The same defect was fixed once on the proxy side (item 2)
+    // and reintroduced here when the model moved into this component.
+    const toSeconds = (ms) => (typeof ms === "number" && ms > 0 ? ms / 1000 : undefined);
     const unified = this.#model.update({
       bufferedAhead: this.#bufferedAhead ?? undefined,
       downloadStats,
-      transcodeProgress
+      transcodeProgress,
+      expectedSessionCreateSeconds: toSeconds(transcodeProgress?.expectedSessionCreateMs),
+      expectedFirstSegmentSeconds: toSeconds(transcodeProgress?.expectedFirstSegmentMs)
     });
     const needed = downloadStats?.resumeNeededBytes;
     const got = downloadStats?.resumeDownloadedBytes;
