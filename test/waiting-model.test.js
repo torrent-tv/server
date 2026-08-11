@@ -293,3 +293,23 @@ test("the estimate reaches zero exactly when the gate opens", () => {
     `predicted ${predicted}s, the gate opened after ${elapsed}s`
   );
 });
+
+test("the estimate never promises longer than the gate's own timeout", () => {
+  const model = new WaitingModel();
+  // A rate so slow that filling the cushion would take minutes. The gate does
+  // not wait minutes: after its timeout it starts playback regardless, so a
+  // figure larger than the time left on that timeout is predicting an event
+  // that will not be the one to happen. Measured 2026-08-11 — four waits whose
+  // last reading was 25.0s, 30.5s, 21.4s and 33.4s, each within two seconds of
+  // the picture starting.
+  const answer = model.update({
+    bufferedAhead: 0.1,
+    fillRate: 0.05,
+    transcodeProgress: { state: "ready" }
+  });
+  assert.ok(answer.etaSeconds !== null, "a measured rate must produce a figure");
+  assert.ok(
+    answer.etaSeconds <= 45,
+    `promised ${answer.etaSeconds}s, but the gate gives up waiting after 45s`
+  );
+});
