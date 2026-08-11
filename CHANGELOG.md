@@ -1,3 +1,8 @@
+## 0.8.168
+
+- **Fix**: The rule that decides when playback may start exists in one copy. It was written twice — once in the model, to predict when the picture would start, and once in the pipeline, to decide it — each with its own thresholds. Two copies of one rule cannot be tested against each other, only against themselves, and while they were apart the overlay announced the cushion met on a wait that then ran 42.6 seconds. The model now answers "may playback start", the pipeline asks it, and the duplicate thresholds are gone.
+- **Chore**: The test this makes possible: the estimate is stepped forward against a buffer filling at a known rate, and the moment it counts down to zero is required to be the moment the gate opens. Two independent things compared, which could not be done while the rule was duplicated.
+
 ## 0.8.167
 
 - **Fix**: Every hand-chosen weight is gone from the estimate. A fall weight, a rise weight and a display speed limit had been introduced to stop the shown figure jumping; the scoring says what they bought — six waits with median errors of 3.6-22.8 s on waits of 9-47 s, 228 s promised for a 15 s wait and 0 s for a 42.6 s one. Smoothing a wrong number gives a smooth wrong number and hides that the model is incomplete. The measured fill rate is now used as measured.

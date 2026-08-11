@@ -3901,22 +3901,20 @@ export class Loading extends StateDerivedView {
       // The model owns this figure now: the gate releases on it and the estimate
       // counts down to it, so they cannot describe different moments.
       this.#waitingModel.update({ fillRate: Number.isFinite(fillRate) ? fillRate : undefined });
-      const target = this.#waitingModel.requiredBufferSeconds();
+      // THE gate rule lives in the model, in one copy. It was written here as
+      // well, with its own thresholds, and two copies of one rule can only be
+      // tested against themselves — while they were separate the overlay
+      // announced the cushion met on a wait that then ran 42.6 s.
+      const gate = this.#waitingModel.mayStartPlayback({
+        ahead,
+        fillRate,
+        fillSpanMs: this.#bufferFillSpanMs()
+      });
+      const target = gate.target;
 
-      // Start early when the fill rate has SUSTAINED a healthy surplus over
-      // the FULL rolling window (not just the shorter span that makes the
-      // rate trustworthy at all) — the same anti-burst guard that fixed the
-      // 0.8.45 start-stutter. Low margins keep the deeper adaptive target
-      // unchanged.
-      const healthyEarly =
-        ahead >= PREBUFFER_HEALTHY_AHEAD_SECONDS &&
-        Number.isFinite(fillRate) &&
-        fillRate >= PREBUFFER_HEALTHY_FILL_RATE &&
-        this.#bufferFillSpanMs() >= BUFFER_FILL_WINDOW_MS;
-
-      if (ahead >= target || healthyEarly) {
+      if (gate.ready) {
         this.#logEvt(
-          `prebuffer ready start=${ahead >= target ? "target" : "early"} ` +
+          `prebuffer ready start=${gate.reason} ` +
             `ahead=${ahead.toFixed(1)}s target=${target.toFixed(1)}s ` +
             `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
         );
@@ -4866,9 +4864,6 @@ const _PREBUFFER_BASE_SECONDS = 12;
 // land in bursts every ~4-11 s on a slow/warming encoder, so a short window
 // reads a single burst as "3x realtime" and releases with a tiny cushion that
 // then drains. Below this fill rate the deeper adaptive target is kept (thin
-// margins need it).
-const PREBUFFER_HEALTHY_FILL_RATE = 1.35;
-const PREBUFFER_HEALTHY_AHEAD_SECONDS = 10;
 // Allow a full cushion to build on a genuinely slow start before falling back.
 const PREBUFFER_TIMEOUT_MS = 45_000;
 // If, after the timeout, less than this is buffered, treat the stream as never

@@ -732,6 +732,37 @@ export class WaitingModel {
   }
 
   /**
+   * May playback start now?
+   *
+   * THE gate rule — the only copy. It used to be written twice: once here, to
+   * predict when the picture would start, and once in the pipeline, to decide
+   * it. Two copies of one rule cannot be tested against each other, only
+   * against themselves, and while they were separate the estimate said the
+   * cushion was met on a wait that then ran 42.6 s.
+   *
+   * @param {{ ahead: number, fillRate?: number | null, fillSpanMs?: number }} reading
+   * @returns {{ ready: boolean, reason: "target" | "early" | null, target: number }}
+   */
+  mayStartPlayback({ ahead, fillRate = null, fillSpanMs = 0 }) {
+    const target = this.requiredBufferSeconds();
+    if (typeof ahead === "number" && ahead >= target) {
+      return { ready: true, reason: "target", target };
+    }
+    // The early path exists so a link with room to spare does not sit banking
+    // media it plainly does not need. It asks for a rate SUSTAINED over the
+    // whole window rather than a lucky burst.
+    const sustained = typeof fillSpanMs === "number" && fillSpanMs >= RATE_TREND_WINDOW_MS;
+    const healthy =
+      typeof fillRate === "number" &&
+      Number.isFinite(fillRate) &&
+      fillRate >= GATE_HEALTHY_FILL_RATE;
+    if (ahead >= GATE_HEALTHY_AHEAD_SECONDS && healthy && sustained) {
+      return { ready: true, reason: "early", target };
+    }
+    return { ready: false, reason: null, target };
+  }
+
+  /**
    * Remember a rate reading, keeping only the recent window.
    *
    * @param {number | null} rate
