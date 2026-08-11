@@ -263,3 +263,33 @@ test("the countdown falls by exactly the time that passed", () => {
   }
 });
 
+
+test("the estimate reaches zero exactly when the gate opens", () => {
+  const model = new WaitingModel();
+  const progress = { state: "ready" };
+  const rate = 2.0;
+  // Two independent things compared: what the model PREDICTS the wait to be,
+  // and when it SAYS playback may start. Writing this was impossible while the
+  // rule existed in two copies — a test could then only check a copy against
+  // itself, which is how the overlay came to announce the cushion met on a wait
+  // that ran 42.6 s.
+  let ahead = 0;
+  let elapsed = 0;
+  const predicted = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress }).etaSeconds;
+  assert.ok(predicted !== null && predicted > 0, "a measured rate must predict a wait");
+
+  for (let step = 0; step < 200; step += 1) {
+    const gate = model.mayStartPlayback({ ahead, fillRate: rate, fillSpanMs: 10_000 });
+    if (gate.ready) {
+      break;
+    }
+    ahead += rate * 0.5;
+    elapsed += 0.5;
+    model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
+  }
+
+  assert.ok(
+    Math.abs(elapsed - predicted) <= 0.5,
+    `predicted ${predicted}s, the gate opened after ${elapsed}s`
+  );
+});
