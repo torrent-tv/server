@@ -1,3 +1,8 @@
+## 0.8.169
+
+- **Fix**: The estimate predicts the event that is actually going to happen. The gate has three ways out — the cushion being reached, the early path on a healthy rate, and a timeout after which playback starts regardless — and the estimate modelled two. That is why the figure never counted down to zero: measured 2026-08-11, four separate waits whose last reading was 25.0 s, 30.5 s, 21.4 s and 33.4 s, each within two seconds of the picture starting. It now takes the nearest of the three, and says so in the diagnostic when the timeout is the binding one.
+- **Fix**: The rest of a wait is predicted from the rate AVERAGED over that wait, not from the reading taken at this instant. A snapshot extrapolated as a constant says the next twenty seconds will look like the last half-second, and it was the single largest source of miss: measured 2026-08-11, a wait of 57 s predicted at 23.7 s from a rate of 1.05x taken at that moment, while the whole wait averaged 0.44x. Four of six waits missed for this one reason, in both directions. The average is measured, needs no weight, and describes what has actually happened.
+
 ## 0.8.168
 
 - **Fix**: The rule that decides when playback may start exists in one copy. It was written twice — once in the model, to predict when the picture would start, and once in the pipeline, to decide it — each with its own thresholds. Two copies of one rule cannot be tested against each other, only against themselves, and while they were apart the overlay announced the cushion met on a wait that then ran 42.6 seconds. The model now answers "may playback start", the pipeline asks it, and the duplicate thresholds are gone.

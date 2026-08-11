@@ -22,6 +22,17 @@ const RATE_TREND_WINDOW_MS = 6_000;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
 const GATE_HEALTHY_FILL_RATE = 1.35;
 const GATE_HEALTHY_AHEAD_SECONDS = 10;
+/**
+ * The gate's THIRD exit: it gives up waiting and starts anyway.
+ *
+ * Must equal the pipeline's `PREBUFFER_TIMEOUT_MS`. The estimate ignored it
+ * entirely, which is why the figure never counted down to zero — measured
+ * 2026-08-11, the last reading of four separate waits was 25.0 s with 1.5 s to
+ * go, 30.5 s with 0.4 s, 21.4 s with 0.1 s and 33.4 s with 2.0 s. The picture
+ * started while the estimate still promised half a minute, because it was
+ * predicting an event that was not the one about to happen.
+ */
+const GATE_TIMEOUT_SECONDS = 45;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const RATE_TREND_MAX_GROWTH = 4;
 
@@ -44,6 +55,21 @@ const RATE_TREND_MAX_GROWTH = 4;
 export class WaitingModel {
   /** @type {number | null} Seconds of media ahead of the playhead. */
   #bufferedAhead = null;
+
+  /**
+   * The cushion when this wait began, and when that was.
+   *
+   * Together they give the rate AVERAGED over the wait so far, which is what
+   * the remainder of the wait should be predicted from. The instantaneous rate
+   * is a snapshot and was being extrapolated as a constant: measured
+   * 2026-08-11, a wait of 57 s was predicted at 23.7 s from a rate of 1.05x
+   * taken at that instant, while the whole wait averaged 0.44x — the rate fell
+   * after the figure was shown. Four of six waits missed for this one reason,
+   * in both directions.
+   *
+   * @type {{ ahead: number, atMs: number } | null}
+   */
+  #waitStart = null;
 
   /**
    * Seconds of media gained per second of wall clock, measured at the buffer by
@@ -114,6 +140,7 @@ export class WaitingModel {
   update(facts = {}) {
     if (typeof facts.bufferedAhead === "number") {
       this.#bufferedAhead = facts.bufferedAhead;
+      this.#waitStart ??= { ahead: facts.bufferedAhead, atMs: Date.now() };
     }
     if (typeof facts.fillRate === "number" && Number.isFinite(facts.fillRate)) {
       this.#fillRate = facts.fillRate;
@@ -489,6 +516,21 @@ export class WaitingModel {
     // playback`, for the whole of a wait in which the buffer never moved. It
     // existed to hide jumps between estimate sources; there is one source now,
     // so a rise means the wait genuinely got longer, and saying so is the point.
+    // The gate has THREE ways out and the estimate must predict the nearest.
+    // The first two are the cushion and the early path, both above. The third
+    // is the timeout: after GATE_TIMEOUT_SECONDS the pipeline starts playback
+    // whatever the buffer says. Ignoring it is why the figure never reached
+    // zero — it was predicting an event that was not the one about to happen.
+    if (etaSeconds !== null && this.#waitStart !== null) {
+      const untilTimeout = Math.max(
+        0,
+        GATE_TIMEOUT_SECONDS - (Date.now() - this.#waitStart.atMs) / 1000
+      );
+      if (untilTimeout < etaSeconds) {
+        etaSeconds = untilTimeout;
+        etaSource = `${etaSource}+timeout=${untilTimeout.toFixed(1)}`;
+      }
+    }
     this.#etaSamples.push({ atMs: Date.now(), predicted: etaSeconds, terms: etaSource });
 
     const result = {
@@ -784,8 +826,35 @@ export class WaitingModel {
    *
    * @returns {number | null}
    */
+  /**
+   * The rate AVERAGED over this wait, which is what the rest of it should be
+   * predicted from — not the reading taken at this instant.
+   *
+   * A snapshot extrapolated as a constant is the single largest source of miss:
+   * it says the next twenty seconds will look like the last half-second. The
+   * average is measured, needs no weight, and describes what has actually
+   * happened so far.
+   *
+   * @returns {number | null} Null until the wait is long enough to average over.
+   */
+  #averagedFillRate() {
+    const start = this.#waitStart;
+    if (start === null || this.#bufferedAhead === null) {
+      return null;
+    }
+    const elapsed = (Date.now() - start.atMs) / 1000;
+    // Below a second the divisor is small enough that a single segment landing
+    // dominates the answer.
+    if (elapsed < 1) {
+      return null;
+    }
+    return Math.max(0, (this.#bufferedAhead - start.ahead) / elapsed);
+  }
+
   #conservativeFillRate() {
-    const rate = this.#measuredRate;
+    // The average over this wait first; the instant only until there is enough
+    // of a wait to average.
+    const rate = this.#averagedFillRate() ?? this.#measuredRate;
     if (rate === null) {
       return null;
     }
