@@ -1167,6 +1167,17 @@ export class Loading extends StateDerivedView {
   #lastFillRate = null;
 
   /**
+   * The buffer reading published by the component that owns the element.
+   *
+   * One reading, so the gate and the overlay cannot answer the same question
+   * differently. Measuring it here as well is what let the overlay say the
+   * cushion was met while the gate went on waiting.
+   *
+   * @type {number | null}
+   */
+  #lastBufferedAhead = null;
+
+  /**
    * Everything the waiting overlay is allowed to say something about, in one
    * object. Two writers used to share that line — the pipeline's stage string
    * and the buffering formatter — so the same wait read one way while opening
@@ -1321,6 +1332,15 @@ export class Loading extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.BUFFER, (event) => {
       const rate = event instanceof CustomEvent ? event.detail?.fillRate : null;
       this.#lastFillRate = typeof rate === "number" && Number.isFinite(rate) ? rate : null;
+      // The SAME reading the overlay's model is given. The gate used to measure
+      // the element itself, so one rule ran on two different numbers taken at
+      // two different moments — and they disagreed exactly where it shows: the
+      // overlay announced the cushion 100% met and zero seconds left while the
+      // gate held playback, which is the `[ready] said=0.0 was=42.6` case in the
+      // accuracy report and what the viewer sees as "0 seconds" over a picture
+      // that never starts.
+      const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
+      this.#lastBufferedAhead = typeof ahead === "number" && Number.isFinite(ahead) ? ahead : null;
     });
     window.addEventListener("pagehide", this.#onPageHide);
     window.addEventListener("beforeunload", this.#onBeforeUnload);
@@ -3890,9 +3910,10 @@ export class Loading extends StateDerivedView {
           // Transient — keep the last known progress rather than blanking it.
         }
       }
-      const ahead = bufferedAheadSeconds(videoElement);
+      // The published reading, not a fresh one of our own — see the listener.
+      const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
       const unified = this.#waitingModel.update({
-        bufferedAhead: bufferedAheadSeconds(this.#videoElement),
+        bufferedAhead: ahead,
         fillRate: this.#lastFillRate ?? undefined,
         downloadStats: this.#lastDownloadStats,
         transcodeProgress: cachedProgress
