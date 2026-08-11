@@ -1,3 +1,7 @@
+## 2.9.141
+
+- **New**: A held segment says whether the encoder is actually moving. The line already reported that the run was alive and at the right index, and stopped there — which left the two possible causes indistinguishable: an encoder waiting on torrent pieces looks exactly like one that is encoding and has not finished. It now reports how much media the run has produced since it started and at what speed, and says outright when the position has not moved at all, which means the input is what is being waited for. Measured 2026-08-11: segment #675 held with the run started at #675 and the encoder alive, and nothing in the log could say why — the browser then abandoned the session and built another, which is where the "second session after a seek" came from.
+
 ## 0.8.171
 
 - **Fix**: The overlay no longer reads "0 seconds until playback" over a picture that has not started. The rule deciding when playback may begin was unified in 0.8.169, but the READING it runs on was not: the gate measured the media element itself while the overlay's model was given the measurement published by the component that owns it. One rule, two numbers, taken at two different moments — and they disagreed exactly where it shows. Measured 2026-08-11: the overlay reported the cushion 100% met and the estimate fell to zero while the gate went on holding, which is the `[ready] said=0.0 was=42.6s` entry in the accuracy report. Both now use the one published reading.
