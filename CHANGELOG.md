@@ -1,3 +1,7 @@
+## 0.9.1
+
+- **Fix**: Playback starts again on every stream that re-encodes its video. 0.9.0 handed the master playlist to the wait that decides when the first segment is ready, and that wait looks for `#EXTINF:` or `#EXT-X-ENDLIST` — a master has neither and never will, since it lists variants and not segments. So the wait ran to its fifteen-minute timeout behind a loading screen that never ended: field-reported 2026-08-11 on three sessions, and visible in the proxy log as the master being fetched every four seconds for as long as the viewer waited. The wait now polls the media playlist, which is what it was always about; a master arriving there is reported in the console instead of being waited on.
+
 ## 0.9.0
 
 - **New**: Changing quality no longer stops the picture. Where the proxy publishes a master playlist (proxy 2.10.0) the player switches variants itself — the new rung is appended after what is already buffered — instead of the session being re-opened at a fixed size, which cost a cold start with the screen blank and the position restored by hand. The old path stays for streams that have no variants: a copied video is cut at the source's own keyframes, and a re-encoded rung cannot be spliced into it.

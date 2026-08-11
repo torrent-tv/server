@@ -668,7 +668,8 @@ export class TorrentSession {
     // so its absence is the answer for this file and not a fallback.
     const masterPath = typeof payload?.masterPath === "string" ? payload.masterPath.trim() : "";
     const variantHeight = Number(payload?.variantHeight) || 0;
-    const playlistUrl = transport.url(masterPath || playlistPath);
+    const mediaPlaylistUrl = transport.url(playlistPath);
+    const playlistUrl = masterPath ? transport.url(masterPath) : mediaPlaylistUrl;
     const progressPath = sessionId
       ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`
       : "";
@@ -716,7 +717,10 @@ export class TorrentSession {
     // synthetic VOD playlist, so it cannot drive that part of the UI).
     this.activeProgressPoll = progressUrl ? { progressUrl, fetchFn } : null;
 
-    await waitForHlsPlaylist(playlistUrl, 15 * 60_000, {
+    // The MEDIA playlist, never the master. What is being waited for is a
+    // playable segment list, and a master carries none — only pointers to the
+    // variants. Waiting on one never finishes.
+    await waitForHlsPlaylist(mediaPlaylistUrl, 15 * 60_000, {
       progressUrl,
       fetchFn,
       onProgress: onTranscodeProgress,
@@ -726,7 +730,7 @@ export class TorrentSession {
       playlistUrl,
       variantHeight: masterPath ? variantHeight : 0,
       // The one-variant manifest, for a player that would adapt on its own.
-      mediaPlaylistUrl: transport.url(playlistPath)
+      mediaPlaylistUrl
     };
   }
 
@@ -853,6 +857,16 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
         // entire transcode is complete. Start playback as soon as the first
         // segment is present (#EXTINF:), which means buffering can begin immediately.
         if (body.includes("#EXTM3U") && (body.includes("#EXTINF:") || body.includes("#EXT-X-ENDLIST"))) {
+          return;
+        }
+        // A master playlist has neither of those and never will: it lists
+        // variants, not segments. Waiting on one runs to the fifteen-minute
+        // timeout behind a loading screen that never ends — which is exactly
+        // what shipping the master did on 2026-08-11, on every session that
+        // re-encodes video. Say so rather than wait: whoever passed it here
+        // meant the media playlist.
+        if (body.includes("#EXT-X-STREAM-INF")) {
+          console.warn("[torrent-tv] waited on a master playlist; it lists variants, not segments");
           return;
         }
         attempt += 1;
