@@ -1,3 +1,7 @@
+## 0.8.163
+
+- **Fix**: The time until playback moves instead of jumping. The rate it divides by was the MINIMUM over a sliding six-second window, which is conservative and also discontinuous by construction: a slow reading entering the window collapsed the divisor and the figure leapt, and the same reading ageing out of it made the figure collapse back. Measured 2026-08-11 on consecutive ticks — 22.58 s to 3.83 s, then 5.43 s to 45.87 s, with the number climbing steadily in between so the wait appeared to lengthen while the viewer watched it. The rate is now smoothed, and deliberately asymmetrically: a rate that got worse is believed almost at once, because a wait is governed by its worst stretch, and a rate that got better is believed slowly, so one lucky burst cannot promise a wait it will not deliver. Covered by a test that fails on the jump.
+
 ## 0.8.164
 
 - **Fix**: The fill rate credits media that was actually PLAYED, read from the playhead, instead of trusting a flag. 0.8.163 credited playback consumption whenever the element was not paused — but a stalled element is not paused either, and plays nothing, so `@1.00x` came straight back on frozen buffers and turned into overestimates of 17.4 and 3.7 seconds (measured 2026-08-10). The playhead cannot be wrong about this: if it did not move, nothing was consumed, whatever the element intended. The flag is gone; each buffer reading now carries the playhead beside it, and one formula is correct while playing, while paused and while stalled.
