@@ -395,7 +395,7 @@ export class TorrentSession {
       typeof options.sourceKey === "string" && options.sourceKey.length > 0
         ? options.sourceKey
         : await this.registerSourceOnProxy(transport);
-    const playlistUrl = await this.tryCreateTranscodeSession(
+    const { playlistUrl, variantHeight, mediaPlaylistUrl } = await this.tryCreateTranscodeSession(
       transport,
       sourceKey,
       fileIndex,
@@ -426,9 +426,16 @@ export class TorrentSession {
       fileIndex,
       transcodeVideo,
       transcodeAudio,
-      playlistUrl
+      playlistUrl,
+      variantHeight
     });
-    await playHls(videoElement, playlistUrl);
+    // The variant to start on — the one the proxy is already encoding. Zero
+    // when this stream has no variants, and then the player has one level and
+    // nothing to pin.
+    await playHls(videoElement, playlistUrl, {
+      preferredHeight: variantHeight,
+      nativeManifestUrl: mediaPlaylistUrl
+    });
 
     // Seeking is handled entirely server-side: the proxy serves a complete VOD
     // playlist (full duration, #EXT-X-ENDLIST) and produces segments on demand,
@@ -564,7 +571,11 @@ export class TorrentSession {
    * @param {((progress: object) => void) | null} onTranscodeProgress
    * @param {boolean} transcodeVideo
    * @param {{ transcodeAudio?: boolean, targetWidth?: number, targetHeight?: number, startPositionSeconds?: number }} options
-   * @returns {Promise<string>} HLS playlist URL
+   * @returns {Promise<{ playlistUrl: string, variantHeight: number, mediaPlaylistUrl: string }>}
+   *   The manifest to load — a master playlist when the session offers quality
+   *   variants, its media playlist otherwise — the height of the variant the
+   *   proxy is already encoding (0 when there are no variants), and the media
+   *   playlist on its own, for a player that adapts by itself.
    */
   async tryCreateTranscodeSession(
     transport,
@@ -649,7 +660,15 @@ export class TorrentSession {
     if (!playlistPath) {
       throw new Error("Proxy did not return transcode playlist path.");
     }
-    const playlistUrl = transport.url(playlistPath);
+    // A master playlist when this session has quality variants to offer. Given
+    // one, the player changes quality by fetching another variant and appending
+    // it after what is already buffered — where a media playlist can only be
+    // changed by building a new session, which is a cold start with the picture
+    // gone. The proxy publishes a master only where the variants can be joined,
+    // so its absence is the answer for this file and not a fallback.
+    const masterPath = typeof payload?.masterPath === "string" ? payload.masterPath.trim() : "";
+    const variantHeight = Number(payload?.variantHeight) || 0;
+    const playlistUrl = transport.url(masterPath || playlistPath);
     const progressPath = sessionId
       ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`
       : "";
@@ -703,7 +722,12 @@ export class TorrentSession {
       onProgress: onTranscodeProgress,
       signal: this.abortController.signal
     });
-    return playlistUrl;
+    return {
+      playlistUrl,
+      variantHeight: masterPath ? variantHeight : 0,
+      // The one-variant manifest, for a player that would adapt on its own.
+      mediaPlaylistUrl: transport.url(playlistPath)
+    };
   }
 
   /**

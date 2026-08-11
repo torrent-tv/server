@@ -3324,19 +3324,20 @@ export class Loading extends StateDerivedView {
     if (this.#autoEffectiveHeight === 0 && !this.#videoIsReencoded && this.#sourceVideoHeight > 0) {
       this.#autoEffectiveHeight = this.#sourceVideoHeight;
     }
-    // Feed the player's quality menu (Auto + forced resolutions <= source).
-    document.dispatchEvent(
-      new CustomEvent(PLAYER_EVENTS.SET_QUALITY_OPTIONS, {
-        detail: { options: this.#buildQualityOptions(), activeHeight: this.#selectedQualityHeight }
-      })
-    );
+    // Feed the player's quality menu — the stream's own variants where it has
+    // them, otherwise Auto plus forced resolutions at or below the source.
+    this.#publishQualityOptions();
   }
 
   /**
-   * The viewer picked a quality: replay the active file at the chosen
-   * resolution (0 = Auto / realtime budget), preserving the position. Forcing a
-   * resolution re-opens the transcode session at a fixed size (budget off), so
-   * the resolution stays constant for the session — no mid-stream change.
+   * The viewer picked a quality.
+   *
+   * Where the stream has variants the player switches between them itself: it
+   * fetches the other variant, appends it after what is already buffered and
+   * changes the decoder's type if the codec parameters differ — playback never
+   * stops. Where it has none (a copied video, or a source with nothing to step
+   * down to) the only way to change resolution is still to re-open the session
+   * at a fixed size, which costs a cold start with the picture gone.
    *
    * @param {CustomEvent} event
    */
@@ -3345,6 +3346,21 @@ export class Loading extends StateDerivedView {
     const height = Number(detail?.height);
     if (!Number.isInteger(height) || height < 0) {
       return;
+    }
+    const level = this.#hlsPlayer.levels().find((candidate) => candidate.height === height);
+    if (level) {
+      if (level.index === this.#hlsPlayer.currentLevel()) {
+        return;
+      }
+      if (this.#hlsPlayer.switchLevel(level.index)) {
+        // Remembered only once the switch was accepted, so a refusal still
+        // leaves the re-open path below a height to act on. Its purpose is the
+        // NEXT file of this torrent: it opens at the rung the viewer chose
+        // rather than reverting to the automatic pick.
+        this.#selectedQualityHeight = height;
+        this.#logEvt(`quality: switching to ${height}p without interrupting playback`);
+        return;
+      }
     }
     if (height === this.#selectedQualityHeight) {
       return;
@@ -3799,10 +3815,15 @@ export class Loading extends StateDerivedView {
           ...(typeof resumeStartPosition === "number" && resumeStartPosition > 0
             ? { startPosition: resumeStartPosition }
             : {}),
+          onLevelSwitched: (height) => this.#onHlsLevelSwitched(height),
           ...playOptions
         }),
       onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
     });
+    // The variants are known only once the manifest has been parsed, which
+    // happens inside the call above. The menu was published before it, from the
+    // source's height alone.
+    this.#publishQualityOptions();
     // Transcoded HLS is always browser-compatible (proxy outputs H.264/AAC), so
     // a codec-decodability check is unnecessary. More importantly, waiting for a
     // presented frame here deadlocks on iOS because the player view is still
@@ -4569,6 +4590,21 @@ export class Loading extends StateDerivedView {
     }
   }
 
+  /**
+   * The player finished switching variant: the rung named here is the one on
+   * screen, which is not the one that was asked for until the first fragment of
+   * the new variant has been appended.
+   *
+   * @param {number} height
+   * @returns {void}
+   */
+  #onHlsLevelSwitched(height) {
+    if (height > 0) {
+      this.#logEvt(`quality: now playing ${height}p`);
+    }
+    this.#publishQualityOptions();
+  }
+
   #noteEffectiveQuality(progress) {
     const height = Number(progress?.currentHeight);
     const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
@@ -4580,14 +4616,52 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#logEvt(`automatic quality is now ${effective > 0 ? `${effective}p` : "the source's own height"}`);
+    this.#publishQualityOptions();
+  }
+
+  /**
+   * Put the quality menu on screen, saying which rung is playing.
+   *
+   * One place, because the answer comes from two sources now — the player's own
+   * variants where the stream has them, the source's height where it does not —
+   * and three moments publish it.
+   *
+   * @returns {void}
+   */
+  #publishQualityOptions() {
+    const levels = this.#hlsPlayer.levels();
+    const activeLevel = levels.find((level) => level.index === this.#hlsPlayer.currentLevel());
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_QUALITY_OPTIONS, {
-        detail: { options: this.#buildQualityOptions(), activeHeight: this.#selectedQualityHeight }
+        detail: {
+          options: this.#buildQualityOptions(),
+          // With variants the menu says what is PLAYING, which is the player's
+          // to answer: a pick takes effect a fragment later, and until then the
+          // old rung is still on screen.
+          activeHeight: activeLevel ? activeLevel.height : this.#selectedQualityHeight
+        }
       })
     );
   }
 
   #buildQualityOptions() {
+    // The variants the player itself reports, when the proxy published a master
+    // playlist for this stream. Built from what the player has, not from a list
+    // assembled separately, so the menu cannot offer a rung that is not there.
+    const named = this.#hlsPlayer.levels()
+      .filter((level) => level.height > 0)
+      .sort((left, right) => right.height - left.height);
+    // More than one rung, and each of them says what it is. A variant whose
+    // height the player could not read is one the menu cannot name, and a menu
+    // of one unnamed entry is worse than the list below it.
+    if (named.length > 1) {
+      return named.map((level) => ({
+        height: level.height,
+        label: level.height === this.#sourceVideoHeight
+          ? `${level.height}p (source)`
+          : `${level.height}p`
+      }));
+    }
     if (!(this.#sourceVideoHeight > 0)) {
       return [];
     }
