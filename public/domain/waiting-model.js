@@ -40,6 +40,18 @@ const GATE_HEALTHY_AHEAD_SECONDS = 10;
 const RATE_FALL_WEIGHT = 0.6;
 /** …and of a BETTER one — a little, so a burst cannot promise what it cannot keep. */
 const RATE_RISE_WEIGHT = 0.1;
+/**
+ * How far the SHOWN figure may depart, per second of wall clock, from the
+ * countdown it would follow on its own.
+ *
+ * A countdown falls by one second per second by nature. Anything beyond that is
+ * news, and news has a speed limit — because `remaining / rate` is a hyperbola
+ * and a single near-zero reading sends it to the moon. Measured 2026-08-11:
+ * 13.18 s to 219.34 s between two ticks, then twenty ticks of decay through
+ * figures no one could use, for a wait that ended in seconds. Smoothing the
+ * rate alone cannot prevent this; the shown value needs its own limit.
+ */
+const ETA_SLEW_SECONDS_PER_SECOND = 2;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const RATE_TREND_MAX_GROWTH = 4;
 
@@ -88,6 +100,10 @@ export class WaitingModel {
   #etaPromise = null;
   /** @type {number} When that promise was made. */
   #etaPromiseAt = 0;
+  /** @type {number | null} The figure last shown, for {@link #slewEta}. */
+  #shownEta = null;
+  /** @type {number} When it was shown. */
+  #shownEtaAt = 0;
   /** @type {Array<object>} Estimates against what actually happened. */
   #etaSamples = [];
   /** @type {number | null} */
@@ -502,6 +518,10 @@ export class WaitingModel {
     // playback`, for the whole of a wait in which the buffer never moved. It
     // existed to hide jumps between estimate sources; there is one source now,
     // so a rise means the wait genuinely got longer, and saying so is the point.
+    // Continuous by construction — see #slewEta. Applied before the sample is
+    // recorded, so the accuracy report scores the figure the viewer was SHOWN
+    // and not one that never appeared.
+    etaSeconds = etaSeconds === null ? null : this.#slewEta(etaSeconds);
     this.#etaSamples.push({ atMs: Date.now(), predicted: etaSeconds, terms: etaSource });
 
     const result = {
@@ -588,9 +608,36 @@ export class WaitingModel {
   }
 
 
+  /**
+   * Let the shown figure move toward the computed one without leaping to it.
+   *
+   * @param {number} target - What the arithmetic says.
+   * @returns {number} What may be shown.
+   */
+  #slewEta(target) {
+    const now = Date.now();
+    if (this.#shownEta === null || this.#shownEtaAt === 0) {
+      this.#shownEta = target;
+      this.#shownEtaAt = now;
+      return target;
+    }
+    const elapsed = Math.max(0, (now - this.#shownEtaAt) / 1000);
+    // Where the previous figure would stand on its own: a countdown.
+    const coasted = Math.max(0, this.#shownEta - elapsed);
+    const allowance = ETA_SLEW_SECONDS_PER_SECOND * Math.max(elapsed, 0.05);
+    const bounded = Math.min(Math.max(target, coasted - allowance), coasted + allowance);
+    this.#shownEta = Math.max(0, bounded);
+    this.#shownEtaAt = now;
+    return this.#shownEta;
+  }
+
   #resetEtaFloor() {
     this.#etaPromise = null;
     this.#etaPromiseAt = 0;
+    // A new wait starts from what it measures, not from where the last one
+    // happened to leave the figure.
+    this.#shownEta = null;
+    this.#shownEtaAt = 0;
   }
 
   /**
