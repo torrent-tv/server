@@ -18,6 +18,72 @@ function isNativeHlsSupported(videoElement) {
 }
 
 /**
+ * Which variant to start on.
+ *
+ * The height the proxy is already encoding, because an encoder is running for
+ * it — every other rung is a separate ffmpeg run and a cold start before the
+ * first frame. A height the master does not list should not happen, since the
+ * master is built from that very session; the nearest rung is still a better
+ * answer than leaving the choice to the player, which with no measured
+ * throughput yet picks the lowest one.
+ *
+ * @param {{ height?: number }[]} levels
+ * @param {number | undefined} preferredHeight
+ * @returns {number} An index into `levels`, or −1 when there is nothing to pin.
+ */
+export function chooseStartLevel(levels, preferredHeight) {
+  if (!Array.isArray(levels) || levels.length < 2) {
+    return -1;
+  }
+  const wanted = Number(preferredHeight) || 0;
+  if (wanted <= 0) {
+    // No height was reported — an older proxy, or a response that lost the
+    // field. Take the tallest rung rather than an index, because hls.js orders
+    // levels from lowest to highest and index 0 would silently start the viewer
+    // on the smallest picture the file is offered at.
+    return levels.reduce(
+      (best, level, index) => (Number(level?.height) > Number(levels[best]?.height) ? index : best),
+      0
+    );
+  }
+  return levels.reduce(
+    (best, level, index) =>
+      Math.abs(Number(level?.height) - wanted) < Math.abs(Number(levels[best]?.height) - wanted)
+        ? index
+        : best,
+    0
+  );
+}
+
+/**
+ * Fix the variant to start on, and with it turn off the player's own bitrate
+ * adaptation.
+ *
+ * Automatic adaptation is not wanted here and never has been: each variant is
+ * its own ffmpeg run on the proxy, so a player switching by itself would start
+ * encoders on a host that has capacity for one. Assigning `currentLevel` is
+ * what disables it — hls.js adapts only while the level is −1.
+ *
+ * @param {object} instance - The hls.js instance.
+ * @param {number | undefined} preferredHeight - The height the proxy is
+ *   already encoding.
+ * @returns {void}
+ */
+function pinStartLevel(instance, preferredHeight) {
+  const levels = Array.isArray(instance?.levels) ? instance.levels : [];
+  const chosen = chooseStartLevel(levels, preferredHeight);
+  if (chosen < 0) {
+    return -1;
+  }
+  instance.currentLevel = chosen;
+  console.debug(
+    `[torrent-tv][hls] pinned level ${chosen} (${levels[chosen]?.height}p) of ` +
+    `${levels.map((level) => `${level?.height}p`).join(", ")}`
+  );
+  return chosen;
+}
+
+/**
  * Create a stateful HLS player instance.
  *
  * @param {(message: string) => void} onLog - Called with status/error messages
@@ -26,14 +92,82 @@ function isNativeHlsSupported(videoElement) {
  */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
+  // The variant in force — the one pinned at start or last picked by the
+  // viewer. Kept here because hls.js's own `currentLevel` answers a different
+  // question: it reports the level of the fragment AT THE PLAYHEAD, so for as
+  // long as the old rung is still buffered ahead (up to half a minute) it goes
+  // on naming the rung the viewer has just left. Read that way, the menu would
+  // snap back to the old height right after a switch and refuse to switch back.
+  let desiredLevel = -1;
 
   return {
+    /**
+     * The quality variants this stream offers, in the player's own order.
+     *
+     * Empty for a single media playlist — the proxy publishes a master only
+     * where the rungs can actually be joined (every one re-encoded, so all cut
+     * on the same grid). The menu is built from what the player reports rather
+     * than from a list assembled separately, so the two cannot disagree about
+     * what is on offer.
+     *
+     * @returns {{ index: number, height: number, width: number, bitrate: number }[]}
+     */
+    levels() {
+      const levels = Array.isArray(hlsInstance?.levels) ? hlsInstance.levels : [];
+      if (levels.length < 2) {
+        return [];
+      }
+      return levels.map((level, index) => ({
+        index,
+        height: Number(level?.height) || 0,
+        width: Number(level?.width) || 0,
+        bitrate: Number(level?.bitrate) || 0
+      }));
+    },
+    /**
+     * The variant in force, as an index into {@link levels}. −1 when there is
+     * no instance or none has been chosen yet.
+     *
+     * What was CHOSEN, not what is at the playhead — see `desiredLevel` above.
+     *
+     * @returns {number}
+     */
+    currentLevel() {
+      if (desiredLevel >= 0) {
+        return desiredLevel;
+      }
+      const level = hlsInstance?.currentLevel;
+      return typeof level === "number" ? level : -1;
+    },
+    /**
+     * Change quality without interrupting playback.
+     *
+     * `nextLevel` rather than `currentLevel`: it switches at the next fragment
+     * and keeps what is already playing, where `currentLevel` flushes the whole
+     * buffer and rebuffers from the current position — which is the visible
+     * interruption this whole path exists to remove.
+     *
+     * @param {number} index
+     * @returns {boolean} False when there is nothing to switch.
+     */
+    switchLevel(index) {
+      if (!hlsInstance || !Number.isInteger(index) || index < 0) {
+        return false;
+      }
+      if (!Array.isArray(hlsInstance.levels) || index >= hlsInstance.levels.length) {
+        return false;
+      }
+      hlsInstance.nextLevel = index;
+      desiredLevel = index;
+      return true;
+    },
     /** Destroy any active HLS.js instance and release its resources. */
     clear() {
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
       }
+      desiredLevel = -1;
     },
     /**
      * `true` when an hls.js instance is currently active (i.e. NOT the native
@@ -75,9 +209,14 @@ export function createHlsPlayer(onLog) {
      *
      * @param {HTMLVideoElement} videoElement
      * @param {string} manifestUrl
-     * @param {{ loader?: HlsLoaderClass }} [options]
+     * @param {{ loader?: HlsLoaderClass, startPosition?: number, preferredHeight?: number, nativeManifestUrl?: string, onLevelSwitched?: (height: number) => void }} [options]
      *   Pass `{ loader: createWebRtcHlsLoader(proxy) }` when segments and
      *   manifests must be fetched through a WebRTC data channel.
+     *   `preferredHeight` pins the variant to start on when the manifest is a
+     *   master — the height the proxy is ALREADY encoding, so loading the
+     *   master costs no second cold start. `nativeManifestUrl` is what the
+     *   native fallback plays instead: it adapts on its own, which must not
+     *   reach the variants.
      * @returns {Promise<void>}
      */
     async play(videoElement, manifestUrl, options = {}) {
@@ -137,7 +276,14 @@ export function createHlsPlayer(onLog) {
             Number.isFinite(options.startPosition) &&
             options.startPosition > 0
             ? { startPosition: options.startPosition }
-            : {})
+            : {}),
+          // Nothing is fetched until we say so. With a master playlist hls.js
+          // would otherwise begin on a variant of ITS choosing — with no
+          // measured throughput yet that is the lowest rung — and each variant
+          // is a separate encoder on the proxy, so the wrong first choice is a
+          // cold start the viewer waits through for nothing. The level is
+          // pinned on MANIFEST_PARSED and loading starts there.
+          autoStartLoad: false
         };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
@@ -192,6 +338,14 @@ export function createHlsPlayer(onLog) {
             manifestReady = true;
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
+            desiredLevel = pinStartLevel(instance, options.preferredHeight);
+            // Deferred to here by `autoStartLoad: false` above, so the first
+            // fragment fetched belongs to the variant we chose.
+            instance.startLoad(
+              typeof options.startPosition === "number" && options.startPosition > 0
+                ? options.startPosition
+                : -1
+            );
             resolve();
           };
           const onError = (_event, data) => {
@@ -245,6 +399,17 @@ export function createHlsPlayer(onLog) {
             }
           });
 
+          // The switch has actually happened — the menu says what is playing,
+          // not what was asked for. The two differ for as long as the segment
+          // the new variant is being produced takes.
+          instance.on(HlsClass.Events.LEVEL_SWITCHED, (_event, data) => {
+            const level = instance.levels?.[data?.level];
+            const height = Number(level?.height) || 0;
+            console.debug(`[torrent-tv][hls] level switched to ${height}p (index ${data?.level})`);
+            if (typeof options.onLevelSwitched === "function") {
+              options.onLevelSwitched(height);
+            }
+          });
           instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
             instance.loadSource(manifestUrl);
           });
@@ -288,7 +453,13 @@ export function createHlsPlayer(onLog) {
       }
 
       videoElement.pause();
-      videoElement.src = manifestUrl;
+      // The single-variant manifest where one was given. The native player does
+      // its own bitrate adaptation and there is no way to turn it off from
+      // here — and every switch it made would stop one encoder on someone's
+      // home machine and cold-start another. So it is never handed a master.
+      videoElement.src = typeof options.nativeManifestUrl === "string" && options.nativeManifestUrl
+        ? options.nativeManifestUrl
+        : manifestUrl;
       videoElement.load();
       // Playback is started on player reveal (see above) — not here.
     }
