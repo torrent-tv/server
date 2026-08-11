@@ -233,38 +233,33 @@ test("a shortfall is divided by the slowest recent rate, not the fastest", () =>
   );
 });
 
-test("the estimate moves instead of jumping when the rate changes", () => {
+
+
+
+test("the countdown falls by exactly the time that passed", () => {
   const model = new WaitingModel();
   const progress = { state: "ready" };
-  // A steady fast link, then one slow reading, then fast again — the shape that
-  // a sliding-window minimum turned into leaps of 19 and 40 seconds on
-  // consecutive ticks (measured 2026-08-11: 22.58 to 3.83, then 5.43 to 45.87).
-  model.update({ bufferedAhead: 2, fillRate: 3.0, transcodeProgress: progress });
-  const before = model.update({ bufferedAhead: 2, fillRate: 3.0, transcodeProgress: progress });
-  const dip = model.update({ bufferedAhead: 2, fillRate: 0.3, transcodeProgress: progress });
-  const after = model.update({ bufferedAhead: 2, fillRate: 3.0, transcodeProgress: progress });
+  const rate = 2.0;
+  let ahead = 1;
+  // A buffer filling steadily at `rate`. The expectation is NOT recomputed from
+  // the formula — that would only restate the implementation. It is the figure
+  // the model itself gave a moment ago, less the media that has since arrived.
+  // A countdown that does not do this is not a countdown, and over these days
+  // it has variously climbed, stuck and leapt.
+  const first = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
+  assert.ok(first.etaSeconds !== null, "a measured rate must produce a figure");
 
-  assert.ok(dip.etaSeconds > before.etaSeconds, "a worse rate must lengthen the estimate");
-  assert.ok(
-    after.etaSeconds > before.etaSeconds,
-    "and one good reading must not undo it at once — otherwise the figure snaps back and forth"
-  );
-});
-
-test("one bad reading cannot send the shown figure to the moon", () => {
-  const model = new WaitingModel();
-  const progress = { state: "ready" };
-  for (let tick = 0; tick < 5; tick += 1) {
-    model.update({ bufferedAhead: 3, fillRate: 2.0, transcodeProgress: progress });
+  for (const elapsed of [1, 1, 2]) {
+    const before = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
+    ahead += rate * elapsed;
+    const after = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
+    if (before.etaSeconds === 0) {
+      break;
+    }
+    assert.ok(
+      Math.abs((before.etaSeconds - after.etaSeconds) - elapsed) < 0.01,
+      `after ${elapsed}s the figure went ${before.etaSeconds} -> ${after.etaSeconds}`
+    );
   }
-  const steady = model.update({ bufferedAhead: 3, fillRate: 2.0, transcodeProgress: progress });
-  // A single near-zero reading: `remaining / rate` is a hyperbola, and this is
-  // what took the screen from 13.18s to 219.34s between two ticks on
-  // 2026-08-11, followed by twenty ticks of decay for a wait that ended in
-  // seconds.
-  const spike = model.update({ bufferedAhead: 3, fillRate: 0.01, transcodeProgress: progress });
-  assert.ok(
-    spike.etaSeconds < steady.etaSeconds + 5,
-    `one reading moved the figure from ${steady.etaSeconds} to ${spike.etaSeconds}`
-  );
 });
+

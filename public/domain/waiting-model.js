@@ -1,34 +1,20 @@
 import { getEstimatedLinkMbps } from "./net-report.js";
 
-/**
- * @file The waiting model: raw facts in, the figures the viewer is shown out.
- *
- * A Humble Object split. The overlay that shows these numbers is a view, and a
- * view with arithmetic in it can only be checked by looking at it. Everything
- * that decides WHAT the figures are lives here instead — no DOM, no events, no
- * element — so `node --test` can pin it, and the view is left with subscribing
- * and rendering.
- *
- * It is a class rather than a set of functions because it genuinely has state:
- * a short history of download rates, the floor that stops the shown countdown
- * jumping about, and the samples that later score how honest the estimate was.
- *
- * Two consumers, one implementation: the overlay reads these figures to show
- * them, and the pre-buffer gate reads them to decide when the picture may
- * start. They must never disagree, which is why neither of them computes.
- */
-
+/** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const ENCODE_SPEED_MIN_PRODUCED_SECONDS = 2;
-
 const SEGMENT_DURATION_SECONDS = 4;
 
-/** The cushion to bank when no fill rate has been measured yet. */
+/**
+ * The cushion, and the bounds it is held between.
+ *
+ * These are thresholds of the GATE — the conditions under which playback is
+ * allowed to start — not coefficients fitted to make a figure look right. The
+ * estimate's job is to predict when they will be met, so it must know them
+ * exactly, and they must be the same numbers the gate uses.
+ */
 const PREBUFFER_TARGET_SECONDS = 15;
-/** Never bank less than this, however healthy the surplus looks. */
 const PREBUFFER_MIN_SECONDS = 6;
-/** Never bank more than this, however thin the surplus. */
 const PREBUFFER_MAX_SECONDS = 25;
-/** Seconds of cushion per unit of surplus over realtime. */
 const PREBUFFER_BASE_SECONDS = 12;
 
 /** How long the download-rate trend is worth extrapolating from. */
@@ -36,22 +22,6 @@ const RATE_TREND_WINDOW_MS = 6_000;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
 const GATE_HEALTHY_FILL_RATE = 1.35;
 const GATE_HEALTHY_AHEAD_SECONDS = 10;
-/** How much of a WORSE reading is believed at once — nearly all of it. */
-const RATE_FALL_WEIGHT = 0.6;
-/** …and of a BETTER one — a little, so a burst cannot promise what it cannot keep. */
-const RATE_RISE_WEIGHT = 0.1;
-/**
- * How far the SHOWN figure may depart, per second of wall clock, from the
- * countdown it would follow on its own.
- *
- * A countdown falls by one second per second by nature. Anything beyond that is
- * news, and news has a speed limit — because `remaining / rate` is a hyperbola
- * and a single near-zero reading sends it to the moon. Measured 2026-08-11:
- * 13.18 s to 219.34 s between two ticks, then twenty ticks of decay through
- * figures no one could use, for a wait that ended in seconds. Smoothing the
- * rate alone cannot prevent this; the shown value needs its own limit.
- */
-const ETA_SLEW_SECONDS_PER_SECOND = 2;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const RATE_TREND_MAX_GROWTH = 4;
 
@@ -92,18 +62,14 @@ export class WaitingModel {
    */
   #fillRate = null;
 
-  /** @type {number | null} The smoothed fill rate. See #recordFillRate. */
-  #smoothedRate = null;
+  /** @type {number | null} The fill rate as measured, unsmoothed. */
+  #measuredRate = null;
   /** @type {Array<{ atMs: number, bytes: number }>} Recent download readings. */
   #downloadRateSamples = [];
   /** @type {number | null} The smallest figure promised so far, in seconds. */
   #etaPromise = null;
   /** @type {number} When that promise was made. */
   #etaPromiseAt = 0;
-  /** @type {number | null} The figure last shown, for {@link #slewEta}. */
-  #shownEta = null;
-  /** @type {number} When it was shown. */
-  #shownEtaAt = 0;
   /** @type {Array<object>} Estimates against what actually happened. */
   #etaSamples = [];
   /** @type {number | null} */
@@ -492,11 +458,16 @@ export class WaitingModel {
         // but it is a fact about the machine doing the work, not an assumption
         // about it.
         const hostPrior = this.#expectedFirstSegmentSeconds;
-        const fillSeconds = typeof hostPrior === "number" && hostPrior > 0
-          ? hostPrior
-          : cushionRemainingSeconds;
+        const measured = typeof hostPrior === "number" && hostPrior > 0;
+        // Without the host's own figure the fallback is the shortfall itself,
+        // which is the shortfall divided by an assumed rate of exactly one.
+        // That IS an assumption, and it was being labelled `@host-median` — the
+        // name of a measurement — so every log line said the figure came from
+        // the machine's own history when it came from nowhere. A term that
+        // cannot be measured must at least be named for what it is.
+        const fillSeconds = measured ? hostPrior : cushionRemainingSeconds;
         total += fillSeconds;
-        terms.push(`fill=${fillSeconds.toFixed(1)}@host-median`);
+        terms.push(`fill=${fillSeconds.toFixed(1)}@${measured ? "host-median" : "assumed-1x"}`);
       }
     }
 
@@ -518,10 +489,6 @@ export class WaitingModel {
     // playback`, for the whole of a wait in which the buffer never moved. It
     // existed to hide jumps between estimate sources; there is one source now,
     // so a rise means the wait genuinely got longer, and saying so is the point.
-    // Continuous by construction — see #slewEta. Applied before the sample is
-    // recorded, so the accuracy report scores the figure the viewer was SHOWN
-    // and not one that never appeared.
-    etaSeconds = etaSeconds === null ? null : this.#slewEta(etaSeconds);
     this.#etaSamples.push({ atMs: Date.now(), predicted: etaSeconds, terms: etaSource });
 
     const result = {
@@ -614,30 +581,11 @@ export class WaitingModel {
    * @param {number} target - What the arithmetic says.
    * @returns {number} What may be shown.
    */
-  #slewEta(target) {
-    const now = Date.now();
-    if (this.#shownEta === null || this.#shownEtaAt === 0) {
-      this.#shownEta = target;
-      this.#shownEtaAt = now;
-      return target;
-    }
-    const elapsed = Math.max(0, (now - this.#shownEtaAt) / 1000);
-    // Where the previous figure would stand on its own: a countdown.
-    const coasted = Math.max(0, this.#shownEta - elapsed);
-    const allowance = ETA_SLEW_SECONDS_PER_SECOND * Math.max(elapsed, 0.05);
-    const bounded = Math.min(Math.max(target, coasted - allowance), coasted + allowance);
-    this.#shownEta = Math.max(0, bounded);
-    this.#shownEtaAt = now;
-    return this.#shownEta;
-  }
-
   #resetEtaFloor() {
     this.#etaPromise = null;
     this.#etaPromiseAt = 0;
     // A new wait starts from what it measures, not from where the last one
     // happened to leave the figure.
-    this.#shownEta = null;
-    this.#shownEtaAt = 0;
   }
 
   /**
@@ -790,25 +738,14 @@ export class WaitingModel {
    * @returns {void}
    */
   #recordFillRate(rate) {
-    if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
-      return;
+    // Kept as measured. Smoothing it meant choosing how much to believe a
+    // reading, and a weight chosen by hand is a number nobody measured: it made
+    // the figure calmer and left the errors exactly where they were (six waits,
+    // median error 3.6-22.8 s on waits of 9-47 s). What is measured is used;
+    // what is not measured is not invented.
+    if (typeof rate === "number" && Number.isFinite(rate) && rate >= 0) {
+      this.#measuredRate = rate;
     }
-    if (this.#smoothedRate === null) {
-      this.#smoothedRate = rate;
-      return;
-    }
-    // Asymmetric on purpose. Taking the MINIMUM over a sliding window was
-    // conservative and also discontinuous by construction: a slow reading
-    // entering the window collapsed the divisor and the estimate leapt, and the
-    // same reading ageing out of it made the estimate collapse back. Measured
-    // 2026-08-11 on consecutive ticks — 22.58 to 3.83, then 5.43 to 45.87.
-    //
-    // A rate that got worse is believed almost at once, because a wait is
-    // governed by its worst stretch; a rate that got better is believed slowly,
-    // so one lucky burst cannot promise a wait it will not deliver. Both are
-    // continuous, so the shown figure moves instead of jumping.
-    const weight = rate < this.#smoothedRate ? RATE_FALL_WEIGHT : RATE_RISE_WEIGHT;
-    this.#smoothedRate = this.#smoothedRate + weight * (rate - this.#smoothedRate);
   }
 
   /**
@@ -817,7 +754,7 @@ export class WaitingModel {
    * @returns {number | null}
    */
   #conservativeFillRate() {
-    const rate = this.#smoothedRate;
+    const rate = this.#measuredRate;
     if (rate === null) {
       return null;
     }
