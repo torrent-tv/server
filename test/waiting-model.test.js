@@ -232,3 +232,21 @@ test("a shortfall is divided by the slowest recent rate, not the fastest", () =>
     "a rate that collapsed must lengthen the estimate, not be forgotten in favour of the earlier fast one"
   );
 });
+
+test("the estimate moves instead of jumping when the rate changes", () => {
+  const model = new WaitingModel();
+  const progress = { state: "ready" };
+  // A steady fast link, then one slow reading, then fast again — the shape that
+  // a sliding-window minimum turned into leaps of 19 and 40 seconds on
+  // consecutive ticks (measured 2026-08-11: 22.58 to 3.83, then 5.43 to 45.87).
+  model.update({ bufferedAhead: 2, fillRate: 3.0, transcodeProgress: progress });
+  const before = model.update({ bufferedAhead: 2, fillRate: 3.0, transcodeProgress: progress });
+  const dip = model.update({ bufferedAhead: 2, fillRate: 0.3, transcodeProgress: progress });
+  const after = model.update({ bufferedAhead: 2, fillRate: 3.0, transcodeProgress: progress });
+
+  assert.ok(dip.etaSeconds > before.etaSeconds, "a worse rate must lengthen the estimate");
+  assert.ok(
+    after.etaSeconds > before.etaSeconds,
+    "and one good reading must not undo it at once — otherwise the figure snaps back and forth"
+  );
+});

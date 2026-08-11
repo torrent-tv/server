@@ -36,6 +36,10 @@ const RATE_TREND_WINDOW_MS = 6_000;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
 const GATE_HEALTHY_FILL_RATE = 1.35;
 const GATE_HEALTHY_AHEAD_SECONDS = 10;
+/** How much of a WORSE reading is believed at once — nearly all of it. */
+const RATE_FALL_WEIGHT = 0.6;
+/** …and of a BETTER one — a little, so a burst cannot promise what it cannot keep. */
+const RATE_RISE_WEIGHT = 0.1;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const RATE_TREND_MAX_GROWTH = 4;
 
@@ -76,8 +80,8 @@ export class WaitingModel {
    */
   #fillRate = null;
 
-  /** @type {Array<{ atMs: number, rate: number }>} Recent fill-rate readings. */
-  #fillRateSamples = [];
+  /** @type {number | null} The smoothed fill rate. See #recordFillRate. */
+  #smoothedRate = null;
   /** @type {Array<{ atMs: number, bytes: number }>} Recent download readings. */
   #downloadRateSamples = [];
   /** @type {number | null} The smallest figure promised so far, in seconds. */
@@ -739,15 +743,25 @@ export class WaitingModel {
    * @returns {void}
    */
   #recordFillRate(rate) {
-    // Zero is recorded, not discarded: a buffer that is not filling is a
-    // measurement, and the most important one. Dropping it left the last
-    // optimistic reading standing while nothing arrived.
     if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
       return;
     }
-    const now = Date.now();
-    this.#fillRateSamples.push({ atMs: now, rate });
-    this.#fillRateSamples = this.#fillRateSamples.filter((each) => now - each.atMs <= RATE_TREND_WINDOW_MS);
+    if (this.#smoothedRate === null) {
+      this.#smoothedRate = rate;
+      return;
+    }
+    // Asymmetric on purpose. Taking the MINIMUM over a sliding window was
+    // conservative and also discontinuous by construction: a slow reading
+    // entering the window collapsed the divisor and the estimate leapt, and the
+    // same reading ageing out of it made the estimate collapse back. Measured
+    // 2026-08-11 on consecutive ticks — 22.58 to 3.83, then 5.43 to 45.87.
+    //
+    // A rate that got worse is believed almost at once, because a wait is
+    // governed by its worst stretch; a rate that got better is believed slowly,
+    // so one lucky burst cannot promise a wait it will not deliver. Both are
+    // continuous, so the shown figure moves instead of jumping.
+    const weight = rate < this.#smoothedRate ? RATE_FALL_WEIGHT : RATE_RISE_WEIGHT;
+    this.#smoothedRate = this.#smoothedRate + weight * (rate - this.#smoothedRate);
   }
 
   /**
@@ -756,22 +770,15 @@ export class WaitingModel {
    * @returns {number | null}
    */
   #conservativeFillRate() {
-    if (this.#fillRateSamples.length === 0) {
+    const rate = this.#smoothedRate;
+    if (rate === null) {
       return null;
     }
-    const slowest = Math.min(...this.#fillRateSamples.map((each) => each.rate));
     // Anything at or below a crawl answers as badly as zero: a rate of 0.0002
     // turned a twenty-five second shortfall into thirty hours on screen
     // (measured 2026-08-10, 107 095 s). A link this slow is a fact worth
     // keeping and a divisor worth refusing.
-    if (slowest < 0.05) {
-      return null;
-    }
-    // A rate of zero cannot divide a shortfall — that is how 586.9 seconds
-    // reached the screen. It is still the truth about the link, so it is not
-    // ignored: it means this measurement can say nothing, and the estimate
-    // falls through to what this host has historically taken.
-    return slowest > 0 ? slowest : null;
+    return rate >= 0.05 ? rate : null;
   }
 
   #requiredBufferSeconds() {
