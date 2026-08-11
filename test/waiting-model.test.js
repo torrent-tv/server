@@ -313,3 +313,39 @@ test("the estimate never promises longer than the gate's own timeout", () => {
     `promised ${answer.etaSeconds}s, but the gate gives up waiting after 45s`
   );
 });
+
+test("a host figure is counted once, not in two terms at the same time", () => {
+  // Sensitivity, not a threshold: doubling the host's segment time must move
+  // the estimate by ONE such time, never two. It moved by two —
+  // `first=30.0+fill=30.0@host-median` — found in review 2026-08-11.
+  const estimateFor = (hostSeconds) => {
+    const model = new WaitingModel();
+    return model.update({
+      bufferedAhead: 14.5,
+      expectedFirstSegmentSeconds: hostSeconds,
+      transcodeProgress: { state: "ready" }
+    }).etaSeconds;
+  };
+  const small = estimateFor(2);
+  const large = estimateFor(4);
+  assert.ok(small !== null && large !== null, "a host measurement must produce a figure");
+  assert.ok(
+    large - small < 3.5,
+    `two more seconds of host time moved the estimate by ${(large - small).toFixed(1)}s`
+  );
+});
+
+test("a second wait is not clamped by the first wait's clock", () => {
+  const model = new WaitingModel();
+  const progress = { state: "ready" };
+  model.update({ bufferedAhead: 2, fillRate: 0.5, transcodeProgress: progress });
+  // The timeout clamp measures from the wait's own start. Left anchored to the
+  // first wait of the page, every later wait read exactly zero once 45s of page
+  // life had passed — the defect the formatter was accidentally hiding.
+  model.reset();
+  const after = model.update({ bufferedAhead: 0, fillRate: 0.2, transcodeProgress: progress });
+  assert.ok(
+    after.etaSeconds === null || after.etaSeconds > 0,
+    `a fresh wait with an empty buffer reported ${after.etaSeconds}s`
+  );
+});
