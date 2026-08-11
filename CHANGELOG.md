@@ -1,3 +1,7 @@
+## 0.8.171
+
+- **Fix**: The overlay no longer reads "0 seconds until playback" over a picture that has not started. The rule deciding when playback may begin was unified in 0.8.169, but the READING it runs on was not: the gate measured the media element itself while the overlay's model was given the measurement published by the component that owns it. One rule, two numbers, taken at two different moments — and they disagreed exactly where it shows. Measured 2026-08-11: the overlay reported the cushion 100% met and the estimate fell to zero while the gate went on holding, which is the `[ready] said=0.0 was=42.6s` entry in the accuracy report. Both now use the one published reading.
+
 ## 0.8.170
 
 - **Fix**: The time until playback stops reading zero for every wait after the first. The estimate is capped by the time remaining before the gate's own timeout, and the point that was measured from was set once and never cleared — so it stayed anchored to the first wait of the page, and 45 seconds into the session the remaining time was permanently nought. Every later seek then computed exactly zero. It was invisible only because the display refused to print a zero.
