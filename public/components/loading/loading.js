@@ -16,7 +16,8 @@ import {
   buildUrlSearch,
   decideHistoryWrite,
   isAdvanceToNext,
-  decideNavigation
+  decideNavigation,
+  resumePositionFor
 } from "../../domain/url-state.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
@@ -302,6 +303,12 @@ export class Loading extends StateDerivedView {
   #planTracks = null;
   /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
   #selectedQualityHeight = 0;
+  /**
+   * @type {number} Which quality pick is the current one. Warming a rung waits
+   * on the proxy, so picks made close together finish in the order the rungs
+   * happen to be ready — not the order they were made.
+   */
+  #qualityPickSeq = 0;
   /**
    * The height automatic quality is producing right now, as reported by the
    * proxy. Zero when unknown or when the video is copied — then nothing is
@@ -3352,15 +3359,8 @@ export class Loading extends StateDerivedView {
       if (level.index === this.#hlsPlayer.currentLevel()) {
         return;
       }
-      if (this.#hlsPlayer.switchLevel(level.index)) {
-        // Remembered only once the switch was accepted, so a refusal still
-        // leaves the re-open path below a height to act on. Its purpose is the
-        // NEXT file of this torrent: it opens at the rung the viewer chose
-        // rather than reverting to the automatic pick.
-        this.#selectedQualityHeight = height;
-        this.#logEvt(`quality: switching to ${height}p without interrupting playback`);
-        return;
-      }
+      void this.#switchQualityLevel(level, height);
+      return;
     }
     if (height === this.#selectedQualityHeight) {
       return;
@@ -3395,6 +3395,56 @@ export class Loading extends StateDerivedView {
         this.#failPlayback(epoch, { description: message });
       });
   };
+
+  /**
+   * Move the player to another quality rung, having first asked the proxy to
+   * make one ready.
+   *
+   * The rung does not exist until it is asked for: its encoder starts from
+   * nothing and its first segment takes as long as it takes — 15 988 ms
+   * measured on 2026-08-11. Switching first and waiting second puts that wait
+   * on screen as a spinner. Asking first puts it behind the picture that is
+   * still playing, and the switch happens when there is something to switch to.
+   *
+   * The wait is not allowed to be indefinite: a rung that is not ready in time
+   * is still switched to, because the viewer asked for it and waiting is what
+   * they would have done anyway.
+   *
+   * @param {{ index: number, height: number }} level
+   * @param {number} height
+   * @returns {Promise<void>}
+   */
+  async #switchQualityLevel(level, height) {
+    // Remembered up front: it is what the NEXT file of this torrent opens at,
+    // and that is true whether or not this switch turns out to be quick.
+    this.#selectedQualityHeight = height;
+    // Which pick this is. Warming waits on the proxy, so two picks in quick
+    // succession are two waits that finish in whatever order the rungs happen
+    // to be ready — and without this the one that finishes LAST wins, which is
+    // not the one the viewer made last. A rung that was already warm answers in
+    // a second while a cold one takes thirty, so the older pick would routinely
+    // land on top and move the picture back on its own.
+    const pick = (this.#qualityPickSeq ?? 0) + 1;
+    this.#qualityPickSeq = pick;
+    const position =
+      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+        ? this.#videoElement.currentTime
+        : 0;
+    this.#logEvt(`quality: preparing ${height}p at ${Math.round(position)}s before switching`);
+    const ready = await this.#session.prepareQualityVariant(height, position);
+    if (this.#qualityPickSeq !== pick) {
+      this.#logEvt(`quality: ${height}p was superseded by a later pick; not switching`);
+      return;
+    }
+    this.#logEvt(
+      ready
+        ? `quality: ${height}p is ready, switching`
+        : `quality: ${height}p is not ready yet, switching anyway`
+    );
+    if (!this.#hlsPlayer.switchLevel(level.index)) {
+      this.#logEvt(`quality: the player refused the switch to ${height}p`);
+    }
+  }
 
   /**
    * The viewer picked another audio track: replay the active file through
@@ -3780,7 +3830,16 @@ export class Loading extends StateDerivedView {
     // whenever the field is empty.
     const fromField = this.#pendingCurrentTime;
     this.#pendingCurrentTime = null;
-    const fromUrl = readUrlState(location.search).currentTime;
+    // The address bar's position belongs to the file it was written for, and at
+    // this moment it still describes the PREVIOUS one: the address is rewritten
+    // from `#activeFileIndex`, which does not become this file until the load
+    // finishes. Taking it regardless is why picking the next episode started it
+    // wherever the last one had got to — field-reported 2026-08-11, and the
+    // further into an episode the viewer was, the further into the next one it
+    // began.
+    const urlState = readUrlState(location.search);
+    const urlIsForThisFile = urlState.fileIndex === fileIndex;
+    const fromUrl = resumePositionFor(urlState, fileIndex);
     const resumeStartPosition = fromField != null && fromField > 0
       ? fromField
       : (fromUrl > 0 ? fromUrl : null);
@@ -3791,7 +3850,9 @@ export class Loading extends StateDerivedView {
     // matching `start=` name the moment between them.
     this.#logEvt(
       `starting from ${resumeStartPosition == null ? "the beginning" : `${Math.round(resumeStartPosition)}s`}` +
-      ` (field=${fromField == null ? "-" : Math.round(fromField)} url=${fromUrl > 0 ? Math.round(fromUrl) : "-"})`
+      ` (field=${fromField == null ? "-" : Math.round(fromField)}` +
+      ` url=${fromUrl > 0 ? Math.round(fromUrl) : "-"}` +
+      `${urlIsForThisFile ? "" : ` [address bar still describes file ${urlState.fileIndex}, ignored]`})`
     );
     // Held so the `playing` handler can say how far the actual start fell from
     // what was asked for.

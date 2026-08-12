@@ -14,7 +14,8 @@ import {
   buildUrlSearch,
   decideHistoryWrite,
   isAdvanceToNext,
-  decideNavigation
+  decideNavigation,
+  resumePositionFor
 } from "../public/domain/url-state.js";
 
 const MAGNET_A = "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -192,4 +193,22 @@ test("arriving at an already-empty address writes nothing", () => {
     ),
     "none"
   );
+});
+
+test("the address bar's position belongs to the file it was written for", () => {
+  // Picking the next episode: the address still describes the previous file,
+  // because it is rewritten from the active file index and that does not become
+  // the new file until the load finishes. Taking the position regardless is
+  // what started episode 4 at the 22 minutes episode 3 had reached
+  // (field-reported 2026-08-11).
+  const address = { magnet: "magnet:?xt=urn:btih:abc", fileIndex: 2, currentTime: 1320 };
+
+  assert.equal(resumePositionFor(address, 3), 0, "another file resumes at its own beginning");
+  assert.equal(resumePositionFor(address, 2), 1320, "the file it was written for keeps its position");
+});
+
+test("a position is offered only when there is one and a file to apply it to", () => {
+  assert.equal(resumePositionFor({ fileIndex: 1, currentTime: 0 }, 1), 0);
+  assert.equal(resumePositionFor({ fileIndex: -1, currentTime: 90 }, -1), 0, "no file is open");
+  assert.equal(resumePositionFor(null, 1), 0);
 });

@@ -18,6 +18,35 @@ function isNativeHlsSupported(videoElement) {
 }
 
 /**
+ * Put the element back where it was after a recovery rebuilt its source.
+ *
+ * The position cannot simply be assigned: at the moment of recovery the media
+ * has no duration yet — `readyState` is 0 — and an assignment is discarded. It
+ * is applied as soon as the element knows its duration, and only if it has
+ * actually landed somewhere else.
+ *
+ * @param {HTMLVideoElement} videoElement
+ * @param {number} seconds
+ * @returns {void}
+ */
+function restorePosition(videoElement, seconds) {
+  if (!(videoElement instanceof HTMLVideoElement)) {
+    return;
+  }
+  const apply = () => {
+    if (Math.abs(videoElement.currentTime - seconds) > 1) {
+      videoElement.currentTime = seconds;
+      console.debug(`[torrent-tv][hls] position restored to ${seconds.toFixed(1)}s after recovery`);
+    }
+  };
+  if (videoElement.readyState >= 1) {
+    apply();
+    return;
+  }
+  videoElement.addEventListener("loadedmetadata", apply, { once: true });
+}
+
+/**
  * Which variant to start on.
  *
  * The height the proxy is already encoding, because an encoder is running for
@@ -308,6 +337,15 @@ export function createHlsPlayer(onLog) {
             return;
           }
           recovering = true;
+          // Where the viewer was, taken NOW — recovering a media error tears the
+          // MediaSource down and builds it again, and what comes back starts at
+          // the beginning of the playlist unless it is told otherwise. That is
+          // the "it jumped back to the start" the field reported on 2026-08-11:
+          // the position was never lost by a seek, it was lost by the recovery
+          // from an unrelated error a moment earlier.
+          const resumeAt = videoElement instanceof HTMLVideoElement && videoElement.currentTime > 0
+            ? videoElement.currentTime
+            : -1;
           window.setTimeout(() => {
             recovering = false;
             if (hlsInstance !== instance) {
@@ -316,10 +354,20 @@ export function createHlsPlayer(onLog) {
             try {
               if (type === HlsClass.ErrorTypes.MEDIA_ERROR) {
                 instance.recoverMediaError();
+                if (resumeAt > 0) {
+                  // Both halves are needed: the loader is told where to fetch
+                  // from, and the element is put back there once it will accept
+                  // a position again.
+                  instance.startLoad(resumeAt);
+                  restorePosition(videoElement, resumeAt);
+                }
               } else {
                 instance.startLoad(-1);
               }
-              console.debug(`[torrent-tv][hls] recovered fatal ${type}`);
+              console.debug(
+                `[torrent-tv][hls] recovered fatal ${type}` +
+                (resumeAt > 0 ? `, resuming at ${resumeAt.toFixed(1)}s` : "")
+              );
             } catch (recoverError) {
               console.warn("[torrent-tv][hls] recovery failed", recoverError);
             }
@@ -428,7 +476,19 @@ export function createHlsPlayer(onLog) {
             const currentTime = typeof videoElement?.currentTime === "number" ? videoElement.currentTime.toFixed(2) : "?";
             const hole = typeof data?.hole === "number" ? ` hole=${data.hole.toFixed(3)}s` : "";
             if (data?.fatal) {
-              console.warn(`[torrent-tv][hls] ${t} fatal: ${details} currentTime=${currentTime}${hole}`, data);
+              // What actually went wrong, named. Logging the whole `data` put a
+              // dump of the segment's bytes into the line, and the forwarded
+              // console truncates at 2000 characters — so a `bufferAppendError`
+              // on 2026-08-11 arrived with everything except the exception that
+              // caused it, and the cause had to be guessed at. These fields are
+              // the ones that identify it: the browser's own message, which
+              // buffer refused it, and which file.
+              console.warn(
+                `[torrent-tv][hls] ${t} fatal: ${details} currentTime=${currentTime}${hole} ` +
+                `reason=${data?.reason ?? "-"} buffer=${data?.sourceBufferName ?? "-"} ` +
+                `level=${data?.level ?? "-"} frag=${data?.frag?.relurl ?? "-"} sn=${data?.frag?.sn ?? "-"} ` +
+                `error=${data?.error?.name ?? "-"}: ${data?.error?.message ?? "-"}`
+              );
               recoverFatal(data);
             } else {
               console.debug(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}`);
