@@ -170,3 +170,29 @@ export function decideNavigation(current, target) {
   }
   return answer("seek");
 }
+
+/**
+ * The position the address bar offers for a file that is about to be opened.
+ *
+ * The address carries one position, and it belongs to the file it was written
+ * for. While a new file is being opened the address still describes the
+ * previous one — it is rewritten from the active file index, which does not
+ * become the new file until the load finishes — so reading the position
+ * regardless starts an episode wherever the last one had got to. Reported from
+ * the field 2026-08-11, and the further into an episode the viewer was, the
+ * further into the next one it began.
+ *
+ * @param {ReturnType<typeof readUrlState>} state - What the address says now.
+ * @param {number} fileIndex - The file being opened.
+ * @returns {number} Seconds to resume at; 0 when the address has nothing to
+ *   say about THIS file.
+ */
+export function resumePositionFor(state, fileIndex) {
+  if (!state || !Number.isInteger(fileIndex) || fileIndex < 0) {
+    return 0;
+  }
+  if (state.fileIndex !== fileIndex) {
+    return 0;
+  }
+  return state.currentTime > 0 ? state.currentTime : 0;
+}

@@ -32,6 +32,12 @@ export class TorrentSession {
      * @type {{ progressUrl: string, fetchFn: (url: string, options?: object) => Promise<Response> } | null}
      */
     this.activeProgressPoll = null;
+    /**
+     * The transcode session the viewer is watching, as opposed to any that have
+     * not been released yet.
+     * @type {{ sessionId: string, transport: import("./proxy-transport.js").ProxyTransport } | null}
+     */
+    this.currentTranscodeSession = null;
   }
 
   clear(options = {}) {
@@ -55,6 +61,7 @@ export class TorrentSession {
     // it is always dropped — a re-pick reconnects a fresh proxy and re-registers.
     this.proxySourceKeyCache.clear();
     this.activeProgressPoll = null;
+    this.currentTranscodeSession = null;
   }
 
   /**
@@ -70,6 +77,41 @@ export class TorrentSession {
       return null;
     }
     return fetchTranscodeProgress(poll.progressUrl, this.abortController.signal, poll.fetchFn);
+  }
+
+  /**
+   * Ask the proxy to prepare a quality rung before the player is told to
+   * switch to it.
+   *
+   * A rung is an encoder that does not exist until it is asked for, so
+   * switching first and waiting second shows a spinner for as long as its first
+   * segment takes to make. Asking first moves that wait behind the picture that
+   * is still playing.
+   *
+   * Best effort by design: a rung that is not ready in time is not a reason to
+   * refuse the viewer their switch — it only means they wait where they would
+   * have waited anyway.
+   *
+   * @param {number} height
+   * @param {number} positionSeconds
+   * @returns {Promise<boolean>} Whether the rung reported itself ready.
+   */
+  async prepareQualityVariant(height, positionSeconds) {
+    const current = this.currentTranscodeSession;
+    if (!current || !this.activeTranscodeSessions.has(current.sessionId) || !Number.isFinite(positionSeconds)) {
+      return false;
+    }
+    const { sessionId, transport } = current;
+    const path =
+      `/transcode/${encodeURIComponent(sessionId)}/v/${height}/warm` +
+      `?position=${positionSeconds.toFixed(3)}`;
+    try {
+      const response = await transport.fetch(path);
+      return response.status === 204;
+    } catch (error) {
+      console.debug("[torrent-tv] warming the quality variant failed", error);
+      return false;
+    }
   }
 
   /**
@@ -691,6 +733,11 @@ export class TorrentSession {
 
     if (sessionId) {
       this.activeTranscodeSessions.set(sessionId, transport);
+      // The one on screen. The map can hold more than one — a previous file's
+      // session lingers until it is released or its progress poll 404s — and
+      // anything addressed to "the first entry" would then reach the episode
+      // the viewer has just left.
+      this.currentTranscodeSession = { sessionId, transport };
       this.#keepSessionsAlive();
       // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
       console.debug(`[evt] ${nowHms()} transcode-session create id=${sessionId.slice(0, 8)} fileIndex=${fileIndex}`);
