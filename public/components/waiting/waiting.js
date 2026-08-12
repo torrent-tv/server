@@ -109,10 +109,18 @@ export class WaitingOverlay {
     const needed = downloadStats?.resumeNeededBytes;
     const got = downloadStats?.resumeDownloadedBytes;
     const usable = transcodeProgress && transcodeProgress.state !== "failed";
+    // The download stage is over once an encoder exists for this file, and its
+    // figures go with it. They were being assigned unconditionally, so peers,
+    // speed and bytes-still-needed stayed on screen through the encode — and
+    // stayed STILL, because they describe a stage that had finished. A number
+    // that cannot change is worse than no number: it reads as a stall in
+    // whatever the viewer is actually waiting for. Withdrawn by setting them
+    // undefined, which is how this component forgets a measurement.
+    const downloading = !usable;
     Object.assign(this.#measurements, {
-      peers: downloadStats?.numPeers,
-      downloadBytesPerSecond: downloadStats?.downloadSpeed,
-      remainingBytes: typeof needed === "number" && typeof got === "number"
+      peers: downloading ? downloadStats?.numPeers : undefined,
+      downloadBytesPerSecond: downloading ? downloadStats?.downloadSpeed : undefined,
+      remainingBytes: downloading && typeof needed === "number" && typeof got === "number"
         ? Math.max(0, needed - got)
         : undefined,
       cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,

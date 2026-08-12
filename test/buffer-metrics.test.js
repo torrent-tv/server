@@ -10,7 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../public/domain/buffer-metrics.js";
+import { bufferedAheadSeconds, bufferedEndSeconds, fillRateFromSamples, withSample } from "../public/domain/buffer-metrics.js";
 
 /**
  * A stand-in for the media element: only `currentTime` and `buffered` are read.
@@ -140,4 +140,23 @@ test("a frozen buffer during a wait is filling at zero, not at 1x", () => {
     1,
     "the same buffer readings mean 1x once the playhead shows the media was actually played"
   );
+});
+
+test("a quality switch is prepared where the buffer ends, not at the playhead", () => {
+  // The player keeps what it has and appends the new rung after it, so this is
+  // the segment the switch will actually ask for first. Measured 2026-08-12:
+  // preparing the playhead was 11 s, 14 s and 50 s short across three switches,
+  // and each one stalled on arrival.
+  const video = {
+    currentTime: 277.7,
+    buffered: { length: 1, start: () => 200, end: () => 328 }
+  };
+
+  assert.equal(bufferedEndSeconds(video), 328);
+});
+
+test("with nothing buffered the switch is prepared at the playhead", () => {
+  const video = { currentTime: 42, buffered: { length: 0, start: () => 0, end: () => 0 } };
+
+  assert.equal(bufferedEndSeconds(video), 42, "there is nowhere else it could land");
 });

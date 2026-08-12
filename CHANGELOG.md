@@ -1,3 +1,8 @@
+## 0.9.3
+
+- **Fix**: A quality change is prepared where it will actually land. The player keeps what it has buffered and appends the new rung AFTER it, so the first segment it asks for is the one at the end of that buffer — but the preparation named the playhead. Measured 2026-08-12 across three switches: prepared at 141 s, 214 s and 278 s while the player then requested 152 s, 228 s and 328 s. Every one arrived to find nothing there, the buffer drained to 0.0 s, and the viewer watched the spinner the preparation exists to prevent — 13.6 s, 22.9 s and 6.2 s of it.
+- **Fix**: The download figures leave the screen when the download is over. Peers, speed and bytes-still-needed were assigned on every measurement regardless of stage, so they stayed up throughout the encode — and stayed STILL, because they describe a stage that had finished. A number that cannot change reads as a stall in whatever the viewer is actually waiting for.
+
 ## 0.9.2
 
 - **Fix**: The next episode starts at its own beginning. The address bar carries one position and it belongs to the file it was written for — but while a new file is opening the address still describes the PREVIOUS one, because it is rewritten from the active file index and that does not become the new file until the load finishes. The position was read regardless, so picking the next episode started it wherever the last one had got to, and the further in the viewer had been, the further in the next one began. Field-reported 2026-08-11.
