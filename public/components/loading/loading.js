@@ -21,7 +21,7 @@ import {
 } from "../../domain/url-state.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
-import { bufferedAheadSeconds } from "../../domain/buffer-metrics.js";
+import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 
 /** Embedded-subtitle extraction reads the file to the last cue — allow long. */
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
@@ -3426,11 +3426,20 @@ export class Loading extends StateDerivedView {
     // land on top and move the picture back on its own.
     const pick = (this.#qualityPickSeq ?? 0) + 1;
     this.#qualityPickSeq = pick;
-    const position =
-      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
-        ? this.#videoElement.currentTime
-        : 0;
-    this.#logEvt(`quality: preparing ${height}p at ${Math.round(position)}s before switching`);
+    // Where the switch will LAND, which is not where the viewer is. The player
+    // keeps what it has buffered and appends the new rung after it, so the first
+    // segment it asks for is the one at the END of that buffer. Preparing the
+    // playhead instead left the rung producing in the wrong place: measured
+    // 2026-08-12, three switches were prepared 11 s, 14 s and 50 s short of what
+    // the player then requested, and each stalled on arrival — the spinner this
+    // preparation exists to prevent.
+    const position = this.#videoElement instanceof HTMLVideoElement
+      ? bufferedEndSeconds(this.#videoElement)
+      : 0;
+    this.#logEvt(
+      `quality: preparing ${height}p at ${Math.round(position)}s ` +
+      `(playhead ${Math.round(this.#videoElement?.currentTime ?? 0)}s) before switching`
+    );
     const ready = await this.#session.prepareQualityVariant(height, position);
     if (this.#qualityPickSeq !== pick) {
       this.#logEvt(`quality: ${height}p was superseded by a later pick; not switching`);

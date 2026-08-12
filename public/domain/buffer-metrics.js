@@ -38,6 +38,29 @@ export function bufferedAheadSeconds(video) {
 }
 
 /**
+ * Where the media the player already holds runs out, in seconds on the
+ * timeline.
+ *
+ * This is where a quality change actually lands. The player keeps what it has
+ * buffered and appends the new rung AFTER it — so the first segment the new
+ * rung must supply is the one at this time, not the one under the playhead.
+ * Measured 2026-08-12: three switches were prepared at the playhead and the
+ * player then asked for a segment 11 s, 14 s and 50 s further on, each time
+ * finding nothing there and stalling — the spinner the preparation exists to
+ * prevent.
+ *
+ * @param {HTMLVideoElement | null} video
+ * @returns {number} The end of the range holding the playhead, or the playhead
+ *   itself when nothing playable is buffered.
+ */
+export function bufferedEndSeconds(video) {
+  if (!video || typeof video.currentTime !== "number") {
+    return 0;
+  }
+  return video.currentTime + bufferedAheadSeconds(video);
+}
+
+/**
  * One reading of the buffer, taken at a moment.
  *
  * @typedef {object} BufferSample
