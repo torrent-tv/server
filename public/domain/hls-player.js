@@ -9,6 +9,8 @@
 
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
+import { bufferedEndSeconds } from "./buffer-metrics.js";
+
 /**
  * @param {HTMLVideoElement} videoElement
  * @returns {boolean}
@@ -329,11 +331,20 @@ export function createHlsPlayer(onLog) {
         // covers the wait. Debounced so a persistent error cannot hot-loop.
         let recovering = false;
         const recoverFatal = (data) => {
+          // Why a recovery did NOT happen, said out loud. Without it a player
+          // left at `currentTime=0 readyState=0` is indistinguishable from one
+          // whose recovery ran and lost the position — the two need opposite
+          // fixes, and on 2026-08-14 the log could not tell them apart.
           if (recovering || !manifestReady) {
+            console.warn(
+              `[torrent-tv][hls] recovery declined for ${data?.details ?? "?"}: ` +
+              `${recovering ? "already recovering" : "manifest not ready"}`
+            );
             return;
           }
           const type = data?.type;
           if (type !== HlsClass.ErrorTypes.NETWORK_ERROR && type !== HlsClass.ErrorTypes.MEDIA_ERROR) {
+            console.warn(`[torrent-tv][hls] recovery declined for ${data?.details ?? "?"}: type=${type ?? "-"}`);
             return;
           }
           recovering = true;
@@ -438,11 +449,22 @@ export function createHlsPlayer(onLog) {
             // they made or something restarting the stream behind their back.
             // Only the second is a defect, and only this line can tell them
             // apart.
-            if (Math.abs(start - at) > 30) {
+            //
+            // Measured against the END of what is buffered, not against the
+            // playhead. Filling the buffer forward is the loader's ordinary
+            // work, so a fragment 30 s ahead of the picture is normal whenever
+            // 30 s are already held — and comparing with the playhead made this
+            // warn on exactly that: ten times in one healthy session on
+            // 2026-08-14 (`sn=5 fragStart=45.3s currentTime=13.6s` while the
+            // buffer was growing through 58 s). What is anomalous is a fragment
+            // past the edge the loader has reached, or behind the playhead.
+            const bufferEnd = bufferedEndSeconds(videoElement);
+            const distance = start > bufferEnd ? start - bufferEnd : at - start;
+            if (distance > 30) {
               console.warn(
                 `[evt] frag-far sn=${sn} fragStart=${start.toFixed(1)}s ` +
-                `currentTime=${at.toFixed(1)}s seeking=${videoElement.seeking} ` +
-                `lastPlayerEvent=${lastPlayerEvent}`
+                `currentTime=${at.toFixed(1)}s bufferEnd=${bufferEnd.toFixed(1)}s ` +
+                `seeking=${videoElement.seeking} lastPlayerEvent=${lastPlayerEvent}`
               );
             }
           });
@@ -491,7 +513,25 @@ export function createHlsPlayer(onLog) {
               );
               recoverFatal(data);
             } else {
-              console.debug(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}`);
+              // A non-fatal error that names an exception gets the same fields
+              // as a fatal one. `bufferAppendError` arrives NON-fatal — hls.js
+              // retries the append itself — and when its retries run out it
+              // tears the media source down without ever raising a fatal error,
+              // so `recoverFatal` below never runs and the position is never
+              // taken or restored. Measured 2026-08-14: `bufferAppendingError`
+              // at 80.96 s, `bufferAppendError` at 0.00, then `readyState=0`
+              // and a player that requested nothing for the remaining 2 min
+              // 50 s. Which exception the browser threw is the fact that
+              // separates the possible causes, and it was not in the log.
+              const cause = data?.error
+                ? ` reason=${data?.reason ?? "-"} buffer=${data?.sourceBufferName ?? "-"} ` +
+                  `frag=${data?.frag?.relurl ?? "-"} sn=${data?.frag?.sn ?? "-"} ` +
+                  `error=${data.error.name ?? "-"}: ${data.error.message ?? "-"}`
+                : "";
+              const level = data?.error
+                ? console.warn.bind(console)
+                : console.debug.bind(console);
+              level(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}${cause}`);
             }
           });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);

@@ -161,26 +161,48 @@ export function createWebRtcHlsLoader(transport) {
           // [net-debug] TEMPORARY: measure data-channel transfer time/throughput
           // per resource to locate the slow-start bottleneck.
           const ms = endedAt - startedAt;
-          const mbps = ms > 0 ? ((byteLength * 8) / (ms / 1000) / 1e6) : 0;
+          // The half of the round trip that the LINK is responsible for. The
+          // other half is the proxy producing the response, and adding them
+          // together does not measure a network: on 2026-08-14 a segment took
+          // 22 161 ms of which 21 951 ms was the proxy holding the file, and
+          // the viewer's link — which had just carried 8 MB at 38 Mbit/s — was
+          // reported at 0.11 Mbit/s. Null on a transport that cannot split the
+          // two (plain HTTP), where the total is the only figure there is.
+          const transferMs = typeof response.transferMs === "number" ? response.transferMs : null;
+          const waitMs = typeof response.waitMs === "number" ? response.waitMs : null;
+          // Throughput over the transfer, not over the round trip — the figure
+          // beside `waitMs` in this line has to be the one that can be compared
+          // with a link speed, or the log itself argues for the wrong diagnosis.
+          const rateMs = transferMs ?? ms;
+          const mbps = rateMs > 0 ? ((byteLength * 8) / (rateMs / 1000) / 1e6) : 0;
           console.debug("[net-debug] dc-load", {
             t: new Date().toISOString().slice(11, 23), // UTC HH:MM:SS.mmm — matches proxy logs
             path,
             type: context.responseType,
             bytes: byteLength,
             ms: Math.round(ms),
+            waitMs: waitMs === null ? null : Math.round(waitMs),
+            transferMs: transferMs === null ? null : Math.round(transferMs),
             mbps: Number(mbps.toFixed(2))
           });
 
           // Feed the viewer net reporter (adaptive bitrate): media segments
           // only — playlists are tiny and would skew the link estimate.
           if (context.responseType === "arraybuffer") {
-            recordNetSample(byteLength, ms);
+            recordNetSample(byteLength, transferMs ?? ms);
           }
 
           // Update the public stats so ABR controller sees accurate timings.
+          //
+          // `first` is when the first BYTE arrived, which is what hls.js's own
+          // bandwidth estimator measures against: it reads `end - first` as the
+          // transfer duration. Reporting the moment of the request instead put
+          // the proxy's production time inside hls.js's idea of the link, the
+          // same error this file's own sample had.
+          const firstByteAt = waitMs === null ? startedAt : startedAt + waitMs;
           this.stats.loaded = byteLength;
           this.stats.total = byteLength;
-          this.stats.loading.first = startedAt;
+          this.stats.loading.first = firstByteAt;
           this.stats.loading.end = endedAt;
 
           successCalled = true;
@@ -193,7 +215,7 @@ export function createWebRtcHlsLoader(transport) {
               bwEstimate: 0,
               loaded: byteLength,
               total: byteLength,
-              loading: { start: startedAt, first: startedAt, end: endedAt },
+              loading: { start: startedAt, first: firstByteAt, end: endedAt },
               parsing: { start: 0, end: 0 },
               buffering: { start: 0, first: 0, end: 0 }
             },
