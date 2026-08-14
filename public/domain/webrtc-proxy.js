@@ -202,6 +202,19 @@ export class WebRtcProxy {
   }
 
   /**
+   * The signalling session id the proxy knows this connection by.
+   *
+   * Exposed so the log forwarder can be told about the connection that is
+   * actually CARRYING the session rather than about every connection that ever
+   * reached "connected" — see {@link setSignalSession}'s caller.
+   *
+   * @returns {string | null}
+   */
+  get signalSessionId() {
+    return this.#signalSessionId;
+  }
+
+  /**
    * Whether this connection was built allowing the proxy's local-address
    * candidates. Reused on reconnect so the same candidate policy (and thus no
    * permission question on the same-proxy path) is applied.
@@ -275,8 +288,17 @@ export class WebRtcProxy {
     try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === "session") {
-      // Record the session id and hand it to the log forwarder so browser
-      // logs can be joined to the proxy's `[webrtc] Session <id>` lines.
+      // Record the session id and hand it to the log forwarder so browser logs
+      // can be joined to the proxy's `[webrtc] Session <id>` lines.
+      //
+      // Announced here AND again when the connection is adopted as the
+      // transport, last writer wins. Here, because the forwarder stamps whole
+      // batches every two seconds and the connect itself takes seconds — the
+      // signalling, ICE, DTLS and local-network phase is the part most often
+      // being diagnosed, and a connect that FAILS never reaches adoption at
+      // all, so leaving it to adoption alone left exactly those lines
+      // unstamped. Again at adoption, because with more than one connection
+      // this one may not be the one that carries the session.
       this.#signalSessionId = typeof msg.sessionId === "string" ? msg.sessionId : null;
       if (this.#signalSessionId) {
         console.debug(`[ice] signalling session ${this.#signalSessionId}`);
@@ -484,11 +506,19 @@ export class WebRtcProxy {
       // older proxy that has not yet switched to binary frames. Decode to bytes
       // immediately so chunks are uniformly Uint8Array regardless of transport.
       if (msg.data) {
+        entry.firstByteAt ??= performance.now();
         entry.chunks.push(base64ToBytes(msg.data));
       }
       if (msg.done) {
         this.#pending.delete(msg.requestId);
-        entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks));
+        const finishedAt = performance.now();
+        // Split the same way as the binary path. Without it this path answered
+        // "no timing", and the loader's fallback is the whole round trip — the
+        // figure that counts an encoder's wait as the viewer's link speed.
+        entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks, {
+          waitMs: typeof entry.startedAt === "number" ? (entry.firstByteAt ?? finishedAt) - entry.startedAt : null,
+          transferMs: typeof entry.startedAt === "number" ? finishedAt - (entry.firstByteAt ?? finishedAt) : null
+        }));
       }
       return;
     }
@@ -529,10 +559,14 @@ export class WebRtcProxy {
       this.#pending.delete(requestId);
       const finishedAt = performance.now();
       const totalBytes = entry.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const waitMs = typeof entry.startedAt === "number"
+        ? (entry.firstByteAt ?? finishedAt) - entry.startedAt
+        : null;
+      const transferMs = typeof entry.startedAt === "number"
+        ? finishedAt - (entry.firstByteAt ?? finishedAt)
+        : null;
       // Only worth reporting for real payloads; status-only replies are noise.
-      if (totalBytes > 65536 && typeof entry.startedAt === "number") {
-        const waitMs = (entry.firstByteAt ?? finishedAt) - entry.startedAt;
-        const transferMs = finishedAt - (entry.firstByteAt ?? finishedAt);
+      if (totalBytes > 65536 && waitMs !== null && transferMs !== null) {
         const mbps = transferMs > 0 ? (totalBytes * 8) / (transferMs * 1000) : 0;
         console.debug(
           `[dc-recv] ${entry.path ?? "?"} bytes=${totalBytes} ` +
@@ -540,18 +574,26 @@ export class WebRtcProxy {
             `chunks=${entry.chunks.length} rate=${mbps.toFixed(1)}Mbps`
         );
       }
-      entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks));
+      entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks, { waitMs, transferMs }));
     }
   }
 
   /**
    * Assemble body byte chunks into a minimal Response-like object.
    *
+   * Carries the two halves of the round trip. They must not be added together
+   * and called a network measurement: `waitMs` is the proxy producing the
+   * response — an encoder that has not reached this segment yet — and only
+   * `transferMs` says anything about the link. Measured 2026-08-14: a segment
+   * took 22 161 ms of which 21 951 ms was the proxy holding the file, and the
+   * viewer's link was reported at 0.11 Mbit/s having just moved 8 MB at 38.
+   *
    * @param {number} status
    * @param {object} headers
    * @param {Uint8Array[]} chunks
+   * @param {{ waitMs: number | null, transferMs: number | null }} [timing]
    */
-  #buildResponse(status, headers, chunks) {
+  #buildResponse(status, headers, chunks, timing) {
     const assemble = () => {
       const total = chunks.reduce((n, p) => n + p.length, 0);
       const out = new Uint8Array(total);
@@ -564,6 +606,8 @@ export class WebRtcProxy {
       ok: status >= 200 && status < 300,
       status,
       headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+      waitMs: timing?.waitMs ?? null,
+      transferMs: timing?.transferMs ?? null,
       arrayBuffer: async () => assemble().buffer,
       text: async () => new TextDecoder().decode(assemble()),
       json: async () => JSON.parse(new TextDecoder().decode(assemble()))

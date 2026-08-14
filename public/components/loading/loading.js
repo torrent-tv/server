@@ -23,6 +23,17 @@ import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torren
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 
+/**
+ * One attempt to connect a proxy, and everyone waiting on it.
+ *
+ * @typedef {object} TransportAcquisition
+ * @property {Promise<import("../../domain/proxy-transport.js").ProxyTransport>} promise
+ * @property {Set<(proxyName: string) => void>} listeners - Each waiting
+ *   caller's progress callback.
+ * @property {string | null} announced - The proxy named to them, once one has
+ *   been chosen. Replayed to a caller that joins after the announcement.
+ */
+
 /** Embedded-subtitle extraction reads the file to the last cue — allow long. */
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 
@@ -242,6 +253,13 @@ export class Loading extends StateDerivedView {
   #proxy = null;
   /** @type {import("../../domain/proxy-transport.js").ProxyTransport | null} */
   #transport = null;
+  /**
+   * The connect currently in flight, and everyone waiting on it. Null when no
+   * connect is running. See {@link #acquireTransport}.
+   *
+   * @type {TransportAcquisition | null}
+   */
+  #transportAcquisition = null;
   /** @type {Array<object>} All subtitle files parsed from the current torrent. */
   #subtitleFiles = [];
   /** @type {string[]} Blob URLs created for active subtitle tracks; revoked on cleanup. */
@@ -1284,6 +1302,9 @@ export class Loading extends StateDerivedView {
     });
     this.#hlsPlayer.clear();
     this.#clearSubtitleTracks();
+    // Before the proxy is torn down, so a connect that finishes a moment later
+    // cannot put a live one back on a component that has just let go of it.
+    this.#abandonTransportAcquisition();
     if (this.#proxy) {
       this.#proxy.close();
       this.#proxy = null;
@@ -1463,6 +1484,10 @@ export class Loading extends StateDerivedView {
   #onCancelClick = () => {
     this.#logEvt("loading cancelled by user");
     this.#cancelRequested = true;
+    // A connect in flight is part of this attempt and dies with it. Left in
+    // place it would be handed to whoever asks next, and fail them with this
+    // cancellation.
+    this.#abandonTransportAcquisition();
     // Supersede the current attempt so its now-aborted requests, when they
     // reject, are recognised as stale and cannot surface an error screen.
     this.#playbackEpoch += 1;
@@ -2732,6 +2757,15 @@ export class Loading extends StateDerivedView {
    * flow obtain the permission (explainer + one click that makes the browser
    * ask) and retry with the proxy's local addresses included.
    *
+   * Callers that arrive while a connection is already being built JOIN it
+   * rather than starting a second one. The check above only sees a FINISHED
+   * connection, and two callers run concurrently by design — the background
+   * warm-up starts when the torrent is opened, the playback flow when a file is
+   * picked a moment later — so without this both built one. Measured
+   * 2026-08-14: the proxy took two offers 7 ms apart and brought up two full
+   * connections with two data channels each; one carried 5 MB, the other 1204
+   * bytes and stayed open, unclosed, for the whole session.
+   *
    * @param {{ onConnecting?: (proxyName: string) => void }} [options]
    * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
    */
@@ -2739,6 +2773,87 @@ export class Loading extends StateDerivedView {
     if (this.#transport && (!this.#proxy || this.#proxy.isOpen)) {
       return this.#transport;
     }
+    const running = this.#transportAcquisition;
+    if (running) {
+      // Each caller still gets its own progress. The proxy is announced ONCE,
+      // the moment it is chosen and before the seconds of connecting — so a
+      // joiner arriving after that moment is told what was announced, rather
+      // than sitting on "selecting a proxy" for the whole connect. That is the
+      // common case, not the rare one: the warm-up announces nothing, and the
+      // playback flow joins whenever the viewer finishes choosing an episode.
+      if (typeof onConnecting === "function") {
+        running.listeners.add(onConnecting);
+        if (running.announced !== null) {
+          try {
+            onConnecting(running.announced);
+          } catch {
+            // A status line must never break the connect it describes.
+          }
+        }
+      }
+      return running.promise;
+    }
+    /** @type {TransportAcquisition} */
+    const record = {
+      promise: /** @type {any} */ (null),
+      listeners: new Set(typeof onConnecting === "function" ? [onConnecting] : []),
+      announced: null
+    };
+    record.promise = this.#connectTransport(record).finally(() => {
+      // Only if it is still ours: an abandoned attempt was replaced long ago
+      // and must not clear the connect that replaced it.
+      if (this.#transportAcquisition === record) {
+        this.#transportAcquisition = null;
+      }
+    });
+    this.#transportAcquisition = record;
+    return record.promise;
+  }
+
+  /**
+   * Give up on the connect in flight, if any.
+   *
+   * The callers already waiting on it keep their promise and its rejection;
+   * what stops is its claim on the component — the next request for a
+   * transport starts a fresh connect, and this one may no longer adopt the
+   * proxy it is building. Without this a connect begun before a cancel stayed
+   * the answer given to everyone who asked afterwards, so a cancelled attempt
+   * failed the NEXT one too; and one that finished after `#stopPlayback` put a
+   * live proxy back on a component that had just torn one down.
+   *
+   * @returns {void}
+   */
+  #abandonTransportAcquisition() {
+    // The waiters keep the promise; what they stop getting is progress. An
+    // abandoned attempt still has a second half to run (the local-address
+    // retry), and its status line would otherwise re-label a screen that has
+    // moved on.
+    this.#transportAcquisition?.listeners.clear();
+    this.#transportAcquisition = null;
+  }
+
+  /**
+   * Build a transport: pick a proxy, connect, adopt it. The single flight
+   * behind {@link #acquireTransport} — never call it directly, or the
+   * duplicate-connection it exists to prevent comes back.
+   *
+   * @param {TransportAcquisition} record - This attempt: who is waiting on it,
+   *   and what has been announced to them. The same object the component holds
+   *   while the attempt is current, so identity answers "is this still the
+   *   attempt in flight".
+   * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
+   */
+  async #connectTransport(record) {
+    const onConnecting = (proxyName) => {
+      record.announced = proxyName;
+      for (const listener of record.listeners) {
+        try {
+          listener(proxyName);
+        } catch {
+          // A status line must never break the connect it describes.
+        }
+      }
+    };
     // Close stale proxy if present.
     if (this.#proxy) {
       this.#proxy.close();
@@ -2757,6 +2872,12 @@ export class Loading extends StateDerivedView {
       });
     } catch (publicOnlyError) {
       this.#throwIfCancelled();
+      // Checked separately from cancellation: playback can be torn down
+      // without a cancel (an error screen, a reset, the page going away), and
+      // the local path's next step puts a permission explainer on the screen.
+      // Asking for a network permission on behalf of an attempt nobody is
+      // waiting for is worse than merely wasteful.
+      this.#throwIfAbandoned(record);
       const lanProbeUrl =
         publicOnlyError instanceof Error && typeof publicOnlyError.lanProbeUrl === "string"
           ? publicOnlyError.lanProbeUrl
@@ -2764,11 +2885,37 @@ export class Loading extends StateDerivedView {
       this.#logEvt(`public-only connect failed (${publicOnlyError?.message ?? publicOnlyError}); trying local path`);
       await this.#ensureLocalNetworkPermission(lanProbeUrl);
       this.#throwIfCancelled();
+      this.#throwIfAbandoned(record);
       // Attempt 2: all addresses, permission (when the browser has such a
       // mechanism) obtained above.
       proxy = await this.#proxySelector.chooseBestProxy({ allowPrivateCandidates: true, onConnecting });
     }
+    // Adopting now would hand a live proxy to a component that has torn its
+    // own down, so the connection is closed rather than left running.
+    if (this.#transportAcquisition !== record) {
+      proxy.close();
+      this.#throwIfAbandoned(record);
+    }
     return this.#adoptProxy(proxy);
+  }
+
+  /**
+   * Stop a connect attempt that is no longer the one in flight.
+   *
+   * Thrown as an `AbortError` because that is what every call site already
+   * recognises as "this attempt was superseded" and swallows without putting an
+   * error screen in front of the viewer.
+   *
+   * @param {TransportAcquisition} record
+   * @returns {void}
+   */
+  #throwIfAbandoned(record) {
+    if (this.#transportAcquisition === record) {
+      return;
+    }
+    const abandoned = new Error("Proxy connect abandoned.");
+    abandoned.name = "AbortError";
+    throw abandoned;
   }
 
   /**
@@ -2782,9 +2929,32 @@ export class Loading extends StateDerivedView {
    * @returns {import("../../domain/proxy-transport.js").ProxyTransport}
    */
   #adoptProxy(proxy) {
+    // Nothing else closes a connection this one replaces. The reconnect flow
+    // adopts a fresh proxy over a dead one, where closing is a no-op; a live
+    // one being replaced is the case that leaked, and a leaked connection keeps
+    // its channels, its keepalives and its ICE alive on both machines for as
+    // long as the page is open.
+    if (this.#proxy && this.#proxy !== proxy) {
+      try {
+        this.#proxy.close();
+      } catch {
+        // Already gone — the point was that it is not left open.
+      }
+    }
     // Surface a mid-playback loss of this connection (auto-reconnect flow). A
     // close() by #stopPlayback never fires this.
     proxy.onConnectionLost = () => this.#onTransportLost();
+    // Stamp the forwarded log with the connection that is about to carry the
+    // session. The connection announces itself as soon as it has an id, which
+    // is what covers the connect phase; this is the correction, for the case
+    // where the one that got there first is not the one being used.
+    if (proxy.signalSessionId) {
+      try {
+        window.__ttvClientLogger?.setSignalSession?.(proxy.signalSessionId);
+      } catch {
+        // Log forwarder is a debugging aid — never let it break playback.
+      }
+    }
     this.#proxy = proxy;
     if (this.#transport && !this.#transport.isHttp) {
       this.#transport.replaceWebRtcProxy(proxy);

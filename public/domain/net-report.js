@@ -29,7 +29,11 @@ let active = null;
  * Record one completed segment transfer (called by the HLS loader).
  *
  * @param {number} bytes
- * @param {number} ms
+ * @param {number} ms - TRANSFER time only. Not the round trip: the time the
+ *   proxy spent producing the segment belongs to the encoder and describes
+ *   nothing about the link. Passing the round trip made a 22 s wait for one
+ *   segment read as a 0.11 Mbit/s link on 2026-08-14, minutes after the same
+ *   link had carried 8 MB at 38 Mbit/s.
  * @returns {void}
  */
 export function recordNetSample(bytes, ms) {
