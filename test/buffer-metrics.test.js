@@ -40,6 +40,25 @@ test("a range after a gap does not count", () => {
   assert.equal(bufferedAheadSeconds(video(10, [[0, 12], [40, 90]])), 2);
 });
 
+test("a join the player steps over does not end the count", () => {
+  // Measured 2026-08-14: a copied video cut at the container's keyframes
+  // arrives as `[2275.609, 2290.649]` and `[2290.708, 2301.140]` — a 0.059 s
+  // gap at the join. Read as the end of the buffer it cost 45 s of every cold
+  // start, because the gate saw ten seconds where two minutes were held.
+  assert.equal(
+    Math.round(bufferedAheadSeconds(video(2280, [[2275.609, 2290.649], [2290.708, 2301.140]])) * 1000),
+    21140
+  );
+  // Two joins in a row are still one run.
+  assert.equal(bufferedAheadSeconds(video(0, [[0, 10], [10.2, 20], [20.3, 30]])), 30);
+});
+
+test("a gap too wide to step over still ends the count", () => {
+  // Half a second is the limit; a whole missing segment must not be counted as
+  // cushion, or the gate promises a start over a picture about to stop.
+  assert.equal(bufferedAheadSeconds(video(0, [[0, 10], [10.6, 40]])), 10);
+});
+
 test("nothing buffered at the playhead is zero, not an error", () => {
   assert.equal(bufferedAheadSeconds(video(30, [[0, 12]])), 0);
   assert.equal(bufferedAheadSeconds(video(0, [])), 0);

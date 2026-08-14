@@ -147,6 +147,17 @@ export class Loading extends StateDerivedView {
     chooseVideoFile: "Choose a video file from playlist.",
     headerDownloadStalled:
       "Torrent isn't downloading — no peers reachable for this file. Try again later or pick another source.",
+    // The player itself has died and cannot be revived in place. Says what to
+    // do rather than what broke: the viewer can only start it again, and
+    // starting again does work — the position is remembered.
+    playerCannotContinue:
+      "The video player stopped and can't continue. Press Retry to start it again from where you were.",
+    // A pick that did not happen has to say so. Switching regardless would empty
+    // the buffer and stop the picture, which is worse than the quality the
+    // viewer already has.
+    /** @param {number} height */
+    qualityNotReady: (height) =>
+      `${height}p isn't ready yet — still playing the current quality. Try again in a moment.`,
     // Shown INSTEAD of failing once the ordinary wait has been exhausted. There
     // is nothing wrong on our side and nothing to retry: the file simply has
     // nobody to download it from, and that can change at any moment or never.
@@ -3585,6 +3596,8 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   async #switchQualityLevel(level, height) {
+    // What to go back to if the rung never becomes ready.
+    const previousHeight = this.#selectedQualityHeight;
     // Remembered up front: it is what the NEXT file of this torrent opens at,
     // and that is true whether or not this switch turns out to be quick.
     this.#selectedQualityHeight = height;
@@ -3615,11 +3628,24 @@ export class Loading extends StateDerivedView {
       this.#logEvt(`quality: ${height}p was superseded by a later pick; not switching`);
       return;
     }
-    this.#logEvt(
-      ready
-        ? `quality: ${height}p is ready, switching`
-        : `quality: ${height}p is not ready yet, switching anyway`
-    );
+    // Not ready means not ready. Switching regardless throws away everything
+    // buffered — the player flushes on a level change — and puts nothing in its
+    // place: measured 2026-08-14, a 64 s cushion went to 1.1 s, the picture
+    // stopped for thirteen seconds, and the rung's first segment then took
+    // another 21.6 s because the encoder had been restarted by the switch
+    // itself. The viewer keeps what they were watching instead, and the rung
+    // stays warm for a second attempt.
+    if (!ready) {
+      this.#logEvt(`quality: ${height}p is not ready; staying on the current one rather than emptying the buffer`);
+      // Back to what the viewer had, not to whatever automatic happens to say —
+      // this is a pick that did not happen, and it must not silently change a
+      // setting the viewer made earlier.
+      this.#selectedQualityHeight = previousHeight;
+      this.#publishQualityOptions();
+      this.setStatus(Loading.MESSAGES.qualityNotReady(height));
+      return;
+    }
+    this.#logEvt(`quality: ${height}p is ready, switching`);
     if (!this.#hlsPlayer.switchLevel(level.index)) {
       this.#logEvt(`quality: the player refused the switch to ${height}p`);
     }
@@ -4039,6 +4065,8 @@ export class Loading extends StateDerivedView {
       ? resumeStartPosition
       : null;
 
+    // The attempt this player belongs to. See `onUnrecoverable` below.
+    const playerEpoch = this.#playbackEpoch;
     await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
       transport,
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
@@ -4056,6 +4084,11 @@ export class Loading extends StateDerivedView {
             ? { startPosition: resumeStartPosition }
             : {}),
           onLevelSwitched: (height) => this.#onHlsLevelSwitched(height),
+          // The epoch this player belongs to, captured now. Read at report time
+          // it would always equal the current one, which is the same as having
+          // no guard: a fault from an abandoned attempt's player would then be
+          // able to kill the live one.
+          onUnrecoverable: (details) => this.#onPlayerUnrecoverable(details, playerEpoch),
           ...playOptions
         }),
       onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
@@ -4151,6 +4184,9 @@ export class Loading extends StateDerivedView {
     }
     const startedAt = Date.now();
     let loggedTarget = -1;
+    // For the wedge below: what the buffer last read, and when it last grew.
+    let lastAhead = -1;
+    let lastGrowthAt = Date.now();
     let cachedProgress = null;
     let lastProgressFetchAt = 0;
     while (Date.now() - startedAt < timeoutMs) {
@@ -4209,6 +4245,24 @@ export class Loading extends StateDerivedView {
           `prebuffer target=${loggedTarget}s ahead=${ahead.toFixed(1)}s ` +
             `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
         );
+      }
+      // The loader stops at a segment join while the element is paused, which
+      // is the whole of this wait — hls.js computes the buffered run with a
+      // hole tolerance of zero whenever `paused` is true, so `maxBufferHole`
+      // does not reach it here. Nothing else explains a buffer that stands
+      // still while segments sit finished on the proxy. Telling the loader
+      // where the media really ends restarts it past the join; harmless when
+      // there was no join, since that is where it was already headed.
+      if (ahead > 0 && Math.abs(ahead - lastAhead) < 0.01) {
+        if (Date.now() - lastGrowthAt >= PREBUFFER_NUDGE_AFTER_MS) {
+          lastGrowthAt = Date.now();
+          const end = bufferedEndSeconds(videoElement);
+          this.#logEvt(`prebuffer stood still at ${ahead.toFixed(1)}s — pointing the loader at ${end.toFixed(1)}s`);
+          this.#hlsPlayer.resumeLoadAt(end);
+        }
+      } else {
+        lastAhead = ahead;
+        lastGrowthAt = Date.now();
       }
       this.#setPhaseProgress(2, unified.cushionPercent ?? 0); // phase 2 (buffering) fills the final third
       // Renders on its own — its return value must NOT be fed back through
@@ -4845,6 +4899,38 @@ export class Loading extends StateDerivedView {
     this.#publishQualityOptions();
   }
 
+  /**
+   * The player has reached a state it cannot come back from.
+   *
+   * There was no channel for this at all: hls.js's own recovery runs on fatal
+   * errors, and the one that kills a session — an append refused by an ended
+   * MediaSource — arrives non-fatal. So on 2026-08-14 the element sat at
+   * `currentTime=0 readyState=0` behind a spinner for the rest of the session
+   * while every layer reported success. A viewer looking at a dead player must
+   * be told, and given the button that starts it again.
+   *
+   * @param {string} details - hls.js's own name for what failed.
+   * @returns {void}
+   */
+  #onPlayerUnrecoverable(details, epoch) {
+    // While the loading flow is still running it owns the failure path, and it
+    // reports with the context this handler does not have. Same division as
+    // `#onTransportLost`.
+    if (this.#isProcessing) {
+      this.#logEvt(`player cannot continue (${details}) — the loading flow will report it`);
+      return;
+    }
+    // A file index of -1 means no load has finished yet, and Retry would then
+    // ask for a file that does not exist. There is nothing useful to offer.
+    if (this.#activeFileIndex < 0) {
+      this.#logEvt(`player cannot continue (${details}) — no active file to restart`);
+      return;
+    }
+    this.#logEvt(`player cannot continue (${details}) — offering a restart`);
+    const error = this.#armRetryableStall(this.#activeFileIndex, Loading.MESSAGES.playerCannotContinue);
+    this.#failPlayback(epoch, { description: error.message, canRetry: true });
+  }
+
   #noteEffectiveQuality(progress) {
     const height = Number(progress?.currentHeight);
     const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
@@ -5201,6 +5287,12 @@ const _PREBUFFER_BASE_SECONDS = 12;
 // then drains. Below this fill rate the deeper adaptive target is kept (thin
 // Allow a full cushion to build on a genuinely slow start before falling back.
 const PREBUFFER_TIMEOUT_MS = 45_000;
+
+// How long a motionless buffer is allowed to stand before the loader is pointed
+// at the end of the media. Segments here take a second or two to arrive, so
+// four seconds of no movement at all is not slowness — it is the paused-loader
+// wedge described at `resumeLoadAt`.
+const PREBUFFER_NUDGE_AFTER_MS = 4_000;
 // If, after the timeout, less than this is buffered, treat the stream as never
 // started (dead transport) and fail rather than reveal an unplayable player.
 const PREBUFFER_MIN_START_SECONDS = 0.5;

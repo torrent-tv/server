@@ -13,13 +13,37 @@
  */
 
 /**
+ * The largest gap between two buffered ranges that still counts as one run of
+ * media.
+ *
+ * Segment joins are not always exact. Measured 2026-08-14 on a copied video cut
+ * at the container's own keyframes: hls.js reported the buffer as
+ * `[{start:2275.609,end:2290.648999},{start:2290.708,end:2301.139999}]` — a
+ * 0.059 s gap at a join — and on another run a 0.170 s one. Read as the end of
+ * the buffer, such a gap cost 45 s of every cold start: the gate saw 10 s where
+ * 130 s were held and waited out its whole timeout.
+ *
+ * Half a second is far larger than any join artefact and far smaller than a
+ * missing segment (segments here run 4-10 s), so it cannot hide a real hole.
+ * The player is configured with the same figure and merges on the same rule —
+ * a gap of exactly this much is NOT merged by either.
+ *
+ * The player only honours it while it is PLAYING: hls.js substitutes zero
+ * whenever the element is paused, which is the whole of our cold start. So this
+ * figure describes what the two sides agree on once the picture is moving, and
+ * the wedge it causes before then is dealt with where the prebuffer waits.
+ */
+export const MAX_BUFFER_HOLE_SECONDS = 0.5;
+
+/**
  * How many seconds of media sit ahead of the playhead.
  *
- * Only the buffered range CONTAINING the playhead counts. Ranges after a gap
- * are not playable without the gap being filled first, and counting them would
- * report a comfortable cushion over a picture that is about to stop. The 0.25 s
- * slack absorbs the ordinary case where the range starts a few frames after the
- * position the element reports.
+ * Counts from the range holding the playhead and continues across gaps up to
+ * {@link MAX_BUFFER_HOLE_SECONDS}, because the player steps over those by
+ * itself. A larger gap ends the count: media past it is not playable until the
+ * gap is filled, and counting it would report a comfortable cushion over a
+ * picture about to stop. The 0.25 s slack absorbs the ordinary case where the
+ * range starts a few frames after the position the element reports.
  *
  * @param {HTMLVideoElement | null} video
  * @returns {number} Seconds ahead, or 0 when nothing playable is buffered.
@@ -31,7 +55,14 @@ export function bufferedAheadSeconds(video) {
   const { buffered, currentTime } = video;
   for (let index = 0; index < buffered.length; index += 1) {
     if (buffered.start(index) <= currentTime + 0.25 && currentTime < buffered.end(index)) {
-      return buffered.end(index) - currentTime;
+      let end = buffered.end(index);
+      for (let next = index + 1; next < buffered.length; next += 1) {
+        if (buffered.start(next) - end >= MAX_BUFFER_HOLE_SECONDS) {
+          break;
+        }
+        end = buffered.end(next);
+      }
+      return end - currentTime;
     }
   }
   return 0;
