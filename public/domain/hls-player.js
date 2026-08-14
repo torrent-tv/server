@@ -9,7 +9,7 @@
 
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
-import { bufferedEndSeconds } from "./buffer-metrics.js";
+import { bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
 
 /**
  * @param {HTMLVideoElement} videoElement
@@ -173,10 +173,15 @@ export function createHlsPlayer(onLog) {
     /**
      * Change quality without interrupting playback.
      *
-     * `nextLevel` rather than `currentLevel`: it switches at the next fragment
-     * and keeps what is already playing, where `currentLevel` flushes the whole
-     * buffer and rebuffers from the current position — which is the visible
-     * interruption this whole path exists to remove.
+     * `nextLevel` rather than `currentLevel`, which is the lesser of two
+     * flushes and not the absence of one. Read in the vendored hls.js: setting
+     * `nextLevel` calls `nextLevelSwitch()`, which flushes the buffer from
+     * about two fragments ahead of the playhead to the end. `currentLevel`
+     * flushes from the playhead itself and rebuffers immediately, so this keeps
+     * the picture moving where that would not — but everything the viewer had
+     * banked beyond the next couple of fragments is gone either way. Measured
+     * 2026-08-14: a 64-second cushion became 1.1 s. That is why the caller must
+     * not switch to a rung that is not ready.
      *
      * @param {number} index
      * @returns {boolean} False when there is nothing to switch.
@@ -230,6 +235,30 @@ export function createHlsPlayer(onLog) {
       if (hlsInstance) {
         hlsInstance.startLoad(-1);
       }
+    },
+    /**
+     * Point the loader at a position and have it fetch from there.
+     *
+     * The way out of a wedge that only happens while the element is PAUSED, and
+     * therefore only during the cold start. hls.js chooses its next fragment
+     * from the end of the buffered run holding the load position, and while
+     * paused it computes that run with a hole tolerance of zero, whatever
+     * `maxBufferHole` says — verified in the vendored source. So a join left by
+     * a keyframe cut, a few hundredths of a second wide, makes it choose the
+     * fragment it has already appended, find nothing to do, and stop: measured
+     * 2026-08-14, two segments delivered and then 39 s of silence while the
+     * proxy held two minutes of finished ones, three times across two sessions,
+     * costing 45 s each. Told where the media actually ends, it carries on.
+     *
+     * @param {number} position - Seconds on the timeline.
+     * @returns {boolean} False when there is no hls.js instance to steer.
+     */
+    resumeLoadAt(position) {
+      if (!hlsInstance || !Number.isFinite(position) || position < 0) {
+        return false;
+      }
+      hlsInstance.startLoad(position);
+      return true;
     },
     /**
      * Start HLS playback on `videoElement`.
@@ -295,6 +324,18 @@ export function createHlsPlayer(onLog) {
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
           backBufferLength: 30,
+          // What counts as one run of media rather than two. The default 0.1 s
+          // is smaller than the joins this proxy produces: a copied video is
+          // cut at the container's own keyframes and the cuts do not always
+          // land exactly, so the buffer arrives as neighbouring ranges with a
+          // gap of a few hundredths to a couple of tenths of a second. hls.js
+          // picks its next fragment from the end of the run holding the
+          // playhead, so a gap it will not step over stops it loading
+          // altogether — measured 2026-08-14: two segments delivered, then
+          // nothing requested for 39 s while the proxy held 130 s of finished
+          // ones, and the cold start ran out its whole 45 s timeout. The same
+          // figure is used on our side of the fence, so both agree.
+          maxBufferHole: MAX_BUFFER_HOLE_SECONDS,
           // Where to begin buffering. It belongs HERE, in the configuration
           // handed to the constructor: on the instance `startPosition` is a
           // getter, so assigning to it throws in a module's strict mode —
@@ -330,6 +371,8 @@ export function createHlsPlayer(onLog) {
         // buffering notice (driven by the <video> stall events in loading.js)
         // covers the wait. Debounced so a persistent error cannot hot-loop.
         let recovering = false;
+        // Said once per player. See the fatal branch below.
+        let unrecoverableAnnounced = false;
         const recoverFatal = (data) => {
           // Why a recovery did NOT happen, said out loud. Without it a player
           // left at `currentTime=0 readyState=0` is indistinguishable from one
@@ -483,6 +526,31 @@ export function createHlsPlayer(onLog) {
           instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
             instance.loadSource(manifestUrl);
           });
+          // The two events that end the MediaSource, and nothing else does —
+          // read off the vendored hls.js, `endOfStream()` is called on
+          // BUFFER_EOS and in `onMediaDetaching`. An ended MediaSource refuses
+          // every later append, which is how a quality change on 2026-08-14
+          // ended in `bufferAppendError ... MediaSource readyState: ended`, a
+          // position reset to 0 and a player that requested nothing for the
+          // next minute and a half. Which of the two fired, and when, is the
+          // one fact that log did not carry.
+          for (const [name, event] of [
+            ["media-detaching", HlsClass.Events.MEDIA_DETACHING],
+            ["buffer-eos", HlsClass.Events.BUFFER_EOS],
+            ["media-detached", HlsClass.Events.MEDIA_DETACHED]
+          ]) {
+            if (!event) {
+              continue;
+            }
+            instance.on(event, (_evt, data) => {
+              const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime.toFixed(2) : "?";
+              const ready = videoElement instanceof HTMLVideoElement ? videoElement.readyState : "?";
+              console.warn(
+                `[torrent-tv][hls] ${name} currentTime=${at} readyState=${ready} ` +
+                `type=${data?.type ?? "-"} transfer=${data?.transferMedia ? "yes" : "no"}`
+              );
+            });
+          }
           instance.on(HlsClass.Events.ERROR, (_event, data) => {
             const details = typeof data?.details === "string" ? data.details : "unknown";
             // Console only — never surface to the on-screen status. Non-fatal
@@ -511,6 +579,22 @@ export function createHlsPlayer(onLog) {
                 `level=${data?.level ?? "-"} frag=${data?.frag?.relurl ?? "-"} sn=${data?.frag?.sn ?? "-"} ` +
                 `error=${data?.error?.name ?? "-"}: ${data?.error?.message ?? "-"}`
               );
+              // An append refused by an ENDED MediaSource is the end of this
+              // player. hls.js raises it non-fatally first and retries the
+              // append three times, and both its own error controller and
+              // `recoverFatal` below are written to recover from exactly this —
+              // so it is only worth reporting on the FATAL occurrence, once the
+              // retries are spent. Reported on the earlier ones it would fire up
+              // to six times and pre-empt the recovery that sometimes works.
+              // Latched, because nothing downstream can mend an ended
+              // MediaSource and the message must not repeat.
+              if (!unrecoverableAnnounced && /MediaSource readyState: ended/i.test(String(data?.error?.message ?? ""))) {
+                unrecoverableAnnounced = true;
+                console.warn(`[torrent-tv][hls] ${t} unrecoverable: the media source has ended; the player cannot continue`);
+                if (typeof options.onUnrecoverable === "function") {
+                  options.onUnrecoverable(details);
+                }
+              }
               recoverFatal(data);
             } else {
               // A non-fatal error that names an exception gets the same fields
@@ -532,6 +616,13 @@ export function createHlsPlayer(onLog) {
                 ? console.warn.bind(console)
                 : console.debug.bind(console);
               level(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}${cause}`);
+              // An append refused by an ENDED MediaSource is the end of this
+              // player. It arrives non-fatal, so hls.js does not recover and
+              // nothing here did either: measured 2026-08-14, the position went
+              // to 0, `readyState` to 0, and the viewer watched a spinner over a
+              // dead element for the rest of the session. Nothing downstream
+              // can mend an ended MediaSource, so say so and let the caller
+              // rebuild.
             }
           });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
