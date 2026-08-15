@@ -3681,7 +3681,7 @@ export class Loading extends StateDerivedView {
    *
    * @param {CustomEvent} event
    */
-  #onSelectAudioTrack = (event) => {
+  #onSelectAudioTrack = async (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const trackIndex = Number(detail?.trackIndex);
     if (!Number.isInteger(trackIndex) || trackIndex < 0) {
@@ -3698,6 +3698,24 @@ export class Loading extends StateDerivedView {
     // rebuild below is a cold start with the screen empty — measured in tens of
     // seconds on a weak host — and it is what every stream without renditions
     // still gets.
+    if (this.#hlsPlayer.audioTracks().length > 1) {
+      // Made ready BEFORE the player is told to move. Changing track discards
+      // the audio the player holds and it cannot show a frame until the new
+      // track covers the playhead — so switching first and producing second
+      // shows the track's cold start as a spinner over a stopped picture
+      // (measured 2026-08-15). The picture keeps playing through this wait,
+      // exactly as it does while a quality rung is prepared.
+      const playhead =
+        this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+          ? this.#videoElement.currentTime
+          : 0;
+      const readyAt = Date.now();
+      const ready = await this.#session.prepareAudioTrack(trackIndex, playhead);
+      this.#logEvt(
+        `audio track ${trackIndex} ${ready ? "is ready" : "was not ready in time"} ` +
+        `after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
+      );
+    }
     if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
       // What the PLAYER settled on, not what was asked for. Assigning a track
       // is a request: hls.js applies it asynchronously and can decline it or

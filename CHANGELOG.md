@@ -1,3 +1,7 @@
+## 0.12.0
+
+- **New**: Changing the audio track asks the proxy to have it ready first (proxy 2.15.0), then tells the player to move. The player discards the audio it holds the moment it switches and cannot show a frame until the new track covers the playhead, so asking in the other order showed the track's cold start as a spinner over a stopped picture — measured 2026-08-15. The picture now keeps playing through the wait, exactly as it does while a quality rung is prepared, and the log says how long the track took and at what position.
+
 ## 0.11.0
 
 - **Fix**: A player whose media source has ended says so wherever that arrives, not only from a fatal error. The report was written into the fatal branch on the reasoning that hls.js retries the append and escalates when its retries run out; it does not. Measured 2026-08-15: `bufferAppendingError` at 217.20 s, the media detached, `bufferAppendError` at 0.00 — both non-fatal, no fatal error ever raised — and then three minutes in which the browser requested nothing at all while the overlay told the viewer playback was about to start. It is now announced from either branch, once per player, and the viewer is offered the retry that remembers their position.
