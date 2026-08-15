@@ -197,6 +197,59 @@ export function createHlsPlayer(onLog) {
       desiredLevel = index;
       return true;
     },
+    /**
+     * The audio renditions the master offers, when it publishes them as a
+     * group. Empty when it does not — an older proxy, or a stream whose audio
+     * is muxed into the picture — and the caller then rebuilds the session to
+     * change track, as it always has.
+     *
+     * @returns {{ index: number, name: string, language: string }[]}
+     */
+    audioTracks() {
+      const tracks = Array.isArray(hlsInstance?.audioTracks) ? hlsInstance.audioTracks : [];
+      if (tracks.length < 2) {
+        // One rendition is not a choice, and switching to the one already
+        // playing is a flush for nothing.
+        return [];
+      }
+      return tracks.map((track, index) => ({
+        index,
+        name: typeof track?.name === "string" ? track.name : "",
+        language: typeof track?.lang === "string" ? track.lang : ""
+      }));
+    },
+    /**
+     * The rendition in force, as an index into {@link audioTracks}. −1 when
+     * there are none.
+     *
+     * @returns {number}
+     */
+    currentAudioTrack() {
+      const track = hlsInstance?.audioTrack;
+      return typeof track === "number" ? track : -1;
+    },
+    /**
+     * Change audio track without rebuilding anything.
+     *
+     * With the track published as its own rendition, the player fetches the
+     * other one and swaps it in; the picture is not touched at all. Rebuilding
+     * the session for this — which is what happens without renditions — is a
+     * cold start with the picture gone, measured in tens of seconds on a weak
+     * host.
+     *
+     * @param {number} index
+     * @returns {boolean} False when there is nothing to switch.
+     */
+    switchAudioTrack(index) {
+      if (!hlsInstance || !Number.isInteger(index) || index < 0) {
+        return false;
+      }
+      if (!Array.isArray(hlsInstance.audioTracks) || index >= hlsInstance.audioTracks.length) {
+        return false;
+      }
+      hlsInstance.audioTrack = index;
+      return true;
+    },
     /** Destroy any active HLS.js instance and release its resources. */
     clear() {
       if (hlsInstance) {
