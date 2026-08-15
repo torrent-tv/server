@@ -424,8 +424,63 @@ export function createHlsPlayer(onLog) {
         // buffering notice (driven by the <video> stall events in loading.js)
         // covers the wait. Debounced so a persistent error cannot hot-loop.
         let recovering = false;
-        // Said once per player. See the fatal branch below.
+        // Said once per player.
         let unrecoverableAnnounced = false;
+        /**
+         * An append refused by an ENDED MediaSource is the end of this player:
+         * nothing downstream can mend it, and the viewer is otherwise left with
+         * a waiting overlay over a dead element — measured twice in the field
+         * (2026-08-14, 2026-08-15), the second time printing "starting now" for
+         * three minutes.
+         *
+         * Announced whether or not the error is fatal. It was written into the
+         * fatal branch alone, on the reasoning that hls.js retries the append
+         * and escalates when the retries run out. It does not: on 2026-08-15
+         * both `bufferAppendingError` and `bufferAppendError` arrived non-fatal,
+         * the media was detached, and no fatal error ever came — so the report
+         * never fired and the recovery never ran.
+         *
+         * But a NON-fatal one does not always mean nobody will act. Read from
+         * the vendored hls.js (`ErrorController.onErrorOut`): on this exact
+         * message it calls `recoverMediaError()` itself, and that path leaves
+         * the error non-fatal. Announcing there would replace a picture hls.js
+         * was about to restore with an error screen — and, because recovering
+         * detaches the media and ends the source, OUR own recovery would set
+         * off the announcement a second later and kill what it was mending. So
+         * a non-fatal one is announced only where nothing is going to act:
+         * hls.js has decided to do nothing, and no recovery of ours is running.
+         *
+         * The latch is what makes it safe to call from both places: hls.js's
+         * own retries produce several of these, and only the first is worth
+         * telling anyone about.
+         *
+         * @param {string} t
+         * @param {string} details
+         * @param {{ fatal?: boolean, error?: { message?: string }, errorAction?: { action?: number, resolved?: boolean } }} data
+         */
+        const announceEndedSource = (t, details, data) => {
+          if (unrecoverableAnnounced || !/MediaSource readyState: ended/i.test(String(data?.error?.message ?? ""))) {
+            return;
+          }
+          if (data?.fatal !== true) {
+            // 0 is hls.js's `NetworkErrorAction.DoNothing`; an absent action is
+            // the same thing, since nothing reads it afterwards.
+            const willAct = (data?.errorAction?.action ?? 0) !== 0 || recovering;
+            if (willAct) {
+              console.debug(
+                `[torrent-tv][hls] ${t} ended media source, not announced: ` +
+                `action=${data?.errorAction?.action ?? "-"} resolved=${data?.errorAction?.resolved ?? "-"} ` +
+                `recovering=${recovering}`
+              );
+              return;
+            }
+          }
+          unrecoverableAnnounced = true;
+          console.warn(`[torrent-tv][hls] ${t} unrecoverable: the media source has ended; the player cannot continue`);
+          if (typeof options.onUnrecoverable === "function") {
+            options.onUnrecoverable(details);
+          }
+        };
         const recoverFatal = (data) => {
           // Why a recovery did NOT happen, said out loud. Without it a player
           // left at `currentTime=0 readyState=0` is indistinguishable from one
@@ -633,21 +688,10 @@ export function createHlsPlayer(onLog) {
                 `error=${data?.error?.name ?? "-"}: ${data?.error?.message ?? "-"}`
               );
               // An append refused by an ENDED MediaSource is the end of this
-              // player. hls.js raises it non-fatally first and retries the
-              // append three times, and both its own error controller and
-              // `recoverFatal` below are written to recover from exactly this —
-              // so it is only worth reporting on the FATAL occurrence, once the
-              // retries are spent. Reported on the earlier ones it would fire up
-              // to six times and pre-empt the recovery that sometimes works.
-              // Latched, because nothing downstream can mend an ended
-              // MediaSource and the message must not repeat.
-              if (!unrecoverableAnnounced && /MediaSource readyState: ended/i.test(String(data?.error?.message ?? ""))) {
-                unrecoverableAnnounced = true;
-                console.warn(`[torrent-tv][hls] ${t} unrecoverable: the media source has ended; the player cannot continue`);
-                if (typeof options.onUnrecoverable === "function") {
-                  options.onUnrecoverable(details);
-                }
-              }
+              // player. Reported here and from the non-fatal branch alike —
+              // `announceEndedSource` holds the rule about which non-fatal ones
+              // count, and the latch that keeps it to one message per player.
+              announceEndedSource(t, details, data);
               recoverFatal(data);
             } else {
               // A non-fatal error that names an exception gets the same fields
@@ -663,6 +707,11 @@ export function createHlsPlayer(onLog) {
               const cause = data?.error
                 ? ` reason=${data?.reason ?? "-"} buffer=${data?.sourceBufferName ?? "-"} ` +
                   `frag=${data?.frag?.relurl ?? "-"} sn=${data?.frag?.sn ?? "-"} ` +
+                  // What hls.js decided to DO about it, which is what separates
+                  // an error it is recovering from one nobody will act on. It
+                  // was missing on 2026-08-15, so which of the two killed that
+                  // session had to be read out of the library's source.
+                  `action=${data?.errorAction?.action ?? "-"} resolved=${data?.errorAction?.resolved ?? "-"} ` +
                   `error=${data.error.name ?? "-"}: ${data.error.message ?? "-"}`
                 : "";
               const level = data?.error
@@ -670,12 +719,12 @@ export function createHlsPlayer(onLog) {
                 : console.debug.bind(console);
               level(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}${cause}`);
               // An append refused by an ENDED MediaSource is the end of this
-              // player. It arrives non-fatal, so hls.js does not recover and
-              // nothing here did either: measured 2026-08-14, the position went
-              // to 0, `readyState` to 0, and the viewer watched a spinner over a
-              // dead element for the rest of the session. Nothing downstream
-              // can mend an ended MediaSource, so say so and let the caller
-              // rebuild.
+              // player, and this is where it actually arrives: non-fatal, twice,
+              // and never escalated. Measured 2026-08-15 — `bufferAppendingError`
+              // at 217.20 s, the media detached, `bufferAppendError` at 0.00,
+              // and then three minutes in which the browser requested nothing
+              // while the overlay said playback was about to start.
+              announceEndedSource(t, details, data);
             }
           });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
