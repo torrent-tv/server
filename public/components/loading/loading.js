@@ -3510,16 +3510,7 @@ export class Loading extends StateDerivedView {
         detail: { url: this.#buildShareUrl() }
       })
     );
-    // Feed the player's audio menu with the active file's tracks.
-    const audioTracks = (this.#planTracks?.audio ?? []).map((t) => ({
-      index: t.index,
-      label: buildTrackLabel(t)
-    }));
-    document.dispatchEvent(
-      new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, {
-        detail: { tracks: audioTracks, activeIndex: this.#selectedAudioTrackIndex }
-      })
-    );
+    this.#publishAudioTracks();
     // What automatic quality has settled on, as far as is known BEFORE the
     // first progress report. When the video is copied the answer is final —
     // nothing is being re-encoded, so what plays is the source's own height,
@@ -3628,19 +3619,33 @@ export class Loading extends StateDerivedView {
     // land on top and move the picture back on its own.
     const pick = (this.#qualityPickSeq ?? 0) + 1;
     this.#qualityPickSeq = pick;
-    // Where the switch will LAND, which is not where the viewer is. The player
-    // keeps what it has buffered and appends the new rung after it, so the first
-    // segment it asks for is the one at the END of that buffer. Preparing the
-    // playhead instead left the rung producing in the wrong place: measured
-    // 2026-08-12, three switches were prepared 11 s, 14 s and 50 s short of what
-    // the player then requested, and each stalled on arrival — the spinner this
-    // preparation exists to prevent.
+    // Prepare at the PLAYHEAD, and let the run cover everything after it.
+    //
+    // Read from the vendored hls.js rather than guessed: `nextLevelSwitch()`
+    // flushes from the start of the fragment FOLLOWING the one holding
+    // `currentTime + fetchdelay`, where `fetchdelay` is
+    // `fragCurrent.duration × nextLevel.maxBitrate / (1000 × fragLastKbps) + 1`
+    // while playing and 0 while paused. So the landing point is the playhead
+    // plus between zero and one fragment — never the end of the buffer, which
+    // is what this used to send. Measured 2026-08-14: warmed at 2398.6 s, the
+    // player asked for 2371.5 s with the playhead at 2370.2 s, and the proxy
+    // read the 27 s difference as a seek BACKWARDS, killed the run and threw
+    // away the 21.8 s that thirty seconds of warming had produced.
+    //
+    // `fragLastKbps` is hls.js's own internal measurement, so predicting the
+    // exact landing point from here is fragile. Starting at the playhead makes
+    // that unnecessary: wherever it lands is inside the run already going, and
+    // the proxy answers "already within the running encode". The price is the
+    // encoder producing a few segments the player already holds, which is
+    // affordable exactly when the rung runs faster than realtime — which is
+    // what roadmap item 1 now establishes before the rung is offered at all.
     const position = this.#videoElement instanceof HTMLVideoElement
-      ? bufferedEndSeconds(this.#videoElement)
+      ? Math.max(0, this.#videoElement.currentTime)
       : 0;
     this.#logEvt(
-      `quality: preparing ${height}p at ${Math.round(position)}s ` +
-      `(playhead ${Math.round(this.#videoElement?.currentTime ?? 0)}s) before switching`
+      `quality: preparing ${height}p at the playhead ${Math.round(position)}s ` +
+      `(buffered to ${Math.round(this.#videoElement instanceof HTMLVideoElement ? bufferedEndSeconds(this.#videoElement) : 0)}s) ` +
+      `before switching`
     );
     const ready = await this.#session.prepareQualityVariant(height, position);
     if (this.#qualityPickSeq !== pick) {
@@ -3686,6 +3691,26 @@ export class Loading extends StateDerivedView {
       return;
     }
     if (this.#isProcessing || this.#activeFileIndex < 0 || !this.#session.current) {
+      return;
+    }
+    // Published as its own rendition, the track is the player's to switch: it
+    // fetches the other one and swaps it in without touching the picture. The
+    // rebuild below is a cold start with the screen empty — measured in tens of
+    // seconds on a weak host — and it is what every stream without renditions
+    // still gets.
+    if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
+      // What the PLAYER settled on, not what was asked for. Assigning a track
+      // is a request: hls.js applies it asynchronously and can decline it or
+      // choose another itself (a level switch changes group), and nothing
+      // rebuilds the session here — so a menu written from the request would
+      // keep asserting a track that is not playing, with nothing to correct it.
+      const applied = this.#hlsPlayer.currentAudioTrack();
+      this.#selectedAudioTrackIndex = applied >= 0 ? applied : trackIndex;
+      this.#logEvt(
+        `audio track ${trackIndex} switched in place, without rebuilding the session` +
+        (applied >= 0 && applied !== trackIndex ? ` (the player settled on ${applied})` : "")
+      );
+      this.#publishAudioTracks();
       return;
     }
     const fileIndex = this.#activeFileIndex;
@@ -5012,6 +5037,28 @@ export class Loading extends StateDerivedView {
       this.#selectedQualityHeight = 0;
     }
     this.#publishQualityOptions();
+  }
+
+  /**
+   * Feed the player's audio menu with the active file's tracks, and which one
+   * is playing.
+   *
+   * One place, because it is published from two moments now: when a file has
+   * loaded, and after a track is switched in place through a rendition — where
+   * nothing else redraws it, since the session is not rebuilt.
+   *
+   * @returns {void}
+   */
+  #publishAudioTracks() {
+    const tracks = (this.#planTracks?.audio ?? []).map((track) => ({
+      index: track.index,
+      label: buildTrackLabel(track)
+    }));
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, {
+        detail: { tracks, activeIndex: this.#selectedAudioTrackIndex }
+      })
+    );
   }
 
   /**

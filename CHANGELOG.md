@@ -1,3 +1,9 @@
+## 0.11.0
+
+- **New**: Changing the audio track no longer rebuilds anything. Where the proxy publishes its tracks as renditions (2.14.0), the player fetches the other one and swaps it in while the picture keeps playing; the rebuild — a cold start with the screen empty, tens of seconds on a weak host — remains only for streams that have no renditions.
+- **Fix**: The audio menu says what the PLAYER settled on. Assigning a track is a request — hls.js applies it asynchronously and may decline it or change it itself when the level changes — and nothing rebuilds the session here, so a menu written from the request alone would go on asserting a track that is not playing.
+- **Fix**: A quality rung is prepared at the PLAYHEAD, not at the end of the buffer. Read from the vendored hls.js: a level switch flushes from the fragment following the one holding `currentTime + fetchdelay`, so it lands at the playhead plus at most one fragment — never at the buffer's end, which is where 0.9.3 moved the preparation. Measured 2026-08-14: warmed at 2398.6 s, the player then asked for 2371.5 s, and the proxy read the 27 s difference as a seek backwards, killed the run and threw away the 21.8 s that thirty seconds of warming had produced. Starting at the playhead puts wherever it lands inside the run already going. The price — a few segments the player already holds — is affordable exactly because a rung is now offered only when it runs faster than realtime.
+
 ## 0.10.0
 
 - **New**: The quality menu is filled the moment a file is opened, from the playback plan. The proxy answers for both playback branches — copied video and re-encoded — because only the browser knows which one it will take, and it decides that from the codecs in the very same plan.

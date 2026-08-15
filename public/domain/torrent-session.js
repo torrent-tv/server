@@ -657,6 +657,13 @@ export class TorrentSession {
           targetHeight:
             Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : undefined,
           manualQuality: options.manualQuality === true ? true : undefined,
+          // This browser takes its audio from the master playlist's rendition
+          // group, so the picture is encoded without it and each track is
+          // encoded once for the file rather than once per quality rung. The
+          // proxy has to be told: publishing renditions AND muxing the same
+          // audio would play it twice, and a browser that did not know about
+          // them would get no sound at all.
+          audioRenditions: true,
           consumerId: this.consumerId,
           fileName: this.#getFileLogName(fileIndex),
           startPositionSeconds: startPositionSeconds > 0 ? startPositionSeconds : undefined,
