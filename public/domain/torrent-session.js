@@ -401,7 +401,7 @@ export class TorrentSession {
    *   targetWidth?: number,
    *   targetHeight?: number
    * }} options
-   * @returns {Promise<{ mode: "proxy-hls" }>}
+   * @returns {Promise<{ mode: "proxy-hls", offeredHeights: number[] | null }>}
    */
   async streamFileToVideoWithAudioTranscode(fileIndex, videoElement, options = {}) {
     if (!this.current || this.current.type !== "torrent") {
@@ -437,7 +437,7 @@ export class TorrentSession {
       typeof options.sourceKey === "string" && options.sourceKey.length > 0
         ? options.sourceKey
         : await this.registerSourceOnProxy(transport);
-    const { playlistUrl, variantHeight, mediaPlaylistUrl } = await this.tryCreateTranscodeSession(
+    const { playlistUrl, variantHeight, offeredHeights, mediaPlaylistUrl } = await this.tryCreateTranscodeSession(
       transport,
       sourceKey,
       fileIndex,
@@ -485,7 +485,7 @@ export class TorrentSession {
     // the encoded range.  No client-side session restart is required, which
     // also avoids playlist-swap glitches during scrubbing.
 
-    return { mode: "proxy-hls" };
+    return { mode: "proxy-hls", offeredHeights };
   }
 
   /**
@@ -579,6 +579,12 @@ export class TorrentSession {
       // Full track inventory (proxy 2.9.26+; empty on older proxies).
       audioTracks: Array.isArray(payload?.audioTracks) ? payload.audioTracks : [],
       subtitleTracks: Array.isArray(payload?.subtitleTracks) ? payload.subtitleTracks : [],
+      // The heights this proxy could serve this file at, per playback branch
+      // (proxy 2.13.0+; null on older proxies, and then the browser keeps its
+      // own ladder). Which branch applies is decided here, from the codecs in
+      // this very plan, so the menu can be right from the moment the file is
+      // opened rather than from the moment an encoder exists.
+      offeredHeights: readOfferedHeights(payload?.offeredHeights),
       pending
     };
   }
@@ -613,7 +619,7 @@ export class TorrentSession {
    * @param {((progress: object) => void) | null} onTranscodeProgress
    * @param {boolean} transcodeVideo
    * @param {{ transcodeAudio?: boolean, targetWidth?: number, targetHeight?: number, startPositionSeconds?: number }} options
-   * @returns {Promise<{ playlistUrl: string, variantHeight: number, mediaPlaylistUrl: string }>}
+   * @returns {Promise<{ playlistUrl: string, variantHeight: number, offeredHeights: number[] | null, mediaPlaylistUrl: string }>}
    *   The manifest to load — a master playlist when the session offers quality
    *   variants, its media playlist otherwise — the height of the variant the
    *   proxy is already encoding (0 when there are no variants), and the media
@@ -710,6 +716,19 @@ export class TorrentSession {
     // so its absence is the answer for this file and not a fallback.
     const masterPath = typeof payload?.masterPath === "string" ? payload.masterPath.trim() : "";
     const variantHeight = Number(payload?.variantHeight) || 0;
+    // The heights this proxy will actually serve the file at. Sent whether or
+    // not there is a master, because a stream without variants still changes
+    // quality — by re-opening the session — and the browser used to compose
+    // that list itself from the source height, which is a statement about the
+    // FILE where the question is about the HOST.
+    // Null, not empty, when the field is absent: that is an older proxy which
+    // has not been asked what it can serve, and the browser must then fall back
+    // to offering what it always did rather than to offering nothing.
+    const offeredHeights = Array.isArray(payload?.offeredHeights)
+      ? payload.offeredHeights
+          .map((height) => Number(height))
+          .filter((height) => Number.isFinite(height) && height > 0)
+      : null;
     const mediaPlaylistUrl = transport.url(playlistPath);
     const playlistUrl = masterPath ? transport.url(masterPath) : mediaPlaylistUrl;
     const progressPath = sessionId
@@ -776,6 +795,7 @@ export class TorrentSession {
     return {
       playlistUrl,
       variantHeight: masterPath ? variantHeight : 0,
+      offeredHeights,
       // The one-variant manifest, for a player that would adapt on its own.
       mediaPlaylistUrl
     };
@@ -847,6 +867,26 @@ function bytesToBase64(bytes) {
 
 function ensureTrailingSlash(url) {
   return url.endsWith("/") ? url : `${url}/`;
+}
+
+/**
+ * The two rung lists a plan carries — one for a copied video, one for a
+ * re-encoded one. Null when the proxy did not answer (older than 2.13.0), which
+ * is a different thing from answering with nothing: the first leaves the
+ * browser's own ladder in place, the second means there is nothing to offer.
+ *
+ * @param {unknown} value
+ * @returns {{ copy: number[], transcode: number[] } | null}
+ */
+function readOfferedHeights(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const heights = (list) =>
+    Array.isArray(list)
+      ? list.map((height) => Number(height)).filter((height) => Number.isFinite(height) && height > 0)
+      : [];
+  return { copy: heights(value.copy), transcode: heights(value.transcode) };
 }
 
 /**
