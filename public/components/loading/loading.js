@@ -45,6 +45,12 @@ const MAGNET_METADATA_TIMEOUT_MS = 180_000;
 // the live player); attempt 3 falls back to a full re-selection + rebuild.
 const RECONNECT_SAME_PROXY_ATTEMPTS = 2;
 const RECONNECT_TOTAL_ATTEMPTS = 3;
+// How long a `waiting` after a deliberate audio-track change is treated as that
+// change rather than as a stall. The player throws away the audio it holds and
+// refetches from the picture, which took 2.75 s measured on the addon host with
+// the picture never stopping; a spinner over a moving picture reports a fault
+// that is not there. A wait outliving this is reported normally.
+const AUDIO_SWITCH_GRACE_MS = 4_000;
 const RECONNECT_CONNECT_TIMEOUT_MS = 10_000;
 const RECONNECT_BACKOFF_MS = 2_000; // pause before attempt 2
 const RECONNECT_ONLINE_WAIT_MS = 15_000; // max wait for `online` per attempt
@@ -772,6 +778,18 @@ export class Loading extends StateDerivedView {
    */
   #scheduleBufferingCheck() {
     if (!this.#playbackLive || this.#bufferingTimer !== null) {
+      return;
+    }
+    // An audio track the viewer just chose is a wait they asked for, and a
+    // short one: the player throws away the audio it holds and refetches from
+    // the picture's position, so the element reports `waiting` for as long as
+    // the first piece of the new track takes — measured 2.75 s on the addon
+    // host, with the picture never stopping. A spinner over a picture that is
+    // still moving says the player is broken when it is doing exactly what was
+    // asked. The wait itself is not hidden for ever: if the track has not
+    // arrived by the time the grace runs out, this is scheduled again by the
+    // next `waiting` and the spinner appears as usual.
+    if (this.#audioSwitchGraceUntil > Date.now()) {
       return;
     }
     this.#bufferingTimer = window.setTimeout(() => {
@@ -3716,6 +3734,9 @@ export class Loading extends StateDerivedView {
         `after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
       );
     }
+    // The element reports `waiting` the moment the player drops the audio it
+    // holds, and that wait belongs to this switch rather than to a stall.
+    this.#audioSwitchGraceUntil = Date.now() + AUDIO_SWITCH_GRACE_MS;
     if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
       // What the PLAYER settled on, not what was asked for. Assigning a track
       // is a request: hls.js applies it asynchronously and can decline it or
