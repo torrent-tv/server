@@ -1,3 +1,7 @@
+## 0.12.1
+
+- **Fix**: Changing the audio track no longer shows a spinner. The player throws away the audio it holds and refetches from the picture's position, so the element reports itself as waiting for as long as the first piece of the new track takes — 2.75 s measured on the addon host, with the picture never stopping. A spinner over a moving picture reports a fault that is not there. The wait is not hidden indefinitely: one outliving the switch is reported as usual.
+
 ## 0.12.0
 
 - **New**: Changing the audio track asks the proxy to have it ready first (proxy 2.15.0), then tells the player to move. The player discards the audio it holds the moment it switches and cannot show a frame until the new track covers the playhead, so asking in the other order showed the track's cold start as a spinner over a stopped picture — measured 2026-08-15. The picture now keeps playing through the wait, exactly as it does while a quality rung is prepared, and the log says how long the track took and at what position.
