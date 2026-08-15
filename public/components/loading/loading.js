@@ -350,6 +350,12 @@ export class Loading extends StateDerivedView {
   #sourceVideoWidth = 0;
   #sourceVideoHeight = 0;
   /**
+   * Heights the proxy says it will serve this file at, largest first — null
+   * until a session says, and against a proxy too old to be asked.
+   * @type {number[] | null}
+   */
+  #offeredHeights = null;
+  /**
    * Cold-start phase marks (performance.now()) for the proxy-served flow, used
    * to log one summary line on a successful start. Set at the top of the
    * proxy branch of #switchToVideoFile; cleared when the summary is logged.
@@ -2432,6 +2438,10 @@ export class Loading extends StateDerivedView {
     // A new file answers the quality question afresh; the previous one's
     // height must not survive into its menu.
     this.#autoEffectiveHeight = 0;
+    // Nor may the rungs the proxy offered for it: a different file on the same
+    // host is a different encode, and until this one's session says otherwise
+    // there is nothing to offer.
+    this.#offeredHeights = null;
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
@@ -2590,6 +2600,15 @@ export class Loading extends StateDerivedView {
     const forceQualityTranscode = this.#selectedQualityHeight > 0;
     const shouldTranscodeVideo = codecSupport.videoSupported === false || forceQualityTranscode;
     const shouldTranscodeAudio = codecSupport.audioSupported === false;
+    // The quality menu, filled the moment the branch is known — before any
+    // session exists, let alone an encoder. The proxy answered for both
+    // branches because only this side knows which one it takes; a proxy too old
+    // to answer leaves it null, and the browser keeps its own ladder.
+    const planned = prepared.offeredHeights;
+    if (planned) {
+      this.#offeredHeights = shouldTranscodeVideo ? planned.transcode : planned.copy;
+      this.#publishQualityOptions();
+    }
     this.#debug("playback decision", {
       fileIndex,
       container: prepared.container,
@@ -4067,7 +4086,7 @@ export class Loading extends StateDerivedView {
 
     // The attempt this player belongs to. See `onUnrecoverable` below.
     const playerEpoch = this.#playbackEpoch;
-    await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
+    const started = await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
       transport,
       sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
       transcodeVideo: options.transcodeVideo === true,
@@ -4093,6 +4112,15 @@ export class Loading extends StateDerivedView {
         }),
       onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
     });
+    // The heights this proxy will serve, from the proxy. Which rungs exist is a
+    // question about the host that would encode them, not about the file: a
+    // weak host offering 240p it runs at a third of realtime is how choosing a
+    // LOWER quality came to break playback (measured 2026-08-14).
+    // Through the same reader the progress reports use, so it cannot overwrite a
+    // list that has already been corrected: creating the session and the first
+    // progress reports overlap, and this line used to win whatever arrived
+    // while it was awaited. It also rounds and filters the same way.
+    this.#noteOfferedHeights(started?.offeredHeights);
     // The variants are known only once the manifest has been parsed, which
     // happens inside the call above. The menu was published before it, from the
     // source's height alone.
@@ -4932,6 +4960,7 @@ export class Loading extends StateDerivedView {
   }
 
   #noteEffectiveQuality(progress) {
+    this.#noteOfferedHeights(progress?.offeredHeights);
     const height = Number(progress?.currentHeight);
     const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
     if (effective === this.#autoEffectiveHeight) {
@@ -4942,6 +4971,46 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#logEvt(`automatic quality is now ${effective > 0 ? `${effective}p` : "the source's own height"}`);
+    this.#publishQualityOptions();
+  }
+
+  /**
+   * Take the rungs the proxy is still willing to serve, which it re-states with
+   * every progress report.
+   *
+   * The list handed over when the file opened was predicted from this host's
+   * startup benchmarks; once an encoder has run on this actual source the proxy
+   * knows what the source really costs and the list can change. A rung that
+   * turns out to be beyond the machine leaves the menu on its own, rather than
+   * being discovered by a viewer switching to it and watching the picture stop.
+   *
+   * Older proxies send nothing here, and nothing is what that must mean: the
+   * list already in hand stays.
+   *
+   * @param {unknown} offered
+   * @returns {void}
+   */
+  #noteOfferedHeights(offered) {
+    if (!Array.isArray(offered)) {
+      return;
+    }
+    const heights = offered
+      .map((value) => Math.round(Number(value)))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const held = this.#offeredHeights;
+    if (Array.isArray(held) && held.length === heights.length && held.every((value, index) => value === heights[index])) {
+      return;
+    }
+    this.#logEvt(`proxy now offers ${heights.length > 0 ? heights.map((value) => `${value}p`).join(" ") : "nothing to switch to"}`);
+    this.#offeredHeights = heights;
+    // A forced pick that is no longer on offer stops being the pick. It governs
+    // what the next re-open asks for, so leaving it set would ask for the rung
+    // the proxy has just withdrawn — and the menu, which no longer lists it,
+    // would have no way to say so.
+    if (this.#selectedQualityHeight > 0 && heights.length > 0 && !heights.includes(this.#selectedQualityHeight)) {
+      this.#logEvt(`${this.#selectedQualityHeight}p is no longer offered — back to automatic`);
+      this.#selectedQualityHeight = 0;
+    }
     this.#publishQualityOptions();
   }
 
@@ -4981,12 +5050,56 @@ export class Loading extends StateDerivedView {
     // height the player could not read is one the menu cannot name, and a menu
     // of one unnamed entry is worse than the list below it.
     if (named.length > 1) {
-      return named.map((level) => ({
-        height: level.height,
-        label: level.height === this.#sourceVideoHeight
-          ? `${level.height}p (source)`
-          : `${level.height}p`
-      }));
+      // The master playlist is read ONCE, at the start, so the player's list is
+      // the offer as it stood then. The proxy keeps revising it — a rung it has
+      // since found to be beyond the machine is refused at the route, so leaving
+      // it in the menu offers the viewer a switch that ends in a 404 rather than
+      // in a picture. What the proxy still offers wins; a proxy that says
+      // nothing (older than 2.13.0) leaves the player's own list alone.
+      const offeredNow = Array.isArray(this.#offeredHeights) ? this.#offeredHeights : null;
+      const usable = offeredNow === null
+        ? named
+        : named.filter((level) => offeredNow.includes(level.height));
+      if (usable.length > 1) {
+        return usable.map((level) => ({
+          height: level.height,
+          label: level.height === this.#sourceVideoHeight
+            ? `${level.height}p (source)`
+            : `${level.height}p`
+        }));
+      }
+      // One rung left to switch between is no choice at all, and the control
+      // hides itself rather than showing a menu of one.
+      return [];
+    }
+    // Without variants, quality changes by re-opening the session — and the
+    // rungs on offer are the ones the PROXY says it will serve. This list used
+    // to be composed here from the source height and a fixed ladder, which
+    // answers a question about the file where the question is about the host:
+    // on the host measured 2026-08-14 that offered a 240p rung it ran at
+    // 0.388-0.947x, and picking it was what broke playback.
+    //
+    // A proxy that does not answer at all (older than 2.13.0, and the pool is
+    // mixed by design — each owner updates their own addon) is a different case
+    // from one that answers with a single height: the first has not been asked
+    // and keeps the list this browser has always composed, the second has said
+    // there is nothing to switch to and the control stays hidden.
+    const offered = this.#offeredHeights;
+    if (Array.isArray(offered)) {
+      if (offered.length < 2) {
+        return [];
+      }
+      const priced = [{
+        height: 0,
+        label: this.#autoEffectiveHeight > 0 ? `Auto (${this.#autoEffectiveHeight}p)` : "Auto"
+      }];
+      for (const height of offered) {
+        priced.push({
+          height,
+          label: height === this.#sourceVideoHeight ? `${height}p (source)` : `${height}p`
+        });
+      }
+      return priced;
     }
     if (!(this.#sourceVideoHeight > 0)) {
       return [];
@@ -4999,11 +5112,10 @@ export class Loading extends StateDerivedView {
       height: 0,
       label: this.#autoEffectiveHeight > 0 ? `Auto (${this.#autoEffectiveHeight}p)` : "Auto"
     }];
-    const ladder = [2160, 1440, 1080, 720, 540, 480, 360, 240];
     // The source height itself as the top forced rung (labelled), then standard
     // rungs strictly below it. Never offer above the source (no upscaling).
     options.push({ height: this.#sourceVideoHeight, label: `${this.#sourceVideoHeight}p (source)` });
-    for (const height of ladder) {
+    for (const height of [2160, 1440, 1080, 720, 540, 480, 360, 240]) {
       if (height < this.#sourceVideoHeight) {
         options.push({ height, label: `${height}p` });
       }
