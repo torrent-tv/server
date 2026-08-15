@@ -115,6 +115,41 @@ export class TorrentSession {
   }
 
   /**
+   * Ask the proxy to have an audio track ready at a position before the player
+   * is told to change to it.
+   *
+   * The player discards the audio it holds the moment it changes track, and it
+   * cannot show a frame until the new track covers the playhead — so switching
+   * first and producing second shows the track's cold start as a spinner over a
+   * stopped picture. The same reason the quality rung above is prepared.
+   *
+   * Best effort: a track that is not ready in time is not a reason to refuse
+   * the viewer their change, it only means they wait where they would have
+   * waited anyway.
+   *
+   * @param {number} trackIndex
+   * @param {number} positionSeconds
+   * @returns {Promise<boolean>} Whether the track reported itself ready.
+   */
+  async prepareAudioTrack(trackIndex, positionSeconds) {
+    const current = this.currentTranscodeSession;
+    if (!current || !this.activeTranscodeSessions.has(current.sessionId) || !Number.isFinite(positionSeconds)) {
+      return false;
+    }
+    const { sessionId, transport } = current;
+    const path =
+      `/transcode/${encodeURIComponent(sessionId)}/a/${trackIndex}/warm` +
+      `?position=${positionSeconds.toFixed(3)}`;
+    try {
+      const response = await transport.fetch(path);
+      return response.status === 204;
+    } catch (error) {
+      console.debug("[torrent-tv] preparing the audio track failed", error);
+      return false;
+    }
+  }
+
+  /**
    * Tell the proxy where the viewer seeked to.
    *
    * The proxy cannot work this out for itself. A single seek leaves ~25
