@@ -1,3 +1,8 @@
+## 0.13.2
+
+- **New**: The branches that abandon work now say so, and say what they decided from. First pass of the rule: the warm-up that is cancelled, the reconnect that stops because the viewer cancelled or a newer attempt took over, the replaced connection that refuses to close, the stored codec hints that cannot be read or written, and the codec probe falling back from `mediaCapabilities` to `canPlayType` — which decides whether a track is copied or re-encoded, i.e. whether someone's home machine runs an encoder at all. Thirteen silent failure paths fewer (60 to 51), and the ratchet that counts them was lowered to match.
+- **New**: The transport stops dropping messages in silence. A signalling frame or a data-channel frame that cannot be parsed is a step of the connect, or a response to a request, that quietly never happened — the viewer meets it later as "no proxy answered" or as a request waiting out its whole timeout. Both now name what arrived. An ICE candidate the browser refuses is logged with the refusal instead of being assumed stale and duplicate: that assumption was never established, and a candidate refused for another reason is a path to the proxy nobody tried.
+
 ## 0.13.1
 
 - **Fix**: A later choice of audio track cancels an earlier one. Preparing a track takes seconds, so two quick picks were applied in whatever order the proxy finished them — and the earlier one, landing last, moved the sound away from what was asked for. Only one track plays, so the newest pick simply wins: this side stops waiting for the abandoned one, and the proxy stops its encoder when it is asked for the new one.

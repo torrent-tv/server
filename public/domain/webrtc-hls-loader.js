@@ -115,7 +115,13 @@ export function createWebRtcHlsLoader(transport) {
       try {
         fetchPromise = transport.fetch(path);
       } catch (syncErr) {
+        // After the abort check, not before it: a load the player itself
+        // abandoned is not a failure to report, and reporting it would put a
+        // warning in the log for every ordinary cancellation.
         if (!this._aborted) {
+          console.warn(
+            `[torrent-tv][hls-loader] the request for ${path} could not be issued: ${syncErr?.message ?? String(syncErr)}`
+          );
           callbacks.onError(
             { code: 0, text: syncErr?.message ?? String(syncErr) },
             context,

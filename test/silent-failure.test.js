@@ -1,7 +1,7 @@
 /**
  * @file No failure path may be silent.
  *
- * The rule this checks is the first half of roadmap item 11: a branch that
+ * The rule this checks is the first half of roadmap item 12: a branch that
  * ABANDONS work must record what it decided and what it decided from. The
  * expensive lesson behind it is not from this repo — proxy 2.9.126 swallowed a
  * `RangeError` in a process-wide handler and the source stopped answering for
@@ -39,20 +39,19 @@ const SILENCE_ALLOWED = new Map([
 /**
  * What is silent TODAY, per file, measured 2026-08-15: 60 catch blocks across
  * the browser's code that discard an error without a word. They are not fixed
- * in one edit — that is roadmap item 11, done in passes — but the count may
+ * in one edit — that is roadmap item 12, done in passes — but the count may
  * never grow, and every pass lowers a number here.
  */
 const SILENT_TODAY = new Map([
-  ["components/loading/loading.js", 28],
+  ["components/loading/loading.js", 23],
   ["domain/torrent-session.js", 7],
-  ["domain/webrtc-proxy.js", 7],
+  ["domain/webrtc-proxy.js", 4],
   ["components/proxy-selector/proxy-selector.js", 4],
   ["shared/client-logger.js", 4],
   ["components/media-session/media-session.js", 3],
   ["components/player/player.js", 3],
   ["components/torrent/torrent.js", 2],
-  ["domain/net-report.js", 1],
-  ["domain/webrtc-hls-loader.js", 1]
+  ["domain/net-report.js", 1]
 ]);
 
 /**
