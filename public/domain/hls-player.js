@@ -548,7 +548,19 @@ export function createHlsPlayer(onLog) {
             reached = stage;
             console.debug(`[torrent-tv][hls] start-up: ${stage}`);
           };
-          const timeoutId = window.setTimeout(() => {
+          // Chrome does not open a MediaSource for a HIDDEN page, and hls.js
+          // waits for it to open before it will ask for anything — so a viewer
+          // who looks away while a file is loading gets no manifest, no
+          // request, and this timeout, while a viewer who watches the screen
+          // gets a film. Measured 2026-08-15 in a hidden tab: `sourceopen`
+          // never fires, whatever `preload` says (`metadata`, `auto` and `none`
+          // all leave the source `closed`).
+          //
+          // So the clock does not run while nobody is looking. It starts when
+          // the page is shown, which is also the first moment the browser will
+          // do any of this work.
+          let timeoutId = 0;
+          const startTimeout = () => {
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
             const media = videoElement instanceof HTMLVideoElement ? videoElement : null;
@@ -559,12 +571,34 @@ export function createHlsPlayer(onLog) {
               `error=${media?.error?.code ?? "-"} inDocument=${media ? document.contains(media) : "-"} ` +
               `url=${manifestUrl.slice(manifestUrl.lastIndexOf("/") + 1)}`
             );
+            document.removeEventListener("visibilitychange", onVisibilityChange);
             reject(new Error("HLS manifest parsing timed out."));
-          }, 10_000);
+          };
+          const armTimeout = () => {
+            window.clearTimeout(timeoutId);
+            timeoutId = window.setTimeout(startTimeout, 10_000);
+          };
+          const onVisibilityChange = () => {
+            if (document.hidden) {
+              // Nothing can progress now; stop counting against it.
+              window.clearTimeout(timeoutId);
+              console.debug("[torrent-tv][hls] page hidden — the browser will not open a media source; waiting");
+              return;
+            }
+            console.debug("[torrent-tv][hls] page shown — start-up can proceed");
+            armTimeout();
+          };
+          document.addEventListener("visibilitychange", onVisibilityChange);
+          if (!document.hidden) {
+            armTimeout();
+          } else {
+            console.debug("[torrent-tv][hls] start-up begins on a hidden page; the clock waits for it to be shown");
+          }
 
           const onManifestParsed = () => {
             noteStage("manifest parsed");
             window.clearTimeout(timeoutId);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
             manifestReady = true;
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
@@ -585,6 +619,7 @@ export function createHlsPlayer(onLog) {
             }
             console.error("[torrent-tv][hls] fatal error", data?.details, data);
             window.clearTimeout(timeoutId);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
             const details = typeof data?.details === "string" ? data.details : "unknown";
