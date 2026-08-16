@@ -1,3 +1,7 @@
+## 0.12.6
+
+- **Fix**: An audio track that was not made ready in time is not switched to. The player discards the audio it holds the moment it is told to change, so switching into a track nobody has produced yet leaves the picture with nothing to play — measured 2026-08-15: a track that answered "not ready" after 14.4 s was switched to anyway, and the viewer watched **48 seconds** of spinner. The rule is now the one a quality change already follows: keep what is playing, put the menu back where it was, and say the track was not ready.
+
 ## 0.12.5
 
 - **New**: The start-up records how long the browser took to open the media source, and what the element looked like when it was asked to: its box, its computed display and visibility, and the page's. Measured 2026-08-15 on one machine and one build, that attach took 3-5 ms in most sessions and **13.2 s** in one, and nothing recorded said what the difference was.

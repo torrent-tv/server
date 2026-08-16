@@ -3724,6 +3724,9 @@ export class Loading extends StateDerivedView {
    * @param {CustomEvent} event
    */
   #onSelectAudioTrack = async (event) => {
+    // Whether the track was made ready before the switch. A track that is not
+    // ready is not switched to.
+    let ready = true;
     const detail = event instanceof CustomEvent ? event.detail : null;
     const trackIndex = Number(detail?.trackIndex);
     if (!Number.isInteger(trackIndex) || trackIndex < 0) {
@@ -3752,11 +3755,23 @@ export class Loading extends StateDerivedView {
           ? this.#videoElement.currentTime
           : 0;
       const readyAt = Date.now();
-      const ready = await this.#session.prepareAudioTrack(trackIndex, playhead);
+      ready = await this.#session.prepareAudioTrack(trackIndex, playhead);
       this.#logEvt(
         `audio track ${trackIndex} ${ready ? "is ready" : "was not ready in time"} ` +
         `after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
       );
+    }
+    // A track that was not made ready in time is not switched to. The player
+    // discards the audio it holds the moment it is told to change, so switching
+    // into a track nobody has produced yet leaves the picture with nothing to
+    // play: measured 2026-08-15, a track that answered "not ready" after 14.4 s
+    // was switched to anyway and the viewer watched **48 seconds** of spinner.
+    // The rule is the one a quality change already follows — keep what is
+    // playing, put the menu back, and say the track was not ready.
+    if (ready === false) {
+      this.#logEvt(`audio track ${trackIndex} was not ready; staying on ${this.#selectedAudioTrackIndex}`);
+      this.#publishAudioTracks();
+      return;
     }
     if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
       // What the PLAYER settled on, not what was asked for. Assigning a track
@@ -5176,7 +5191,11 @@ export class Loading extends StateDerivedView {
         }));
       }
       // One rung left to switch between is no choice at all, and the control
-      // hides itself rather than showing a menu of one.
+      // hides itself rather than showing a menu of one. What must never happen
+      // is arriving here through a WRONG refusal — on 2026-08-15 a host had
+      // learned impossible costs, refused every re-encoded rung, and the menu
+      // vanished with them. That is fixed where it belongs, in what the proxy
+      // offers (2.21.1), not by showing a menu with nothing in it.
       return [];
     }
     // Without variants, quality changes by re-opening the session — and the
