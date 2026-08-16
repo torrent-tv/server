@@ -1,3 +1,10 @@
+## 0.13.1
+
+- **Fix**: A later choice of audio track cancels an earlier one. Preparing a track takes seconds, so two quick picks were applied in whatever order the proxy finished them — and the earlier one, landing last, moved the sound away from what was asked for. Only one track plays, so the newest pick simply wins: this side stops waiting for the abandoned one, and the proxy stops its encoder when it is asked for the new one.
+- **Fix**: A track that is not ready says so ON SCREEN, not only in the log. The menu snapping back with no word for it reads as the player ignoring the viewer; the quality path has said this since 0.9.5.
+- **Fix**: "This proxy cannot prepare a track" is no longer treated as "the track is not ready". A 404 — an older proxy, or a stream whose audio is not published separately — used to forbid every audio change for the rest of the session; it now takes the path that rebuilds the session, which is what has always worked there.
+- **Fix**: The long-task reading collects what is still queued before it disconnects, and says "unmeasured" where the browser cannot report long tasks at all. `observe()` does not throw for an entry type it does not know, so Safari and Firefox were reporting an idle main thread they had never looked at — and the task most likely to be dropped on disconnect is the one that ended just before the attach, which is exactly what is being hunted.
+
 ## 0.13.0
 
 - **New**: The point to start from can be named while the film is still loading. Someone returning to a half-watched film opens the torrent and says where to begin, and that becomes the session's START rather than a seek performed after the beginning has been produced — the double wait this removes was measured today: dragging the player's own scrubber during the wait changed nothing at all and playback began at `currentTime=0.0`. The control appears in the waiting interface, spans the film's real length (known from the plan long before a frame exists), and both sides are told: the proxy moves its encoder there, and the player is pointed at the same place.

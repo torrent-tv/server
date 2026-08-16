@@ -157,6 +157,7 @@ export class Loading extends StateDerivedView {
     // the buffer and stop the picture, which is worse than the quality the
     // viewer already has.
     /** @param {number} height */
+    audioNotReady: "That soundtrack is not ready yet — still playing the one you had.",
     qualityNotReady: (height) =>
       `${height}p isn't ready yet — still playing the current quality. Try again in a moment.`,
     // Shown INSTEAD of failing once the ordinary wait has been exhausted. There
@@ -360,6 +361,12 @@ export class Loading extends StateDerivedView {
    * happen to be ready — not the order they were made.
    */
   #qualityPickSeq = 0;
+  /**
+   * Which audio pick is the viewer's latest. Preparing a track takes seconds,
+   * and only one plays — so a later pick cancels an earlier one rather than
+   * queueing behind it.
+   */
+  #audioPickSeq = 0;
   /**
    * The height automatic quality is producing right now, as reported by the
    * proxy. Zero when unknown or when the video is copied — then nothing is
@@ -3827,6 +3834,14 @@ export class Loading extends StateDerivedView {
     // Whether the track was made ready before the switch. A track that is not
     // ready is not switched to.
     let ready = true;
+    // The viewer's LAST word wins. Preparing a track takes seconds, so two
+    // quick picks would otherwise be applied in the order the proxy happened to
+    // finish them — and the earlier one, landing last, would move the sound
+    // away from what was asked for. Only one track plays, so a later pick
+    // simply cancels the earlier: the proxy stops the abandoned track's encoder
+    // when it is asked for the new one, and this side stops waiting for it.
+    const pick = (this.#audioPickSeq ?? 0) + 1;
+    this.#audioPickSeq = pick;
     const detail = event instanceof CustomEvent ? event.detail : null;
     const trackIndex = Number(detail?.trackIndex);
     if (!Number.isInteger(trackIndex) || trackIndex < 0) {
@@ -3855,11 +3870,19 @@ export class Loading extends StateDerivedView {
           ? this.#videoElement.currentTime
           : 0;
       const readyAt = Date.now();
-      ready = await this.#session.prepareAudioTrack(trackIndex, playhead);
+      const answer = await this.#session.prepareAudioTrack(trackIndex, playhead);
+      // Only "not-ready" refuses. "unsupported" means this proxy cannot prepare
+      // tracks at all — older than 2.14.0, or a stream that does not publish
+      // them separately — and there the switch has always worked by rebuilding
+      // the session, so forbidding it would take away something that works.
+      ready = answer !== "not-ready";
       this.#logEvt(
-        `audio track ${trackIndex} ${ready ? "is ready" : "was not ready in time"} ` +
-        `after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
+        `audio track ${trackIndex} ${answer} after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
       );
+      if (this.#audioPickSeq !== pick) {
+        this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
+        return;
+      }
     }
     // A track that was not made ready in time is not switched to. The player
     // discards the audio it holds the moment it is told to change, so switching
@@ -3869,6 +3892,10 @@ export class Loading extends StateDerivedView {
     // The rule is the one a quality change already follows — keep what is
     // playing, put the menu back, and say the track was not ready.
     if (ready === false) {
+      // Said on screen, not only in the log. A menu that snaps back with no
+      // word for it reads as the player ignoring the viewer — the quality path
+      // has said this since 0.9.5 and the audio path did not.
+      this.setStatus(Loading.MESSAGES.audioNotReady);
       this.#logEvt(`audio track ${trackIndex} was not ready; staying on ${this.#selectedAudioTrackIndex}`);
       this.#publishAudioTracks();
       return;
