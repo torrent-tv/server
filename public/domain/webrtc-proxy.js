@@ -119,6 +119,14 @@ export class WebRtcProxy {
   /** @type {WebSocket | null} */
   #ws = null;
   /**
+   * How many remote candidates this connection has refused. Only the count is
+   * kept: the lines themselves are capped, because one bad `sdpMid` refuses
+   * every candidate that follows.
+   */
+  #candidateRefusals = 0;
+  /** How many refusals are written before only the count is kept. */
+  static #MAX_CANDIDATE_REFUSAL_LINES = 3;
+  /**
    * Pending fetch and ping entries keyed by requestId (or `ping:{id}`).
    * @type {Map<string, PendingEntry>}
    */
@@ -285,7 +293,19 @@ export class WebRtcProxy {
    */
   async #onSignalMessage(raw, settle) {
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try {
+      msg = JSON.parse(raw);
+    } catch (error) {
+      // A signalling message that cannot be read is a step of the connect that
+      // silently did not happen, and the viewer meets it later as "no proxy
+      // answered". Say what arrived — truncated, because a malformed frame can
+      // be any size at all.
+      console.warn(
+        `[torrent-tv][signal] a signalling message could not be parsed (${error instanceof Error ? error.message : String(error)}): ` +
+        `${String(raw).slice(0, 200)}`
+      );
+      return;
+    }
 
     if (msg.type === "session") {
       // Record the session id and hand it to the log forwarder so browser logs
@@ -358,8 +378,30 @@ export class WebRtcProxy {
       }
       try {
         await this.#pc.addIceCandidate(c);
-      } catch {
-        // Stale or duplicate candidate — safe to ignore.
+      } catch (error) {
+        // Usually stale or duplicate — but that is a guess, and a candidate
+        // refused for some other reason is a path to the proxy that was never
+        // tried. Name what was refused instead of asserting why.
+        //
+        // Through the same privacy-safe summary every other candidate line
+        // uses: the raw string carries the proxy owner's home IP and port, and
+        // these lines are forwarded to the server and kept in its log. In a
+        // pool of strangers' machines that is not ours to record.
+        //
+        // A refusal is rarely alone — a mismatched mid or a closed connection
+        // refuses every candidate that follows, and with predicted ports there
+        // can be eighteen of them — so only the first few are written, and the
+        // rest are counted. The forwarder's buffer is 500 lines; a burst that
+        // fills it discards the lines saying why the connect failed.
+        this.#candidateRefusals += 1;
+        if (this.#candidateRefusals <= WebRtcProxy.#MAX_CANDIDATE_REFUSAL_LINES) {
+          console.debug(
+            `[torrent-tv][ice] candidate refused (${error instanceof Error ? error.message : String(error)}): ` +
+            `${WebRtcProxy.#describeCandidate(c.candidate)}`
+          );
+        } else if (this.#candidateRefusals === WebRtcProxy.#MAX_CANDIDATE_REFUSAL_LINES + 1) {
+          console.debug("[torrent-tv][ice] further candidate refusals on this connection are not being written");
+        }
       }
     }
   }
@@ -480,7 +522,18 @@ export class WebRtcProxy {
     }
 
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try {
+      msg = JSON.parse(raw);
+    } catch (error) {
+      // Same rule as the signalling channel above: a frame dropped here is a
+      // response nobody will ever match to its request, and the request then
+      // waits out its whole timeout with no explanation.
+      console.warn(
+        `[torrent-tv][dc] a data-channel message could not be parsed (${error instanceof Error ? error.message : String(error)}): ` +
+        `${String(raw).slice(0, 200)}`
+      );
+      return;
+    }
 
     // Ping/pong RTT measurement.
     if (msg.type === "pong") {

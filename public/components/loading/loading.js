@@ -1872,11 +1872,17 @@ export class Loading extends StateDerivedView {
     void (async () => {
       try {
         const transport = await this.#acquireTransport();
+        // The ordinary way this ends: the viewer picked a file while the warm-up
+        // was still connecting, so a newer attempt owns the pipeline. Said out
+        // loud because the silence otherwise reads as a proxy that ignored the
+        // request — and the two are indistinguishable in the log.
         if (epoch !== this.#playbackEpoch) {
+          this.#logEvt(`warm-up abandoned before registering: a newer attempt began (file ${fileIndex ?? "-"})`);
           return;
         }
         const sourceKey = await this.#session.registerSourceOnProxy(transport);
         if (epoch !== this.#playbackEpoch) {
+          this.#logEvt(`warm-up abandoned after registering: a newer attempt began (file ${fileIndex ?? "-"})`);
           return;
         }
         const response = await transport.fetch(`/api/sources/${sourceKey}/warm`, {
@@ -1887,6 +1893,11 @@ export class Loading extends StateDerivedView {
         this.#logEvt(`warm-up requested (${response.ok ? "accepted" : `refused ${response.status}`})`);
       } catch (error) {
         if (this.#isAbortError(error)) {
+          // Abandoned work says so. An aborted warm-up is ordinary — the viewer
+          // moved on before the swarm answered — but a warm-up that never
+          // happened and never explained itself reads afterwards as a proxy
+          // that ignored the request.
+          this.#logEvt("warm-up abandoned: the attempt was cancelled");
           return;
         }
         this.#logEvt(`warm-up skipped: ${error instanceof Error ? error.message : String(error)}`);
@@ -3116,8 +3127,16 @@ export class Loading extends StateDerivedView {
     if (this.#proxy && this.#proxy !== proxy) {
       try {
         this.#proxy.close();
-      } catch {
-        // Already gone — the point was that it is not left open.
+      } catch (error) {
+        // Already gone — the point was that it is not left open. Said out loud
+        // all the same: a connection that refuses to close is exactly the shape
+        // of the leak this block exists to prevent, and it kept its channels,
+        // its keepalives and its ICE alive on both machines when it happened.
+        console.debug(
+          `[torrent-tv][transport] the replaced connection would not close ` +
+          `(sig=${this.#proxy?.signalSessionId ?? "-"} proxy=${this.#proxy?.proxyId ?? "-"}): ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
     // Surface a mid-playback loss of this connection (auto-reconnect flow). A
@@ -3340,8 +3359,12 @@ export class Loading extends StateDerivedView {
         this.#directPlaybackHints.set(key, { updatedAt, directSupported });
       }
       this.#trimDirectPlaybackHints();
-    } catch (_error) {
-      // Best effort cache; ignore malformed storage.
+    } catch (error) {
+      // The cache is best-effort, but a cache that quietly never loads means
+      // every open re-probes the codecs and nothing says why.
+      console.debug(
+        `[torrent-tv][codec] stored playback hints could not be read (${error instanceof Error ? error.message : String(error)}); starting from none`
+      );
     }
   }
 
@@ -3352,8 +3375,13 @@ export class Loading extends StateDerivedView {
     try {
       const payload = JSON.stringify(Array.from(this.#directPlaybackHints.entries()));
       window.localStorage.setItem(DIRECT_PLAYBACK_HINTS_STORAGE_KEY, payload);
-    } catch (_error) {
-      // Best effort cache; ignore storage issues.
+    } catch (error) {
+      // Usually a full or refused storage (private windows refuse writes).
+      // Worth a word: the effect is that codec probing never gets cheaper, and
+      // that is otherwise invisible.
+      console.debug(
+        `[torrent-tv][codec] playback hints could not be stored (${error instanceof Error ? error.message : String(error)})`
+      );
     }
   }
 
@@ -4030,6 +4058,7 @@ export class Loading extends StateDerivedView {
 
     for (let attempt = 1; attempt <= RECONNECT_TOTAL_ATTEMPTS; attempt += 1) {
       if (this.#cancelRequested) {
+        this.#logEvt(`reconnect abandoned before attempt ${attempt}: the viewer cancelled`);
         return;
       }
       if (attempt === 2) {
@@ -4041,6 +4070,7 @@ export class Loading extends StateDerivedView {
         }
         await this.#waitForOnline(RECONNECT_ONLINE_WAIT_MS);
         if (this.#cancelRequested) {
+          this.#logEvt(`reconnect abandoned while waiting for the network: the viewer cancelled (attempt ${attempt})`);
           return;
         }
       }
@@ -4085,6 +4115,18 @@ export class Loading extends StateDerivedView {
         return;
       } catch (error) {
         if (this.#isAbortError(error) || this.#cancelRequested) {
+          // A reconnect that stops here leaves the viewer looking at whatever
+          // was on screen, so it must be findable afterwards: the two reasons
+          // need opposite readings — the viewer gave up, or the attempt was
+          // superseded by a newer one.
+          // What is KNOWN, not a verdict about why. An abort here has several
+          // sources — the viewer, a newer attempt, the transport's own signal —
+          // and naming one of them is how a log sends the next reader after a
+          // race that never happened.
+          this.#logEvt(
+            `reconnect abandoned: cancelled=${this.#cancelRequested} ` +
+            `error=${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
+          );
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
@@ -5463,8 +5505,16 @@ export class Loading extends StateDerivedView {
         if (result && typeof result.supported === "boolean") {
           return result.supported;
         }
-      } catch (_error) {
-        // Ignore and fall back to canPlayType path.
+      } catch (error) {
+        // Which path decided the answer, and why the better one did not. This
+        // choice decides whether a track is copied or re-encoded, i.e. whether
+        // someone's home machine runs an encoder for this viewer at all — a
+        // silent fall-back to `canPlayType` hides the fact that the precise
+        // answer was never available.
+        console.debug(
+          `[torrent-tv][codec] mediaCapabilities declined to answer for audio ${contentType} ` +
+          `(${error instanceof Error ? error.message : String(error)}); falling back to canPlayType`
+        );
       }
     }
     return null;
@@ -5499,8 +5549,16 @@ export class Loading extends StateDerivedView {
         if (result && typeof result.supported === "boolean") {
           return result.supported;
         }
-      } catch (_error) {
-        // Ignore and fall back to canPlayType path.
+      } catch (error) {
+        // Which path decided the answer, and why the better one did not. This
+        // choice decides whether a track is copied or re-encoded, i.e. whether
+        // someone's home machine runs an encoder for this viewer at all — a
+        // silent fall-back to `canPlayType` hides the fact that the precise
+        // answer was never available.
+        console.debug(
+          `[torrent-tv][codec] mediaCapabilities declined to answer for video ${contentType} ` +
+          `(${error instanceof Error ? error.message : String(error)}); falling back to canPlayType`
+        );
       }
     }
     return null;
