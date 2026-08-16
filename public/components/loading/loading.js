@@ -329,6 +329,15 @@ export class Loading extends StateDerivedView {
    * @type {number}
    */
   #playbackEpoch = 0;
+  /**
+   * Until when a `waiting` from the element belongs to an audio track the
+   * viewer has just changed rather than to a stall worth a spinner. The player
+   * drops the audio it holds and refetches from the picture, which took 2.75 s
+   * measured on the addon host with the picture never stopping.
+   *
+   * @type {number}
+   */
+  #audioSwitchGraceUntil = 0;
   /** @type {number} Viewer-chosen audio track (type-relative; 0 = default). */
   #selectedAudioTrackIndex = 0;
   /**
