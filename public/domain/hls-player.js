@@ -563,13 +563,15 @@ export function createHlsPlayer(onLog) {
           const startTimeout = () => {
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
+            stopWatchingTasks();
             const media = videoElement instanceof HTMLVideoElement ? videoElement : null;
             console.warn(
               `[torrent-tv][hls] start-up stopped at "${reached}" — ` +
               `readyState=${media?.readyState ?? "-"} networkState=${media?.networkState ?? "-"} ` +
               `src=${media?.src ? (media.src.startsWith("blob:") ? "blob" : "url") : "none"} ` +
               `error=${media?.error?.code ?? "-"} inDocument=${media ? document.contains(media) : "-"} ` +
-              `url=${manifestUrl.slice(manifestUrl.lastIndexOf("/") + 1)}`
+              `url=${manifestUrl.slice(manifestUrl.lastIndexOf("/") + 1)} ` +
+              `mainThreadBusy=${Math.round(blockedMs)}ms longestTask=${Math.round(longestTaskMs)}ms`
             );
             document.removeEventListener("visibilitychange", onVisibilityChange);
             reject(new Error("HLS manifest parsing timed out."));
@@ -687,7 +689,14 @@ export function createHlsPlayer(onLog) {
             }
           });
           instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
-            noteStage(`media attached after ${Math.round(performance.now() - attachRequestedAt)}ms`);
+            const attachTookMs = Math.round(performance.now() - attachRequestedAt);
+            stopWatchingTasks();
+            noteStage(
+              `media attached after ${attachTookMs}ms` +
+              (attachTookMs > 1000
+                ? ` — the main thread was busy ${Math.round(blockedMs)}ms of it, longest task ${Math.round(longestTaskMs)}ms`
+                : "")
+            );
             instance.loadSource(manifestUrl);
             noteStage("manifest requested");
           });
@@ -795,6 +804,37 @@ export function createHlsPlayer(onLog) {
           // browser refuse to load is media that is NOT RENDERED, so the box the
           // element occupies is recorded beside it.
           const attachRequestedAt = performance.now();
+          // What the MAIN THREAD was doing while the browser was supposed to be
+          // opening the media source. Attaching is announced on this thread, so
+          // a long task holds the announcement in the queue behind it — and
+          // that is the only candidate left for the 13.2 s attach measured on
+          // 2026-08-15 against 3-5 ms in every other session on the same build.
+          // Nothing in Chromium's documented behaviour defers a MediaSource:
+          // the one documented deferral is `loading="lazy"`, which this element
+          // does not use, and a hidden page attached in 5 ms in the field.
+          let longestTaskMs = 0;
+          let blockedMs = 0;
+          let taskObserver = null;
+          try {
+            taskObserver = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                longestTaskMs = Math.max(longestTaskMs, entry.duration);
+                blockedMs += entry.duration;
+              }
+            });
+            taskObserver.observe({ entryTypes: ["longtask"] });
+          } catch (error) {
+            console.debug("[torrent-tv][hls] main-thread task reporting is unavailable here", error);
+            taskObserver = null; // the rest of the start-up still reports
+          }
+          const stopWatchingTasks = () => {
+            try {
+              taskObserver?.disconnect();
+            } catch (error) {
+              console.debug("[torrent-tv][hls] task observer was already gone", error);
+            }
+            taskObserver = null;
+          };
           const box = videoElement.getBoundingClientRect();
           const shownAs = window.getComputedStyle(videoElement);
           console.debug(
