@@ -1,3 +1,8 @@
+## 0.12.2
+
+- **Fix**: The application loads again. 0.12.1 declared a private field inside a method body instead of the class, so `loading.js` stopped parsing and every viewer got a page whose playback code never ran — a torrent waited twenty-five seconds and failed, with nothing in the proxy's log because no request ever left the browser.
+- **New**: Every script served to the browser is checked for parsing. Neither the linter nor the tests could see this: the rules do not cover an undeclared private field, and no test imports a file that needs a DOM. Asking whether a file parses costs milliseconds and is exactly what the browser does first.
+
 ## 0.12.1
 
 - **Fix**: Changing the audio track no longer shows a spinner. The player throws away the audio it holds and refetches from the picture's position, so the element reports itself as waiting for as long as the first piece of the new track takes — 2.75 s measured on the addon host, with the picture never stopping. A spinner over a moving picture reports a fault that is not there. The wait is not hidden indefinitely: one outliving the switch is reported as usual.
