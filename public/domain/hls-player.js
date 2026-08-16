@@ -571,7 +571,9 @@ export function createHlsPlayer(onLog) {
               `src=${media?.src ? (media.src.startsWith("blob:") ? "blob" : "url") : "none"} ` +
               `error=${media?.error?.code ?? "-"} inDocument=${media ? document.contains(media) : "-"} ` +
               `url=${manifestUrl.slice(manifestUrl.lastIndexOf("/") + 1)} ` +
-              `mainThreadBusy=${Math.round(blockedMs)}ms longestTask=${Math.round(longestTaskMs)}ms`
+              (canWatchTasks
+                ? `mainThreadBusy=${Math.round(blockedMs)}ms longestTask=${Math.round(longestTaskMs)}ms`
+                : "mainThreadBusy=unmeasured")
             );
             document.removeEventListener("visibilitychange", onVisibilityChange);
             reject(new Error("HLS manifest parsing timed out."));
@@ -599,6 +601,7 @@ export function createHlsPlayer(onLog) {
 
           const onManifestParsed = () => {
             noteStage("manifest parsed");
+            stopWatchingTasks();
             window.clearTimeout(timeoutId);
             document.removeEventListener("visibilitychange", onVisibilityChange);
             manifestReady = true;
@@ -620,6 +623,7 @@ export function createHlsPlayer(onLog) {
               return;
             }
             console.error("[torrent-tv][hls] fatal error", data?.details, data);
+            stopWatchingTasks();
             window.clearTimeout(timeoutId);
             document.removeEventListener("visibilitychange", onVisibilityChange);
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
@@ -694,7 +698,9 @@ export function createHlsPlayer(onLog) {
             noteStage(
               `media attached after ${attachTookMs}ms` +
               (attachTookMs > 1000
-                ? ` — the main thread was busy ${Math.round(blockedMs)}ms of it, longest task ${Math.round(longestTaskMs)}ms`
+                ? (canWatchTasks
+                  ? ` — the main thread was busy ${Math.round(blockedMs)}ms of it, longest task ${Math.round(longestTaskMs)}ms`
+                  : " — this browser does not report long tasks, so what the main thread was doing is unmeasured")
                 : "")
             );
             instance.loadSource(manifestUrl);
@@ -815,20 +821,36 @@ export function createHlsPlayer(onLog) {
           let longestTaskMs = 0;
           let blockedMs = 0;
           let taskObserver = null;
+          // Whether this browser can answer the question at all. `observe()`
+          // does NOT throw for an entry type it does not know — it quietly
+          // observes nothing — so without this check Safari and Firefox would
+          // report "the main thread was idle" when the truth is "not measured".
+          const canWatchTasks = typeof PerformanceObserver === "function" &&
+            Array.isArray(PerformanceObserver.supportedEntryTypes) &&
+            PerformanceObserver.supportedEntryTypes.includes("longtask");
           try {
-            taskObserver = new PerformanceObserver((list) => {
+            taskObserver = canWatchTasks ? new PerformanceObserver((list) => {
               for (const entry of list.getEntries()) {
                 longestTaskMs = Math.max(longestTaskMs, entry.duration);
                 blockedMs += entry.duration;
               }
-            });
-            taskObserver.observe({ entryTypes: ["longtask"] });
+            }) : null;
+            taskObserver?.observe({ entryTypes: ["longtask"] });
           } catch (error) {
             console.debug("[torrent-tv][hls] main-thread task reporting is unavailable here", error);
             taskObserver = null; // the rest of the start-up still reports
           }
           const stopWatchingTasks = () => {
             try {
+              // The entries still queued are collected FIRST. `disconnect()`
+              // drops whatever has not been delivered yet, and a long task that
+              // ended just before the attach was announced — precisely the one
+              // this is looking for — is the likeliest to be sitting in that
+              // queue.
+              for (const entry of taskObserver?.takeRecords() ?? []) {
+                longestTaskMs = Math.max(longestTaskMs, entry.duration);
+                blockedMs += entry.duration;
+              }
               taskObserver?.disconnect();
             } catch (error) {
               console.debug("[torrent-tv][hls] task observer was already gone", error);

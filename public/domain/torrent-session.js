@@ -129,7 +129,7 @@ export class TorrentSession {
    *
    * @param {number} trackIndex
    * @param {number} positionSeconds
-   * @returns {Promise<boolean>} Whether the track reported itself ready.
+   * @returns {Promise<"ready" | "not-ready" | "unsupported">} Whether the track reported itself ready.
    */
   async prepareAudioTrack(trackIndex, positionSeconds) {
     const current = this.currentTranscodeSession;
@@ -142,10 +142,19 @@ export class TorrentSession {
       `?position=${positionSeconds.toFixed(3)}`;
     try {
       const response = await transport.fetch(path);
-      return response.status === 204;
+      if (response.status === 204) {
+        return "ready";
+      }
+      // "Not ready in time" and "this proxy cannot prepare a track at all" are
+      // different answers and were both reported as false, which then refused
+      // the switch for the rest of the session. A 404 is the second: an older
+      // proxy with no such route, or a stream whose audio is not published
+      // separately. Then the switch should proceed the old way rather than be
+      // forbidden.
+      return response.status === 404 ? "unsupported" : "not-ready";
     } catch (error) {
       console.debug("[torrent-tv] preparing the audio track failed", error);
-      return false;
+      return "unsupported";
     }
   }
 
