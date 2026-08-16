@@ -114,6 +114,20 @@
     pointer-events: none;
   }
 
+  /* The container above refuses the pointer so it never swallows a gesture
+     meant for the player. A CONTROL inside it must take one back, or it can
+     only be reached with the keyboard — which is what happened to the
+     start-point slider and the retry button: both were unusable by mouse or
+     touch, silently. */
+  .loading__control {
+    pointer-events: auto;
+  }
+
+  #loading__position {
+    width: min(80%, 32rem);
+    accent-color: currentColor;
+  }
+
   /* The spinner — the "growing arc" loader (css-loaders l20), recoloured white
      to match media-chrome. A pseudo-element, so it is independent of the
      peer-count child. Keyframes are top-level (below). */

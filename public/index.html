@@ -73,6 +73,20 @@
              time, which is stated here in words. -->
         <div id="player__buffering" slot="centered-chrome" role="status" aria-live="polite" noautohide hidden>
           <span id="player__buffering-peers"></span>
+          <!-- Where to start, stated while the first frame is still being made.
+               Someone returning to a half-watched film should not have to wait
+               for the beginning to be produced and then wait again for a seek:
+               the length is known from the plan, so the point can be named
+               before anything is playable. Hidden until a length is known. -->
+          <input
+            id="loading__position"
+            class="loading__control"
+            type="range"
+            min="0"
+            step="1"
+            value="0"
+            aria-label="Start from this point"
+            hidden>
           <button id="loading__action" class="loading__control" type="button" hidden></button>
         </div>
 
@@ -111,8 +125,14 @@
           <media-play-button></media-play-button>
           <media-mute-button></media-mute-button>
           <media-volume-range></media-volume-range>
-          <media-time-display showduration></media-time-display>
-          <media-time-range></media-time-range>
+          <!-- Both are hidden until a stream exists. Before that the element's
+               duration is whatever it happens to hold — a viewer opening a
+               ninety-minute film was shown a scrubber eight seconds long
+               (field 2026-08-15) — and a scrubber that lies is worse than no
+               scrubber. While the wait lasts, the control that knows the real
+               length is the one in the waiting interface. -->
+          <media-time-display id="player__time-display" showduration hidden></media-time-display>
+          <media-time-range id="player__time-range" hidden></media-time-range>
           <media-captions-menu-button></media-captions-menu-button>
           <media-settings-menu-button id="player__settings-button" hidden></media-settings-menu-button>
           <button

@@ -127,6 +127,20 @@ export class Player extends StateDerivedView {
     // the spinner is not — it is measured (peers, speed) and keeps arriving on
     // PLAYER:SET_BUFFERING.
     this.#buffering.hidden = !(belongsOnScreen && isWaiting(state));
+    // The scrubber and the clock describe a timeline that exists only once a
+    // stream does. Shown during the wait they describe the element's own
+    // scraps: a ninety-minute film was offered an eight-second scrubber
+    // (2026-08-15). While waiting, the control with the real length lives in
+    // the waiting interface.
+    const timeline = document.querySelector("#player__time-range");
+    const clock = document.querySelector("#player__time-display");
+    const timelineExists = belongsOnScreen && !isWaiting(state);
+    if (timeline instanceof HTMLElement) {
+      timeline.hidden = !timelineExists;
+    }
+    if (clock instanceof HTMLElement) {
+      clock.hidden = !timelineExists;
+    }
     this.#measureWhileWaiting(belongsOnScreen && isWaiting(state));
     this.#applyMediaIntent(state);
   }
