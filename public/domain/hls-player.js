@@ -537,13 +537,33 @@ export function createHlsPlayer(onLog) {
         };
 
         await new Promise((resolve, reject) => {
+          // What the start-up actually got through. A manifest that times out
+          // says only that nothing arrived; these say WHERE it stopped — and on
+          // 2026-08-15 that was the one thing nobody could tell: the browser
+          // was handed a master playlist, no request for it ever reached the
+          // proxy, and the log held nothing between "attaching" and the
+          // timeout.
+          let reached = "attach requested";
+          const noteStage = (stage) => {
+            reached = stage;
+            console.debug(`[torrent-tv][hls] start-up: ${stage}`);
+          };
           const timeoutId = window.setTimeout(() => {
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
+            const media = videoElement instanceof HTMLVideoElement ? videoElement : null;
+            console.warn(
+              `[torrent-tv][hls] start-up stopped at "${reached}" — ` +
+              `readyState=${media?.readyState ?? "-"} networkState=${media?.networkState ?? "-"} ` +
+              `src=${media?.src ? (media.src.startsWith("blob:") ? "blob" : "url") : "none"} ` +
+              `error=${media?.error?.code ?? "-"} inDocument=${media ? document.contains(media) : "-"} ` +
+              `url=${manifestUrl.slice(manifestUrl.lastIndexOf("/") + 1)}`
+            );
             reject(new Error("HLS manifest parsing timed out."));
           }, 10_000);
 
           const onManifestParsed = () => {
+            noteStage("manifest parsed");
             window.clearTimeout(timeoutId);
             manifestReady = true;
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
@@ -632,7 +652,9 @@ export function createHlsPlayer(onLog) {
             }
           });
           instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
+            noteStage("media attached");
             instance.loadSource(manifestUrl);
+            noteStage("manifest requested");
           });
           // The two events that end the MediaSource, and nothing else does —
           // read off the vendored hls.js, `endOfStream()` is called on
@@ -731,6 +753,14 @@ export function createHlsPlayer(onLog) {
           instance.on(HlsClass.Events.ERROR, onError);
 
           // Attach media last — may synchronously fire MEDIA_ATTACHED in HLS.js v1+.
+          // The element as it is handed over. A MediaSource that never opens
+          // leaves the whole start-up silent, and these are the values that
+          // would say why.
+          console.debug(
+            `[torrent-tv][hls] attaching media: readyState=${videoElement.readyState} ` +
+            `networkState=${videoElement.networkState} hasSrc=${Boolean(videoElement.src)} ` +
+            `inDocument=${document.contains(videoElement)}`
+          );
           instance.attachMedia(videoElement);
         });
 

@@ -28,6 +28,10 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
   - `domain/torrent-session.js` — proxy registration, playback plan, HLS start.
     Seeking is server-side (no client-side session restart).
   - `domain/hls-player.js` — hls.js wrapper; HLS errors go to console only.
+  - `domain/waiting-signal.js` — the rule that decides whether a `waiting` from
+    the media element is a stall the viewer must be told about, or some other
+    track being refilled while the picture keeps running (changing a separately
+    published audio track). Pure, tested, and the source of `FRAME_BLOCKED`.
   - `domain/webrtc-proxy.js` — WebRTC signalling + PNA health pre-flight
     (the intentional `http://<lan>:9090/healthz` fetch; see parent CLAUDE.md).
   - `components/player/player.js` — player UI; hides the playlist button when
