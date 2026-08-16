@@ -1,3 +1,7 @@
+## 0.12.7
+
+- **New**: While the browser is opening the media source, the main thread is watched, and a slow attach reports how much of the wait it spent busy and what its longest task was. Attaching is announced ON that thread, so a long task holds the announcement behind it — which is the last standing candidate for the 13.2 s attach measured on 2026-08-15 against 3-5 ms in every other session of the same build. Researched first rather than guessed: the only deferral Chromium documents for media loading is `loading="lazy"`, which this element does not use, and the earlier explanation (a hidden page) was disproved in the field by an attach that took 5 ms on one.
+
 ## 0.12.6
 
 - **Fix**: An audio track that was not made ready in time is not switched to. The player discards the audio it holds the moment it is told to change, so switching into a track nobody has produced yet leaves the picture with nothing to play — measured 2026-08-15: a track that answered "not ready" after 14.4 s was switched to anyway, and the viewer watched **48 seconds** of spinner. The rule is now the one a quality change already follows: keep what is playing, put the menu back where it was, and say the track was not ready.
