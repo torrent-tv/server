@@ -687,7 +687,7 @@ export function createHlsPlayer(onLog) {
             }
           });
           instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
-            noteStage("media attached");
+            noteStage(`media attached after ${Math.round(performance.now() - attachRequestedAt)}ms`);
             instance.loadSource(manifestUrl);
             noteStage("manifest requested");
           });
@@ -788,13 +788,21 @@ export function createHlsPlayer(onLog) {
           instance.on(HlsClass.Events.ERROR, onError);
 
           // Attach media last — may synchronously fire MEDIA_ATTACHED in HLS.js v1+.
-          // The element as it is handed over. A MediaSource that never opens
-          // leaves the whole start-up silent, and these are the values that
-          // would say why.
+          // The element as it is handed over, and how long the browser then
+          // takes to open the media source. Measured 2026-08-15: usually 3-5 ms,
+          // once 13.2 s, and the difference is not the page being hidden — a
+          // hidden page attached in 5 ms. What the HTML specification does let a
+          // browser refuse to load is media that is NOT RENDERED, so the box the
+          // element occupies is recorded beside it.
+          const attachRequestedAt = performance.now();
+          const box = videoElement.getBoundingClientRect();
+          const shownAs = window.getComputedStyle(videoElement);
           console.debug(
             `[torrent-tv][hls] attaching media: readyState=${videoElement.readyState} ` +
             `networkState=${videoElement.networkState} hasSrc=${Boolean(videoElement.src)} ` +
-            `inDocument=${document.contains(videoElement)}`
+            `inDocument=${document.contains(videoElement)} ` +
+            `box=${Math.round(box.width)}x${Math.round(box.height)} display=${shownAs.display} ` +
+            `visibility=${shownAs.visibility} page=${document.visibilityState}`
           );
           instance.attachMedia(videoElement);
         });

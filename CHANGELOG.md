@@ -1,3 +1,8 @@
+## 0.12.5
+
+- **New**: The start-up records how long the browser took to open the media source, and what the element looked like when it was asked to: its box, its computed display and visibility, and the page's. Measured 2026-08-15 on one machine and one build, that attach took 3-5 ms in most sessions and **13.2 s** in one, and nothing recorded said what the difference was.
+- **Chore**: The reason given for 0.12.4 was wrong and is corrected here. A MediaSource *can* open on a hidden page — the field showed it 5 ms after attaching, on a page that had begun hidden — so "Chrome does not open one while hidden" was a conclusion drawn from a probe that differed from the real player in more than visibility. The 0.12.4 behaviour stands on its own merit: a viewer who looks away should not lose the film to a clock, whatever makes the browser slow to attach.
+
 ## 0.12.4
 
 - **Fix**: A viewer who looks away while a file is opening no longer gets an error instead of a film. Chrome opens a MediaSource only when the page is VISIBLE — measured 2026-08-15 in a hidden tab: the source stayed `closed`, then opened in the same millisecond the page was shown (hidden at 0 ms, shown at 2696 ms, open at 2696 ms), whatever `preload` says. hls.js waits for that before it asks for anything, so on a hidden page nothing was requested at all, the ten-second wait ran out, and the screen said "HLS manifest parsing timed out" — while a viewer watching the screen got the same build playing. The wait no longer runs while the page is hidden: it starts when the page is shown, which is the first moment the browser will do the work anyway, and both stages are logged.
