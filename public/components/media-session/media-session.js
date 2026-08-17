@@ -116,7 +116,9 @@ export class MediaSessionBridge {
     try {
       navigator.mediaSession.setActionHandler(action, handler);
     } catch {
-      // Action unsupported by this browser — ignore.
+      // silent-ok: the browser refusing an action it does not implement is the
+      // ANSWER to whether it implements it. Playback is unaffected; only the
+      // system's own media controls offer one button fewer.
     }
   }
 
@@ -170,7 +172,8 @@ export class MediaSessionBridge {
         artist: MediaSessionBridge.APP_NAME
       });
     } catch {
-      // MediaMetadata unsupported — ignore.
+      // silent-ok: as above — the title shown by the operating system's media
+      // controls is decoration over playback that continues either way.
     }
   }
 
@@ -196,7 +199,9 @@ export class MediaSessionBridge {
         playbackRate: this.#video.playbackRate || 1
       });
     } catch {
-      // Invalid state (e.g. position briefly past duration during a seek) — ignore.
+      // silent-ok: the position is rejected exactly when it is momentarily
+      // inconsistent — past the duration mid-seek — and the next update, a
+      // moment later, carries a valid one.
     }
   };
 }

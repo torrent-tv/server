@@ -1,3 +1,7 @@
+## 0.13.6
+
+- **Fix**: The start-point slider shown over the video while the first frame is being made was drawn by the browser's own default — a bare white bar with a dot, which over black video reads as a broken element rather than as something to drag. It is now drawn like the message above it: the same plate, the same width, a slim track and a round handle with room inside the plate at both extremes, and a visible focus ring. One rule per engine rather than a selector list, so no browser drops the lot over a prefix it does not know.
+
 ## 0.13.5
 
 - **Fix**: The scrubber restoration is now a complete revert, not a patch over the change that broke it. 0.13.4 left the two identifiers behind and a block that took `hidden` off both elements on every state change — work that does nothing, over markup that no longer needs naming. The control bar and the player's state handler are now identical, line for line, to what they were before the hiding was introduced. Verified in the browser: bar 1280 px, scrubber 918, clock 84, neither hidden, neither carrying an id.

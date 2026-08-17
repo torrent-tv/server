@@ -105,7 +105,9 @@ export function startNetReporter({ transport, sessionId, getBufferedAheadSec }) 
       const value = getBufferedAheadSec();
       bufferedAheadSec = Number.isFinite(value) && value > 0 ? value : 0;
     } catch {
-      // Buffer probe must never break reporting.
+      // silent-ok: the buffered figure is one field of a report whose point is
+      // the link speed beside it, and zero is a truthful reading of a buffer
+      // that cannot be read. The report still goes.
     }
     console.debug(
       `[torrent-tv] net-report link=${linkMbps.toFixed(2)}Mbps buffer=${bufferedAheadSec.toFixed(1)}s`

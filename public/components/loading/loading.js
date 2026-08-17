@@ -90,6 +90,8 @@ function buildTrackLabel(track) {
     try {
       parts.push(LANGUAGE_DISPLAY?.of(code) ?? code);
     } catch {
+      // silent-ok: a browser without a display name for this language tag says
+      // so by refusing; the tag itself is then the best label there is.
       parts.push(code);
     }
   }
@@ -454,6 +456,21 @@ export class Loading extends StateDerivedView {
    * @type {number | null}
    */
   #bufferingResumeAnchorByteStart = null;
+
+  /**
+   * Whether the source's stats have already been reported as unreadable. The
+   * poll behind them runs about once a second for as long as the viewer waits,
+   * so the condition is said on its edge and not on every tick.
+   *
+   * @type {boolean}
+   */
+  #statsUnreadable = false;
+
+  /** Same, for the two transcode-progress polls. */
+  #progressPollFailing = false;
+
+  /** Same, for the metadata poll under the waiting interface. */
+  #metadataPollFailing = false;
   /**
    * Playback position (seconds) from a shared `&currentTime=` link, applied once
    * the player is revealed and the media is seekable, then cleared. Named to
@@ -1103,13 +1120,28 @@ export class Loading extends StateDerivedView {
       if (this.#bufferingResumeAnchorByteStart === null && typeof stats?.resumeAnchorByteStart === "number") {
         this.#bufferingResumeAnchorByteStart = stats.resumeAnchorByteStart;
       }
+      // Readable again: a later failure is a new condition and is worth one
+      // more line.
+      this.#statsUnreadable = false;
       return {
         numPeers: typeof stats?.numPeers === "number" ? stats.numPeers : 0,
         downloadSpeed: typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0,
         resumeNeededBytes: typeof stats?.resumeNeededBytes === "number" ? stats.resumeNeededBytes : null,
         resumeDownloadedBytes: typeof stats?.resumeDownloadedBytes === "number" ? stats.resumeDownloadedBytes : null
       };
-    } catch {
+    } catch (error) {
+      // The peer count and the download speed are what the waiting interface
+      // shows while nothing else is known. Losing them leaves the viewer
+      // watching a spinner with no figures at all, and the reason was never
+      // recorded — so it is now, once per run of the condition rather than on
+      // every poll.
+      if (!this.#statsUnreadable) {
+        this.#statsUnreadable = true;
+        console.warn(
+          `[torrent-tv] the source's stats cannot be read: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        );
+      }
       return null;
     }
   }
@@ -1234,8 +1266,15 @@ export class Loading extends StateDerivedView {
         try {
           video.currentTime = Math.min(currentTime, video.duration - 1);
           this.#logEvt(`resume seek to ${currentTime}s`);
-        } catch {
-          // Non-seekable yet / rejected — best effort.
+        } catch (error) {
+          // The viewer asked to continue where they stopped, and this is the
+          // line that puts them there. Refused, playback starts from the
+          // beginning instead — which is exactly the complaint that made this
+          // path exist — so the refusal is named rather than swallowed.
+          console.warn(
+            `[torrent-tv] could not resume at ${currentTime}s: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+          );
         }
       }
     };
@@ -1956,7 +1995,8 @@ export class Loading extends StateDerivedView {
           displayName = dn.trim();
         }
       } catch {
-        // Keep the fallback name.
+        // silent-ok: a magnet whose query will not parse carries no display
+        // name, and the fallback is already in place.
       }
 
       this.visible = true;
@@ -2284,7 +2324,7 @@ export class Loading extends StateDerivedView {
         history.replaceState(null, "", url);
       }
     } catch {
-      // A browser that refuses (rate limit, sandboxed frame) keeps the address
+      // silent-ok: a browser that refuses (rate limit, sandboxed frame) keeps the address
       // it had; nothing about playback depends on this.
     }
   }
@@ -2419,6 +2459,8 @@ export class Loading extends StateDerivedView {
       try {
         return new TextDecoder().decode(value).trim();
       } catch {
+        // silent-ok: bytes that are not text carry no name, and "" is that
+        // answer rather than a failure to report.
         return "";
       }
     }
@@ -2426,6 +2468,7 @@ export class Loading extends StateDerivedView {
       try {
         return new TextDecoder().decode(Uint8Array.from(value)).trim();
       } catch {
+        // silent-ok: a byte array that is not text carries no name either.
         return "";
       }
     }
@@ -2977,7 +3020,8 @@ export class Loading extends StateDerivedView {
           try {
             onConnecting(running.announced);
           } catch {
-            // A status line must never break the connect it describes.
+            // silent-ok: a status line must never break the connect it
+            // describes, and the connect continues either way.
           }
         }
       }
@@ -3040,7 +3084,8 @@ export class Loading extends StateDerivedView {
         try {
           listener(proxyName);
         } catch {
-          // A status line must never break the connect it describes.
+          // silent-ok: as above — a listener that throws costs a line of text,
+          // not the connection.
         }
       }
     };
@@ -3150,7 +3195,8 @@ export class Loading extends StateDerivedView {
       try {
         window.__ttvClientLogger?.setSignalSession?.(proxy.signalSessionId);
       } catch {
-        // Log forwarder is a debugging aid — never let it break playback.
+        // silent-ok: the forwarder is a debugging aid; playback must not depend
+        // on a diagnostic being tagged.
       }
     }
     this.#proxy = proxy;
@@ -3478,6 +3524,8 @@ export class Loading extends StateDerivedView {
       try {
         name = decodeURIComponent(rawName);
       } catch {
+        // silent-ok: a name that is not valid percent-encoding is used as it
+        // stands — which is what the tracker or the viewer actually supplied.
         name = rawName;
       }
     }
@@ -3509,6 +3557,7 @@ export class Loading extends StateDerivedView {
     try {
       return LANGUAGE_DISPLAY?.of(code) ?? "";
     } catch {
+      // silent-ok: a tag this browser cannot name is shown without a name.
       return "";
     }
   }
@@ -4033,8 +4082,28 @@ export class Loading extends StateDerivedView {
 
     // Freeze fetching but keep the player and its buffer alive (Level 1). Keep
     // the transport OBJECT (swap target); only drop the dead proxy.
-    try { this.#hlsPlayer.stopLoad(); } catch { /* best-effort */ }
-    try { this.#proxy?.close(); } catch { /* best-effort */ }
+    try {
+      this.#hlsPlayer.stopLoad();
+    } catch (error) {
+      // Fetching was meant to stop here while the player keeps its buffer. If
+      // it did not, the player goes on requesting from a proxy that is gone —
+      // which reads to the viewer as a stall with no cause.
+      console.warn(
+        `[torrent-tv] could not stop loading after the transport was lost: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    try {
+      this.#proxy?.close();
+    } catch (error) {
+      // A connection that will not close is left holding its channels; the
+      // replacement then competes with it. Named, because it decides which of
+      // two connections the next request goes to.
+      console.warn(
+        `[torrent-tv] the lost transport would not close: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     this.#proxy = null;
 
     // Seamless is only possible over a live hls.js WebRTC transport with a
@@ -4504,8 +4573,17 @@ export class Loading extends StateDerivedView {
         lastProgressFetchAt = now;
         try {
           cachedProgress = await this.#session.fetchActiveTranscodeProgress();
-        } catch {
-          // Transient — keep the last known progress rather than blanking it.
+        } catch (error) {
+          // The estimate and the quality menu are built from these readings; a
+          // run of failures freezes both at their last value with no sign why.
+          // Said on the edge — this poll runs about once a second.
+          if (!this.#progressPollFailing) {
+            this.#progressPollFailing = true;
+            console.warn(
+              `[torrent-tv] the transcode progress stopped being readable: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+            );
+          }
         }
       }
       // The published reading, not a fresh one of our own — see the listener.
@@ -4643,8 +4721,16 @@ export class Loading extends StateDerivedView {
           if (!stopped && progress) {
             this.#renderTranscodeProgress(progress);
           }
-        } catch (_error) {
-          // Transient errors (session not ready yet) are ignored.
+        } catch (error) {
+          // Same readings, the other poll. Reported once per run of the
+          // condition for the same reason.
+          if (!this.#progressPollFailing) {
+            this.#progressPollFailing = true;
+            console.warn(
+              `[torrent-tv] the transcode progress poll failed: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+            );
+          }
         }
         if (stopped) {
           break;
@@ -4947,8 +5033,16 @@ export class Loading extends StateDerivedView {
               this.#updateMetadataStatus(stats);
             }
           }
-        } catch (_error) {
-          // Ignore transient errors — proxy may not be ready yet.
+        } catch (error) {
+          // The file's own metadata line under the waiting interface. Losing it
+          // leaves that line empty for the rest of the wait.
+          if (!this.#metadataPollFailing) {
+            this.#metadataPollFailing = true;
+            console.warn(
+              `[torrent-tv] the source's metadata could not be read: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+            );
+          }
         }
         if (!stopped) {
           await new Promise((resolve) => setTimeout(resolve, 2_000));
