@@ -125,14 +125,8 @@
           <media-play-button></media-play-button>
           <media-mute-button></media-mute-button>
           <media-volume-range></media-volume-range>
-          <!-- Both are hidden until a stream exists. Before that the element's
-               duration is whatever it happens to hold — a viewer opening a
-               ninety-minute film was shown a scrubber eight seconds long
-               (field 2026-08-15) — and a scrubber that lies is worse than no
-               scrubber. While the wait lasts, the control that knows the real
-               length is the one in the waiting interface. -->
-          <media-time-display id="player__time-display" showduration hidden></media-time-display>
-          <media-time-range id="player__time-range" hidden></media-time-range>
+          <media-time-display id="player__time-display" showduration></media-time-display>
+          <media-time-range id="player__time-range"></media-time-range>
           <media-captions-menu-button></media-captions-menu-button>
           <media-settings-menu-button id="player__settings-button" hidden></media-settings-menu-button>
           <button

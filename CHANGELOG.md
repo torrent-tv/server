@@ -1,3 +1,7 @@
+## 0.13.4
+
+- **Fix**: The control bar is whole again. Hiding the scrubber during the wait (0.13.0) also took away the element that carries the bar's width, so everything collapsed into a strip in the corner with the volume slider stretched across it where the scrubber should be. Measured on the restored bar: 1280 px wide with the scrubber taking 1102 of it. The fault it was avoiding — a scrubber showing the media element's own scraps before a stream exists — is smaller than a player that looks broken, and the proper fix is to give that scrubber the duration the playback plan already knows, not to remove the control.
+
 ## 0.13.3
 
 - **New**: Second pass of the rule that a branch abandoning work must say so — the session path this time. A seek the proxy was never told about (the ONE message that repositions the encoder: without it the viewer waits on segments nobody is producing while the proxy's log shows a healthy run at the old position), a keepalive the proxy is not hearing, and progress readings that stop being readable — the viewer's estimate and the quality menu are built from those, and both simply froze with nothing in the log. Each is said once per run of the condition, not on every poll: the ping goes out every thirty seconds and the readings about every one and a half.
