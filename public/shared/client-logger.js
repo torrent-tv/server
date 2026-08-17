@@ -87,6 +87,8 @@ function makeSessionId() {
     crypto.getRandomValues(a);
     return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
   } catch {
+    // silent-ok: a session id only has to be unique enough to group one page's
+    // lines; the fallback produces one, so nothing is abandoned.
     return Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
   }
 }
@@ -107,6 +109,9 @@ function renderArg(arg) {
   try {
     return JSON.stringify(arg);
   } catch {
+    // silent-ok: rendering a log argument that will not serialise is what the
+    // fallback is FOR, and complaining about it would be a log line about
+    // logging.
     return String(arg);
   }
 }
@@ -129,7 +134,9 @@ function record(level, args) {
       buffer.splice(0, buffer.length - MAX_BUFFER);
     }
   } catch {
-    // Never let logging capture break the app.
+    // silent-ok: capturing a line must never break the app it is describing,
+    // and there is nowhere to report a failure of the reporting itself —
+    // console.* here would recurse into this very function.
   }
 }
 
@@ -159,7 +166,8 @@ function flush(useBeacon = false) {
       // Best-effort: drop on failure (do NOT console.* here — would loop).
     });
   } catch {
-    // Swallow — forwarding logs must never throw.
+    // silent-ok: same as above — this IS the forwarder, so it has no channel of
+    // its own to complain through.
   }
 }
 

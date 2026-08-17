@@ -325,7 +325,9 @@ export class WebRtcProxy {
         try {
           window.__ttvClientLogger?.setSignalSession?.(this.#signalSessionId);
         } catch {
-          // Log forwarder is a debugging aid — never let it break signalling.
+          // silent-ok: the log forwarder is a debugging aid, and signalling must
+          // not fail because a diagnostic could not be tagged. Nothing is
+          // abandoned here — the session continues either way.
         }
       }
       try {
@@ -835,7 +837,9 @@ export class WebRtcProxy {
       try {
         this.#channel?.send(WebRtcProxy.#buildBodyFrame(2, requestId, null));
       } catch {
-        // Channel already gone — nothing to abort.
+        // silent-ok: the abort frame tells the proxy to stop work we no longer
+        // want, and a channel that has gone has stopped it anyway. Nothing is
+        // left to say and nothing left to do.
       }
     };
     try {

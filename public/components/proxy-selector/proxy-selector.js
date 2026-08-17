@@ -115,7 +115,16 @@ export class ProxySelector {
       const u = new URL(best.baseUrl);
       const p = parseInt(u.port, 10);
       if (p > 0 && p <= 65535) proxyLocalPort = p;
-    } catch { /* baseUrl absent/malformed — preflight is skipped */ }
+    } catch (error) {
+      // Skipping the preflight is not free: it is what prompts Chromium for
+      // the local-network permission, and without the permission a same-LAN
+      // pair opens a data channel that carries nothing and dies in five
+      // seconds. So the address that could not be read is named.
+      console.warn(
+        `[torrent-tv] no local port for the preflight — the proxy's address could not be read ` +
+        `(${error instanceof Error ? error.message : String(error)})`
+      );
+    }
 
     // Same-LAN public-only attempts get a short connect budget (hairpin
     // connects fast or never); everyone else keeps the caller's timeout.

@@ -295,6 +295,8 @@ export class Torrent extends StateDerivedView {
         bytes[index] = binary.charCodeAt(index);
       }
     } catch {
+      // silent-ok: not silent at all — the viewer is shown the error screen
+      // below, which is the loudest answer this app has.
       document.dispatchEvent(
         new CustomEvent(ERROR_EVENTS.SHOW, {
           detail: { title: "Error", description: "Could not decode torrent from URL.", backEvent: APP_EVENTS.RESET_TO_PICKER }
@@ -401,6 +403,8 @@ export class Torrent extends StateDerivedView {
         })
       );
     } catch (_error) {
+      // silent-ok: as above — the failure reaches the viewer as the error
+      // screen dispatched below.
       document.dispatchEvent(
         new CustomEvent(ERROR_EVENTS.SHOW, {
           detail: {

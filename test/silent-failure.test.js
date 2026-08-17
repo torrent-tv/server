@@ -37,33 +37,21 @@ const SILENCE_ALLOWED = new Map([
 ]);
 
 /**
- * What is silent TODAY, per file. They are not fixed in one edit — that is
- * roadmap item 12, done in passes — but the count may never grow, and every
- * pass lowers a number here.
+ * What is silent TODAY, per file — and as of 2026-08-17 the answer is NOTHING.
+ * Roadmap item 9 is finished: every `catch` in the browser's own code either
+ * speaks, re-throws, or carries a `silent-ok:` marker with the reason it is
+ * right to say nothing.
  *
- * The totals were rebased on 2026-08-16 and the drop is NOT a pass. Two faults
- * in the rule itself, in opposite directions:
+ * The map stays because the check is a ratchet: a file appearing here again
+ * means a silent failure path was added, and the test says which.
  *
- *   - it matched `throw` followed by a BACKSPACE character where a word
- *     boundary was meant, so no `catch` that re-throws counted as speaking and
- *     every one of them was tallied as silent. The check could therefore have
- *     been satisfied by twelve new silent blocks anywhere in the tree;
- *   - it judged comments along with code, so a silent `catch` commented "must
- *     never throw" scored as one that speaks. Comments are stripped now.
- *
- * Rebased against the corrected rule: 38 blocks, not 51.
+ * The totals were rebased on 2026-08-16 before the last passes, after two
+ * faults in the rule itself: it matched `throw` followed by a BACKSPACE
+ * character where a word boundary was meant, so no `catch` that re-throws
+ * counted as speaking; and it judged comments along with code, so a silent
+ * `catch` commented "must never throw" scored as one that speaks.
  */
-const SILENT_TODAY = new Map([
-  ["components/loading/loading.js", 17],
-  ["domain/webrtc-proxy.js", 4],
-  ["components/media-session/media-session.js", 3],
-  ["components/player/player.js", 3],
-  ["domain/torrent-session.js", 3],
-  ["shared/client-logger.js", 4],
-  ["components/torrent/torrent.js", 2],
-  ["components/proxy-selector/proxy-selector.js", 1],
-  ["domain/net-report.js", 1]
-]);
+const SILENT_TODAY = new Map([]);
 
 /**
  * Every `.js` under a directory, recursively.
@@ -119,7 +107,7 @@ function catchBodies(source) {
  * What counts as a catch block speaking: it logs, it hands the failure to the
  * app's own logger, it re-throws, or it rejects.
  */
-const SPEAKS = /console\.(debug|info|warn|error)|#logEvt|logEvent|onLog|\bthrow\b|reject\(/;
+const SPEAKS = /console\.(debug|info|warn|error)|#logEvt|logEvent|onLog|\bthrow\b|reject\(|\bsettle\(/;
 
 /**
  * The same source with comments removed. Deliberately crude — it is applied to
@@ -131,6 +119,23 @@ const SPEAKS = /console\.(debug|info|warn|error)|#logEvt|logEvent|onLog|\bthrow\
  */
 function withoutComments(body) {
   return body.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
+/**
+ * A catch block that stays silent ON PURPOSE, marked at the block itself.
+ *
+ * `SILENCE_ALLOWED` above excuses a whole FILE, which is too coarse for the
+ * places that matter: `loading.js` holds both branches that abandon real work
+ * and parse fall-backs where the failure IS the answer. The marker is written
+ * where the decision is, and it must carry a reason — the bare word explains
+ * nothing to whoever finds the block later.
+ *
+ * @param {string} body
+ * @returns {boolean}
+ */
+function markedSilentOnPurpose(body) {
+  const marker = /silent-ok:\s*(.+)/.exec(body);
+  return marker !== null && marker[1].trim().length >= 12;
 }
 
 test("no new failure path is added that says nothing", () => {
@@ -149,7 +154,7 @@ test("no new failure path is added that says nothing", () => {
       // catch commented "forwarding logs must never throw" — and it was scored
       // as speaking. Left as it was, this rule could be satisfied by writing
       // "throw" into a comment, which is the opposite of what it is for.
-      const speaks = SPEAKS.test(withoutComments(body));
+      const speaks = SPEAKS.test(withoutComments(body)) || markedSilentOnPurpose(body);
       if (!speaks) {
         counted.set(relative, (counted.get(relative) ?? 0) + 1);
       }

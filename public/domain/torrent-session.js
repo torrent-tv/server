@@ -673,7 +673,9 @@ export class TorrentSession {
         const payload = await response.json();
         details = typeof payload?.error === "string" ? payload.error : "";
       } catch (_error) {
-        // Ignore non-JSON error payload.
+        // silent-ok: the body is optional detail on top of a status the caller
+        // already acts on and already reports. A proxy that answers without
+        // JSON has still answered.
       }
       const suffix = details ? `: ${details}` : "";
       throw new Error(`Proxy playback plan request failed (${response.status})${suffix}`);
@@ -828,7 +830,9 @@ export class TorrentSession {
         const payload = await response.json();
         details = typeof payload?.error === "string" ? payload.error : "";
       } catch (_error) {
-        // Ignore non-JSON error payload.
+        // silent-ok: the body is optional detail on top of a status the caller
+        // already acts on and already reports. A proxy that answers without
+        // JSON has still answered.
       }
 
       const isWarmupError =
@@ -1110,7 +1114,8 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
           const payload = await response.json();
           details = typeof payload?.error === "string" ? payload.error : "";
         } catch (_error) {
-          // Ignore non-JSON responses.
+          // silent-ok: the body is optional detail on top of a status that is
+          // reported and raised immediately below.
         }
         const suffix = details ? `: ${details}` : "";
         // The wait ENDS here, so the line says that rather than "still

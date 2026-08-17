@@ -368,7 +368,8 @@ export class Player extends StateDerivedView {
     try {
       this.#shareMenu.showPopover();
     } catch {
-      // Already open / unsupported — no-op.
+      // silent-ok: the menu is already open, or this browser has no popover —
+      // in both cases the state the caller wanted is the state that holds.
     }
   };
 
@@ -383,13 +384,21 @@ export class Player extends StateDerivedView {
     try {
       this.#shareMenu.hidePopover();
     } catch {
-      // ignore
+      // silent-ok: closing a menu that is already closed. The click that got
+      // here is served either way.
     }
     try {
       await navigator.clipboard.writeText(url);
       this.#flashShareCopied();
-    } catch {
-      // Clipboard blocked (permissions / insecure context) — no-op.
+    } catch (error) {
+      // The viewer pressed a button and nothing happened: no link on the
+      // clipboard, and no sign of why. This is the rule's second half — a
+      // branch that changes what the viewer sees — so it is said out loud and
+      // names the condition, which is nearly always a refused permission or a
+      // page that is not a secure context.
+      console.warn(
+        `[torrent-tv][share] the link could not be copied: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   };
 
