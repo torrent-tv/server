@@ -37,20 +37,31 @@ const SILENCE_ALLOWED = new Map([
 ]);
 
 /**
- * What is silent TODAY, per file, measured 2026-08-15: 60 catch blocks across
- * the browser's code that discard an error without a word. They are not fixed
- * in one edit — that is roadmap item 12, done in passes — but the count may
- * never grow, and every pass lowers a number here.
+ * What is silent TODAY, per file. They are not fixed in one edit — that is
+ * roadmap item 12, done in passes — but the count may never grow, and every
+ * pass lowers a number here.
+ *
+ * The totals were rebased on 2026-08-16 and the drop is NOT a pass. Two faults
+ * in the rule itself, in opposite directions:
+ *
+ *   - it matched `throw` followed by a BACKSPACE character where a word
+ *     boundary was meant, so no `catch` that re-throws counted as speaking and
+ *     every one of them was tallied as silent. The check could therefore have
+ *     been satisfied by twelve new silent blocks anywhere in the tree;
+ *   - it judged comments along with code, so a silent `catch` commented "must
+ *     never throw" scored as one that speaks. Comments are stripped now.
+ *
+ * Rebased against the corrected rule: 38 blocks, not 51.
  */
 const SILENT_TODAY = new Map([
-  ["components/loading/loading.js", 23],
-  ["domain/torrent-session.js", 7],
+  ["components/loading/loading.js", 17],
   ["domain/webrtc-proxy.js", 4],
-  ["components/proxy-selector/proxy-selector.js", 4],
-  ["shared/client-logger.js", 4],
   ["components/media-session/media-session.js", 3],
   ["components/player/player.js", 3],
+  ["domain/torrent-session.js", 3],
+  ["shared/client-logger.js", 4],
   ["components/torrent/torrent.js", 2],
+  ["components/proxy-selector/proxy-selector.js", 1],
   ["domain/net-report.js", 1]
 ]);
 
@@ -104,6 +115,24 @@ function catchBodies(source) {
   return bodies;
 }
 
+/**
+ * What counts as a catch block speaking: it logs, it hands the failure to the
+ * app's own logger, it re-throws, or it rejects.
+ */
+const SPEAKS = /console\.(debug|info|warn|error)|#logEvt|logEvent|onLog|\bthrow\b|reject\(/;
+
+/**
+ * The same source with comments removed. Deliberately crude — it is applied to
+ * a catch body, where a `//` or `/* *​/` inside a string literal would be a
+ * curiosity; what it must not do is let a comment vouch for the code.
+ *
+ * @param {string} body
+ * @returns {string}
+ */
+function withoutComments(body) {
+  return body.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+}
+
 test("no new failure path is added that says nothing", () => {
   /** @type {Map<string, number>} */
   const counted = new Map();
@@ -114,7 +143,13 @@ test("no new failure path is added that says nothing", () => {
     }
     const source = readFileSync(script, "utf8");
     for (const { body } of catchBodies(source)) {
-      const speaks = /console\.(debug|info|warn|error)|#logEvt|logEvent|onLog|throw|reject\(/.test(body);
+      // Comments are stripped before the body is judged, because a catch block
+      // that says nothing is not made to speak by the word "throw" appearing in
+      // its own explanation. `client-logger.js` has exactly that — a silent
+      // catch commented "forwarding logs must never throw" — and it was scored
+      // as speaking. Left as it was, this rule could be satisfied by writing
+      // "throw" into a comment, which is the opposite of what it is for.
+      const speaks = SPEAKS.test(withoutComments(body));
       if (!speaks) {
         counted.set(relative, (counted.get(relative) ?? 0) + 1);
       }

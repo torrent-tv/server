@@ -1,4 +1,4 @@
-import { APP_EVENTS } from "../shared/events.js";
+import { APP_EVENTS } from "./events.js";
 
 /**
  * @file A view whose presence on screen is decided by the application state.
