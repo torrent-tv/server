@@ -13,11 +13,12 @@ import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS, signalApp } from "../../shared/events.js";
 import {
-  readUrlState,
   buildUrlSearch,
   decideHistoryWrite,
-  isAdvanceToNext,
   decideNavigation,
+  isAdvanceToNext,
+  positionToRecord,
+  readUrlState,
   resumePositionFor
 } from "../../domain/url-state.js";
 import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
@@ -251,6 +252,8 @@ export class Loading extends StateDerivedView {
   #rebuildingSession = false;
   /** A Back/Forward navigation is being carried out; see #onHistoryNavigate. */
   #navigatingHistory = false;
+  /** Said once per player: a torn-down element's zero is not a position. */
+  #torndownPositionReported = false;
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
@@ -2194,12 +2197,32 @@ export class Loading extends StateDerivedView {
       return;
     }
     const video = this.#videoElement;
+    const current = readUrlState(location.search);
+    // Not `video.currentTime` outright: a torn-down element reports zero
+    // through the very events that record a position, and a zero written here
+    // removes the parameter altogether — the viewer's refresh then starts the
+    // film from the beginning. `positionToRecord` decides what the element's
+    // reading is worth.
+    const position = video instanceof HTMLVideoElement
+      ? positionToRecord(video, current.currentTime)
+      : current.currentTime;
+    if (
+      video instanceof HTMLVideoElement &&
+      video.readyState === 0 &&
+      current.currentTime > 0 &&
+      !this.#torndownPositionReported
+    ) {
+      this.#torndownPositionReported = true;
+      this.#logEvt(
+        `the player holds nothing (readyState=0); keeping ${current.currentTime}s in the address ` +
+        "rather than the zero it reports"
+      );
+    }
     const next = {
       magnet,
       fileIndex: this.#activeFileIndex >= 0 ? this.#activeFileIndex : -1,
-      currentTime: video instanceof HTMLVideoElement ? Math.floor(video.currentTime) : 0
+      currentTime: position
     };
-    const current = readUrlState(location.search);
     const how = decideHistoryWrite(current, next);
     // Moving on to the next episode means this one is finished, so the entry
     // being left loses its position and Back opens it from the start. Reading
@@ -4670,6 +4693,12 @@ export class Loading extends StateDerivedView {
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
       fillRate: this.#lastFillRate ?? undefined,
+      // What the proxy measured on this file: the smallest buffer at which no
+      // interruption reaches the viewer. It replaces a ceiling of 25 s that
+      // nobody had shown to be necessary — on the field torrent the measured
+      // answer is 7-9 s, which is sixteen fewer seconds of spinner before the
+      // picture starts.
+      minimumBufferSeconds: progress?.minimumBufferSeconds ?? undefined,
       downloadStats: this.#lastDownloadStats,
       transcodeProgress: progress
     });

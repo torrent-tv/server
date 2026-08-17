@@ -17,6 +17,14 @@ const PREBUFFER_MIN_SECONDS = 6;
 const PREBUFFER_MAX_SECONDS = 25;
 const PREBUFFER_BASE_SECONDS = 12;
 
+/**
+ * The proxy's own answer, when it has one: the smallest buffer at which no
+ * interruption reaches the viewer, computed from the reader's measured waits on
+ * this file. Absent on an older proxy, and absent until two interruptions have
+ * been seen — one wait shows no interval, and the constants above stand in
+ * meanwhile.
+ */
+
 /** How long the download-rate trend is worth extrapolating from. */
 const RATE_TREND_WINDOW_MS = 6_000;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
@@ -87,6 +95,11 @@ export class WaitingModel {
    * @type {number | null}
    */
   #fillRate = null;
+  /**
+   * The proxy's measured smallest safe buffer for this file, or null when it
+   * has not said — an older proxy, or fewer than two interruptions seen.
+   */
+  #minimumBufferSeconds = null;
 
   /** @type {number | null} The fill rate as measured, unsmoothed. */
   #measuredRate = null;
@@ -145,6 +158,12 @@ export class WaitingModel {
     if (typeof facts.fillRate === "number" && Number.isFinite(facts.fillRate)) {
       this.#fillRate = facts.fillRate;
     }
+    // Kept only while it is a number: the proxy sends null until its reader has
+    // seen two interruptions, and null must leave the previous answer standing
+    // rather than blank it.
+    if (typeof facts.minimumBufferSeconds === "number" && facts.minimumBufferSeconds > 0) {
+      this.#minimumBufferSeconds = facts.minimumBufferSeconds;
+    }
     if (typeof facts.expectedFirstSegmentSeconds === "number") {
       this.#expectedFirstSegmentSeconds = facts.expectedFirstSegmentSeconds;
     }
@@ -194,6 +213,17 @@ export class WaitingModel {
    * @returns {number} Seconds.
    */
   requiredBufferSeconds() {
+    // What the PROXY measured on this very file, when it has measured it: one
+    // whole segment — the one being played — plus the worst interruption its
+    // reader met before the buffer could refill. Every figure below is a number
+    // somebody chose; this one is derived from what actually happened to this
+    // film on this swarm, and it rises by itself when the interruptions grow,
+    // which is what makes it safe to be smaller. On the field torrent of
+    // 2026-08-17 it is 7-9 s where the ceiling below is 25.
+    const measured = this.#minimumBufferSeconds;
+    if (Number.isFinite(measured) && measured > 0) {
+      return measured;
+    }
     const fillRate = this.#fillRate;
     if (!Number.isFinite(fillRate)) {
       return PREBUFFER_TARGET_SECONDS;

@@ -10,11 +10,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  readUrlState,
   buildUrlSearch,
   decideHistoryWrite,
-  isAdvanceToNext,
   decideNavigation,
+  isAdvanceToNext,
+  positionToRecord,
+  readUrlState,
   resumePositionFor
 } from "../public/domain/url-state.js";
 
@@ -211,4 +212,29 @@ test("a position is offered only when there is one and a file to apply it to", (
   assert.equal(resumePositionFor({ fileIndex: 1, currentTime: 0 }, 1), 0);
   assert.equal(resumePositionFor({ fileIndex: -1, currentTime: 90 }, -1), 0, "no file is open");
   assert.equal(resumePositionFor(null, 1), 0);
+});
+
+// ------------------------------------- the position a torn-down player reports
+
+test("a player holding nothing does not erase the position in the address", () => {
+  // Field case 2026-08-14: an append failure ended the MediaSource, the element
+  // reset to currentTime=0 readyState=0, `timeupdate`/`pause` fired, the zero
+  // was written, and `buildUrlSearch` omits a zero — so the parameter vanished
+  // and the viewer's refresh started the film from the beginning.
+  assert.equal(positionToRecord({ readyState: 0, currentTime: 0 }, 1590), 1590);
+});
+
+test("a player that IS holding media may say the viewer is at the beginning", () => {
+  assert.equal(positionToRecord({ readyState: 4, currentTime: 0 }, 1590), 0);
+});
+
+test("a real position always wins", () => {
+  assert.equal(positionToRecord({ readyState: 4, currentTime: 12.7 }, 1590), 12);
+  assert.equal(positionToRecord({ readyState: 1, currentTime: 4.2 }, 0), 4);
+});
+
+test("nothing to read from keeps what the address has", () => {
+  assert.equal(positionToRecord(null, 42), 42);
+  assert.equal(positionToRecord({ readyState: Number.NaN, currentTime: 0 }, 42), 42);
+  assert.equal(positionToRecord({ readyState: 0, currentTime: 0 }, 0), 0);
 });

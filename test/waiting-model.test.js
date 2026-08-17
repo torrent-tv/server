@@ -349,3 +349,27 @@ test("a second wait is not clamped by the first wait's clock", () => {
     `a fresh wait with an empty buffer reported ${after.etaSeconds}s`
   );
 });
+
+test("the proxy's measured buffer replaces the figures chosen by hand", () => {
+  // Roadmap item 4: 25 s was a number somebody picked, and on the field torrent
+  // of 2026-08-17 the measured answer — one segment plus the worst interruption
+  // the reader met — is 7.2 s. Sixteen seconds of spinner that nothing had
+  // shown to be necessary.
+  const model = new WaitingModel();
+  model.update({ bufferedAhead: 0, fillRate: 1.0 });
+  assert.equal(model.requiredBufferSeconds(), 25, "without a measurement the old ceiling stands");
+
+  model.update({ minimumBufferSeconds: 7.2 });
+  assert.equal(model.requiredBufferSeconds(), 7.2, "with one, it is used whatever the fill rate says");
+});
+
+test("a proxy that has not measured leaves the answer alone", () => {
+  // Null until the reader has seen two interruptions: one wait shows no
+  // interval, and an interval invented from one point is what this work removes.
+  const model = new WaitingModel();
+  model.update({ minimumBufferSeconds: 8 });
+  model.update({ minimumBufferSeconds: null });
+  assert.equal(model.requiredBufferSeconds(), 8, "a null must not blank a figure already measured");
+  model.update({ minimumBufferSeconds: 0 });
+  assert.equal(model.requiredBufferSeconds(), 8, "and neither may a zero");
+});
