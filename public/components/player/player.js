@@ -1,6 +1,6 @@
 import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 import { APP_VIEW, MEDIA_INTENT, isWaiting, mediaIntentForState, viewForState } from "../../domain/app-state.js";
-import { StateDerivedView } from "../state-derived-view.js";
+import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
 

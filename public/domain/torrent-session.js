@@ -14,6 +14,20 @@ export class TorrentSession {
   /** @type {(() => void) | null} */
   #seekCleanup = null;
 
+  /**
+   * Sessions whose keepalive answer could not be read, and sessions whose
+   * keepalive request failed outright. Both are kept so each condition is
+   * reported once per run of it rather than every thirty seconds — which is
+   * how often this ping goes out. Entries are dropped when the session is
+   * released or reported gone, so neither set outlives the sessions it names.
+   *
+   * @type {Set<string>}
+   */
+  #unreadableProgress = new Set();
+
+  /** @type {Set<string>} */
+  #pingFailing = new Set();
+
   constructor(onLog) {
     this.onLog = onLog;
     this.current = null;
@@ -192,8 +206,22 @@ export class TorrentSession {
         } else {
           await fetch(new URL(path.slice(1), ensureTrailingSlash(transport.baseUrl)), init);
         }
-      } catch {
-        // Best-effort: the encoder simply keeps producing where it is.
+      } catch (error) {
+        // Best-effort in the sense that nothing is retried — but not silent.
+        // This is the ONE message that repositions the encoder (every other
+        // request only fetches data), so a seek that never arrives leaves the
+        // viewer waiting on segments nobody is producing, and the proxy's log
+        // shows a perfectly healthy run at the old position. The two sides then
+        // disagree about where the viewer is, with nothing to say why.
+        // Which session, and whether it is the one on screen: the loop covers
+        // every session still held, and a previous episode's session can be
+        // among them until it is released.
+        const onScreen = this.currentTranscodeSession?.sessionId === sessionId;
+        console.warn(
+          `[torrent-tv][seek] the proxy was not told about the seek to ${positionSeconds.toFixed(1)}s ` +
+          `(session ${sessionId.slice(0, 8)}${onScreen ? ", on screen" : ", not on screen"}): ` +
+          `${error instanceof Error ? error.message : String(error)}`
+        );
       }
     }
   }
@@ -246,12 +274,51 @@ export class TorrentSession {
             // proxy is producing, which is what tells the viewer what automatic
             // quality has settled on.
             if (response?.ok) {
+              /** @type {object | null} */
+              let detail = null;
               try {
-                document.dispatchEvent(new CustomEvent(SESSION_EVENTS.PROGRESS, {
-                  detail: await response.json()
-                }));
-              } catch {
-                // A malformed body is not worth interrupting the ping for.
+                // ONLY the reading is inside, and the dispatch below is outside
+                // on purpose: the quality menu and the estimate both listen for
+                // this event, so a listener that throws would be reported here
+                // as "the proxy's progress cannot be read" — a catch standing
+                // for one condition while covering another, which is the shape
+                // that cost release 2.9.124 its whole product.
+                detail = await response.json();
+              } catch (error) {
+                // Said on the EDGE, not on every poll: this runs about every
+                // one and a half seconds for as long as the picture moves, and
+                // a line per poll would be the flood the rule forbids. What is
+                // worth knowing is that the readings stopped being readable —
+                // the quality menu and the viewer's estimate are built from
+                // them, and both would simply freeze with no explanation.
+                if (!this.#unreadableProgress.has(sessionId)) {
+                  this.#unreadableProgress.add(sessionId);
+                  console.warn(
+                    `[torrent-tv][progress] the proxy's progress for session ${sessionId.slice(0, 8)} ` +
+                    `cannot be read: ${error instanceof Error ? error.message : String(error)}`
+                  );
+                }
+              }
+              if (detail !== null) {
+                document.dispatchEvent(new CustomEvent(SESSION_EVENTS.PROGRESS, { detail }));
+                // Readable again: the next failure is a new episode and is
+                // worth saying once more.
+                this.#unreadableProgress.delete(sessionId);
+                this.#pingFailing.delete(sessionId);
+              }
+              return;
+            }
+            // Any other refusal: not "this session is gone", so the poll goes
+            // on — but a session answering 500 twice a minute for the rest of
+            // the film left nothing at all in the log, and the branch that
+            // abandons a reading must say what it decided from.
+            if (response && response.status !== 404) {
+              if (!this.#pingFailing.has(sessionId)) {
+                this.#pingFailing.add(sessionId);
+                console.warn(
+                  `[torrent-tv][keepalive] the proxy answered ${response.status} for session ` +
+                  `${sessionId.slice(0, 8)}; still polling`
+                );
               }
               return;
             }
@@ -263,15 +330,41 @@ export class TorrentSession {
               return;
             }
             this.activeTranscodeSessions.delete(sessionId);
+            this.#forgetSessionComplaints(sessionId);
             console.debug(`[evt] ${nowHms()} transcode-session gone id=${sessionId.slice(0, 8)}`);
             document.dispatchEvent(new CustomEvent(SESSION_EVENTS.GONE, { detail: { sessionId } }));
           })
-          .catch(() => {
-            // A ping that fails says nothing on its own: the transport may be
-            // reconnecting. The session's own error handling owns that.
+          .catch((error) => {
+            // A single failure says nothing on its own — the transport may be
+            // reconnecting — so it is said once per run of them, not every
+            // thirty seconds. But it must be said: twenty of these in a row is
+            // the session about to expire on the proxy, and the viewer meets
+            // that as a spinner with nothing in the log between the last
+            // segment and the first 404.
+            if (!this.#pingFailing.has(sessionId)) {
+              this.#pingFailing.add(sessionId);
+              console.warn(
+                `[torrent-tv][keepalive] the proxy is not hearing this session ` +
+                `(${sessionId.slice(0, 8)}): ${error instanceof Error ? error.message : String(error)}`
+              );
+            }
           });
       }
     }, SESSION_KEEPALIVE_MS);
+  }
+
+  /**
+   * Forget what has been complained about for a session that is over.
+   *
+   * Without it the sets grow for the life of the page — one entry per episode
+   * of a season pack — and nothing owns them.
+   *
+   * @param {string} sessionId
+   * @returns {void}
+   */
+  #forgetSessionComplaints(sessionId) {
+    this.#unreadableProgress.delete(sessionId);
+    this.#pingFailing.delete(sessionId);
   }
 
   releaseActiveTranscodeSessions(options = {}) {
@@ -289,6 +382,7 @@ export class TorrentSession {
     const sessions = Array.from(this.activeTranscodeSessions.entries());
     this.activeTranscodeSessions.clear();
     for (const [sessionId, transport] of sessions) {
+      this.#forgetSessionComplaints(sessionId);
       // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
       console.debug(`[evt] ${nowHms()} transcode-session release id=${sessionId.slice(0, 8)} reason=${reason || "(none)"}`);
       // WebRTC transport: fire-and-forget is unreliable on unload events,
@@ -1019,11 +1113,34 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
           // Ignore non-JSON responses.
         }
         const suffix = details ? `: ${details}` : "";
-        throw new Error(`Transcode playlist request failed (${response.status})${suffix}`);
+        // The wait ENDS here, so the line says that rather than "still
+        // waiting": a 500 on this route means the session is in its failed
+        // state, and nothing a further poll does moves it out — the way back is
+        // a new session, which is the caller's to make.
+        console.warn(
+          `[torrent-tv] the proxy refused the playlist (${response.status})${suffix}; giving up the wait`
+        );
+        // Thrown for the caller, and marked so the catch below can tell it from
+        // the transport failures that catch is for. Unmarked, it was caught by
+        // its own handler and the wait simply continued: measured by reading,
+        // a session stuck in "failed" answered 500 every three seconds for
+        // fifteen minutes without a word, and ended as "timed out waiting for
+        // generated HLS playlist" — a message that names none of it.
+        const refusal = new Error(`Transcode playlist request failed (${response.status})${suffix}`);
+        refusal.isProxyRefusal = true;
+        // Retryable, and it must say so: the caller passes `canRetry` straight
+        // from this flag to the error screen, and without it the viewer is left
+        // on a screen with no way back. The commonest way here is the torrent
+        // ceasing to deliver — the run stops short, the session goes to its
+        // failed state and answers 500 to everything — which is data starvation,
+        // the archetypal keep-waiting case, and a Retry makes a new session
+        // that starts the encoder again.
+        refusal.canRetry = true;
+        throw refusal;
       }
-    } catch (_error) {
-      if (isAbortError(_error)) {
-        throw _error;
+    } catch (error) {
+      if (isAbortError(error) || error?.isProxyRefusal === true) {
+        throw error;
       }
       // Playlist can be temporarily unavailable while ffmpeg is warming up.
     }
@@ -1042,19 +1159,81 @@ async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
   try {
     const response = await fetchFn(progressUrl, { cache: "no-store", signal: signal ?? undefined });
     if (!response.ok) {
+      noteProgressUnreadable(progressUrl, `the proxy answered ${response.status}`);
       return null;
     }
     const payload = await response.json();
     if (!payload || typeof payload !== "object") {
+      noteProgressUnreadable(progressUrl, "the answer was not an object");
       return null;
     }
+    progressComplainedAbout.delete(progressUrl);
     return payload;
-  } catch (_error) {
-    if (isAbortError(_error)) {
-      throw _error;
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
     }
+    noteProgressUnreadable(progressUrl, error instanceof Error ? error.message : String(error));
     return null;
   }
+}
+
+/**
+ * Which progress endpoints have already been complained about. Named for what
+ * it HOLDS: an earlier version called it `progressReadable` while holding the
+ * opposite, and a latch whose name inverts its contents is one a later edit
+ * reads backwards.
+ *
+ * This poll runs about every one and a half seconds for as long as the viewer
+ * is waiting, so the complaint is made on the EDGE — the first failure after a
+ * good reading — and never on every poll.
+ *
+ * @type {Set<string>}
+ */
+const progressComplainedAbout = new Set();
+
+/** How many sessions' complaints are remembered at once. See the use below. */
+const PROGRESS_COMPLAINTS_KEPT = 8;
+
+/**
+ * Say once that the progress readings have stopped arriving, and why.
+ *
+ * The readings are what the viewer's estimate and the quality menu are built
+ * from. When they stop, both simply freeze; without this the log holds nothing
+ * at all between a healthy session and a viewer looking at a figure that never
+ * changes.
+ *
+ * @param {string} progressUrl
+ * @param {string} reason
+ * @returns {void}
+ */
+function noteProgressUnreadable(progressUrl, reason) {
+  if (progressComplainedAbout.has(progressUrl)) {
+    return;
+  }
+  // One entry per session that ever failed, and a session is never seen again
+  // once it is over — so the set is bounded here rather than left to grow for
+  // the life of the page. The oldest goes first: what it costs is one repeated
+  // line about a session from many episodes ago, which is not a flood.
+  if (progressComplainedAbout.size >= PROGRESS_COMPLAINTS_KEPT) {
+    const [oldest] = progressComplainedAbout;
+    progressComplainedAbout.delete(oldest);
+  }
+  progressComplainedAbout.add(progressUrl);
+  // Named, because more than one session can be in flight and a line that
+  // cannot be attributed to one of them is a line nobody can act on.
+  console.warn(`[torrent-tv][progress] no reading from the proxy for ${describeProgressUrl(progressUrl)}: ${reason}`);
+}
+
+/**
+ * The session a progress endpoint belongs to, for a log line.
+ *
+ * @param {string} progressUrl
+ * @returns {string}
+ */
+function describeProgressUrl(progressUrl) {
+  const match = /transcode-sessions\/([^/?#]+)/.exec(progressUrl);
+  return match ? `session ${match[1].slice(0, 8)}` : progressUrl.slice(0, 80);
 }
 
 function delay(ms) {

@@ -1,7 +1,7 @@
 import { APP_EVENTS, ERROR_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
 import { parseTorrentBytes } from "../../domain/torrent-parser.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
-import { StateDerivedView } from "../state-derived-view.js";
+import { StateDerivedView } from "../../shared/state-derived-view.js";
 
 /**
  * Torrent input view.

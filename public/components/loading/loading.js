@@ -1,7 +1,7 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
-import { StateDerivedView } from "../state-derived-view.js";
+import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";

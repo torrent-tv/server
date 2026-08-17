@@ -1,6 +1,6 @@
 import { APP_EVENTS, ERROR_EVENTS } from "../../shared/events.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
-import { StateDerivedView } from "../state-derived-view.js";
+import { StateDerivedView } from "../../shared/state-derived-view.js";
 
 /**
  * Error view.
