@@ -127,19 +127,27 @@ export class Player extends StateDerivedView {
     // the spinner is not — it is measured (peers, speed) and keeps arriving on
     // PLAYER:SET_BUFFERING.
     this.#buffering.hidden = !(belongsOnScreen && isWaiting(state));
-    // The scrubber and the clock describe a timeline that exists only once a
-    // stream does. Shown during the wait they describe the element's own
-    // scraps: a ninety-minute film was offered an eight-second scrubber
-    // (2026-08-15). While waiting, the control with the real length lives in
-    // the waiting interface.
+    // The scrubber and the clock stay on the bar at all times.
+    //
+    // They were hidden during the wait, because before a stream exists they
+    // describe the element's own scraps — a ninety-minute film was offered an
+    // eight-second scrubber (2026-08-15). What that cost is worse than what it
+    // fixed: the time range is the element that carries the bar's width, so
+    // removing it collapsed the whole control bar into a strip in the corner
+    // with the volume slider stretched across it. A wrong duration for a few
+    // seconds is a smaller fault than a player that looks broken.
+    //
+    // The scrubber that knows the real length before a frame exists is the one
+    // in the waiting interface; making THIS one right during the wait means
+    // giving it the duration from the playback plan, which is a change to make
+    // deliberately rather than by hiding the control.
     const timeline = document.querySelector("#player__time-range");
     const clock = document.querySelector("#player__time-display");
-    const timelineExists = belongsOnScreen && !isWaiting(state);
     if (timeline instanceof HTMLElement) {
-      timeline.hidden = !timelineExists;
+      timeline.hidden = false;
     }
     if (clock instanceof HTMLElement) {
-      clock.hidden = !timelineExists;
+      clock.hidden = false;
     }
     this.#measureWhileWaiting(belongsOnScreen && isWaiting(state));
     this.#applyMediaIntent(state);
