@@ -1,3 +1,7 @@
+## 0.13.7
+
+- **New**: The wait before the picture starts is as long as this film needs, not twenty-five seconds. The proxy now measures the smallest buffer at which no interruption reaches the viewer — one whole segment plus the worst wait its reader met before the buffer could refill — and the browser uses that instead of the ceiling it has been holding. On the field torrent of 2026-08-17 the measured answer is 7-9 s against 25, which is sixteen fewer seconds of spinner. Lowering it is safe precisely because it is measured continuously: a film whose supply is interrupted more often asks for more by itself. The old constants stand in until the proxy has seen two interruptions, and an older proxy changes nothing.
+
 ## 0.13.6
 
 - **Fix**: The start-point slider is gone, along with every line that served it. It was a second control for a job the player's own scrubber already does, added while building the start-during-load behaviour and never asked for; over black video its default rendering read as a broken element under the waiting message. Seeking before the first frame keeps working and needs nothing new: the synthetic playlist carries the whole length, so the scrubber is live as soon as the manifest is parsed, and a seek made then is reported to the proxy by the same path as any other.

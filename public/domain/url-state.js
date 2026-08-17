@@ -196,3 +196,40 @@ export function resumePositionFor(state, fileIndex) {
   }
   return state.currentTime > 0 ? state.currentTime : 0;
 }
+
+/**
+ * The position worth writing into the address, given what the media element
+ * says and what the address already holds.
+ *
+ * A media element that has been torn down reports `currentTime === 0` and
+ * `readyState === 0`, and it reports them through the same events that record a
+ * real position — `timeupdate`, `pause`, `pagehide`. Measured 2026-08-14: an
+ * append failure ended the MediaSource, the element reset to zero, one of those
+ * events fired, the zero was written, and `buildUrlSearch` omits a zero
+ * position entirely — so the parameter vanished and the viewer's refresh
+ * started the film from the beginning. The address was otherwise intact; only
+ * the position was gone.
+ *
+ * The rule: a zero from an element with nothing loaded is not evidence about
+ * where the viewer was. Neither is a zero from an element that has never
+ * played, while the address already names a position — that is the state
+ * between opening a link and the seek that honours it.
+ *
+ * @param {{ readyState: number, currentTime: number }} element - What the media
+ *   element reports now.
+ * @param {number} recorded - The position already in the address, in seconds.
+ * @returns {number} Seconds to write.
+ */
+export function positionToRecord(element, recorded) {
+  const known = Number.isFinite(recorded) && recorded > 0 ? Math.floor(recorded) : 0;
+  if (!element || !Number.isFinite(element.currentTime) || !Number.isFinite(element.readyState)) {
+    return known;
+  }
+  const position = Math.floor(element.currentTime);
+  if (position > 0) {
+    return position;
+  }
+  // Zero, from here on. Only an element that is actually holding media may say
+  // the viewer is at the beginning; anything else keeps what the address knows.
+  return element.readyState > 0 ? 0 : known;
+}
