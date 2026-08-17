@@ -123,65 +123,6 @@
     pointer-events: auto;
   }
 
-  /* The start-point slider, shown over the video while the first frame is still
-     being made. Drawn rather than left to the browser: the default control is a
-     bare white bar with a dot, which over black video reads as a broken element
-     rather than as something to drag. It sits on the same plate as the message
-     above it, at the same width, so the two read as one panel. */
-  #loading__position {
-    appearance: none;
-    inline-size: min(90vw, 34rem);
-    /* Block padding gives the thumb room inside the plate; without it the
-       circle is clipped by the plate's own edge at the extremes. */
-    padding: 0.55rem 0.7rem;
-    border-radius: 0.5rem;
-    background: rgb(20 20 22 / 0.5);
-    /* Chrome and Safari need the thumb's box to be told the control's height;
-       the track below carries the visible line. */
-    block-size: 1.9rem;
-    cursor: pointer;
-  }
-
-  /* One rule per engine: a selector list would be dropped whole by any browser
-     that does not know one of its parts. */
-  #loading__position::-webkit-slider-runnable-track {
-    block-size: 0.25rem;
-    border-radius: 0.125rem;
-    background: rgb(255 255 255 / 0.35);
-  }
-
-  #loading__position::-moz-range-track {
-    block-size: 0.25rem;
-    border-radius: 0.125rem;
-    background: rgb(255 255 255 / 0.35);
-  }
-
-  #loading__position::-webkit-slider-thumb {
-    appearance: none;
-    inline-size: 0.9rem;
-    block-size: 0.9rem;
-    /* Centres the circle on a 0.25rem track: half the thumb minus half the
-       track. */
-    margin-block-start: -0.325rem;
-    border-radius: 50%;
-    background: var(--media-primary-color, #fff);
-    box-shadow: 0 0.0625rem 0.25rem rgb(0 0 0 / 0.5);
-  }
-
-  #loading__position::-moz-range-thumb {
-    inline-size: 0.9rem;
-    block-size: 0.9rem;
-    border: none;
-    border-radius: 50%;
-    background: var(--media-primary-color, #fff);
-    box-shadow: 0 0.0625rem 0.25rem rgb(0 0 0 / 0.5);
-  }
-
-  #loading__position:focus-visible {
-    outline: 0.125rem solid var(--media-primary-color, #fff);
-    outline-offset: 0.125rem;
-  }
-
   /* The spinner — the "growing arc" loader (css-loaders l20), recoloured white
      to match media-chrome. A pseudo-element, so it is independent of the
      peer-count child. Keyframes are top-level (below). */

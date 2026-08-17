@@ -234,19 +234,6 @@ export class Loading extends StateDerivedView {
    * playback plan. Seconds, or null before it has told us.
    */
   #expectedFirstSegmentSeconds = null;
-  /**
-   * How long the film is, from the plan. Known before any frame exists, and
-   * therefore the range a viewer may point at while the first one is being
-   * made.
-   */
-  #waitingDurationSeconds = 0;
-  /**
-   * Where the viewer said playback should begin, stated while it was still
-   * loading. Becomes the session's start rather than a seek after it.
-   *
-   * @type {number | null}
-   */
-  #startFromSeconds = null;
   /** What the chosen proxy takes to create a session, in seconds, or null. */
   #expectedSessionCreateSeconds = null;
   /**
@@ -1172,80 +1159,6 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * Show, or hide, the control that says where playback should begin.
-   *
-   * It is offered only while there is nothing to play yet AND the film's length
-   * is known. Once a frame exists the player's own scrubber does this job, and
-   * two controls for one thing is one too many.
-   */
-  #forgetWaitingPosition() {
-    this.#waitingDurationSeconds = 0;
-    this.#startFromSeconds = null;
-    const control = document.querySelector("#loading__position");
-    if (control instanceof HTMLInputElement) {
-      control.hidden = true;
-      control.value = "0";
-    }
-  }
-
-  #renderWaitingPosition() {
-    const control = document.querySelector("#loading__position");
-    if (!(control instanceof HTMLInputElement)) {
-      return;
-    }
-    const duration = this.#waitingDurationSeconds;
-    const playable = this.#videoElement instanceof HTMLVideoElement &&
-      Number.isFinite(this.#videoElement.duration) &&
-      this.#videoElement.duration > 0;
-    if (!(duration > 0) || playable) {
-      control.hidden = true;
-      return;
-    }
-    control.max = String(Math.floor(duration));
-    control.hidden = false;
-    if (control.dataset.wired !== "yes") {
-      control.dataset.wired = "yes";
-      // On `change`, not on `input`: dragging fires continuously, and each
-      // position would restart the encoder somewhere else. The viewer states
-      // one place when they let go.
-      control.addEventListener("change", () => {
-        const positionSeconds = Number(control.value);
-        if (!Number.isFinite(positionSeconds) || positionSeconds < 0) {
-          return;
-        }
-        this.#startFromDuringLoad(positionSeconds);
-      });
-    }
-  }
-
-  /**
-   * Begin from a point the viewer named while the film was still loading.
-   *
-   * Both sides are told, for the same reason a resumed link tells both: the
-   * proxy must move its encoder there, or the player will ask for segments
-   * nobody is making; and the player must land there when it is revealed,
-   * or it starts at zero and the wait was spent on the wrong part of the film.
-   *
-   * @param {number} positionSeconds
-   */
-  #startFromDuringLoad(positionSeconds) {
-    // Remembered as the START of the session, not as a seek to perform later.
-    // A session created at zero and seeked afterwards produces the beginning
-    // first — which is the double wait this exists to remove.
-    this.#startFromSeconds = positionSeconds;
-    this.#pendingCurrentTime = positionSeconds;
-    this.#logEvt(`start point moved to ${Math.round(positionSeconds)}s while loading`);
-    // A new destination is a new wait; the countdown for the old one describes
-    // nothing now. Same reasoning as a reported seek.
-    this.#waitingModel.reset();
-    // Both sides, when they exist. The proxy moves its encoder there; the
-    // player is pointed at the same place, or it goes on asking for the
-    // beginning and the proxy is dragged back to make it.
-    void this.#session.reportSeek(positionSeconds);
-    this.#hlsPlayer.resumeLoadAt(positionSeconds);
-  }
-
-  /**
    * Seek to the shared-link resume position once, when the player is revealed.
    * Waits for the media to become seekable (duration known — the synthetic VOD
    * playlist provides it) if it is not ready yet. One-shot.
@@ -1253,8 +1166,6 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #applyPendingResume() {
-    // A frame exists now, so the player's own scrubber takes over.
-    this.#renderWaitingPosition();
     const currentTime = this.#pendingCurrentTime;
     if (currentTime == null || !(this.#videoElement instanceof HTMLVideoElement)) {
       return;
@@ -1473,7 +1384,6 @@ export class Loading extends StateDerivedView {
   }
 
   #onAppReset = () => {
-    this.#forgetWaitingPosition();
     this.#stopPlayback();
     this.setProgress(0);
     this.setStatus("");
@@ -1484,7 +1394,6 @@ export class Loading extends StateDerivedView {
   };
 
   #stopPlayback(options = {}) {
-    this.#forgetWaitingPosition();
     this.#isProcessing = false;
     this.#playbackLive = false;
     this.#clearBuffering();
@@ -2803,15 +2712,6 @@ export class Loading extends StateDerivedView {
       this.#offeredHeights = shouldTranscodeVideo ? planned.transcode : planned.copy;
       this.#publishQualityOptions();
     }
-    // How long the film is, known from the plan long before a frame exists —
-    // which is what lets the viewer say WHERE to start while it is still
-    // loading, instead of waiting for the beginning to be produced and then
-    // waiting again for a seek.
-    this.#waitingDurationSeconds =
-      typeof prepared.durationSeconds === "number" && prepared.durationSeconds > 0
-        ? prepared.durationSeconds
-        : 0;
-    this.#renderWaitingPosition();
     this.#debug("playback decision", {
       fileIndex,
       container: prepared.container,
@@ -4402,13 +4302,9 @@ export class Loading extends StateDerivedView {
     const urlState = readUrlState(location.search);
     const urlIsForThisFile = urlState.fileIndex === fileIndex;
     const fromUrl = resumePositionFor(urlState, fileIndex);
-    // A point the viewer named while this was loading outranks both: they said
-    // it last, and they said it about THIS wait.
-    const resumeStartPosition = this.#startFromSeconds != null && this.#startFromSeconds > 0
-      ? this.#startFromSeconds
-      : (fromField != null && fromField > 0
-        ? fromField
-        : (fromUrl > 0 ? fromUrl : null));
+    const resumeStartPosition = fromField != null && fromField > 0
+      ? fromField
+      : (fromUrl > 0 ? fromUrl : null);
     // Said out loud because the two sides have disagreed about it twice: the
     // position reached hls.js, which duly asked for segment #127, while the
     // proxy was told to start at zero and the viewer waited 45.6 s for a
