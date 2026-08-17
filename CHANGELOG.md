@@ -1,5 +1,7 @@
 ## 0.13.6
 
+- **New**: Roadmap item 12 is finished on the browser side: **not one `catch` block in the app's own code discards a failure without a word**. The count went 60 → 38 (rebased against a corrected rule) → 0 over three passes. What each remaining block does now: it logs what it decided and what it decided from, or it re-throws, or it carries a `silent-ok:` marker at the block itself with a reason of its own — the file-level excuse list stays at the four modules where a parse failure IS the answer. Two holes in the check that guarded this were closed with it: a comment could vouch for the code it sat in (`client-logger.js` had a silent catch commented "must never throw" and scored as speaking), and a promise settled through its own `settle(` helper counted as silence.
+
 - **Fix**: The start-point slider shown over the video while the first frame is being made was drawn by the browser's own default — a bare white bar with a dot, which over black video reads as a broken element rather than as something to drag. It is now drawn like the message above it: the same plate, the same width, a slim track and a round handle with room inside the plate at both extremes, and a visible focus ring. One rule per engine rather than a selector list, so no browser drops the lot over a prefix it does not know.
 
 ## 0.13.5
