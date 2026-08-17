@@ -1,3 +1,7 @@
+## 0.13.5
+
+- **Fix**: The scrubber restoration is now a complete revert, not a patch over the change that broke it. 0.13.4 left the two identifiers behind and a block that took `hidden` off both elements on every state change — work that does nothing, over markup that no longer needs naming. The control bar and the player's state handler are now identical, line for line, to what they were before the hiding was introduced. Verified in the browser: bar 1280 px, scrubber 918, clock 84, neither hidden, neither carrying an id.
+
 ## 0.13.4
 
 - **Fix**: The control bar is whole again. Hiding the scrubber during the wait (0.13.0) also took away the element that carries the bar's width, so everything collapsed into a strip in the corner with the volume slider stretched across it where the scrubber should be. Measured on the restored bar: 1280 px wide with the scrubber taking 1102 of it. The fault it was avoiding — a scrubber showing the media element's own scraps before a stream exists — is smaller than a player that looks broken, and the proper fix is to give that scrubber the duration the playback plan already knows, not to remove the control.
