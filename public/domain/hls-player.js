@@ -684,7 +684,8 @@ export function createHlsPlayer(onLog) {
           // because nothing counted. The rule is in `fruitless-repeat.js`.
           const repeatGuard = createRepeatGuard();
           let repeatAnnounced = false;
-          for (const name of ["BUFFER_FLUSHED", "BUFFER_RESET", "MEDIA_DETACHED", "LEVEL_SWITCHED"]) {
+          for (const name of ["BUFFER_FLUSHED", "BUFFER_RESET", "MEDIA_DETACHED", "LEVEL_SWITCHED",
+            "AUDIO_TRACK_SWITCHING", "AUDIO_TRACK_SWITCHED", "AUDIO_TRACKS_UPDATED"]) {
             const event = HlsClass.Events[name];
             if (event) {
               // After any of these a fragment is legitimately appended again,
@@ -698,7 +699,14 @@ export function createHlsPlayer(onLog) {
               return;
             }
             const bufferedEnd = bufferedEndSeconds(videoElement);
-            const verdict = repeatGuard.note({ key: fragmentKey(frag), bufferedEnd });
+            // The playhead decides it: an append that grew nothing while the
+            // picture kept running is ordinary work — changing the audio
+            // language re-appends into a span the picture already covers, and
+            // `video.buffered` is the intersection of the two source buffers,
+            // so its end does not move and need not.
+            const playhead = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : 0;
+            const playing = videoElement instanceof HTMLVideoElement ? !videoElement.paused : false;
+            const verdict = repeatGuard.note({ key: fragmentKey(frag), bufferedEnd, playhead, playing });
             if (verdict.fruitless === 0 || repeatAnnounced) {
               return;
             }
