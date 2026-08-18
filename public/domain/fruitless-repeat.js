@@ -9,11 +9,22 @@
  * shape was recorded on 2026-08-02, when one segment was repeated 1908 times.
  * Nothing anywhere counts these, so nothing ever stops.
  *
- * What makes a repeat FRUITLESS is measurable and needs no chosen number: the
- * fragment was appended — hls.js says so with `FRAG_BUFFERED`, which fires
- * after the append, not after the download — and the end of the buffer did not
- * move. Bytes that added nothing to the buffer will add nothing on the next
- * pass either.
+ * What makes a repeat FRUITLESS is measurable and needs no chosen number, and
+ * the first version of this file got it wrong. It asked only whether the end of
+ * the buffer had moved — and killed a HEALTHY session 40 minutes after it
+ * shipped (2026-08-18 20:37:01): changing the audio language re-appends the
+ * replacement track into a span the picture already covers, `video.buffered` is
+ * the INTERSECTION of the two source buffers, so its end does not move and need
+ * not. Three appends inside 79 ms were declared a loop while the picture was
+ * playing normally.
+ *
+ * The playhead is what tells them apart. In the loop this file exists for, the
+ * picture stood at `t=1061.0s` for 149 seconds; in the audio change it advanced
+ * 1369.80 → 1369.84 → 1369.88 across the very appends that were flagged. So a
+ * repeat is fruitless only when the player is trying to play and NEITHER the
+ * end of the buffer NOR the playhead moved since the last append of the same
+ * fragment. A paused player is excluded for the same reason: its playhead is
+ * standing still because the viewer stopped it, which is not a defect.
  *
  * One such repeat is reported and tolerated, because a fragment is legitimately
  * re-appended after the buffer is flushed and a flush may be missed (a level
@@ -39,33 +50,39 @@
  * @returns {{ note: (fragment: { key: string, bufferedEnd: number }) => RepeatVerdict, forget: () => void }}
  */
 export function createRepeatGuard() {
-  /** @type {Map<string, { bufferedEnd: number, fruitless: number }>} */
+  /** @type {Map<string, { bufferedEnd: number, playhead: number, fruitless: number }>} */
   let seen = new Map();
 
   return {
     /**
      * Record one append.
      *
-     * @param {{ key: string, bufferedEnd: number }} fragment - `key` identifies
-     *   the fragment (its stream, level and sequence number); `bufferedEnd` is
-     *   how far the buffer reaches now.
+     * @param {{ key: string, bufferedEnd: number, playhead: number, playing: boolean }} fragment -
+     *   `key` identifies the fragment (its stream, level and sequence number);
+     *   `bufferedEnd` is how far the buffer reaches now; `playhead` is where the
+     *   picture stands; `playing` is false when the viewer has paused, and then
+     *   a motionless playhead says nothing.
      * @returns {RepeatVerdict}
      */
-    note({ key, bufferedEnd }) {
+    note({ key, bufferedEnd, playhead, playing }) {
       const end = Number.isFinite(bufferedEnd) ? bufferedEnd : 0;
+      const at = Number.isFinite(playhead) ? playhead : 0;
       const known = seen.get(key);
       if (!known) {
-        seen.set(key, { bufferedEnd: end, fruitless: 0 });
+        seen.set(key, { bufferedEnd: end, playhead: at, fruitless: 0 });
         return { fruitless: 0, looping: false, bufferedEnd: end };
       }
-      if (end > known.bufferedEnd) {
-        // It moved the buffer, so it was worth fetching. The count starts over:
-        // what matters is CONSECUTIVE appends that achieved nothing.
-        seen.set(key, { bufferedEnd: end, fruitless: 0 });
+      // Either measurement moving means the append was worth making: the buffer
+      // grew, or the picture is still running on what is already held. The
+      // count starts over, because what matters is CONSECUTIVE appends that
+      // achieved nothing.
+      const moved = end > known.bufferedEnd || at > known.playhead;
+      if (moved || playing !== true) {
+        seen.set(key, { bufferedEnd: end, playhead: at, fruitless: 0 });
         return { fruitless: 0, looping: false, bufferedEnd: end };
       }
       const fruitless = known.fruitless + 1;
-      seen.set(key, { bufferedEnd: known.bufferedEnd, fruitless });
+      seen.set(key, { bufferedEnd: known.bufferedEnd, playhead: known.playhead, fruitless });
       return { fruitless, looping: fruitless >= 2, bufferedEnd: end };
     },
 
