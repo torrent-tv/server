@@ -10,6 +10,7 @@
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
 import { bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
+import { createRepeatGuard, fragmentKey } from "./fruitless-repeat.js";
 
 /**
  * @param {HTMLVideoElement} videoElement
@@ -676,6 +677,50 @@ export function createHlsPlayer(onLog) {
               instance.on(event, () => { lastPlayerEvent = name; });
             }
           }
+          // A fragment fetched again and again while the buffer stands still.
+          // Measured 2026-08-18: two audio segments were fetched 737 and 736
+          // times in 149 s — half a gigabyte of the same bytes — while the
+          // picture stood at 1061.0 s and never moved, and nothing stopped it
+          // because nothing counted. The rule is in `fruitless-repeat.js`.
+          const repeatGuard = createRepeatGuard();
+          let repeatAnnounced = false;
+          for (const name of ["BUFFER_FLUSHED", "BUFFER_RESET", "MEDIA_DETACHED", "LEVEL_SWITCHED"]) {
+            const event = HlsClass.Events[name];
+            if (event) {
+              // After any of these a fragment is legitimately appended again,
+              // so the count must not carry across them.
+              instance.on(event, () => { repeatGuard.forget(); });
+            }
+          }
+          instance.on(HlsClass.Events.FRAG_BUFFERED, (_event, data) => {
+            const frag = data?.frag;
+            if (!frag) {
+              return;
+            }
+            const bufferedEnd = bufferedEndSeconds(videoElement);
+            const verdict = repeatGuard.note({ key: fragmentKey(frag), bufferedEnd });
+            if (verdict.fruitless === 0 || repeatAnnounced) {
+              return;
+            }
+            const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : 0;
+            console.warn(
+              `[torrent-tv][hls] fruitless append ${fragmentKey(frag)} ×${verdict.fruitless} ` +
+              `frag=${frag.relurl ?? "-"} bufferEnd=${bufferedEnd.toFixed(2)}s currentTime=${at.toFixed(2)}s`
+            );
+            if (!verdict.looping) {
+              return;
+            }
+            repeatAnnounced = true;
+            console.warn(
+              `[torrent-tv][hls] the same fragment is being fetched without effect; ` +
+              `stopping instead of repeating it (${fragmentKey(frag)}, buffer stuck at ${bufferedEnd.toFixed(2)}s)`
+            );
+            instance.stopLoad();
+            if (typeof options.onUnrecoverable === "function") {
+              options.onUnrecoverable("fragmentRepeatsWithoutEffect");
+            }
+          });
+
           instance.on(HlsClass.Events.FRAG_LOADING, (_event, data) => {
             const start = data?.frag?.start;
             const sn = data?.frag?.sn;
