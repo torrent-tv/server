@@ -123,6 +123,10 @@ function pinStartLevel(instance, preferredHeight) {
  */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
+  // The media this player is driving. Kept because two answers need the
+  // playhead and have nothing else to read it from — where a switched audio
+  // track resumes, and what a reconnect restores to.
+  let attachedMedia = null;
   // The variant in force — the one pinned at start or last picked by the
   // viewer. Kept here because hls.js's own `currentLevel` answers a different
   // question: it reports the level of the fragment AT THE PLAYHEAD, so for as
@@ -248,6 +252,27 @@ export function createHlsPlayer(onLog) {
         return false;
       }
       hlsInstance.audioTrack = index;
+      // Where the new track resumes is STATED, not left to be guessed. hls.js
+      // discards the audio it holds on a switch, and if the player has nothing
+      // buffered at that moment — which is precisely when a viewer reaches for
+      // the audio menu — its own recovery (`resetStartWhenNotLoaded`) puts the
+      // audio loader back at `startPosition`, and for a VOD opened at the top
+      // of the film that is **zero**. Measured 2026-08-18 at 3128.7 s into
+      // "Sen to Chihiro no Kamikakushi": the switch was answered by a request
+      // for `a/14/segment-00000.mp4`, which is an hour behind the run the proxy
+      // had just warmed at the playhead, so it 404'd; hls.js then walked every
+      // video level looking for a way out, hit a fatal error, and recovered
+      // 25 seconds later. The viewer saw a spinner for all of it.
+      //
+      // `startLoad(position)` gives both loaders the position outright, so the
+      // fallback has the playhead to fall back TO. The media is not moved: the
+      // position handed over is the one it is already standing on.
+      const resumeAt = attachedMedia instanceof HTMLVideoElement && Number.isFinite(attachedMedia.currentTime)
+        ? attachedMedia.currentTime
+        : -1;
+      if (resumeAt > 0) {
+        hlsInstance.startLoad(resumeAt);
+      }
       return true;
     },
     /** Destroy any active HLS.js instance and release its resources. */
@@ -257,6 +282,7 @@ export function createHlsPlayer(onLog) {
         hlsInstance = null;
       }
       desiredLevel = -1;
+      attachedMedia = null;
     },
     /**
      * `true` when an hls.js instance is currently active (i.e. NOT the native
@@ -866,6 +892,7 @@ export function createHlsPlayer(onLog) {
             `box=${Math.round(box.width)}x${Math.round(box.height)} display=${shownAs.display} ` +
             `visibility=${shownAs.visibility} page=${document.visibilityState}`
           );
+          attachedMedia = videoElement;
           instance.attachMedia(videoElement);
         });
 
