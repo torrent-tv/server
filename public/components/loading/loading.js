@@ -1917,6 +1917,7 @@ export class Loading extends StateDerivedView {
       this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
 
       const transport = await this.#acquireTransport();
+      this.#waitingModel.markStage("transport");
       this.#throwIfCancelled();
       if (!transport) {
         throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
@@ -2735,6 +2736,10 @@ export class Loading extends StateDerivedView {
       this.#offeredHeights = shouldTranscodeVideo ? planned.transcode : planned.copy;
       this.#publishQualityOptions();
     }
+    // The plan is what the torrent and the probe together produced: from here
+    // the pre-roll is our own session work, and the stage line separates the
+    // two rather than reporting one span nobody can act on.
+    this.#waitingModel.markStage("plan");
     this.#debug("playback decision", {
       fileIndex,
       container: prepared.container,

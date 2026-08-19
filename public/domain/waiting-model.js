@@ -138,7 +138,14 @@ export class WaitingModel {
    *
    * @type {{ startedAt: number, sessionAt: number | null, producedAt: number | null, fillingAt: number | null }}
    */
-  #stageMarks = { startedAt: Date.now(), sessionAt: null, producedAt: null, fillingAt: null };
+  #stageMarks = {
+    startedAt: Date.now(),
+    transportAt: null,
+    planAt: null,
+    sessionAt: null,
+    producedAt: null,
+    fillingAt: null
+  };
 
   /**
    * Take in whatever has just been measured, and answer with the figures.
@@ -250,7 +257,14 @@ export class WaitingModel {
     // cushion that belonged to the wait before it.
     this.#bufferedAhead = null;
     this.#downloadRateSamples = [];
-    this.#stageMarks = { startedAt: Date.now(), sessionAt: null, producedAt: null, fillingAt: null };
+    this.#stageMarks = {
+      startedAt: Date.now(),
+      transportAt: null,
+      planAt: null,
+      sessionAt: null,
+      producedAt: null,
+      fillingAt: null
+    };
     // The wait's own start, which the timeout clamp measures from. Left behind,
     // it anchored to the FIRST wait of the page: 45 s later the remaining time
     // to the gate's timeout was permanently zero, so every later wait computed
@@ -258,6 +272,27 @@ export class WaitingModel {
     // refusing to print a zero, and became visible the moment it stopped.
     this.#waitStart = null;
     this.#resetEtaFloor();
+  }
+
+  /**
+   * Record that a named step of the pre-roll has just finished.
+   *
+   * The stage line used to carry a single `create=` span from the viewer
+   * opening a file to the first progress report — and that span covers finding
+   * a proxy, connecting to it, adding the torrent, waiting for its metadata,
+   * probing the file and only then creating the session. Read as "session
+   * creation" it says 41 s where the proxy records 41 ms for itself, and the
+   * two are simply different quantities. Naming the parts is what makes the
+   * next reading answerable.
+   *
+   * @param {"transport" | "plan" | "session"} step
+   * @returns {void}
+   */
+  markStage(step) {
+    const key = step === "transport" ? "transportAt" : step === "plan" ? "planAt" : "sessionAt";
+    if (this.#stageMarks[key] === null) {
+      this.#stageMarks[key] = Date.now();
+    }
   }
 
   /**
@@ -748,7 +783,7 @@ export class WaitingModel {
    * @returns {string}
    */
   #describeStages(endedAt) {
-    const { startedAt, sessionAt, producedAt, fillingAt } = this.#stageMarks;
+    const { startedAt, transportAt, planAt, sessionAt, producedAt, fillingAt } = this.#stageMarks;
     // Marks are not guaranteed to fall in pipeline order: after a seek the
     // buffer still holds media from the previous position, so "first bytes
     // arrived" can be observed before "the encoder produced anything". A
@@ -762,7 +797,9 @@ export class WaitingModel {
       return to < from ? "not-in-order" : `${((to - from) / 1000).toFixed(1)}s`;
     };
     return (
-      `create=${span(startedAt, sessionAt)} ` +
+      `transport=${span(startedAt, transportAt)} ` +
+      `plan=${span(transportAt ?? startedAt, planAt)} ` +
+      `create=${span(planAt ?? startedAt, sessionAt)} ` +
       `first-segment=${span(sessionAt, producedAt)} ` +
       `first-bytes=${span(producedAt, fillingAt)} ` +
       `cushion=${span(fillingAt, endedAt)} ` +
