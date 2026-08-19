@@ -1,3 +1,7 @@
+## 0.13.15
+
+- **Fix**: A subtitle track that is still being prepared is waited for instead of being given up on. The proxy now answers `202` while it extracts one (proxy 2.41.0), because extraction reads the whole film and takes minutes; this side asked again five seconds later until it is ready. Held as a single request it could only ever end in this side's sixty-second timeout — measured 2026-08-19, one track produced its 3040 bytes after 752 seconds and the viewer never saw it. Nothing on screen waits for this: the picture is already playing and a track that arrives late appears in the menu when it does.
+
 ## 0.13.14
 
 - **Fix**: A measurement can no longer stop the viewer being told that playback is waiting. `applyAppState` scored the wait that had just ended BEFORE applying the state, so when that scoring threw on 2026-08-19 the rest never ran: `playbackLive` stayed false, and the check that shows a wait begins by returning when that flag is false. Measured across the two sessions of that evening — the one whose exception landed on the FIRST transition to playing logged `playback is live` zero times and showed the viewer a wait zero times, through every seek of its life, while the one whose exceptions came later showed it three times. So a nine-and-a-half-second seek displayed a frozen frame with nothing on it. The state is applied first now and the scoring runs last inside a guard: it is a measurement about a wait that is already over, and nothing on screen depends on it.

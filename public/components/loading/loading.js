@@ -38,6 +38,13 @@ import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-me
 
 /** Embedded-subtitle extraction reads the file to the last cue — allow long. */
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
+/**
+ * How long to leave a background extraction alone before asking again. The work
+ * itself takes minutes — it reads the whole film — so asking often would cost
+ * requests and change nothing; asking rarely would leave a ready track sitting
+ * unused. Five seconds is short against the scan and long against the channel.
+ */
+const SUBTITLE_POLL_INTERVAL_MS = 5_000;
 
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
@@ -3611,10 +3618,32 @@ export class Loading extends StateDerivedView {
     let defaultTaken = hasDefault;
     for (const track of tracks) {
       try {
-        const response = await transport.fetch(
-          `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${fileIndex}&trackIndex=${track.index}`,
-          { signal: this.#session.abortController.signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS }
-        );
+        // The proxy prepares an embedded track in the background and answers
+        // 202 until it is ready: extracting one makes ffmpeg read the whole
+        // film, because subtitles are interleaved through it. Measured
+        // 2026-08-19, one track produced 3040 bytes over 752 seconds — held as
+        // a single request it could only ever end in this side's timeout, and
+        // each retry restarted the same twelve-minute scan. Asking again is
+        // free now: the answer is kept once it exists.
+        //
+        // Nothing on screen waits for this. The picture is already playing, and
+        // a track that arrives late simply appears in the menu when it does.
+        const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
+          `&fileIndex=${fileIndex}&trackIndex=${track.index}`;
+        let response = await transport.fetch(url, {
+          signal: this.#session.abortController.signal,
+          timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
+        });
+        while (response.status === 202) {
+          await new Promise((resolve) => { window.setTimeout(resolve, SUBTITLE_POLL_INTERVAL_MS); });
+          if (this.#session.abortController.signal.aborted) {
+            return;
+          }
+          response = await transport.fetch(url, {
+            signal: this.#session.abortController.signal,
+            timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
+          });
+        }
         if (!response.ok) {
           console.warn(`[torrent-tv][subtitles] embedded track ${track.index} fetch failed (${response.status})`);
           continue;
