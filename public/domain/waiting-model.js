@@ -354,6 +354,10 @@ export class WaitingModel {
     let cushionPercent = null;
     let cushionRemainingSeconds = null;
     let etaSeconds = null;
+    // Set when a term of the sum cannot be measured. The estimate is then not a
+    // smaller number, it is absent: the caller shows "estimating…" rather than
+    // a countdown built on an assumption.
+    let unknown = false;
     let fillRate = this.#fillRate;
     // Which of the four measurements produced the number the viewer sees. It
     // is ONE figure — seconds until playback starts — but it is measured
@@ -580,13 +584,22 @@ export class WaitingModel {
         // name of a measurement — so every log line said the figure came from
         // the machine's own history when it came from nowhere. A term that
         // cannot be measured must at least be named for what it is.
-        const fillSeconds = measured ? hostPrior : cushionRemainingSeconds;
-        total += fillSeconds;
-        terms.push(`fill=${fillSeconds.toFixed(1)}@${measured ? "host-median" : "assumed-1x"}`);
+        if (!measured) {
+          // Nothing about this wait, and nothing about this host either. The
+          // shortfall divided by a rate of exactly one is an invention, and it
+          // was measured saying 13.6 s of a wait that ran 202.1 s, and 4.0 s of
+          // one that ran 46.8 s. A quantity nobody has measured is not a small
+          // number — it is not known, and the viewer is told that instead.
+          unknown = true;
+          terms.push("fill=unknown");
+        } else {
+          total += hostPrior;
+          terms.push(`fill=${hostPrior.toFixed(1)}@host-median`);
+        }
       }
     }
 
-    etaSeconds = total;
+    etaSeconds = unknown ? null : total;
     etaSource = terms.length > 0 ? terms.join("+") : "ready";
 
     // A countdown that goes UP is worse than no countdown: the viewer reads it
