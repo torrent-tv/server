@@ -827,10 +827,23 @@ export class WaitingModel {
       return;
     }
     const endedAt = Date.now();
-    const scored = samples.map((sample) => ({
-      ...sample,
-      actual: (endedAt - sample.atMs) / 1000
-    })).map((sample) => ({ ...sample, error: sample.predicted - sample.actual }));
+    // Only the moments that made a PREDICTION can be scored against the
+    // outcome. Since 0.13.11 a moment with nothing measured makes none — it
+    // says so and shows "estimating…" — and those moments were still going into
+    // this arithmetic, where `null.toFixed()` threw. Measured 2026-08-19: the
+    // exception landed on every wait that ended, including every seek, and it
+    // is thrown from the summary at the END of a wait, so it took the rest of
+    // that turn with it.
+    const scored = samples
+      .filter((sample) => Number.isFinite(sample.predicted))
+      .map((sample) => ({ ...sample, actual: (endedAt - sample.atMs) / 1000 }))
+      .map((sample) => ({ ...sample, error: sample.predicted - sample.actual }));
+    if (scored.length === 0) {
+      // Nothing was ever predicted during this wait. That is a finding, not an
+      // absence: it says the viewer was shown "estimating…" throughout.
+      this.#logEvt(`[eta-stages] ${this.#describeStages(endedAt)}[eta-accuracy] nothing was predicted during this wait`);
+      return;
+    }
     const worst = scored.reduce((a, b) => (Math.abs(b.error) > Math.abs(a.error) ? b : a));
     const errors = scored.map((sample) => Math.abs(sample.error)).sort((a, b) => a - b);
     const median = errors[Math.floor(errors.length / 2)];
