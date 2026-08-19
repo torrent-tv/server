@@ -1145,12 +1145,6 @@ export class Loading extends StateDerivedView {
    * @param {boolean} belongsOnScreen
    */
   applyAppState(state, belongsOnScreen) {
-    // The picture has actually started. Score every estimate shown during the
-    // wait that just ended against what really happened — the only moment at
-    // which that comparison is possible.
-    if (state === APP_STATE.ADVANCING) {
-      this.#waitingModel.reportEtaAccuracy();
-    }
     super.applyAppState(state, belongsOnScreen);
     if (state === APP_STATE.ADVANCING && !this.#playbackLive) {
       this.#logEvt("playback is live");
@@ -1158,6 +1152,26 @@ export class Loading extends StateDerivedView {
       // the pre-buffer fill, so the mid-playback buffering notice applies.
       this.#playbackLive = true;
       this.#applyPendingResume();
+    }
+    // The picture has actually started. Score every estimate shown during the
+    // wait that just ended against what really happened — the only moment at
+    // which that comparison is possible.
+    //
+    // LAST, and inside a guard, because this is a measurement about a wait that
+    // is already over and nothing on screen depends on it. It used to run
+    // FIRST, and on 2026-08-19 it threw — `null.toFixed()` on an estimate that
+    // was deliberately absent — which meant the state below was never applied:
+    // `playbackLive` stayed false for the whole session, and the check that
+    // shows the viewer a wait begins by returning when that flag is false. One
+    // exception in a diagnostic left every seek of that session showing a
+    // frozen frame with nothing on it. A measurement must not be able to do
+    // that, whatever is wrong with the measurement.
+    if (state === APP_STATE.ADVANCING) {
+      try {
+        this.#waitingModel.reportEtaAccuracy();
+      } catch (error) {
+        console.warn("[torrent-tv] scoring the wait that just ended failed", error);
+      }
     }
   }
 
