@@ -187,6 +187,25 @@ test("with nothing measured, the estimate rests on the host's median rather than
   );
 });
 
+test("with nothing measured at all, there is no estimate rather than an invented one", () => {
+  const model = new WaitingModel();
+  // A cold open on a host that has never reported how long it takes. The
+  // shortfall used to be divided by a rate of exactly one and shown as a
+  // confident countdown: measured 2026-08-18 it said 13.6 s of a wait that ran
+  // 202.1 s, and 2026-08-09 it said 4.0 s of one that ran 46.8 s. A quantity
+  // nobody has measured is not a small number.
+  const result = model.update({
+    bufferedAhead: 0,
+    transcodeProgress: { state: "ready" }
+  });
+
+  assert.equal(
+    result.etaSeconds,
+    null,
+    `nothing has been measured, so the viewer is told it is not known yet (got ${result.etaSeconds})`
+  );
+});
+
 test("the cushion the estimate counts down to is the one the gate releases on", () => {
   const model = new WaitingModel();
   // Two figures for one decision is what made the estimate useless at the only
