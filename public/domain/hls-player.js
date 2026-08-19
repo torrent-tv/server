@@ -10,7 +10,6 @@
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
 import { bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
-import { createRepeatGuard, fragmentKey } from "./fruitless-repeat.js";
 
 /**
  * @param {HTMLVideoElement} videoElement
@@ -677,57 +676,20 @@ export function createHlsPlayer(onLog) {
               instance.on(event, () => { lastPlayerEvent = name; });
             }
           }
-          // A fragment fetched again and again while the buffer stands still.
-          // Measured 2026-08-18: two audio segments were fetched 737 and 736
-          // times in 149 s — half a gigabyte of the same bytes — while the
-          // picture stood at 1061.0 s and never moved, and nothing stopped it
-          // because nothing counted. The rule is in `fruitless-repeat.js`.
-          const repeatGuard = createRepeatGuard();
-          let repeatAnnounced = false;
-          for (const name of ["BUFFER_FLUSHED", "BUFFER_RESET", "MEDIA_DETACHED", "LEVEL_SWITCHED",
-            "AUDIO_TRACK_SWITCHING", "AUDIO_TRACK_SWITCHED", "AUDIO_TRACKS_UPDATED"]) {
-            const event = HlsClass.Events[name];
-            if (event) {
-              // After any of these a fragment is legitimately appended again,
-              // so the count must not carry across them.
-              instance.on(event, () => { repeatGuard.forget(); });
-            }
-          }
-          instance.on(HlsClass.Events.FRAG_BUFFERED, (_event, data) => {
-            const frag = data?.frag;
-            if (!frag) {
-              return;
-            }
-            const bufferedEnd = bufferedEndSeconds(videoElement);
-            // The playhead decides it: an append that grew nothing while the
-            // picture kept running is ordinary work — changing the audio
-            // language re-appends into a span the picture already covers, and
-            // `video.buffered` is the intersection of the two source buffers,
-            // so its end does not move and need not.
-            const playhead = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : 0;
-            const playing = videoElement instanceof HTMLVideoElement ? !videoElement.paused : false;
-            const verdict = repeatGuard.note({ key: fragmentKey(frag), bufferedEnd, playhead, playing });
-            if (verdict.fruitless === 0 || repeatAnnounced) {
-              return;
-            }
-            const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : 0;
-            console.warn(
-              `[torrent-tv][hls] fruitless append ${fragmentKey(frag)} ×${verdict.fruitless} ` +
-              `frag=${frag.relurl ?? "-"} bufferEnd=${bufferedEnd.toFixed(2)}s currentTime=${at.toFixed(2)}s`
-            );
-            if (!verdict.looping) {
-              return;
-            }
-            repeatAnnounced = true;
-            console.warn(
-              `[torrent-tv][hls] the same fragment is being fetched without effect; ` +
-              `stopping instead of repeating it (${fragmentKey(frag)}, buffer stuck at ${bufferedEnd.toFixed(2)}s)`
-            );
-            instance.stopLoad();
-            if (typeof options.onUnrecoverable === "function") {
-              options.onUnrecoverable("fragmentRepeatsWithoutEffect");
-            }
-          });
+          // A fragment fetched again and again while the buffer stands still is
+          // a real failure — measured 2026-08-18, two audio segments fetched 737
+          // and 736 times in 149 s while the picture never moved. A guard that
+          // stopped playback on it shipped in 0.13.8 and was REMOVED in 0.13.12,
+          // because it twice killed sessions that were merely stalling: three
+          // appends inside 79 ms during an audio-language change, and three
+          // inside 68 ms after hls.js nudged the playhead off an empty buffer.
+          // Both look identical to the real loop in every quantity the player
+          // exposes at that instant — the buffer is not growing, the picture is
+          // not moving — and differ only in how long they go on: the real one
+          // ran for two and a half minutes. Nothing here measured that, so the
+          // guard was deciding on evidence it did not have. Whatever replaces it
+          // must be founded on duration, and must be shown against BOTH recorded
+          // cases before it is allowed to stop anything.
 
           instance.on(HlsClass.Events.FRAG_LOADING, (_event, data) => {
             const start = data?.frag?.start;
