@@ -392,3 +392,17 @@ test("a proxy that has not measured leaves the answer alone", () => {
   model.update({ minimumBufferSeconds: 0 });
   assert.equal(model.requiredBufferSeconds(), 8, "and neither may a zero");
 });
+
+test("a wait in which nothing was ever predicted is summarised, not thrown on", () => {
+  // Since 0.13.11 a moment with nothing measured makes no prediction. Those
+  // moments were still scored against the outcome, and `null.toFixed()` threw —
+  // measured 2026-08-19 on every wait that ended, every seek included.
+  const model = new WaitingModel();
+
+  const answer = model.update({ bufferedAhead: 0, transcodeProgress: { state: "ready" } });
+  assert.equal(answer.etaSeconds, null, "nothing is measured, so nothing is predicted");
+
+  model.reportEtaAccuracy();
+
+  assert.ok(true, "summarising a wait that predicted nothing must not throw");
+});
