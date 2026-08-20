@@ -118,6 +118,17 @@ function buildTrackLabel(track) {
   }
   return parts.join(" — ");
 }
+/**
+ * The cursor a subtitle answer carries, counted in the order cues were FOUND.
+ *
+ * @param {{ headers?: { get?: (name: string) => string | null } }} response
+ * @returns {number}
+ */
+function cursorOf(response) {
+  const value = Number.parseInt(String(response?.headers?.get?.("X-Subtitle-Cursor") ?? ""), 10);
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
 import {
   detectSubtitleInfo,
   buildSubtitleLabel,
@@ -371,7 +382,7 @@ export class Loading extends StateDerivedView {
    *
    * @type {Map<number, number>}
    */
-  #subtitleReadUntil = new Map();
+  #subtitleCursor = new Map();
   /**
    * Which subtitle tracks have a follow loop running, by track index. One loop
    * per track at most — a `change` on the text tracks fires for every track at
@@ -3492,7 +3503,7 @@ export class Loading extends StateDerivedView {
     // to the `<video>` element, which survives a file switch, and it reads the
     // current file from `#subtitleContext` rather than from a closure.
     this.#subtitleEpoch += 1;
-    this.#subtitleReadUntil.clear();
+    this.#subtitleCursor.clear();
     this.#subtitlesBeingFollowed.clear();
     this.#subtitlesFullyRead.clear();
     this.#embeddedTextTracks.clear();
@@ -3805,7 +3816,7 @@ export class Loading extends StateDerivedView {
         console.debug(
           `[torrent-tv][subtitles] embedded track loaded "${el.label}" with ${added.added} cue(s)`
         );
-        this.#subtitleReadUntil.set(track.index, added.knownUntilSeconds);
+        this.#subtitleCursor.set(track.index, cursorOf(response));
         this.#embeddedTextTracks.set(track.index, el.track);
         this.#subtitleContext = { transport, sourceKey, fileIndex };
         this.#watchSubtitleModes();
@@ -3839,7 +3850,7 @@ export class Loading extends StateDerivedView {
    * whole session, every fifteen seconds, at 0.2-5.2 s of reading each — while
    * at most one of them was ever on screen. A track turned off stops being
    * asked for; turning it back on resumes from where it stopped, which is why
-   * the position lives in `#subtitleReadUntil` and not in this closure.
+   * the cursor lives in `#subtitleCursor` and not in this closure.
    *
    * @param {{ trackIndex: number, textTrack: TextTrack }} params
    * @returns {void}
@@ -3880,10 +3891,10 @@ export class Loading extends StateDerivedView {
         stop();
         return;
       }
-      let until = this.#subtitleReadUntil.get(trackIndex) ?? -1;
+      const since = this.#subtitleCursor.get(trackIndex) ?? 0;
       try {
         const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
-          `&fileIndex=${fileIndex}&trackIndex=${trackIndex}&after=${until.toFixed(3)}`;
+          `&fileIndex=${fileIndex}&trackIndex=${trackIndex}&since=${since}`;
         const response = await transport.fetch(url, { signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS });
         if (epoch !== this.#subtitleEpoch) {
           return;
@@ -3901,16 +3912,18 @@ export class Loading extends StateDerivedView {
           if (epoch !== this.#subtitleEpoch) {
             return;
           }
-          const result = appendCues(textTrack, parseVttCues(vtt), until);
-          until = result.knownUntilSeconds;
-          this.#subtitleReadUntil.set(trackIndex, until);
+          // -1, deliberately: what comes back is everything found since the
+          // cursor, wherever in the film it sits, so nothing may be skipped for
+          // being earlier than the last cue held.
+          const result = appendCues(textTrack, parseVttCues(vtt), -1);
+          this.#subtitleCursor.set(trackIndex, cursorOf(response) || since);
           quietRounds = result.added > 0 ? 0 : quietRounds + 1;
           const covered = Number(response.headers?.get?.("X-Subtitle-Covered-Clusters"));
           const indexed = Number(response.headers?.get?.("X-Subtitle-Indexed-Clusters"));
           if (result.added > 0) {
             console.debug(
               `[torrent-tv][subtitles] track ${trackIndex}: +${result.added} cue(s), ` +
-              `now to ${until.toFixed(1)}s` +
+              `covering to ${result.knownUntilSeconds.toFixed(1)}s` +
               (Number.isFinite(covered) && Number.isFinite(indexed) && indexed > 0
                 ? ` (${covered}/${indexed} of the film read)`
                 : "")
