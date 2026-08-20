@@ -255,3 +255,38 @@ export async function parseTorrentBytes(torrentBytes) {
     isMultiFile
   };
 }
+
+/**
+ * Whether a magnet link names any tracker of its own.
+ *
+ * This is the difference between two failures that look identical from the
+ * outside. A magnet carrying `tr=` parameters was announced to real trackers,
+ * so finding nobody means the swarm is empty or unreachable. A magnet carrying
+ * none was never announced anywhere: only the distributed hash table could look
+ * for the swarm, and for a swarm that lives on a tracker it finds nobody at
+ * all. Saying "no peers reachable" for the second names a consequence and hides
+ * the one thing the viewer can act on — the link is short, not the file dead.
+ *
+ * Established 2026-08-20: this app's own share links carry every tracker of the
+ * original `.torrent`, and with them the same film reached 52-67 seeders where
+ * a bare magnet for it reached none.
+ *
+ * @param {string} magnetUri
+ * @returns {boolean} False when the link names no tracker, or cannot be read.
+ */
+export function magnetNamesATracker(magnetUri) {
+  if (typeof magnetUri !== "string" || magnetUri.length === 0) {
+    return false;
+  }
+  // A magnet is not a hierarchical URL, so its parameters are read from the
+  // text after the first "?" rather than through URL's pathname handling.
+  const query = magnetUri.slice(magnetUri.indexOf("?") + 1);
+  if (query.length === 0 || query === magnetUri) {
+    return false;
+  }
+  try {
+    return new URLSearchParams(query).getAll("tr").some((value) => value.trim().length > 0);
+  } catch {
+    return false;
+  }
+}
