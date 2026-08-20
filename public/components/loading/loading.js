@@ -1,5 +1,6 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
+import { appendCues, parseVttCues } from "../../domain/vtt-cues.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
@@ -45,6 +46,12 @@ const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
  * unused. Five seconds is short against the scan and long against the channel.
  */
 const SUBTITLE_POLL_INTERVAL_MS = 5_000;
+/**
+ * How often to ask for the part of a subtitle track that has appeared since.
+ * A cue is a line of dialogue, and dialogue does not arrive faster than the
+ * film does, so asking every fifteen seconds is ahead of any viewer.
+ */
+const SUBTITLE_FOLLOW_INTERVAL_MS = 15_000;
 
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
@@ -3652,9 +3659,6 @@ export class Loading extends StateDerivedView {
         if (!vtt || !vtt.startsWith("WEBVTT")) {
           continue;
         }
-        const blob = new Blob([vtt], { type: "text/vtt" });
-        const blobUrl = URL.createObjectURL(blob);
-        this.#subtitleBlobUrls.push(blobUrl);
 
         // Language: container metadata tag (author intent) → proxy content
         // detection (X-Subtitle-Language) → the film's audio language → und.
@@ -3670,17 +3674,35 @@ export class Loading extends StateDerivedView {
           group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
         };
 
+        // No `src`. A track element with one can only ever be REPLACED, and
+        // this track grows as the film downloads: the browser was fetching all
+        // of it every few seconds — 76 KB a time on the field file — to gain
+        // the few lines at its end. An element without a source still owns a
+        // `TextTrack`, and cues can be added to it one at a time.
         const el = document.createElement("track");
         el.kind = "subtitles";
         el.label = buildSubtitleLabel(labelInfo);
         el.srclang = lang.code || "und";
-        el.src = blobUrl;
         if (!defaultTaken && track.isDefault === true) {
           el.default = true;
           defaultTaken = true;
         }
         this.#videoElement.appendChild(el);
-        console.debug(`[torrent-tv][subtitles] embedded track loaded "${el.label}"`);
+        const added = appendCues(el.track, parseVttCues(vtt), -1);
+        console.debug(
+          `[torrent-tv][subtitles] embedded track loaded "${el.label}" with ${added.added} cue(s)`
+        );
+        // The rest of the film has not been downloaded yet, so the rest of the
+        // track does not exist yet either. Ask again as it does, sending where
+        // this copy ends so only the new lines come back.
+        this.#followSubtitleTrack({
+          transport,
+          sourceKey,
+          fileIndex,
+          trackIndex: track.index,
+          textTrack: el.track,
+          knownUntilSeconds: added.knownUntilSeconds
+        });
       } catch (e) {
         if (this.#isAbortError(e)) {
           throw e;
@@ -3688,6 +3710,75 @@ export class Loading extends StateDerivedView {
         console.warn(`[torrent-tv][subtitles] embedded track ${track.index} failed:`, e);
       }
     }
+  }
+
+  /**
+   * Keep asking for the part of a subtitle track that does not exist yet.
+   *
+   * A track is read out of the clusters the viewer has downloaded, so it grows
+   * as they watch. Each ask carries where this copy ends and gets back only
+   * what is past it, which is a few hundred bytes instead of the whole track.
+   * It stops when the film is fully covered, when the session ends, or when the
+   * answers stop bringing anything new for long enough that there is plainly
+   * nothing left to bring.
+   *
+   * @param {{ transport: object, sourceKey: string, fileIndex: number, trackIndex: number, textTrack: TextTrack, knownUntilSeconds: number }} params
+   * @returns {void}
+   */
+  #followSubtitleTrack({ transport, sourceKey, fileIndex, trackIndex, textTrack, knownUntilSeconds }) {
+    let until = knownUntilSeconds;
+    let quietRounds = 0;
+    const signal = this.#session.abortController.signal;
+    const ask = async () => {
+      if (signal.aborted) {
+        return;
+      }
+      try {
+        const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
+          `&fileIndex=${fileIndex}&trackIndex=${trackIndex}&after=${until.toFixed(3)}`;
+        const response = await transport.fetch(url, { signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS });
+        if (response.ok) {
+          const vtt = await response.text();
+          const result = appendCues(textTrack, parseVttCues(vtt), until);
+          until = result.knownUntilSeconds;
+          quietRounds = result.added > 0 ? 0 : quietRounds + 1;
+          const covered = Number(response.headers?.get?.("X-Subtitle-Covered-Clusters"));
+          const indexed = Number(response.headers?.get?.("X-Subtitle-Indexed-Clusters"));
+          if (result.added > 0) {
+            console.debug(
+              `[torrent-tv][subtitles] track ${trackIndex}: +${result.added} cue(s), ` +
+              `now to ${until.toFixed(1)}s` +
+              (Number.isFinite(covered) && Number.isFinite(indexed) && indexed > 0
+                ? ` (${covered}/${indexed} of the film read)`
+                : "")
+            );
+          }
+          // Everything the container indexes has been read: there is no more
+          // to come, whatever the viewer does next.
+          if (Number.isFinite(covered) && Number.isFinite(indexed) && indexed > 0 && covered >= indexed) {
+            return;
+          }
+        }
+      } catch (error) {
+        if (this.#isAbortError(error)) {
+          return;
+        }
+        // Nothing on screen depends on this: the cues already shown stay, and
+        // the next ask may well succeed. It is counted as a quiet round so a
+        // track that keeps failing stops being asked for.
+        quietRounds += 1;
+        console.debug(`[torrent-tv][subtitles] track ${trackIndex} follow-up failed:`, error);
+      }
+      // Ten quiet rounds is between two and three minutes of a film that is
+      // still downloading bringing nothing new, which happens when the track
+      // has no cues left in it at all — a forced-subtitle track that covers one
+      // scene, say.
+      if (quietRounds >= 10) {
+        return;
+      }
+      window.setTimeout(() => { void ask(); }, SUBTITLE_FOLLOW_INTERVAL_MS);
+    };
+    window.setTimeout(() => { void ask(); }, SUBTITLE_FOLLOW_INTERVAL_MS);
   }
 
   /**
