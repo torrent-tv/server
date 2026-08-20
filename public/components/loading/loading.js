@@ -22,7 +22,7 @@ import {
   readUrlState,
   resumePositionFor
 } from "../../domain/url-state.js";
-import { classifyMediaFiles, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
+import { classifyMediaFiles, magnetNamesATracker, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 
@@ -216,8 +216,21 @@ export class Loading extends StateDerivedView {
     lanAllowButton: "Allow",
     lanCheckAgainButton: "Check again",
     fetchingMagnetMetadata: "Fetching torrent metadata from the swarm...",
+    // Two different situations, and the difference is in the link itself.
+    //
+    // A magnet may carry the trackers of the torrent it came from (`tr=`), and
+    // then failing to find anyone means the swarm really is empty or
+    // unreachable. A magnet pasted from elsewhere often carries NONE, and then
+    // nothing was ever asked of a tracker: only the distributed hash table
+    // could look, and for a swarm that lives on a tracker it finds nobody. The
+    // old message said "no peers reachable" for both, which names a consequence
+    // and hides the one thing the viewer could act on. Established 2026-08-20:
+    // this app's own share links carry every tracker of the original file, and
+    // with them the same film reached 52-67 seeders.
     magnetMetadataFailed:
-      "Could not fetch metadata for this magnet link — no peers reachable. Try again later."
+      "Could not fetch metadata for this magnet link — no peers reachable. Try again later.",
+    magnetMetadataFailedNoTrackers:
+      "This magnet link names no tracker, so only the distributed hash table could look for the swarm — and it found nobody. The link is incomplete rather than the file being dead: a link that carries its trackers, or the original .torrent file, will usually work."
   };
 
   // How long to wait for the file header quietly before SAYING that nothing is
@@ -2053,7 +2066,7 @@ export class Loading extends StateDerivedView {
         // `pending` (or a transient non-ok) — keep the status up and retry
         // until the wall-clock deadline.
         if (Date.now() >= metadataDeadline) {
-          throw new Error(Loading.MESSAGES.magnetMetadataFailed);
+          throw new Error(this.#magnetFailureMessage(magnetUri));
         }
         this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
         await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -2063,7 +2076,7 @@ export class Loading extends StateDerivedView {
         typeof payload?.name === "string" && payload.name.length > 0 ? payload.name : displayName;
       const files = normalizeRemoteFileList(name, payload?.files);
       if (files.length === 0) {
-        throw new Error(Loading.MESSAGES.magnetMetadataFailed);
+        throw new Error(this.#magnetFailureMessage(magnetUri));
       }
 
       current.name = name;
@@ -2129,6 +2142,19 @@ export class Loading extends StateDerivedView {
     } finally {
       this.#isProcessing = false;
     }
+  }
+
+  /**
+   * Why fetching a magnet's metadata came to nothing, said as far as it is
+   * known rather than as the consequence the viewer already saw.
+   *
+   * @param {string} magnetUri
+   * @returns {string}
+   */
+  #magnetFailureMessage(magnetUri) {
+    return magnetNamesATracker(magnetUri)
+      ? Loading.MESSAGES.magnetMetadataFailed
+      : Loading.MESSAGES.magnetMetadataFailedNoTrackers;
   }
 
   /**
