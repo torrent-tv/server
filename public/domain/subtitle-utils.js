@@ -297,3 +297,35 @@ export function matchSubtitlesForVideo(videoFile, subtitleFiles) {
 
 
 
+
+/**
+ * Which embedded subtitle track the CONTAINER asks to be shown, if it asks for
+ * one at all.
+ *
+ * The rule (stated by the user 2026-08-20): the container decides, and if it
+ * says nothing, nothing is shown. A viewer who wants subtitles picks them in
+ * the menu.
+ *
+ * "Says nothing" is the subtle half. In Matroska `FlagDefault` DEFAULTS TO 1,
+ * so a file whose muxer wrote the flag on none of its tracks is
+ * indistinguishable — through ffmpeg's banner, which is where this flag reaches
+ * us — from one that wrote it on every track: both arrive with everything
+ * marked. A container that marks all of its subtitle tracks has not chosen
+ * between them. Neither has one that offers a single track, since that track is
+ * marked whether or not anybody meant it. So a choice is only a choice when
+ * there are several tracks and exactly one of them carries the flag.
+ *
+ * Subtitle FILES lying beside the video are not considered here at all: a file
+ * in the torrent is not the container speaking about itself.
+ *
+ * @param {Array<{ index: number, textBased?: boolean, isDefault?: boolean }>} tracks
+ * @returns {number | null} The `index` of the track to show, or null for none.
+ */
+export function containerDefaultSubtitleIndex(tracks) {
+  const textBased = (Array.isArray(tracks) ? tracks : []).filter((t) => t?.textBased === true);
+  if (textBased.length < 2) {
+    return null;
+  }
+  const marked = textBased.filter((t) => t.isDefault === true);
+  return marked.length === 1 ? marked[0].index : null;
+}

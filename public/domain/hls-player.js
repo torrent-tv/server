@@ -115,6 +115,69 @@ function pinStartLevel(instance, preferredHeight) {
 }
 
 /**
+ * What each track's own buffer holds right now, as ranges.
+ *
+ * The media element's `buffered` is the INTERSECTION of the tracks it is
+ * playing, so a hole in the sound alone shows there as a hole with no way to
+ * tell which track made it. hls.js keeps the real source buffers per track, and
+ * they are what says whether an appended fragment landed.
+ *
+ * The shape is hls.js's own and is read defensively, because this is a reading
+ * and a reading that throws is worse than one that says "unknown":
+ * `bufferController.sourceBuffers` is an array of `[name, SourceBuffer]` pairs
+ * (hls.js 1.6.16, `sourceBuffers = [[null, null], [null, null]]` filled in as
+ * tracks are created) — NOT an object keyed by name, which is what the first
+ * version of this assumed. That version read `undefined`, fell through to the
+ * media element every time, and would have printed the very intersection this
+ * exists to avoid while the changelog claimed otherwise.
+ *
+ * `SourceBuffer.buffered` throws `InvalidStateError` once the buffer has been
+ * detached from its MediaSource, which is exactly the state a dead film is in,
+ * so each read stands on its own.
+ *
+ * @param {object} instance - The hls.js instance.
+ * @param {HTMLVideoElement} videoElement
+ * @returns {string}
+ */
+export function describeTrackBuffers(instance, videoElement) {
+  const describe = (name, source) => {
+    try {
+      const buffered = source?.buffered;
+      if (!buffered || typeof buffered.length !== "number") {
+        return `${name}=unknown`;
+      }
+      const ranges = [];
+      for (let i = 0; i < buffered.length; i += 1) {
+        ranges.push(`${buffered.start(i).toFixed(3)}..${buffered.end(i).toFixed(3)}`);
+      }
+      return `${name}=[${ranges.join(" ")}]`;
+    } catch {
+      // silent-ok: the failure IS the reading — a buffer that refuses to be
+      // read has been detached from its media source, which is the fact this
+      // line is being printed to establish, and it is returned as that word.
+      return `${name}=detached`;
+    }
+  };
+  const parts = [];
+  const pairs = instance?.bufferController?.sourceBuffers;
+  if (Array.isArray(pairs)) {
+    for (const pair of pairs) {
+      if (!Array.isArray(pair) || !pair[0] || !pair[1]) {
+        continue;
+      }
+      parts.push(describe(pair[0], pair[1]));
+    }
+  }
+  if (parts.length === 0) {
+    // Named for what it is. The media element's range is the intersection of
+    // its tracks, so it answers a different question, and a line that does not
+    // say so would be read as the per-track answer it is standing in for.
+    parts.push(describe("media-intersection", videoElement));
+  }
+  return parts.join(" ");
+}
+
+/**
  * Create a stateful HLS player instance.
  *
  * @param {(message: string) => void} onLog - Called with status/error messages
@@ -720,6 +783,60 @@ export function createHlsPlayer(onLog) {
                 `seeking=${videoElement.seeking} lastPlayerEvent=${lastPlayerEvent}`
               );
             }
+          });
+
+          // The same fragment asked for a second time is the shape a dead film
+          // takes: the bytes arrive, the player finds the range still
+          // unbuffered and asks again, for ever. Measured 2026-08-20 on
+          // "Minions.and.Monsters.1080p.mkv" — audio segment #521 served 22
+          // times in 16 s, an identical 64825 bytes every time, each within
+          // 160 ms — and neither side recorded what the player did with them.
+          // What settles it is where the fragment says it is against what its
+          // OWN track's buffer holds, which is what this prints.
+          //
+          // Counted on DELIVERY, not on the request. A request is re-issued for
+          // reasons that are not faults and are common here: a segment still
+          // being produced fails and is retried up to twelve times by design
+          // (see `fragLoadPolicy` above, and the reason it is twelve), and a
+          // load aborted by a seek or a rung switch is re-issued too. Counting
+          // requests would print a dozen lines for one warming segment, in
+          // exactly the stretch of log a session is read for. The field case
+          // was 22 SUCCESSFUL deliveries of an identical 64825 bytes, so
+          // counting what arrived catches it and excludes every retry by
+          // construction.
+          //
+          // Keyed by rung as well as track and number, and forgotten whenever
+          // the player flushes: a quality switch fetches the same numbers from
+          // another rung, and after a flush re-fetching is the right thing to
+          // do. `backBufferLength` makes flushes routine during healthy
+          // playback, which does not weaken this — a player that is stuck
+          // appends nothing, so it trims nothing.
+          const fragmentDeliveries = new Map();
+          instance.on(HlsClass.Events.BUFFER_FLUSHED, () => {
+            fragmentDeliveries.clear();
+          });
+          instance.on(HlsClass.Events.FRAG_LOADED, (_event, data) => {
+            const frag = data?.frag;
+            const sn = frag?.sn;
+            if (typeof sn !== "number") {
+              return;
+            }
+            const key = `${frag?.type ?? "-"}#${frag?.level ?? "-"}#${sn}`;
+            const deliveries = (fragmentDeliveries.get(key) ?? 0) + 1;
+            fragmentDeliveries.set(key, deliveries);
+            if (deliveries < 2) {
+              return;
+            }
+            const start = Number(frag?.start);
+            const end = start + Number(frag?.duration);
+            const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : null;
+            console.warn(
+              `[evt] frag-again ${key} delivered=${deliveries} ` +
+              `frag=${Number.isFinite(start) ? start.toFixed(3) : "?"}..` +
+              `${Number.isFinite(end) ? end.toFixed(3) : "?"} ` +
+              `currentTime=${typeof at === "number" ? at.toFixed(3) : "-"} ` +
+              describeTrackBuffers(instance, videoElement)
+            );
           });
 
           // The switch has actually happened — the menu says what is playing,
