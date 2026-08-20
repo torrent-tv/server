@@ -306,23 +306,41 @@ export function matchSubtitlesForVideo(videoFile, subtitleFiles) {
  * says nothing, nothing is shown. A viewer who wants subtitles picks them in
  * the menu.
  *
- * "Says nothing" is the subtle half. In Matroska `FlagDefault` DEFAULTS TO 1,
- * so a file whose muxer wrote the flag on none of its tracks is
- * indistinguishable — through ffmpeg's banner, which is where this flag reaches
- * us — from one that wrote it on every track: both arrive with everything
- * marked. A container that marks all of its subtitle tracks has not chosen
- * between them. Neither has one that offers a single track, since that track is
- * marked whether or not anybody meant it. So a choice is only a choice when
- * there are several tracks and exactly one of them carries the flag.
+ * "Says nothing" is the subtle half, and which half of it applies depends on
+ * how well the file could be read.
+ *
+ * When the proxy managed to read the container itself, each track carries
+ * `declaresDefault` — whether `FlagDefault` was WRITTEN for it. Then the answer
+ * is exact: among the tracks the file actually wrote a flag for, one marked
+ * means show that one; none marked, or several, means the file did not choose.
+ * A single track counts here, because a flag written for one track of one is
+ * still somebody saying so.
+ *
+ * When it could not — a container we do not parse, or a reading that did not
+ * line up with the probe — every track arrives with `declaresDefault: false`
+ * and only ffmpeg's banner is left, which cannot tell an unwritten flag from a
+ * written one: Matroska's `FlagDefault` defaults to 1 and ffmpeg has already
+ * applied that default by the time it prints, so a file that marked nothing
+ * looks exactly like one that marked everything. The strongest thing the banner
+ * supports is then kept: several tracks with exactly one marked is a choice,
+ * and anything else is not.
  *
  * Subtitle FILES lying beside the video are not considered here at all: a file
  * in the torrent is not the container speaking about itself.
  *
- * @param {Array<{ index: number, textBased?: boolean, isDefault?: boolean }>} tracks
+ * @param {Array<{ index: number, textBased?: boolean, isDefault?: boolean, declaresDefault?: boolean }>} tracks
  * @returns {number | null} The `index` of the track to show, or null for none.
  */
 export function containerDefaultSubtitleIndex(tracks) {
   const textBased = (Array.isArray(tracks) ? tracks : []).filter((t) => t?.textBased === true);
+  if (textBased.length === 0) {
+    return null;
+  }
+  const written = textBased.filter((t) => t.declaresDefault === true);
+  if (written.length > 0) {
+    const marked = written.filter((t) => t.isDefault === true);
+    return marked.length === 1 ? marked[0].index : null;
+  }
   if (textBased.length < 2) {
     return null;
   }

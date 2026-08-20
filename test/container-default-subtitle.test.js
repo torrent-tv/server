@@ -59,3 +59,48 @@ test("nothing at all is answered with nothing", () => {
   assert.equal(containerDefaultSubtitleIndex([]), null);
   assert.equal(containerDefaultSubtitleIndex(undefined), null);
 });
+
+test("a flag the file actually wrote is believed, even on a single track", () => {
+  // With `declaresDefault` the ambiguity is gone: this file wrote the flag, for
+  // this track, deliberately. The old rule refused a lone track because a
+  // Matroska track is marked whether or not anybody meant it.
+  const chosen = containerDefaultSubtitleIndex([
+    { index: 0, textBased: true, isDefault: true, declaresDefault: true }
+  ]);
+  assert.equal(chosen, 0);
+});
+
+test("a file that wrote the flag on nothing shows nothing, though every track is marked", () => {
+  // What ffmpeg's banner reports for such a file is `(default)` on all of them,
+  // which is why this case used to be indistinguishable from a real choice.
+  const chosen = containerDefaultSubtitleIndex([
+    { index: 0, textBased: true, isDefault: true, declaresDefault: false },
+    { index: 1, textBased: true, isDefault: true, declaresDefault: false }
+  ]);
+  assert.equal(chosen, null);
+});
+
+test("among the tracks a file wrote flags for, exactly one marked is the choice", () => {
+  const chosen = containerDefaultSubtitleIndex([
+    { index: 0, textBased: true, isDefault: false, declaresDefault: true },
+    { index: 1, textBased: true, isDefault: true, declaresDefault: true },
+    { index: 2, textBased: true, isDefault: true, declaresDefault: false }
+  ]);
+  assert.equal(chosen, 1);
+});
+
+test("several tracks marked by the file is not a choice between them", () => {
+  const chosen = containerDefaultSubtitleIndex([
+    { index: 0, textBased: true, isDefault: true, declaresDefault: true },
+    { index: 1, textBased: true, isDefault: true, declaresDefault: true }
+  ]);
+  assert.equal(chosen, null);
+});
+
+test("a container that could not be read falls back to what the banner supports", () => {
+  const chosen = containerDefaultSubtitleIndex([
+    { index: 0, textBased: true, isDefault: true },
+    { index: 1, textBased: true, isDefault: false }
+  ]);
+  assert.equal(chosen, 0);
+});
