@@ -1,3 +1,7 @@
+## 0.13.16
+
+- **New**: A subtitle track that grows as the film downloads is now added to, not fetched again. A `<track src="blob:…">` can only be REPLACED, so every few seconds the browser was fetching the whole track to gain the few lines at its end — measured on the field file, up to **76 KB a time** for a track it already held almost all of. The element is created without a source, its `TextTrack` is filled cue by cue, and each follow-up asks the proxy for what lies past the last cue held (`?after=`), which is a few hundred bytes. Asking stops when the container's own index is fully read, when the session ends, or after ten rounds that bring nothing — which is what a forced-subtitle track covering one scene looks like. The WebVTT parsing is a pure module with its own tests (`public/domain/vtt-cues.js`): hours and minutes forms, multi-row cues, a cue that ends before it starts, and the same cues arriving twice.
+
 ## 0.13.15
 
 - **Fix**: A subtitle track that is still being prepared is waited for instead of being given up on. The proxy now answers `202` while it extracts one (proxy 2.41.0), because extraction reads the whole film and takes minutes; this side asked again five seconds later until it is ready. Held as a single request it could only ever end in this side's sixty-second timeout — measured 2026-08-19, one track produced its 3040 bytes after 752 seconds and the viewer never saw it. Nothing on screen waits for this: the picture is already playing and a track that arrives late appears in the menu when it does.
