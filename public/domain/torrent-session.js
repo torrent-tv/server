@@ -226,6 +226,48 @@ export class TorrentSession {
     }
   }
 
+  /**
+   * Tell the proxy that a delivered fragment sits far from the edge of what is
+   * buffered — the earliest evidence that a stream is coming apart.
+   *
+   * The player already detects this and has only ever written it to the
+   * console. It is worth sending because only the PROXY can say what it means:
+   * it knows which boundary the segment it produced actually holds, and whether
+   * that is the one its number claims. Measured 2026-08-21, this fired four
+   * times across half a minute — naming the gap in seconds — while the buffer
+   * stood still, before hls.js gave up and jumped the picture forward.
+   *
+   * Best-effort and quiet: a report about a stall must not add to one. Sent
+   * only for the session on screen, because a fragment of an episode nobody is
+   * watching says nothing about anybody's playback.
+   *
+   * @param {{ sn: number, track?: string, fragStartSec: number, bufferEndSec: number, currentTimeSec: number }} report
+   * @returns {Promise<void>}
+   */
+  async reportFragmentFar(report) {
+    const sessionId = this.currentTranscodeSession?.sessionId;
+    const transport = sessionId ? this.activeTranscodeSessions.get(sessionId) : null;
+    if (!sessionId || !transport) {
+      return;
+    }
+    const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/fragment-far`;
+    const init = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report)
+    };
+    try {
+      if (!transport.isHttp) {
+        await transport.fetch(path, init);
+      } else {
+        await fetch(new URL(path.slice(1), ensureTrailingSlash(transport.baseUrl)), init);
+      }
+    } catch {
+      // silent-ok: this is a diagnostic about a stream already in trouble, and
+      // nothing downstream depends on it arriving.
+    }
+  }
+
   abortPendingRequests() {
     this.abortController.abort();
     this.abortController = new AbortController();
