@@ -782,6 +782,33 @@ export function createHlsPlayer(onLog) {
                 `currentTime=${at.toFixed(1)}s bufferEnd=${bufferEnd.toFixed(1)}s ` +
                 `seeking=${videoElement.seeking} lastPlayerEvent=${lastPlayerEvent}`
               );
+              // Told to the proxy, not only to this console. This is the
+              // earliest statement that exists of a stream coming apart — on
+              // 2026-08-21 it fired four times over half a minute, naming the
+              // gap in seconds each time, while the buffer stood still and the
+              // viewer waited; then hls.js gave up and jumped the picture
+              // forward. The proxy is the only side that can say whether the
+              // segment it produced holds the boundary its number claims, and
+              // it was never asked.
+              if (typeof options.onFragmentFar === "function" && !videoElement.seeking) {
+                try {
+                  options.onFragmentFar({
+                    sn,
+                    // Which stream this fragment belongs to. hls.js loads the
+                    // audio rendition through the same event, and the proxy
+                    // serves picture and sound from two different sessions
+                    // positioned by two different runs — which is precisely how
+                    // they come apart — so a report that does not say which one
+                    // it is about gets answered about the other.
+                    track: typeof data.frag.type === "string" ? data.frag.type : "",
+                    fragStartSec: start,
+                    bufferEndSec: bufferEnd,
+                    currentTimeSec: at
+                  });
+                } catch {
+                  // silent-ok: a report about a stall must not become one.
+                }
+              }
             }
           });
 

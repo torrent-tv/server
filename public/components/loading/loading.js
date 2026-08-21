@@ -836,6 +836,17 @@ export class Loading extends StateDerivedView {
   }
 
   /**
+   * Pass the player's own "this fragment is nowhere near my buffer" reading on
+   * to the proxy, which is the only side that can say what it means.
+   *
+   * @param {{ sn: number, track?: string, fragStartSec: number, bufferEndSec: number, currentTimeSec: number }} report
+   * @returns {void}
+   */
+  #reportFragmentFar(report) {
+    void this.#session?.reportFragmentFar(report);
+  }
+
+  /**
    * Map a raw <video> event to the mid-playback buffering notice. A stall or a
    * seek (`waiting`/`stalled`/`seeking`) schedules the notice after a short
    * debounce; a resume or a stop (`playing`/`seeked`/`pause`/`ended`/`error`)
@@ -4832,6 +4843,7 @@ export class Loading extends StateDerivedView {
             ? { startPosition: resumeStartPosition }
             : {}),
           onLevelSwitched: (height) => this.#onHlsLevelSwitched(height),
+          onFragmentFar: (report) => this.#reportFragmentFar(report),
           // The epoch this player belongs to, captured now. Read at report time
           // it would always equal the current one, which is the same as having
           // no guard: a fault from an abandoned attempt's player would then be
