@@ -451,6 +451,10 @@ export class Loading extends StateDerivedView {
   #subtitleModesWatched = false;
   /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
   #selectedQualityHeight = 0;
+  // The height an automatic move is being made to right now, so a request
+  // restated in every progress report (polled about every 1.5 s) is acted on
+  // once rather than started afresh while the first move is still warming.
+  #autoQualityRequestHeight = 0;
   /**
    * @type {number} Which quality pick is the current one. Warming a rung waits
    * on the proxy, so picks made close together finish in the order the rungs
@@ -4231,14 +4235,22 @@ export class Loading extends StateDerivedView {
    *
    * @param {{ index: number, height: number }} level
    * @param {number} height
+   * @param {{ chosenByViewer?: boolean }} [options]
+   *   `chosenByViewer` false means the PROXY asked for this move. Then the
+   *   height is not remembered as a pick: the viewer is still on automatic, and
+   *   writing their setting here would silently convert a measurement this host
+   *   took into a choice they never made — after which nothing on either side
+   *   would be allowed to move them again.
    * @returns {Promise<void>}
    */
-  async #switchQualityLevel(level, height) {
+  async #switchQualityLevel(level, height, { chosenByViewer = true } = {}) {
     // What to go back to if the rung never becomes ready.
     const previousHeight = this.#selectedQualityHeight;
     // Remembered up front: it is what the NEXT file of this torrent opens at,
     // and that is true whether or not this switch turns out to be quick.
-    this.#selectedQualityHeight = height;
+    if (chosenByViewer) {
+      this.#selectedQualityHeight = height;
+    }
     // Which pick this is. Warming waits on the proxy, so two picks in quick
     // succession are two waits that finish in whatever order the rungs happen
     // to be ready — and without this the one that finishes LAST wins, which is
@@ -4294,7 +4306,12 @@ export class Loading extends StateDerivedView {
       // setting the viewer made earlier.
       this.#selectedQualityHeight = previousHeight;
       this.#publishQualityOptions();
-      this.setStatus(Loading.MESSAGES.qualityNotReady(height));
+      // Silent when the proxy asked rather than the viewer. Nobody is waiting
+      // on an answer to a request they did not make, and the proxy will ask
+      // again if it still wants the move.
+      if (chosenByViewer) {
+        this.setStatus(Loading.MESSAGES.qualityNotReady(height));
+      }
       return;
     }
     this.#logEvt(`quality: ${height}p is ready, switching`);
@@ -5733,6 +5750,7 @@ export class Loading extends StateDerivedView {
 
   #noteEffectiveQuality(progress) {
     this.#noteOfferedHeights(progress?.offeredHeights);
+    this.#followQualityRequest(progress?.requestedHeight);
     const height = Number(progress?.currentHeight);
     const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
     if (effective === this.#autoEffectiveHeight) {
@@ -5744,6 +5762,58 @@ export class Loading extends StateDerivedView {
     }
     this.#logEvt(`automatic quality is now ${effective > 0 ? `${effective}p` : "the source's own height"}`);
     this.#publishQualityOptions();
+  }
+
+  /**
+   * Move to the variant the proxy asked for — and only ever in automatic mode.
+   *
+   * The proxy measures what its own machine and the viewer's link can carry,
+   * and it used to act on those measurements by rewriting the SIZE of the
+   * picture inside the session the player was already decoding. The init
+   * segment describing that picture is fetched once, by `#EXT-X-MAP`, and can
+   * never be replaced, so every fragment after such a change was decoded
+   * against parameter sets for a picture that was no longer being made:
+   * measured 2026-08-21, one browser reported `size=1280x720` for three and a
+   * half minutes over macroblock garbage, another errored on the first
+   * mismatched fragment and sat at `size=0x0` for four and a half.
+   *
+   * So the proxy asks instead, and the move happens the way the manual menu's
+   * move has always happened — the player fetches another variant, which has
+   * its own init. What this side adds is the one rule the proxy cannot enforce:
+   * IF THE VIEWER PICKED A HEIGHT BY HAND, NOTHING MOVES THEM OFF IT. Automatic
+   * quality changes belong to automatic mode.
+   *
+   * @param {unknown} requested
+   * @returns {void}
+   */
+  #followQualityRequest(requested) {
+    const height = Math.round(Number(requested));
+    if (!Number.isFinite(height) || height <= 0) {
+      return; // the proxy is content, or is older than this exchange
+    }
+    if (this.#selectedQualityHeight !== 0) {
+      return; // the viewer's own pick; theirs to change and nobody else's
+    }
+    const level = this.#hlsPlayer.levels().find((candidate) => candidate.height === height);
+    if (!level) {
+      // Nothing to switch to: this stream has no variants, or none at that
+      // height. The proxy lets the request run out on its own.
+      return;
+    }
+    if (level.index === this.#hlsPlayer.currentLevel()) {
+      return;
+    }
+    if (this.#autoQualityRequestHeight === height) {
+      return; // already acting on this one
+    }
+    this.#autoQualityRequestHeight = height;
+    this.#logEvt(`the proxy asks for ${height}p and the viewer is on automatic — moving`);
+    void this.#switchQualityLevel(level, height, { chosenByViewer: false })
+      .finally(() => {
+        if (this.#autoQualityRequestHeight === height) {
+          this.#autoQualityRequestHeight = 0;
+        }
+      });
   }
 
   /**
