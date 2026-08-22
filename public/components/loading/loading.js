@@ -46,12 +46,6 @@ const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
  * unused. Five seconds is short against the scan and long against the channel.
  */
 const SUBTITLE_POLL_INTERVAL_MS = 5_000;
-/**
- * How often to ask for the part of a subtitle track that has appeared since.
- * A cue is a line of dialogue, and dialogue does not arrive faster than the
- * film does, so asking every fifteen seconds is ahead of any viewer.
- */
-const SUBTITLE_FOLLOW_INTERVAL_MS = 15_000;
 
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
@@ -118,17 +112,6 @@ function buildTrackLabel(track) {
   }
   return parts.join(" — ");
 }
-/**
- * The cursor a subtitle answer carries, counted in the order cues were FOUND.
- *
- * @param {{ headers?: { get?: (name: string) => string | null } }} response
- * @returns {number}
- */
-function cursorOf(response) {
-  const value = Number.parseInt(String(response?.headers?.get?.("X-Subtitle-Cursor") ?? ""), 10);
-  return Number.isInteger(value) && value > 0 ? value : 0;
-}
-
 import {
   detectSubtitleInfo,
   buildSubtitleLabel,
@@ -385,27 +368,6 @@ export class Loading extends StateDerivedView {
    */
   #planTracks = null;
   /**
-   * How far each embedded subtitle track has been read, in seconds of the film,
-   * keyed by the track's index in the source.
-   *
-   * Kept outside the follow loop because the loop stops whenever the viewer
-   * turns a track off and starts again when they turn it back on: the position
-   * has to survive that, or every switch would re-read the track from its
-   * beginning.
-   *
-   * @type {Map<number, number>}
-   */
-  #subtitleCursor = new Map();
-  /**
-   * Which subtitle tracks have a follow loop running, by track index. One loop
-   * per track at most — a `change` on the text tracks fires for every track at
-   * once, and without this a viewer toggling captions twice would leave two
-   * loops asking for the same thing.
-   *
-   * @type {Set<number>}
-   */
-  #subtitlesBeingFollowed = new Set();
-  /**
    * The `TextTrack` each embedded subtitle track owns, by its index in the
    * source. A `<track>` element created here has no `src`, so it cannot be
    * found again by URL, and the element order is not the source's track order
@@ -415,21 +377,13 @@ export class Loading extends StateDerivedView {
    */
   #embeddedTextTracks = new Map();
   /**
-   * Subtitle tracks that have been read to the end of what the container
-   * indexes, by track index. Nothing more will ever come of them, so turning
-   * one on again must not start asking for it again.
-   *
-   * @type {Set<number>}
-   */
-  #subtitlesFullyRead = new Set();
-  /**
    * Which set of subtitle tracks is the current one. Incremented whenever the
-   * tracks are cleared — a new file, a new torrent — so that a follow loop
+   * tracks are cleared — a new file, a new torrent — so that a seed fetch
    * still in flight from the previous set can tell that everything it holds is
    * stale and leave the shared state alone.
    *
    * The `<video>` element survives a file switch, and so do its listeners and
-   * any pending timer; without this a loop for the previous episode wrote its
+   * any pending timer; without this a seed for the previous episode wrote its
    * read position over the current one's, under the same track index.
    *
    * @type {number}
@@ -3261,6 +3215,9 @@ export class Loading extends StateDerivedView {
     // Surface a mid-playback loss of this connection (auto-reconnect flow). A
     // close() by #stopPlayback never fires this.
     proxy.onConnectionLost = () => this.#onTransportLost();
+    // Subtitle cues, pushed as the proxy reads them off its own download —
+    // never polled for. See #onSubtitleCuesPush.
+    proxy.onSubtitleCues = (event) => this.#onSubtitleCuesPush(event);
     // Stamp the forwarded log with the connection that is about to carry the
     // session. The connection announces itself as soon as it has an id, which
     // is what covers the connect phase; this is the correction, for the case
@@ -3534,19 +3491,16 @@ export class Loading extends StateDerivedView {
       URL.revokeObjectURL(url);
     }
     this.#subtitleBlobUrls = [];
-    // The tracks are going, so what was read of them goes with them. A follow
-    // loop still in flight belongs to the epoch being left behind: it holds its
-    // `TextTrack` by closure and nothing here can reach it, so it is not told
-    // to stop — it checks the epoch on its next step and leaves, touching none
-    // of the state the next set of tracks is already using.
+    // The tracks are going, so what was read of them goes with them. A seed
+    // fetch still in flight belongs to the epoch being left behind: it checks
+    // the epoch on its next step and leaves, touching none of the state the
+    // next set of tracks is already using. A push arriving late for it is
+    // dropped the same way, by `#onSubtitleCuesPush`'s own fileIndex check.
     //
     // The listener on the text tracks is deliberately NOT removed: it belongs
     // to the `<video>` element, which survives a file switch, and it reads the
     // current file from `#subtitleContext` rather than from a closure.
     this.#subtitleEpoch += 1;
-    this.#subtitleCursor.clear();
-    this.#subtitlesBeingFollowed.clear();
-    this.#subtitlesFullyRead.clear();
     this.#embeddedTextTracks.clear();
     this.#subtitleContext = null;
     if (this.#videoElement instanceof HTMLVideoElement) {
@@ -3592,7 +3546,7 @@ export class Loading extends StateDerivedView {
     }
 
     await this.#loadExternalSubtitles(fileIndex, transport, sourceKey);
-    await this.#loadEmbeddedSubtitles(fileIndex, transport, sourceKey);
+    this.#loadEmbeddedSubtitles(fileIndex, transport, sourceKey);
   }
 
   /**
@@ -3760,264 +3714,147 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * Embedded TEXT subtitle tracks (inside the MKV/MP4), extracted by the
-   * proxy as WebVTT (`GET /api/subtitles`). Fetched sequentially with a
-   * generous timeout: extraction reads the file up to the last cue, so a
-   * cold torrent downloads while extracting. Tracks appear in the captions
-   * menu as they finish.
+   * Embedded TEXT subtitle tracks (inside the MKV/MP4). Every declared track
+   * gets its `<track>` element and its place in `#embeddedTextTracks`
+   * immediately, in one pass — the container already says how many there are
+   * and what language each claims, so none of that needs a round trip. Cues
+   * themselves arrive two ways: a one-off seed fetch per track, in parallel,
+   * for whatever the proxy has already read; and after that, PUSHED by the
+   * proxy as it reads more (`#onSubtitleCuesPush`), never polled for.
    */
-  async #loadEmbeddedSubtitles(fileIndex, transport, sourceKey) {
+  #loadEmbeddedSubtitles(fileIndex, transport, sourceKey) {
     const tracks = (this.#planTracks?.subtitles ?? []).filter((t) => t?.textBased === true);
     if (tracks.length === 0) {
       return;
     }
-    // The set of tracks this loader belongs to. Extracting one track takes
-    // minutes (55, 193 and 752 s on the field film), so a viewer picking
-    // another episode leaves this loop suspended mid-await with the shared
-    // `<video>` element, the track maps and `#subtitleContext` all now
-    // belonging to the new file. Without this it resumes and writes the
-    // previous episode's track, index and fileIndex over them — and the follow
-    // loops that read that context then ask the proxy to walk the wrong file.
+    // The set of tracks this loader belongs to. A seed fetch below may still
+    // be in flight when a viewer picks another episode; without this it would
+    // resolve into the new file's `#embeddedTextTracks` under the old track
+    // index, or set `#subtitleContext` back to the file just left.
     const epoch = this.#subtitleEpoch;
+    this.#subtitleContext = { transport, sourceKey, fileIndex };
+    this.#watchSubtitleModes();
+
     for (const track of tracks) {
-      if (epoch !== this.#subtitleEpoch) {
-        return;
-      }
-      try {
-        // The proxy prepares an embedded track in the background and answers
-        // 202 until it is ready: extracting one makes ffmpeg read the whole
-        // film, because subtitles are interleaved through it. Measured
-        // 2026-08-19, one track produced 3040 bytes over 752 seconds — held as
-        // a single request it could only ever end in this side's timeout, and
-        // each retry restarted the same twelve-minute scan. Asking again is
-        // free now: the answer is kept once it exists.
-        //
-        // Nothing on screen waits for this. The picture is already playing, and
-        // a track that arrives late simply appears in the menu when it does.
-        const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
-          `&fileIndex=${fileIndex}&trackIndex=${track.index}`;
-        let response = await transport.fetch(url, {
-          signal: this.#session.abortController.signal,
-          timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
-        });
-        while (response.status === 202) {
-          await new Promise((resolve) => { window.setTimeout(resolve, SUBTITLE_POLL_INTERVAL_MS); });
-          if (this.#session.abortController.signal.aborted) {
-            return;
-          }
-          response = await transport.fetch(url, {
-            signal: this.#session.abortController.signal,
-            timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
-          });
-        }
-        if (epoch !== this.#subtitleEpoch) {
-          return;
-        }
-        if (!response.ok) {
-          console.warn(`[torrent-tv][subtitles] embedded track ${track.index} fetch failed (${response.status})`);
-          continue;
-        }
-        const vtt = await response.text();
-        // Reading the body is a second suspension point, and over plain HTTP a
-        // real network read.
-        if (epoch !== this.#subtitleEpoch) {
-          return;
-        }
-        if (!vtt || !vtt.startsWith("WEBVTT")) {
-          continue;
-        }
+      // No `src`. A track element with one can only ever be REPLACED, and
+      // this track grows as the film downloads — an element without a source
+      // still owns a `TextTrack`, and cues can be added to it one at a time,
+      // whether pushed or seeded.
+      const el = document.createElement("track");
+      el.kind = "subtitles";
+      const fallbackLang = trackLanguageCode(track.language);
+      el.label = buildSubtitleLabel({
+        code: fallbackLang || "und",
+        name: this.#languageName(fallbackLang) || "Unknown",
+        group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
+      });
+      el.srclang = fallbackLang || "und";
+      this.#videoElement.appendChild(el);
+      this.#embeddedTextTracks.set(track.index, el.track);
+      // No `default` attribute — what it would ask for is decided by
+      // `#applySubtitleMode`, for this track alone.
+      this.#applySubtitleMode(el.track, track.index, epoch);
 
-        // Language: container metadata tag (author intent) → proxy content
-        // detection (X-Subtitle-Language) → the film's audio language → und.
-        let lang = { code: trackLanguageCode(track.language), name: "" };
-        if (!lang.code || lang.code === "und") {
-          const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
-          lang = detected ?? { code: "und", name: "" };
-        }
-        // Prefer the metadata title for the label; else the language name.
-        const labelInfo = {
-          code: lang.code || "und",
-          name: lang.name || this.#languageName(lang.code) || "Unknown",
-          group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
-        };
-
-        // No `src`. A track element with one can only ever be REPLACED, and
-        // this track grows as the film downloads: the browser was fetching all
-        // of it every few seconds — 76 KB a time on the field file — to gain
-        // the few lines at its end. An element without a source still owns a
-        // `TextTrack`, and cues can be added to it one at a time.
-        const el = document.createElement("track");
-        el.kind = "subtitles";
-        el.label = buildSubtitleLabel(labelInfo);
-        el.srclang = lang.code || "und";
-        // No `default` attribute. What it would ask for is decided by
-        // `#applySubtitleMode`, for this track alone.
-        this.#videoElement.appendChild(el);
-        const added = appendCues(el.track, parseVttCues(vtt), -1);
-        console.debug(
-          `[torrent-tv][subtitles] embedded track loaded "${el.label}" with ${added.added} cue(s)`
-        );
-        this.#subtitleCursor.set(track.index, cursorOf(response));
-        this.#embeddedTextTracks.set(track.index, el.track);
-        this.#subtitleContext = { transport, sourceKey, fileIndex };
-        this.#watchSubtitleModes();
-        // The follow loop is started by the mode, not here: a track nobody is
-        // reading costs the proxy a walk through the container every fifteen
-        // seconds, and the field log showed all four tracks of one film being
-        // polled at once while the menu was on "off".
-        this.#applySubtitleMode(el.track, track.index, epoch);
-      } catch (e) {
-        if (this.#isAbortError(e)) {
-          throw e;
-        }
-        console.warn(`[torrent-tv][subtitles] embedded track ${track.index} failed:`, e);
-      }
+      void this.#seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch });
     }
   }
 
   /**
-   * Keep asking for the part of a subtitle track that does not exist yet.
+   * Fetch whatever cues the proxy has already read for one track, once. Not
+   * followed up on: everything after this comes from `#onSubtitleCuesPush`.
+   * Kept separate from `#loadEmbeddedSubtitles` so every track's element
+   * exists before any of these resolve, in whatever order they do.
    *
-   * A track is read out of the clusters the viewer has downloaded, so it grows
-   * as they watch. Each ask carries where this copy ends and gets back only
-   * what is past it, which is a few hundred bytes instead of the whole track.
-   * It stops when the film is fully covered, when the session ends, or when the
-   * answers stop bringing anything new for long enough that there is plainly
-   * nothing left to bring.
-   *
-   * Only a track the viewer is actually reading is followed. Each ask makes the
-   * proxy walk the container's clusters for that track, and the cost is real:
-   * measured 2026-08-20, four tracks of one film were followed at once for the
-   * whole session, every fifteen seconds, at 0.2-5.2 s of reading each — while
-   * at most one of them was ever on screen. A track turned off stops being
-   * asked for; turning it back on resumes from where it stopped, which is why
-   * the cursor lives in `#subtitleCursor` and not in this closure.
-   *
-   * @param {{ trackIndex: number, textTrack: TextTrack }} params
-   * @returns {void}
+   * @param {{ track: object, el: HTMLElement, fileIndex: number, transport: object, sourceKey: string, epoch: number }} params
+   * @returns {Promise<void>}
    */
-  #followSubtitleTrack({ trackIndex, textTrack }) {
-    if (this.#subtitlesBeingFollowed.has(trackIndex) || this.#subtitlesFullyRead.has(trackIndex)) {
-      return;
-    }
-    const context = this.#subtitleContext;
-    if (!context) {
-      return;
-    }
-    const { transport, sourceKey, fileIndex } = context;
-    // Which set of tracks this loop belongs to. Every step compares it with the
-    // current one and leaves if they differ, so a loop from a previous file
-    // cannot write into the state the current file is using — it holds its own
-    // `TextTrack` by closure and is otherwise unreachable.
-    const epoch = this.#subtitleEpoch;
-    this.#subtitlesBeingFollowed.add(trackIndex);
-    let quietRounds = 0;
-    const signal = this.#session.abortController.signal;
-    const stop = () => {
-      if (epoch === this.#subtitleEpoch) {
-        this.#subtitlesBeingFollowed.delete(trackIndex);
+  async #seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch }) {
+    try {
+      // The proxy prepares an embedded track in the background and answers
+      // 202 until it is ready — the fallback extraction path, for a container
+      // this side cannot read cluster-by-cluster, makes ffmpeg read the whole
+      // film. Measured 2026-08-19, one track produced 3040 bytes over 752
+      // seconds; asking again is free, the answer is kept once it exists.
+      const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
+        `&fileIndex=${fileIndex}&trackIndex=${track.index}`;
+      let response = await transport.fetch(url, {
+        signal: this.#session.abortController.signal,
+        timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
+      });
+      while (response.status === 202) {
+        await new Promise((resolve) => { window.setTimeout(resolve, SUBTITLE_POLL_INTERVAL_MS); });
+        if (this.#session.abortController.signal.aborted || epoch !== this.#subtitleEpoch) {
+          return;
+        }
+        response = await transport.fetch(url, {
+          signal: this.#session.abortController.signal,
+          timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
+        });
       }
-    };
-    const ask = async () => {
       if (epoch !== this.#subtitleEpoch) {
         return;
       }
-      if (signal.aborted) {
-        stop();
+      if (!response.ok) {
+        console.warn(`[torrent-tv][subtitles] embedded track ${track.index} seed fetch failed (${response.status})`);
         return;
       }
-      // Nobody is reading this one now. Stop asking; `#watchSubtitleModes`
-      // starts a fresh loop if the viewer turns it back on.
-      if (textTrack.mode === "disabled") {
-        stop();
+      const vtt = await response.text();
+      if (epoch !== this.#subtitleEpoch || !vtt || !vtt.startsWith("WEBVTT")) {
         return;
       }
-      const since = this.#subtitleCursor.get(trackIndex) ?? 0;
-      try {
-        const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
-          `&fileIndex=${fileIndex}&trackIndex=${trackIndex}&since=${since}`;
-        const response = await transport.fetch(url, { signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS });
-        if (epoch !== this.#subtitleEpoch) {
-          return;
+
+      // Refine the label if the container said nothing and detection found a
+      // language the container-declared fallback did not have.
+      const fallbackLang = trackLanguageCode(track.language);
+      if (!fallbackLang || fallbackLang === "und") {
+        const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
+        if (detected?.code && detected.code !== "und") {
+          el.label = buildSubtitleLabel({
+            code: detected.code,
+            name: detected.name || this.#languageName(detected.code) || "Unknown",
+            group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
+          });
+          el.srclang = detected.code;
         }
-        if (response.ok) {
-          const vtt = await response.text();
-          // Reading the body is a SECOND suspension point, and over plain HTTP
-          // it is a real network read rather than the already-assembled buffer
-          // the data channel hands back. Everything below writes into state the
-          // current set of tracks is using — the read position, and the "there
-          // is no more of this one" mark that stops it being followed at all —
-          // so the epoch is checked here too. Without this, a loop from the
-          // previous episode could mark the CURRENT file's track finished and
-          // it would never be read again for the rest of the session.
-          if (epoch !== this.#subtitleEpoch) {
-            return;
-          }
-          // -1, deliberately: what comes back is everything found since the
-          // cursor, wherever in the film it sits, so nothing may be skipped for
-          // being earlier than the last cue held.
-          const result = appendCues(textTrack, parseVttCues(vtt), -1);
-          this.#subtitleCursor.set(trackIndex, cursorOf(response) || since);
-          quietRounds = result.added > 0 ? 0 : quietRounds + 1;
-          const covered = Number(response.headers?.get?.("X-Subtitle-Covered-Clusters"));
-          const indexed = Number(response.headers?.get?.("X-Subtitle-Indexed-Clusters"));
-          if (result.added > 0) {
-            console.debug(
-              `[torrent-tv][subtitles] track ${trackIndex}: +${result.added} cue(s), ` +
-              `covering to ${result.knownUntilSeconds.toFixed(1)}s` +
-              (Number.isFinite(covered) && Number.isFinite(indexed) && indexed > 0
-                ? ` (${covered}/${indexed} of the film read)`
-                : "")
-            );
-          }
-          // Everything the container indexes has been read: there is no more
-          // to come, whatever the viewer does next. Recorded rather than just
-          // returned, or turning the track off and on again would start a fresh
-          // loop that asks a finished track ten more times.
-          if (Number.isFinite(covered) && Number.isFinite(indexed) && indexed > 0 && covered >= indexed) {
-            this.#subtitlesFullyRead.add(trackIndex);
-            stop();
-            return;
-          }
-        } else {
-          // An answer that ARRIVES and is not `ok` used to take neither this
-          // branch nor the `catch`, so `quietRounds` never moved and the loop
-          // had no terminal condition at all: a persistent 404 — the session
-          // the request names having been disposed, say — was asked for every
-          // fifteen seconds for the rest of the session. It is a failed round
-          // like any other.
-          quietRounds += 1;
-          console.debug(
-            `[torrent-tv][subtitles] track ${trackIndex} follow-up refused (${response.status})`
-          );
-        }
-      } catch (error) {
-        if (this.#isAbortError(error)) {
-          stop();
-          return;
-        }
-        // Nothing on screen depends on this: the cues already shown stay, and
-        // the next ask may well succeed. It is counted as a quiet round so a
-        // track that keeps failing stops being asked for.
-        quietRounds += 1;
-        console.debug(`[torrent-tv][subtitles] track ${trackIndex} follow-up failed:`, error);
       }
-      // Ten quiet rounds is between two and three minutes of a film that is
-      // still downloading bringing nothing new, which happens when the track
-      // has no cues left in it at all — a forced-subtitle track that covers one
-      // scene, say.
-      //
-      // Not recorded the way a fully-read track is: "nothing new for two
-      // minutes" is a statement about the download, not about the track, and a
-      // viewer who turns it on again has asked for it after more of the film
-      // has arrived.
-      if (quietRounds >= 10) {
-        stop();
+
+      const added = appendCues(el.track, parseVttCues(vtt), -1);
+      console.debug(
+        `[torrent-tv][subtitles] embedded track seeded "${el.label}" with ${added.added} cue(s)`
+      );
+    } catch (e) {
+      if (this.#isAbortError(e)) {
         return;
       }
-      window.setTimeout(() => { void ask(); }, SUBTITLE_FOLLOW_INTERVAL_MS);
-    };
-    window.setTimeout(() => { void ask(); }, SUBTITLE_FOLLOW_INTERVAL_MS);
+      console.warn(`[torrent-tv][subtitles] embedded track ${track.index} seed failed:`, e);
+    }
+  }
+
+  /**
+   * A track's new cues, pushed by the proxy the moment it read them off its
+   * own download — the sole ongoing delivery path; nothing on this side asks
+   * again. Applies to whichever track is named, `mode` included: a track the
+   * viewer has not turned on yet still gets its cues, so turning it on later
+   * shows them at once instead of waiting for a fetch.
+   *
+   * @param {{ fileIndex: number, trackIndex: number, cues: object[], language: string }} event
+   * @returns {void}
+   */
+  #onSubtitleCuesPush(event) {
+    if (!this.#subtitleContext || this.#subtitleContext.fileIndex !== event.fileIndex) {
+      return; // a push for a file that is no longer the one open
+    }
+    const textTrack = this.#embeddedTextTracks.get(event.trackIndex);
+    if (!textTrack || !Array.isArray(event.cues) || event.cues.length === 0) {
+      return;
+    }
+    const added = appendCues(textTrack, event.cues, -1);
+    if (added.added > 0) {
+      console.debug(
+        `[torrent-tv][subtitles] track ${event.trackIndex}: +${added.added} cue(s) pushed, ` +
+        `covering to ${added.knownUntilSeconds.toFixed(1)}s`
+      );
+    }
   }
 
   /**
@@ -4035,8 +3872,8 @@ export class Loading extends StateDerivedView {
    *    (measured in Chromium), and media-chrome's automatic selection is off
    *    here — so the cause is something none of the three, and it cannot be
    *    named without this reading.
-   * 2. It starts a follow loop for a track the viewer has just turned on, which
-   *    is what lets `#followSubtitleTrack` stop when a track is turned off.
+   * 2. That is all it does now — cues arrive by push (`#onSubtitleCuesPush`)
+   *    regardless of `mode`, so there is nothing left to start or stop here.
    *
    * Registered ONCE for the life of the `<video>` element, not once per file:
    * the element survives an episode switch, and a listener per file would both
@@ -4110,17 +3947,6 @@ export class Loading extends StateDerivedView {
         described.push(`"${track.label || track.language || "?"}"=${track.mode}`);
       }
       console.debug(`[torrent-tv][subtitles] modes ${described.join(" ")}`);
-      // A track the viewer has just turned on resumes where it stopped.
-      for (const candidate of this.#planTracks?.subtitles ?? []) {
-        if (candidate?.textBased !== true) {
-          continue;
-        }
-        const textTrack = this.#embeddedTextTracks.get(candidate.index);
-        if (!textTrack || textTrack.mode === "disabled") {
-          continue;
-        }
-        this.#followSubtitleTrack({ trackIndex: candidate.index, textTrack });
-      }
     };
     tracks.addEventListener("change", onChange);
   }

@@ -157,6 +157,15 @@ export class WebRtcProxy {
    */
   onConnectionLost = null;
 
+  /**
+   * Called on every unsolicited `subtitle-cues` push from the proxy — new
+   * cues for one track, found off the proxy's own download rather than in
+   * answer to a request this side made. Assign a handler to receive them.
+   *
+   * @type {((event: { fileIndex: number, trackIndex: number, cues: object[], language: string }) => void) | null}
+   */
+  onSubtitleCues = null;
+
   /** Fire onConnectionLost once, only for losses of an established connection. */
   #fireConnectionLost() {
     if (!this.#connected || this.#closedByUser || this.#lostFired) {
@@ -534,6 +543,23 @@ export class WebRtcProxy {
         `[torrent-tv][dc] a data-channel message could not be parsed (${error instanceof Error ? error.message : String(error)}): ` +
         `${String(raw).slice(0, 200)}`
       );
+      return;
+    }
+
+    // Unsolicited — not a reply to any request this side made, so it is
+    // dispatched before the requestId lookup below (which would find nothing
+    // and drop it).
+    if (msg.type === "subtitle-cues") {
+      try {
+        this.onSubtitleCues?.({
+          fileIndex: msg.fileIndex,
+          trackIndex: msg.trackIndex,
+          cues: Array.isArray(msg.cues) ? msg.cues : [],
+          language: msg.language ?? ""
+        });
+      } catch (error) {
+        console.warn("[webrtc-proxy] onSubtitleCues handler failed:", error);
+      }
       return;
     }
 
