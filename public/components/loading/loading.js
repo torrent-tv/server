@@ -3841,6 +3841,12 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #onSubtitleCuesPush(event) {
+    console.debug(
+      `[torrent-tv][subtitles] push received: file=${event.fileIndex} track=${event.trackIndex} ` +
+      `${Array.isArray(event.cues) ? event.cues.length : "?"} cue(s) ` +
+      `(context file=${this.#subtitleContext?.fileIndex ?? "none"}, ` +
+      `knownTrack=${this.#embeddedTextTracks.has(event.trackIndex)})`
+    );
     if (!this.#subtitleContext || this.#subtitleContext.fileIndex !== event.fileIndex) {
       return; // a push for a file that is no longer the one open
     }
