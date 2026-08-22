@@ -4975,7 +4975,17 @@ export class Loading extends StateDerivedView {
     let lastGrowthAt = Date.now();
     let cachedProgress = null;
     let lastProgressFetchAt = 0;
-    while (Date.now() - startedAt < timeoutMs) {
+    // For the grace period below: the encoder's own best-seen output position,
+    // and when it was last seen to move. Nothing has to have reached the
+    // buffer for this to be true — it is evidence the run is alive, not that
+    // the viewer has anything to watch yet.
+    let bestProcessedSeconds = -1;
+    let lastProcessedGrowthAt = Date.now();
+    const stillMakingProgress = () => Date.now() - lastProcessedGrowthAt < PREBUFFER_PROGRESS_GRACE_MS;
+    while (
+      Date.now() - startedAt < timeoutMs ||
+      (stillMakingProgress() && Date.now() - startedAt < PREBUFFER_ABSOLUTE_TIMEOUT_MS)
+    ) {
       this.#throwIfCancelled();
       if (videoElement.error) {
         return;
@@ -5001,6 +5011,11 @@ export class Loading extends StateDerivedView {
             );
           }
         }
+      }
+      const processedSeconds = Number(cachedProgress?.processedSeconds);
+      if (Number.isFinite(processedSeconds) && processedSeconds > bestProcessedSeconds) {
+        bestProcessedSeconds = processedSeconds;
+        lastProcessedGrowthAt = Date.now();
       }
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
@@ -5079,7 +5094,11 @@ export class Loading extends StateDerivedView {
     // Network Access gate). Fail loudly instead of revealing a dead player:
     // proceeding would fire PLAYBACK_READY over an element that can never play.
     const finalAhead = bufferedAheadSeconds(videoElement);
-    this.#logEvt(`prebuffer timeout ahead=${finalAhead.toFixed(1)}s`);
+    const totalWaitedMs = Date.now() - startedAt;
+    this.#logEvt(
+      `prebuffer timeout ahead=${finalAhead.toFixed(1)}s waited=${Math.round(totalWaitedMs / 1000)}s ` +
+      `processedSeconds=${bestProcessedSeconds >= 0 ? bestProcessedSeconds.toFixed(1) : "n/a"}`
+    );
     if (finalAhead < PREBUFFER_MIN_START_SECONDS) {
       throw new Error(Loading.MESSAGES.prebufferStalled);
     }
@@ -6283,6 +6302,20 @@ const _PREBUFFER_BASE_SECONDS = 12;
 // then drains. Below this fill rate the deeper adaptive target is kept (thin
 // Allow a full cushion to build on a genuinely slow start before falling back.
 const PREBUFFER_TIMEOUT_MS = 45_000;
+// The proxy's own encode progress (`processedSeconds`) is real evidence the
+// stream is still coming, even while nothing has reached the buffer yet — a
+// slow, bursty swarm can hold a run below realtime for the whole base timeout
+// while the encoder keeps genuinely advancing. Field case 2026-08-22: a copy
+// track stuck at 0 s buffered for 58 s straight, `processedSeconds` climbing
+// the entire time (30.5s -> 48.8s in ten seconds), the base timeout expired at
+// 45 s, and the viewer was shown an unrecoverable "sent no video" while the
+// segment was seconds from arriving — the exact failure roadmap item 12
+// exists to remove. As long as `processedSeconds` has grown within this many
+// ms, the wait continues past the base timeout; past `PREBUFFER_ABSOLUTE_TIMEOUT_MS`
+// it stops regardless, so a run that has genuinely died cannot hold the
+// viewer forever.
+const PREBUFFER_PROGRESS_GRACE_MS = 15_000;
+const PREBUFFER_ABSOLUTE_TIMEOUT_MS = 120_000;
 
 // How long a motionless buffer is allowed to stand before the loader is pointed
 // at the end of the media. Segments here take a second or two to arrive, so
