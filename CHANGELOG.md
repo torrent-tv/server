@@ -1,3 +1,7 @@
+## 0.16.3
+
+- **Chore**: `#onSubtitleCuesPush` now logs every push it receives, unconditionally — field report 2026-08-22 that cues still do not appear at once after 0.16.2, and the existing log line only fired when a cue was actually appended, so there was no way to tell "nothing arrived" from "arrived and was silently dropped." Diagnostic only.
+
 ## 0.16.2
 
 - **New**: Embedded subtitle tracks are received by push, not polled for. `WebRtcProxy` gained an `onSubtitleCues` hook for the proxy's unsolicited `{ type: "subtitle-cues" }` messages, dispatched before the request-id lookup since nothing on this side asked for them. `loading.js`'s `#loadEmbeddedSubtitles` now creates every declared track's `<track>` element and registers it in `#embeddedTextTracks` synchronously, in one pass — the container already says how many tracks exist and what language each claims, so none of that needs a round trip — then fires one seed fetch per track in parallel (was: sequential, one full round trip gating the next track's element from existing at all). The 15 s follow-loop (`#followSubtitleTrack`) that re-asked a shown track for what had appeared since is gone: cues for every track, shown or not, now arrive the moment the proxy reads them, so a track the viewer turns on later already has what was found while it was off.
