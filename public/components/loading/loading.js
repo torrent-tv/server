@@ -403,6 +403,42 @@ export class Loading extends StateDerivedView {
   #subtitleContext = null;
   /** @type {boolean} Whether the text-track `change` listener is registered. */
   #subtitleModesWatched = false;
+  /**
+   * How far each embedded track has been read, in the proxy's found-order
+   * count, by the track's index in the source. Sent back as `?since=` when the
+   * page has to ask again — after a reconnect, which loses the subscription the
+   * pushes ride on — so the answer carries only what this page does not have.
+   *
+   * @type {Map<number, number>}
+   */
+  #subtitleCursors = new Map();
+  /**
+   * When each track RAN OUT — the moment it was first seen holding nothing at
+   * or after the position being played. That is the wait the viewer feels, and
+   * it is not the same as how long the track has been switched on: a track
+   * turned on twenty minutes ago and starved two seconds ago has waited two
+   * seconds.
+   *
+   * @type {Map<TextTrack, number>}
+   */
+  #subtitleStarvedAt = new Map();
+  /**
+   * The cues each track already holds, by what they are — see `appendCues`.
+   * `track.cues` cannot serve: it reads null while the mode is `disabled`,
+   * which is most of the time for most tracks.
+   *
+   * @type {Map<TextTrack, Set<string>>}
+   */
+  #subtitleCueKeys = new Map();
+  /** @type {boolean} Whether a re-subscription is already in flight. */
+  #subtitleResubscribing = false;
+  /**
+   * The once-a-second coverage reading, running only while a showing track has
+   * no cue for the position being played.
+   *
+   * @type {ReturnType<typeof setInterval> | null}
+   */
+  #subtitleCoverageTimer = null;
   /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
   #selectedQualityHeight = 0;
   // The height an automatic move is being made to right now, so a request
@@ -3503,6 +3539,11 @@ export class Loading extends StateDerivedView {
     this.#subtitleEpoch += 1;
     this.#embeddedTextTracks.clear();
     this.#subtitleContext = null;
+    this.#subtitleCursors.clear();
+    this.#subtitleStarvedAt.clear();
+    this.#subtitleCueKeys.clear();
+    this.#subtitleResubscribing = false;
+    this.#stopSubtitleCoverageWatch();
     if (this.#videoElement instanceof HTMLVideoElement) {
       for (const track of Array.from(this.#videoElement.querySelectorAll("track"))) {
         track.remove();
@@ -3775,8 +3816,15 @@ export class Loading extends StateDerivedView {
       // this side cannot read cluster-by-cluster, makes ffmpeg read the whole
       // film. Measured 2026-08-19, one track produced 3040 bytes over 752
       // seconds; asking again is free, the answer is kept once it exists.
+      // Everything this page does not already hold. On the first seed that is
+      // the whole of what the proxy has read; on a re-subscription after a
+      // reconnect it is only what arrived while the channel was gone — asking
+      // for all of it again would add every cue a second time, since a cue
+      // already in the track is not recognised by its text.
+      const held = this.#subtitleCursors.get(track.index);
       const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
-        `&fileIndex=${fileIndex}&trackIndex=${track.index}`;
+        `&fileIndex=${fileIndex}&trackIndex=${track.index}` +
+        (Number.isFinite(held) ? `&since=${held}` : "");
       let response = await transport.fetch(url, {
         signal: this.#session.abortController.signal,
         timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
@@ -3818,10 +3866,18 @@ export class Loading extends StateDerivedView {
         }
       }
 
-      const added = appendCues(el.track, parseVttCues(vtt), -1);
+      const cursor = Number.parseInt(response.headers.get("x-subtitle-cursor") ?? "", 10);
+      if (Number.isInteger(cursor)) {
+        this.#subtitleCursors.set(track.index, cursor);
+      }
+      const added = appendCues(el.track, parseVttCues(vtt), this.#cueKeysOf(el.track));
       console.debug(
-        `[torrent-tv][subtitles] embedded track seeded "${el.label}" with ${added.added} cue(s)`
+        `[torrent-tv][subtitles] embedded track seeded "${el.label}" with ${added.added} cue(s) ` +
+        `(track ${track.index}, cursor ${Number.isInteger(cursor) ? cursor : "none"}, ` +
+        `clusters ${response.headers.get("x-subtitle-covered-clusters") ?? "?"}/` +
+        `${response.headers.get("x-subtitle-indexed-clusters") ?? "?"})`
       );
+      this.#reportSubtitleCoverage(`seed of track ${track.index}`);
     } catch (e) {
       if (this.#isAbortError(e)) {
         return;
@@ -3850,17 +3906,228 @@ export class Loading extends StateDerivedView {
     if (!this.#subtitleContext || this.#subtitleContext.fileIndex !== event.fileIndex) {
       return; // a push for a file that is no longer the one open
     }
+    // Before anything else: a batch whose cues all fell away as empty still
+    // moves the proxy's count forward, and a cursor left behind would have this
+    // page ask for those same seqs again after every reconnect.
+    if (Number.isFinite(event.cursor)) {
+      this.#subtitleCursors.set(event.trackIndex, event.cursor);
+    }
     const textTrack = this.#embeddedTextTracks.get(event.trackIndex);
     if (!textTrack || !Array.isArray(event.cues) || event.cues.length === 0) {
       return;
     }
-    const added = appendCues(textTrack, event.cues, -1);
+    const added = appendCues(textTrack, event.cues, this.#cueKeysOf(textTrack));
     if (added.added > 0) {
+      // Against the position being played, because that is the only thing that
+      // decides whether these cues are of any use yet: a batch covering the
+      // stretch the viewer passed two minutes ago and a batch covering the next
+      // line of dialogue are the same event without this comparison.
+      const now = this.#videoElement instanceof HTMLVideoElement ? this.#videoElement.currentTime : 0;
+      const first = event.cues[0]?.startSeconds ?? 0;
+      const last = event.cues[event.cues.length - 1]?.endSeconds ?? first;
       console.debug(
         `[torrent-tv][subtitles] track ${event.trackIndex}: +${added.added} cue(s) pushed, ` +
-        `covering to ${added.knownUntilSeconds.toFixed(1)}s`
+        `covering ${first.toFixed(1)}-${last.toFixed(1)}s, playhead ${now.toFixed(1)}s ` +
+        `(${(first - now).toFixed(1)}s ahead of it)`
       );
+      this.#reportSubtitleCoverage(`push for track ${event.trackIndex}`);
     }
+  }
+
+  /**
+   * What each track the viewer has turned ON can actually draw at the position
+   * being played, and — when it can draw nothing — how far away its nearest cue
+   * is and how long the viewer has been waiting.
+   *
+   * This is the reading the 2026-08-26 report had no answer from. The chain has
+   * three places a cue can be late in — the download that has not reached the
+   * cluster, the push that did not arrive or landed on another track, and the
+   * player that holds the cue and draws nothing — and every log line so far
+   * belonged to one of them alone. Comparing what the track HOLDS against
+   * `currentTime` separates all three from one occurrence: a cue that covers
+   * the playhead and nothing on screen is the player's; no cue and no push is
+   * the download's; a push whose cues sit behind the playhead is its own answer.
+   *
+   * @param {string} cause - What prompted the reading, for the log.
+   * @returns {void}
+   */
+  #reportSubtitleCoverage(cause) {
+    const tracks = this.#videoElement?.textTracks;
+    if (!tracks || !(this.#videoElement instanceof HTMLVideoElement)) {
+      return;
+    }
+    const now = this.#videoElement.currentTime;
+    let starved = false;
+    for (const track of tracks) {
+      if (track.mode !== "showing") {
+        this.#subtitleStarvedAt.delete(track);
+        continue;
+      }
+      // `cues` is null on a track the browser has not started, and empty on one
+      // that holds nothing yet — the two say the same thing here.
+      const cues = track.cues;
+      const count = cues ? cues.length : 0;
+      let covering = 0;
+      let nextAhead = null;
+      for (let index = 0; index < count; index += 1) {
+        const cue = cues[index];
+        if (cue.startTime <= now && now < cue.endTime) {
+          covering += 1;
+        } else if (cue.startTime > now && (nextAhead === null || cue.startTime < nextAhead)) {
+          nextAhead = cue.startTime;
+        }
+      }
+      // A silent stretch of film is not a track with nothing in it. What tells
+      // them apart is whether the track holds ANY cue past the playhead: one
+      // ahead means the blank screen is the film's own pause, and the supply is
+      // fine. Nothing ahead means the track has run out where the viewer is,
+      // which is the state this reading was built for — and it is also what
+      // keeps the once-a-second line from printing through every pause in the
+      // dialogue for the length of a film.
+      const runOut = covering === 0 && nextAhead === null;
+      if (runOut && !this.#subtitleStarvedAt.has(track)) {
+        this.#subtitleStarvedAt.set(track, performance.now());
+      }
+      if (!runOut) {
+        this.#subtitleStarvedAt.delete(track);
+      }
+      const span = count > 0
+        ? `${cues[0].startTime.toFixed(1)}-${cues[count - 1].endTime.toFixed(1)}s`
+        : "none";
+      const starvedAt = this.#subtitleStarvedAt.get(track);
+      console.debug(
+        `[torrent-tv][subtitles] coverage (${cause}) "${track.label || track.language || "?"}": ` +
+        `cues=${count} span=${span} playhead=${now.toFixed(1)}s covering=${covering} ` +
+        `next=${nextAhead === null ? "none" : `${(nextAhead - now).toFixed(1)}s ahead`}` +
+        (starvedAt === undefined
+          ? ""
+          : ` nothingAheadFor=${((performance.now() - starvedAt) / 1000).toFixed(1)}s`)
+      );
+      if (runOut) {
+        starved = true;
+      }
+    }
+    if (starved) {
+      this.#startSubtitleCoverageWatch();
+    } else {
+      this.#stopSubtitleCoverageWatch();
+    }
+  }
+
+  /**
+   * The record of what one track already holds, made on first use.
+   *
+   * @param {TextTrack} track
+   * @returns {Set<string>}
+   */
+  #cueKeysOf(track) {
+    let keys = this.#subtitleCueKeys.get(track);
+    if (!keys) {
+      keys = new Set();
+      this.#subtitleCueKeys.set(track, keys);
+    }
+    return keys;
+  }
+
+  /**
+   * Repeat the coverage reading every second while a showing track has nothing
+   * to draw, so the moment its first usable cue arrives is timed rather than
+   * inferred. Stops itself as soon as every showing track covers the playhead.
+   *
+   * @returns {void}
+   */
+  #startSubtitleCoverageWatch() {
+    if (this.#subtitleCoverageTimer !== null) {
+      return;
+    }
+    this.#subtitleCoverageTimer = window.setInterval(() => {
+      this.#reportSubtitleCoverage("nothing ahead");
+    }, 1000);
+  }
+
+  /** @returns {void} */
+  #stopSubtitleCoverageWatch() {
+    if (this.#subtitleCoverageTimer === null) {
+      return;
+    }
+    window.clearInterval(this.#subtitleCoverageTimer);
+    this.#subtitleCoverageTimer = null;
+  }
+
+  /**
+   * Ask for each embedded track again, from where this page left off.
+   *
+   * The proxy pushes cues to the CHANNELS subscribed to a file, and it drops a
+   * channel from that list the moment it closes. The only thing that subscribes
+   * is a request for that file's subtitles, which is made once when the file is
+   * opened — so a reconnect that swaps the connection under a live player left
+   * the page permanently unsubscribed: cues already delivered kept showing,
+   * nothing further ever arrived, and no line said so. Each request here both
+   * carries the cues missed while the channel was gone and puts the new channel
+   * back on the list.
+   *
+   * @returns {void}
+   */
+  #resubscribeSubtitles() {
+    const context = this.#subtitleContext;
+    if (!context || this.#embeddedTextTracks.size === 0 || this.#subtitleResubscribing) {
+      return;
+    }
+    const tracks = (this.#planTracks?.subtitles ?? []).filter((track) => track?.textBased === true);
+    if (tracks.length === 0) {
+      return;
+    }
+    console.debug(
+      `[torrent-tv][subtitles] re-subscribing ${tracks.length} embedded track(s) after a reconnect`
+    );
+    // One at a time: two reconnects close together would otherwise ask twice
+    // from the same cursor. What comes back cannot double a cue in any case —
+    // every append is judged against what the track already holds — but two
+    // answers to the same question are bytes and a walk for nothing.
+    this.#subtitleResubscribing = true;
+    const epoch = this.#subtitleEpoch;
+    const asked = [];
+    for (const track of tracks) {
+      const element = this.#trackElementFor(track.index);
+      if (!element) {
+        continue;
+      }
+      asked.push(this.#seedEmbeddedTrack({
+        track,
+        el: element,
+        fileIndex: context.fileIndex,
+        // The transport OBJECT survives a seamless reconnect — the connection
+        // inside it is replaced — so either reads the new channel; the current
+        // one is named first all the same.
+        transport: this.#transport ?? context.transport,
+        sourceKey: context.sourceKey,
+        epoch
+      }));
+    }
+    void Promise.allSettled(asked).then(() => {
+      this.#subtitleResubscribing = false;
+    });
+  }
+
+  /**
+   * The `<track>` element carrying one source track index, found through the
+   * `TextTrack` it owns — the elements have no `src` and no attribute naming
+   * the index, so the map built when they were created is the only link.
+   *
+   * @param {number} trackIndex
+   * @returns {HTMLTrackElement | null}
+   */
+  #trackElementFor(trackIndex) {
+    const textTrack = this.#embeddedTextTracks.get(trackIndex);
+    if (!textTrack || !(this.#videoElement instanceof HTMLVideoElement)) {
+      return null;
+    }
+    for (const element of this.#videoElement.querySelectorAll("track")) {
+      if (element.track === textTrack) {
+        return element;
+      }
+    }
+    return null;
   }
 
   /**
@@ -3953,6 +4220,9 @@ export class Loading extends StateDerivedView {
         described.push(`"${track.label || track.language || "?"}"=${track.mode}`);
       }
       console.debug(`[torrent-tv][subtitles] modes ${described.join(" ")}`);
+      // What a track just switched on can draw at this position — see
+      // `#reportSubtitleCoverage`.
+      this.#reportSubtitleCoverage("mode change");
     };
     tracks.addEventListener("change", onChange);
   }
@@ -4411,6 +4681,9 @@ export class Loading extends StateDerivedView {
           const progress = await this.#session.fetchActiveTranscodeProgress();
           if (progress) {
             this.#hlsPlayer.startLoad();
+            // The old channel took the subtitle subscription with it when it
+            // closed, and nothing on this path would ever ask again.
+            this.#resubscribeSubtitles();
             console.debug("[torrent-tv] reconnect: seamless resume");
             this.#armStabilityTimer();
             return;
