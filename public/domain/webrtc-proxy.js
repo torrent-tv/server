@@ -240,7 +240,7 @@ export class WebRtcProxy {
    * cues for one track, found off the proxy's own download rather than in
    * answer to a request this side made. Assign a handler to receive them.
    *
-   * @type {((event: { fileIndex: number, trackIndex: number, cues: object[], language: string }) => void) | null}
+   * @type {((event: { fileIndex: number, trackIndex: number, cues: object[], language: string, cursor: number | null }) => void) | null}
    */
   onSubtitleCues = null;
 
@@ -678,7 +678,8 @@ export class WebRtcProxy {
           fileIndex: msg.fileIndex,
           trackIndex: msg.trackIndex,
           cues: Array.isArray(msg.cues) ? msg.cues : [],
-          language: msg.language ?? ""
+          language: msg.language ?? "",
+          cursor: Number.isFinite(msg.cursor) ? msg.cursor : null
         });
       } catch (error) {
         console.warn("[webrtc-proxy] onSubtitleCues handler failed:", error);
@@ -1352,8 +1353,8 @@ export class WebRtcProxy {
           })
         );
       } catch {
-        // A channel that will not take a 200-byte message is itself the answer;
-        // the proxy sees the echo stop.
+        // silent-ok: a channel that will not take a 200-byte message is itself
+        // the answer, and the proxy reads it — the echo simply stops arriving.
       }
     }, PROBE_ECHO_MS);
   }
@@ -1446,7 +1447,8 @@ export class WebRtcProxy {
       try {
         probe?.close();
       } catch {
-        // Closing a connection that never opened is not an error worth a line.
+        // silent-ok: closing a connection that never opened changes nothing and
+        // leaves nothing undone.
       }
     }
   }

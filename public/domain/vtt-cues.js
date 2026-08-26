@@ -81,27 +81,53 @@ export function parseVttCues(vtt) {
 }
 
 /**
+ * What identifies a cue: when it starts, when it ends, and what it says. Two
+ * deliveries of the same line are the same cue whichever route they came by.
+ *
+ * @param {ParsedCue} cue
+ * @returns {string}
+ */
+function keyOf(cue) {
+  return `${cue.startSeconds}|${cue.endSeconds}|${cue.text}`;
+}
+
+/**
  * Add the cues a track does not have yet, and say where it now ends.
  *
- * Cues are added by time rather than counted, because the proxy sends what it
- * has read so far and a re-read can repeat one that is already shown.
+ * A cue is recognised by what it IS, through `seen`, and not by being later
+ * than the last one added. Two reasons, both met in the field:
+ *
+ * - the same cue really can arrive twice — a re-subscription after a reconnect
+ *   asks for everything the page missed, and a push emitted at that moment
+ *   carries some of it as well. Compared against a cursor, both copies are
+ *   added and the viewer sees a doubled line;
+ * - two cues can legitimately start at the same instant (an ASS sign over a
+ *   line of dialogue), and a rule that only accepts a LATER start threw the
+ *   second one away.
+ *
+ * `track.cues` cannot serve as the record: it reads null while the track's mode
+ * is `disabled`, which is exactly when cues arrive for a track the viewer has
+ * not turned on yet.
  *
  * @param {TextTrack} track
  * @param {ParsedCue[]} cues
- * @param {number} knownUntilSeconds - The start of the last cue already added.
+ * @param {Set<string>} seen - Keys of the cues this track already holds; added
+ *   to as they are appended, so the caller keeps one per track.
  * @returns {{ added: number, knownUntilSeconds: number }}
  */
-export function appendCues(track, cues, knownUntilSeconds) {
-  let until = Number.isFinite(knownUntilSeconds) ? knownUntilSeconds : -1;
+export function appendCues(track, cues, seen) {
+  let until = -1;
   let added = 0;
   for (const cue of cues) {
-    if (cue.startSeconds <= until) {
+    const key = keyOf(cue);
+    if (seen.has(key)) {
       continue;
     }
     try {
       track.addCue(new VTTCue(cue.startSeconds, cue.endSeconds, cue.text));
+      seen.add(key);
       added += 1;
-      until = cue.startSeconds;
+      until = Math.max(until, cue.startSeconds);
     } catch (error) {
       // silent-ok: a cue the player refuses is one line of dialogue, and the
       // rest of the track is worth more than reporting it; the caller is given

@@ -54,12 +54,13 @@ test("only cues the track does not have are added", () => {
     }
   };
 
-  const first = appendCues(track, parseVttCues(SAMPLE), -1);
+  const seen = new Set();
+  const first = appendCues(track, parseVttCues(SAMPLE), seen);
   assert.equal(first.added, 2);
   assert.equal(first.knownUntilSeconds, 4.25);
 
   // The proxy sends what it has read so far, so the same cues come back.
-  const again = appendCues(track, parseVttCues(SAMPLE), first.knownUntilSeconds);
+  const again = appendCues(track, parseVttCues(SAMPLE), seen);
   assert.equal(again.added, 0, "a cue already on screen is not added twice");
   assert.equal(added.length, 2);
 });
@@ -83,8 +84,47 @@ test("a malformed cue does not stop the ones after it", () => {
   const result = appendCues(track, [
     { startSeconds: 1, endSeconds: 2, text: "bad" },
     { startSeconds: 3, endSeconds: 4, text: "good" }
-  ], -1);
+  ], new Set());
 
   assert.equal(result.added, 1);
   assert.equal(added[0].text, "good");
+});
+
+test("a cue that starts at the same instant as another is still added", () => {
+  // An ASS sign over a line of dialogue. Judged by a cursor in film time, the
+  // second of the two was dropped for being no later than the first.
+  const added = [];
+  const track = { addCue: (cue) => added.push(cue) };
+  globalThis.VTTCue = class {
+    constructor(start, end, text) {
+      Object.assign(this, { startTime: start, endTime: end, text });
+    }
+  };
+
+  const result = appendCues(track, [
+    { startSeconds: 10, endSeconds: 12, text: "— Who is there?" },
+    { startSeconds: 10, endSeconds: 12, text: "SIGN: EXIT" }
+  ], new Set());
+
+  assert.equal(result.added, 2);
+});
+
+test("the same cue delivered twice by different routes is added once", () => {
+  // A re-subscription after a reconnect asks for everything missed, and a push
+  // emitted at that moment carries part of the same stretch.
+  const added = [];
+  const track = { addCue: (cue) => added.push(cue) };
+  globalThis.VTTCue = class {
+    constructor(start, end, text) {
+      Object.assign(this, { startTime: start, endTime: end, text });
+    }
+  };
+  const seen = new Set();
+  const line = { startSeconds: 300, endSeconds: 302, text: "Both ways" };
+
+  appendCues(track, [line], seen);
+  const second = appendCues(track, [{ ...line }], seen);
+
+  assert.equal(second.added, 0);
+  assert.equal(added.length, 1);
 });
