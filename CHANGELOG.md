@@ -1,5 +1,9 @@
 ## 0.16.3
 
+- **New**: a third data channel, `proxy-fast`, opened unordered and with no retransmission. It carries the proxy's probes only. SCTP orders and retransmits per stream, so a probe still arriving here while the ordered channels have gone silent means a retransmission is stuck in one of them, and a probe that stops here too means the association stopped transmitting — the question that was otherwise going to need a rebuilt libdatachannel to answer.
+- **New**: the transport sample now carries what only this end can see — tab visibility, event-loop lag, the longest a channel-message handler ran, per-channel `messagesReceived`/`bytesReceived` for every channel rather than one, and the probe numbers seen. Every line is stamped with a UTC timestamp so it aligns with the proxy's.
+- **New**: `probe-echo` reports the highest probe number seen on each channel back to the proxy twice a second, over the browser-to-proxy direction, which goes on working through a delivery freeze.
+- **New**: a delivery wedge — nothing delivered for fifteen seconds with requests outstanding and the connection reporting itself healthy — now takes the one reading that cannot be taken afterwards: it raises a SECOND association to the same proxy and asks it to carry four megabytes. Bytes that cross prove the fault is held in the wedged association's own state; a second association that stalls the same way places it in the path or at this end. Diagnostic only — it never becomes the transport and closes itself either way.
 - **Chore**: `#onSubtitleCuesPush` now logs every push it receives, unconditionally — field report 2026-08-22 that cues still do not appear at once after 0.16.2, and the existing log line only fired when a cue was actually appended, so there was no way to tell "nothing arrived" from "arrived and was silently dropped." Diagnostic only.
 
 ## 0.16.2

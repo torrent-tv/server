@@ -47,6 +47,32 @@
 // How often the browser writes its transport counters to the log. The proxy
 // samples its own on the same cadence, so the two lines can be subtracted.
 const TRANSPORT_SAMPLE_MS = 5_000;
+/**
+ * How often this side reports what it has seen back to the proxy.
+ *
+ * The proxy numbers a probe every half second on every channel; this echo is
+ * what turns those numbers into a reading, because it travels browser to proxy
+ * — the direction that goes on working through a delivery freeze (measured
+ * 2026-08-24: requests arrived and were answered for 88 minutes while nothing
+ * came back the other way). Same period as the probe, so the proxy's gap
+ * measurement is never stale by more than one interval.
+ */
+const PROBE_ECHO_MS = 500;
+/** How often the event loop is asked how late it is running. */
+const LOOP_LAG_PROBE_MS = 200;
+/**
+ * How long the media channel may deliver nothing, while requests are waiting on
+ * it and the connection reports itself healthy, before this is a wedge.
+ *
+ * Fifteen seconds is far longer than any segment takes to arrive on a working
+ * link (measured: 6-11 MB in well under a second on the LAN, tens of seconds at
+ * the worst cellular rates) and far shorter than the 48 and 88 minute episodes
+ * it exists to catch. It only starts a READING, never a recovery, so a false
+ * positive costs one test connection and a log line.
+ */
+const DELIVERY_WEDGE_AFTER_MS = 15_000;
+/** How many bytes the second association is asked to carry to prove itself. */
+const SECOND_ASSOCIATION_BYTES = 4 * 1024 * 1024;
 
 const ASCII_DECODER = new TextDecoder();
 
@@ -116,6 +142,58 @@ export class WebRtcProxy {
    * Reasoning, measurements and the staging: research/control-channel-2026-08-05.md
    */
   #controlChannel = null;
+  /**
+   * A third channel, opened UNORDERED and with no retransmission.
+   *
+   * It carries nothing but the proxy's numbered probes, and it exists to answer
+   * one question no counter on either side can answer alone. SCTP orders and
+   * retransmits per STREAM: a probe that keeps arriving here while the ordered
+   * channels have gone silent means a retransmission is stuck in one of them,
+   * and a probe that stops here too means the association stopped transmitting
+   * — a receive window shut, or the sender halted. Both ordered channels froze
+   * together in the 2026-08-24 episode, which already points at the second, and
+   * this is what settles it.
+   *
+   * Null on a proxy that only accepts what it is offered — nothing depends on
+   * it, so an old proxy simply yields one fewer reading.
+   *
+   * @type {RTCDataChannel | null}
+   */
+  #fastChannel = null;
+  /**
+   * The highest probe number seen on each channel, by label.
+   * @type {Map<string, number>}
+   */
+  #probeSeen = new Map();
+  /** Handle of the echo timer; see #startProbeEcho. */
+  #probeEchoTimer = null;
+  /**
+   * The longest a single channel-message handler has run since the last report.
+   * A page that stops draining the channel is one of the two candidate causes
+   * of a delivery freeze, and this is what would show it.
+   */
+  #handlerMaxMs = 0;
+  /** Event-loop lag, measured by a timer that knows when it should have fired. */
+  #loopLagMs = 0;
+  /** Handle of the loop-lag probe. */
+  #loopLagTimer = null;
+  /** When the loop-lag probe was due to fire next. */
+  #loopLagExpectedAt = null;
+  /**
+   * Per-channel receive counters from the last `getStats` sample.
+   * @type {Record<string, { messages: number | null, bytes: number | null }>}
+   */
+  #lastChannelCounters = {};
+  /** Transport bytes received at the last sample, so the trend is available here too. */
+  #lastTransportIn = null;
+  /** Messages delivered to this page on the media channel at the last sample. */
+  #lastChannelMessages = null;
+  /** When the media channel last delivered a message, or 0 while none is expected. */
+  #lastDeliveryAt = 0;
+  /** True while a wedge is being reported, so the second-association test runs once per episode. */
+  #wedgeReported = false;
+  /** True while this connection IS the second-association test, so a test cannot spawn a test. */
+  #isDiagnosticProbe = false;
   /** @type {WebSocket | null} */
   #ws = null;
   /**
@@ -431,7 +509,7 @@ export class WebRtcProxy {
     this.#controlChannel = this.#pc.createDataChannel("proxy-control", { ordered: true });
     this.#controlChannel.binaryType = "arraybuffer";
     this.#controlChannel.addEventListener("message", (event) => {
-      this.#onChannelMessage(event.data);
+      this.#onChannelMessage(event.data, "proxy-control");
     });
     this.#controlChannel.addEventListener("error", () => {
       // Never fatal: the request simply goes down the media channel instead.
@@ -441,6 +519,30 @@ export class WebRtcProxy {
     this.#controlChannel.addEventListener("close", () => {
       this.#controlChannel = null;
     });
+
+    // The unordered, non-retransmitting channel. It carries probes only, so a
+    // failure to open it costs one reading and nothing else.
+    try {
+      this.#fastChannel = this.#pc.createDataChannel("proxy-fast", {
+        ordered: false,
+        maxRetransmits: 0
+      });
+      this.#fastChannel.binaryType = "arraybuffer";
+      this.#fastChannel.addEventListener("message", (event) => {
+        this.#onChannelMessage(event.data, "proxy-fast");
+      });
+      this.#fastChannel.addEventListener("close", () => {
+        this.#fastChannel = null;
+      });
+      this.#fastChannel.addEventListener("error", () => {
+        this.#fastChannel = null;
+      });
+    } catch (error) {
+      console.debug(
+        `[dc] the unordered probe channel could not be created (${error instanceof Error ? error.message : String(error)})`
+      );
+      this.#fastChannel = null;
+    }
     // Response bodies arrive as binary frames; receive them as ArrayBuffer
     // rather than Blob so they can be parsed synchronously.
     this.#channel.binaryType = "arraybuffer";
@@ -457,7 +559,7 @@ export class WebRtcProxy {
     });
 
     this.#channel.addEventListener("message", (event) => {
-      this.#onChannelMessage(event.data);
+      this.#onChannelMessage(event.data, "proxy");
     });
 
     this.#channel.addEventListener("close", () => {
@@ -524,7 +626,28 @@ export class WebRtcProxy {
    *
    * @param {string} raw
    */
-  #onChannelMessage(raw) {
+  #onChannelMessage(raw, label = "proxy") {
+    // How long this side spends handling one message. A page that has stopped
+    // draining the channel is one of the two candidate causes of a delivery
+    // freeze, and the proxy cannot see it at all; this is the reading that can.
+    const handlerStartedAt = performance.now();
+    try {
+      this.#dispatchChannelMessage(raw, label);
+    } finally {
+      const elapsed = performance.now() - handlerStartedAt;
+      if (elapsed > this.#handlerMaxMs) {
+        this.#handlerMaxMs = elapsed;
+      }
+    }
+  }
+
+  /**
+   * Handle an incoming data channel message.
+   *
+   * @param {string | ArrayBuffer} raw
+   * @param {string} label - The channel it arrived on.
+   */
+  #dispatchChannelMessage(raw, label) {
     // Binary messages carry response body frames (see wire protocol). Control
     // messages (response-start/-error, pong) arrive as JSON strings.
     if (raw instanceof ArrayBuffer) {
@@ -559,6 +682,19 @@ export class WebRtcProxy {
         });
       } catch (error) {
         console.warn("[webrtc-proxy] onSubtitleCues handler failed:", error);
+      }
+      return;
+    }
+
+    // A numbered probe from the proxy. Recorded per channel; the echo timer
+    // reports the highest number seen on each, and the gap between what the
+    // proxy sent and what arrived here is what names the fault.
+    if (msg.type === "probe") {
+      if (Number.isInteger(msg.seq)) {
+        const previous = this.#probeSeen.get(label);
+        if (previous === undefined || msg.seq > previous) {
+          this.#probeSeen.set(label, msg.seq);
+        }
       }
       return;
     }
@@ -1102,6 +1238,7 @@ export class WebRtcProxy {
    */
   #startTransportSampling() {
     this.#stopTransportSampling();
+    this.#startProbeEcho();
     let previous = null;
     this.#transportSampler = window.setInterval(() => {
       if (!this.#pc) {
@@ -1111,19 +1248,35 @@ export class WebRtcProxy {
         let transport = null;
         let pair = null;
         let channel = null;
+        /** @type {Record<string, { messages: number | null, bytes: number | null }>} */
+        const channels = {};
         stats.forEach((report) => {
           if (report.type === "transport") {
             transport = report;
           } else if (report.type === "candidate-pair" && (report.nominated || report.state === "succeeded")) {
             pair = report;
-          } else if (report.type === "data-channel" && report.label === "proxy") {
-            channel = report;
+          } else if (report.type === "data-channel") {
+            // Every channel, not just the media one. Two of the three are
+            // ordered and one is not, and the whole point of the comparison is
+            // lost if only one is counted.
+            channels[report.label ?? "?"] = {
+              messages: report.messagesReceived ?? null,
+              bytes: report.bytesReceived ?? null
+            };
+            if (report.label === "proxy") {
+              channel = report;
+            }
           }
         });
         const received = transport?.bytesReceived ?? pair?.bytesReceived ?? null;
         const sent = transport?.bytesSent ?? pair?.bytesSent ?? null;
         const delta = previous !== null && received !== null ? received - previous : null;
         previous = received;
+        this.#lastTransportIn = received;
+        this.#lastChannelCounters = channels;
+        const perChannel = Object.entries(channels)
+          .map(([name, counters]) => `${name}=${counters.messages ?? "?"}msg/${counters.bytes ?? "?"}B`)
+          .join(" ");
         console.debug(
           `[dc-transport] received=${received ?? "?"}${delta === null ? "" : ` (+${delta})`} ` +
             `sent=${sent ?? "?"} chMsgs=${channel?.messagesReceived ?? "?"} ` +
@@ -1132,14 +1285,187 @@ export class WebRtcProxy {
               pair?.currentRoundTripTime === undefined
                 ? "?"
                 : Math.round(pair.currentRoundTripTime * 1000)
-            }ms pair=${pair?.state ?? "?"}`
+            }ms pair=${pair?.state ?? "?"} ` +
+            // Everything below is the receiving end's own account of itself:
+            // the two candidate causes of a freeze differ here and nowhere else.
+            `visibility=${typeof document === "undefined" ? "?" : document.visibilityState} ` +
+            `loopLag=${Math.round(this.#loopLagMs)}ms handlerMax=${Math.round(this.#handlerMaxMs * 10) / 10}ms ` +
+            `pending=${this.#pending.size} probes=[${[...this.#probeSeen.entries()].map(([name, seq]) => `${name}:${seq}`).join(" ")}] ` +
+            `${perChannel} at=${new Date().toISOString()}`
         );
+        this.#considerWedge(channel?.messagesReceived ?? null);
       }).catch(() => {});
     }, TRANSPORT_SAMPLE_MS);
   }
 
+  /**
+   * Report to the proxy what has arrived here, twice a second.
+   *
+   * Two things travel: the highest probe number seen on each channel, which is
+   * what the proxy turns into a per-channel gap, and what this side can see of
+   * its own receiving — whether the tab is hidden, how late the event loop is
+   * running, how long the channel's own message handler took, and the counters
+   * the transport keeps. The last group is what separates "the sender stopped"
+   * from "this page stopped draining and the window closed", which is the
+   * question the field episodes could not answer because only the sender was
+   * ever read.
+   *
+   * @returns {void}
+   */
+  #startProbeEcho() {
+    this.#stopProbeEcho();
+    this.#loopLagTimer = window.setInterval(() => {
+      const expectedAt = this.#loopLagExpectedAt;
+      const now = performance.now();
+      if (typeof expectedAt === "number") {
+        const lag = now - expectedAt;
+        this.#loopLagMs = lag > 0 ? lag : 0;
+      }
+      this.#loopLagExpectedAt = now + LOOP_LAG_PROBE_MS;
+    }, LOOP_LAG_PROBE_MS);
+
+    this.#probeEchoTimer = window.setInterval(() => {
+      const channel =
+        this.#channel?.readyState === "open"
+          ? this.#channel
+          : this.#controlChannel?.readyState === "open"
+            ? this.#controlChannel
+            : null;
+      if (!channel) {
+        return;
+      }
+      const handlerMaxMs = Math.round(this.#handlerMaxMs * 10) / 10;
+      this.#handlerMaxMs = 0;
+      try {
+        channel.send(
+          JSON.stringify({
+            type: "probe-echo",
+            seen: Object.fromEntries(this.#probeSeen),
+            report: {
+              visibility: typeof document === "undefined" ? "?" : document.visibilityState,
+              loopLagMs: Math.round(this.#loopLagMs),
+              handlerMaxMs,
+              transportBytesReceived: this.#lastTransportIn,
+              channels: this.#lastChannelCounters,
+              pending: this.#pending.size
+            }
+          })
+        );
+      } catch {
+        // A channel that will not take a 200-byte message is itself the answer;
+        // the proxy sees the echo stop.
+      }
+    }, PROBE_ECHO_MS);
+  }
+
+  /**
+   * Decide whether this connection has stopped delivering, and if so, take the
+   * one reading that cannot be taken afterwards.
+   *
+   * The state being looked for is precise: requests are outstanding, the peer
+   * connection reports itself connected, and not one complete message has been
+   * handed to this page since the last sample. That is the field signature —
+   * every layer reporting success while nothing arrives.
+   *
+   * What it then does is NOT a recovery. It raises a SECOND association to the
+   * same proxy and asks it to carry a few megabytes. If they arrive, the fault
+   * is held in the wedged association's own state, and rotating connections
+   * would cure it; if the second association stalls the same way, the fault is
+   * in the path or at this end, and rotating would not. Nothing else separates
+   * those two, and neither can be established once the session is gone.
+   *
+   * @param {number | null} messagesReceived
+   * @returns {void}
+   */
+  #considerWedge(messagesReceived) {
+    if (this.#isDiagnosticProbe) {
+      return;
+    }
+    const now = Date.now();
+    const delivered =
+      messagesReceived === null ||
+      this.#lastChannelMessages === null ||
+      messagesReceived > this.#lastChannelMessages;
+    this.#lastChannelMessages = messagesReceived;
+    if (delivered || this.#pending.size === 0) {
+      this.#lastDeliveryAt = now;
+      this.#wedgeReported = false;
+      return;
+    }
+    if (this.#lastDeliveryAt === 0) {
+      this.#lastDeliveryAt = now;
+      return;
+    }
+    const stalledMs = now - this.#lastDeliveryAt;
+    if (stalledMs < DELIVERY_WEDGE_AFTER_MS || this.#wedgeReported) {
+      return;
+    }
+    this.#wedgeReported = true;
+    console.warn(
+      `[dc-wedge] nothing delivered for ${stalledMs}ms with ${this.#pending.size} request(s) waiting; ` +
+      `state=${this.#pc?.connectionState} ice=${this.#pc?.iceConnectionState} ` +
+      `probes=[${[...this.#probeSeen.entries()].map(([name, seq]) => `${name}:${seq}`).join(" ")}] ` +
+      `at=${new Date(now).toISOString()}`
+    );
+    void this.#runSecondAssociationTest();
+  }
+
+  /**
+   * Raise a second association to the same proxy and try to carry bytes over it.
+   *
+   * Best-effort and self-contained: it never touches this connection, never
+   * becomes the transport, and closes itself whatever happens. The only output
+   * is the log line.
+   *
+   * @returns {Promise<void>}
+   */
+  async #runSecondAssociationTest() {
+    const startedAt = performance.now();
+    let probe = null;
+    try {
+      probe = new WebRtcProxy(this.#proxyId, this.#proxyLocalPort, this.#allowPrivateCandidates);
+      probe.#isDiagnosticProbe = true;
+      await probe.connect();
+      const connectedMs = Math.round(performance.now() - startedAt);
+      const response = await probe.fetch(`/api/delivery-sink?bytes=${SECOND_ASSOCIATION_BYTES}`);
+      const body = await response.arrayBuffer();
+      const totalMs = Math.round(performance.now() - startedAt);
+      console.warn(
+        `[dc-wedge] second association carried ${body.byteLength}B of ${SECOND_ASSOCIATION_BYTES} ` +
+        `status=${response.status} connect=${connectedMs}ms total=${totalMs}ms — ` +
+        `${body.byteLength === SECOND_ASSOCIATION_BYTES
+          ? "the fault is held in the wedged association"
+          : "a fresh association fails too: the path or this end"}`
+      );
+    } catch (error) {
+      console.warn(
+        `[dc-wedge] second association failed after ${Math.round(performance.now() - startedAt)}ms: ` +
+        `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
+      );
+    } finally {
+      try {
+        probe?.close();
+      } catch {
+        // Closing a connection that never opened is not an error worth a line.
+      }
+    }
+  }
+
+  /** @returns {void} */
+  #stopProbeEcho() {
+    if (this.#probeEchoTimer !== null) {
+      window.clearInterval(this.#probeEchoTimer);
+      this.#probeEchoTimer = null;
+    }
+    if (this.#loopLagTimer !== null) {
+      window.clearInterval(this.#loopLagTimer);
+      this.#loopLagTimer = null;
+    }
+  }
+
   /** @returns {void} */
   #stopTransportSampling() {
+    this.#stopProbeEcho();
     if (this.#transportSampler !== null) {
       window.clearInterval(this.#transportSampler);
       this.#transportSampler = null;
@@ -1155,6 +1481,8 @@ export class WebRtcProxy {
     this.#ws?.close();
     this.#controlChannel?.close();
     this.#controlChannel = null;
+    this.#fastChannel?.close();
+    this.#fastChannel = null;
     this.#stopTransportSampling();
     this.#channel?.close();
     this.#pc?.close();
