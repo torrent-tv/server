@@ -1,3 +1,8 @@
+## 0.17.3
+
+- **New**: When the player asks for a fragment far from the end of its buffer, the line now carries the buffered ranges themselves, per track, not just where they end. Field case 2026-08-27: the player asked for fragment #812 while its buffer ended 52.4 s earlier, and the thirteen fragments in between had been delivered minutes before, ahead of a seek backwards. Whether they were still held and simply not joined, or had gone and were never asked for again, decides which defect that is — and one number for the end of the buffer cannot tell those apart.
+- **New**: Two readings for how media leaves the buffer, because it can leave two ways and the remedies are opposite. `buffer-flushing` says which stretch is being removed and whether it lies ahead of the playhead or behind it; `buffer-full` says the browser refused an append for want of memory.
+
 ## 0.17.2
 
 - **Fix**: A subtitle track the file marks unusable is not put in the menu (`FlagEnabled`), and a track is described by its RFC 5646 tag where the file writes one — `Intl.DisplayNames` turns `pt-BR` into "Brazilian Portuguese" where the three-letter `por` gives only "Portuguese" (measured in Chrome).
