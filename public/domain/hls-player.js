@@ -754,6 +754,51 @@ export function createHlsPlayer(onLog) {
           // must be founded on duration, and must be shown against BOTH recorded
           // cases before it is allowed to stop anything.
 
+          // WHO removes media from the buffer, and which stretch.
+          //
+          // The one reading missing on 2026-08-27, when thirteen fragments that
+          // had been delivered were neither in the buffer nor asked for again.
+          // Removal is not a fault by itself — the buffer is bounded and has to
+          // be — so the question is never "was something removed" but "what,
+          // and under which rule". The range answers it without anyone having
+          // to guess: a stretch lying entirely more than `backBufferLength`
+          // behind the playhead is the ordinary back-buffer trim; a stretch
+          // AHEAD of the playhead is not, and is the case that leaves a hole
+          // nothing refills.
+          if (HlsClass.Events.BUFFER_FLUSHING) {
+            instance.on(HlsClass.Events.BUFFER_FLUSHING, (_event, data) => {
+              const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : null;
+              const from = Number(data?.startOffset);
+              const to = Number(data?.endOffset);
+              const ahead = typeof at === "number" && Number.isFinite(from) && from > at;
+              console.warn(
+                `[evt] buffer-flushing ${data?.type ?? "all"} ` +
+                `${Number.isFinite(from) ? from.toFixed(1) : "?"}..` +
+                `${Number.isFinite(to) ? to.toFixed(1) : "?"}s ` +
+                `currentTime=${typeof at === "number" ? at.toFixed(1) : "-"} ` +
+                `${ahead ? "AHEAD of the playhead" : "behind the playhead"} ` +
+                `lastPlayerEvent=${lastPlayerEvent} ` +
+                describeTrackBuffers(instance, videoElement)
+              );
+            });
+          }
+
+          // The other way media leaves: the browser refuses the append because
+          // the source buffer is full, and hls.js frees space itself. This is
+          // the memory bound doing its job, and it has to be told apart from a
+          // flush we asked for — the remedy is opposite in each case.
+          instance.on(HlsClass.Events.ERROR, (_event, data) => {
+            if (data?.details !== "bufferFullError" && data?.details !== "bufferAddCodecError") {
+              return;
+            }
+            const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : null;
+            console.warn(
+              `[evt] buffer-full ${data.details} fatal=${data?.fatal === true} ` +
+              `currentTime=${typeof at === "number" ? at.toFixed(1) : "-"} ` +
+              describeTrackBuffers(instance, videoElement)
+            );
+          });
+
           instance.on(HlsClass.Events.FRAG_LOADING, (_event, data) => {
             const start = data?.frag?.start;
             const sn = data?.frag?.sn;
@@ -777,10 +822,20 @@ export function createHlsPlayer(onLog) {
             const bufferEnd = bufferedEndSeconds(videoElement);
             const distance = start > bufferEnd ? start - bufferEnd : at - start;
             if (distance > 30) {
+              // The buffered ranges belong in this line, not only the end of
+              // them. Field case 2026-08-27: the player asked for fragment
+              // #812 while its buffer ended 52.4 s earlier, and the thirteen
+              // fragments between had been delivered minutes before, ahead of a
+              // seek backwards. Whether they were still held and simply not
+              // joined, or had been removed and never re-asked for, decides
+              // which defect this is — and neither this line nor the proxy's
+              // could say, because the only reading that distinguishes them is
+              // the list of ranges themselves.
               console.warn(
                 `[evt] frag-far sn=${sn} fragStart=${start.toFixed(1)}s ` +
                 `currentTime=${at.toFixed(1)}s bufferEnd=${bufferEnd.toFixed(1)}s ` +
-                `seeking=${videoElement.seeking} lastPlayerEvent=${lastPlayerEvent}`
+                `seeking=${videoElement.seeking} lastPlayerEvent=${lastPlayerEvent} ` +
+                describeTrackBuffers(instance, videoElement)
               );
               // Told to the proxy, not only to this console. This is the
               // earliest statement that exists of a stream coming apart — on

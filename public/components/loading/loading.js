@@ -84,6 +84,23 @@ const LANGUAGE_DISPLAY =
  * @param {string} language - ffmpeg language tag (usually ISO 639-2).
  * @returns {string} Two-letter code when known, the tag otherwise.
  */
+/**
+ * The language tag a track is described by.
+ *
+ * Where the container writes RFC 5646, that is the answer and the three-letter
+ * code is not: "If this element is used, then any Language elements used in the
+ * same TrackEntry MUST be ignored" (RFC 9559, `LanguageBCP47`). It is also the
+ * better label — `Intl.DisplayNames` turns `pt-BR` into "Brazilian Portuguese"
+ * where `por` gives only "Portuguese" (measured in Chrome, 2026-08-27).
+ *
+ * @param {{ language?: string, languageBcp47?: string }} track
+ * @returns {string}
+ */
+function trackLanguageTag(track) {
+  const tag = typeof track?.languageBcp47 === "string" ? track.languageBcp47.trim() : "";
+  return tag.length > 0 ? tag : (track?.language ?? "");
+}
+
 function trackLanguageCode(language) {
   const lang = typeof language === "string" ? language.toLowerCase() : "";
   if (lang.length === 2) {
@@ -3799,7 +3816,12 @@ export class Loading extends StateDerivedView {
    * for what this page missed.
    */
   #loadEmbeddedSubtitles(fileIndex, transport, sourceKey) {
-    const tracks = (this.#planTracks?.subtitles ?? []).filter((t) => t?.textBased === true);
+    // `isEnabled` is FlagEnabled read from the container: "Set to 1 if the track
+    // is usable." ffmpeg keeps such a track and numbers it, so it still holds
+    // its place in `0:s:N` — it is simply never offered.
+    const tracks = (this.#planTracks?.subtitles ?? []).filter(
+      (t) => t?.textBased === true && t?.isEnabled !== false
+    );
     if (tracks.length === 0) {
       return;
     }
@@ -3814,11 +3836,13 @@ export class Loading extends StateDerivedView {
     for (const track of tracks) {
       const el = document.createElement("track");
       el.kind = "subtitles";
-      const fallbackLang = trackLanguageCode(track.language);
+      const fallbackLang = trackLanguageCode(trackLanguageTag(track));
       el.label = buildSubtitleLabel({
         code: fallbackLang || "und",
         name: this.#languageName(fallbackLang) || "Unknown",
-        group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
+        group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null,
+        isForced: track.isForced === true,
+        isHearingImpaired: track.isHearingImpaired === true
       });
       el.srclang = fallbackLang || "und";
       this.#videoElement.appendChild(el);
@@ -4036,14 +4060,16 @@ export class Loading extends StateDerivedView {
 
       // Refine the label if the container said nothing and detection found a
       // language the container-declared fallback did not have.
-      const fallbackLang = trackLanguageCode(track.language);
+      const fallbackLang = trackLanguageCode(trackLanguageTag(track));
       if (!fallbackLang || fallbackLang === "und") {
         const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
         if (detected?.code && detected.code !== "und") {
           el.label = buildSubtitleLabel({
             code: detected.code,
             name: detected.name || this.#languageName(detected.code) || "Unknown",
-            group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
+            group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null,
+            isForced: track.isForced === true,
+            isHearingImpaired: track.isHearingImpaired === true
           });
           el.srclang = detected.code;
         }
@@ -4241,7 +4267,9 @@ export class Loading extends StateDerivedView {
     if (!context || this.#embeddedTextTracks.size === 0 || this.#subtitleResubscribing) {
       return;
     }
-    const tracks = (this.#planTracks?.subtitles ?? []).filter((track) => track?.textBased === true);
+    const tracks = (this.#planTracks?.subtitles ?? []).filter(
+      (track) => track?.textBased === true && track?.isEnabled !== false
+    );
     if (tracks.length === 0) {
       return;
     }

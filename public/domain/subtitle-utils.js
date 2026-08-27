@@ -224,14 +224,35 @@ export function detectSubtitleInfo(subtitleFile) {
 /**
  * Build the display label for a subtitle track.
  *
- * @param {SubtitleInfo} info
- * @returns {string} e.g. `"Russian"`, `"Russian (AT Team)"`
+ * What a track IS comes from the container's own flags, not from the words a
+ * releaser typed into its name. Two of them change what a viewer should expect
+ * and are therefore shown (RFC 9559 §5.1.4.1):
+ *
+ * - **forced** (`FlagForced`) — the track carries what is needed even when
+ *   subtitles were not asked for: signs, and speech in another language. It
+ *   does NOT carry the film's dialogue, so a viewer choosing it should know
+ *   they will see a line every few minutes rather than a conversation;
+ * - **SDH** (`FlagHearingImpaired`) — "suitable for users with hearing
+ *   impairments", so it carries non-speech sound as well as speech.
+ *
+ * The releaser's own name is still shown in brackets beside them, because it
+ * often says something the flags cannot — which studio dubbed it, which team
+ * translated it.
+ *
+ * @param {SubtitleInfo & { isForced?: boolean, isHearingImpaired?: boolean }} info
+ * @returns {string} e.g. `"Russian"`, `"Russian (AT Team)"`,
+ *   `"Russian (fors) · forced"`, `"English · SDH"`
  */
 export function buildSubtitleLabel(info) {
-  if (info.group) {
-    return `${info.name} (${info.group})`;
+  const base = info.group ? `${info.name} (${info.group})` : info.name;
+  const marks = [];
+  if (info.isForced === true) {
+    marks.push("forced");
   }
-  return info.name;
+  if (info.isHearingImpaired === true) {
+    marks.push("SDH");
+  }
+  return marks.length > 0 ? `${base} · ${marks.join(" · ")}` : base;
 }
 
 // ---------------------------------------------------------------------------

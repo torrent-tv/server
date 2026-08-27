@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { containerDefaultSubtitleIndex } from "../public/domain/subtitle-utils.js";
+import { containerDefaultSubtitleIndex, buildSubtitleLabel } from "../public/domain/subtitle-utils.js";
 
 const track = (index, extra = {}) => ({ index, textBased: true, isDefault: false, ...extra });
 
@@ -103,4 +103,34 @@ test("a container that could not be read falls back to what the banner supports"
     { index: 1, textBased: true, isDefault: false }
   ]);
   assert.equal(chosen, 0);
+});
+
+test("a track's label carries what the FILE says it is, not what a releaser typed", () => {
+  // RFC 9559 §5.1.4.1: FlagForced (0x55AA) means the track is shown even when
+  // subtitles were not asked for — signs and foreign speech, not the dialogue.
+  // FlagHearingImpaired (0x55AB) means it also carries non-speech sound.
+  assert.equal(
+    buildSubtitleLabel({ code: "ru", name: "Russian", group: "fors", isForced: true }),
+    "Russian (fors) · forced"
+  );
+  assert.equal(
+    buildSubtitleLabel({ code: "en", name: "English", group: null, isHearingImpaired: true }),
+    "English · SDH"
+  );
+  assert.equal(
+    buildSubtitleLabel({ code: "en", name: "English", group: "SDH", isForced: true, isHearingImpaired: true }),
+    "English (SDH) · forced · SDH"
+  );
+});
+
+test("a track claiming neither flag reads exactly as it did before", () => {
+  assert.equal(buildSubtitleLabel({ code: "ru", name: "Russian", group: null }), "Russian");
+  assert.equal(
+    buildSubtitleLabel({ code: "ru", name: "Russian", group: "AT Team" }),
+    "Russian (AT Team)"
+  );
+  assert.equal(
+    buildSubtitleLabel({ code: "ru", name: "Russian", group: null, isForced: false, isHearingImpaired: false }),
+    "Russian"
+  );
 });
