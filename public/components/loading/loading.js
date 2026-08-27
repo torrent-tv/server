@@ -1,6 +1,7 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { appendCues, parseVttCues } from "../../domain/vtt-cues.js";
+import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.js";
 import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
@@ -46,6 +47,11 @@ const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
  * unused. Five seconds is short against the scan and long against the channel.
  */
 const SUBTITLE_POLL_INTERVAL_MS = 5_000;
+/** `HTMLTrackElement.LOADED` / `.ERROR`, named rather than written as 2 and 3. */
+const TRACK_READY_STATE_LOADED = 2;
+const TRACK_READY_STATE_ERROR = 3;
+/** How long a track element's own load of a few bytes may take. See `#armTrackElement`. */
+const TRACK_ARM_TIMEOUT_MS = 5_000;
 
 /** A cold magnet needs swarm metadata before the file list exists. */
 const MAGNET_METADATA_TIMEOUT_MS = 180_000;
@@ -432,6 +438,28 @@ export class Loading extends StateDerivedView {
   #subtitleCueKeys = new Map();
   /** @type {boolean} Whether a re-subscription is already in flight. */
   #subtitleResubscribing = false;
+  /**
+   * The plan indices whose track element has finished its own load and can be
+   * given cues without losing them — see `#armThenFeed`.
+   *
+   * @type {Set<number>}
+   */
+  #subtitleArmed = new Set();
+  /**
+   * Cues pushed for a track that is still being armed, by plan index. A push
+   * carries what the proxy has just READ and never repeats it, so dropping one
+   * would lose those lines for the session.
+   *
+   * @type {Map<number, object[][]>}
+   */
+  #pendingCues = new Map();
+  /**
+   * The last coverage signature printed for each track, so a reading that says
+   * nothing new is not printed again.
+   *
+   * @type {Map<TextTrack, string>}
+   */
+  #subtitleReported = new Map();
   /**
    * The once-a-second coverage reading, running only while a showing track has
    * no cue for the position being played.
@@ -3542,6 +3570,9 @@ export class Loading extends StateDerivedView {
     this.#subtitleCursors.clear();
     this.#subtitleStarvedAt.clear();
     this.#subtitleCueKeys.clear();
+    this.#subtitleArmed.clear();
+    this.#pendingCues.clear();
+    this.#subtitleReported.clear();
     this.#subtitleResubscribing = false;
     this.#stopSubtitleCoverageWatch();
     if (this.#videoElement instanceof HTMLVideoElement) {
@@ -3758,10 +3789,14 @@ export class Loading extends StateDerivedView {
    * Embedded TEXT subtitle tracks (inside the MKV/MP4). Every declared track
    * gets its `<track>` element and its place in `#embeddedTextTracks`
    * immediately, in one pass — the container already says how many there are
-   * and what language each claims, so none of that needs a round trip. Cues
-   * themselves arrive two ways: a one-off seed fetch per track, in parallel,
-   * for whatever the proxy has already read; and after that, PUSHED by the
-   * proxy as it reads more (`#onSubtitleCuesPush`), never polled for.
+   * and what language each claims, so none of that needs a round trip.
+   *
+   * Cues come later and by three routes, all of them through `#deliverCues`
+   * and none of them before the element has been ARMED (`#armThenFeed`, which
+   * carries the reason): a one-off seed per track for whatever the proxy has
+   * already read; pushes as the proxy reads more (`#onSubtitleCuesPush`),
+   * never polled for; and a re-subscription after a reconnect, which asks only
+   * for what this page missed.
    */
   #loadEmbeddedSubtitles(fileIndex, transport, sourceKey) {
     const tracks = (this.#planTracks?.subtitles ?? []).filter((t) => t?.textBased === true);
@@ -3777,10 +3812,6 @@ export class Loading extends StateDerivedView {
     this.#watchSubtitleModes();
 
     for (const track of tracks) {
-      // No `src`. A track element with one can only ever be REPLACED, and
-      // this track grows as the film downloads — an element without a source
-      // still owns a `TextTrack`, and cues can be added to it one at a time,
-      // whether pushed or seeded.
       const el = document.createElement("track");
       el.kind = "subtitles";
       const fallbackLang = trackLanguageCode(track.language);
@@ -3792,11 +3823,161 @@ export class Loading extends StateDerivedView {
       el.srclang = fallbackLang || "und";
       this.#videoElement.appendChild(el);
       this.#embeddedTextTracks.set(track.index, el.track);
-      // No `default` attribute — what it would ask for is decided by
-      // `#applySubtitleMode`, for this track alone.
-      this.#applySubtitleMode(el.track, track.index, epoch);
 
-      void this.#seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch });
+      void this.#armThenFeed({ track, el, fileIndex, transport, sourceKey, epoch });
+    }
+  }
+
+  /**
+   * Make a track element safe to add cues to, then start feeding it.
+   *
+   * **This is what made subtitles appear "some time later"**, measured
+   * 2026-08-27 (`research/subtitle-delay-2026-08-26.md`). A `<track>` element
+   * runs its own load algorithm the first time its mode leaves `disabled` —
+   * which is the exact moment the viewer switches the track on. The element had
+   * no `src`, so that load FAILED, and a failed load empties the cue list: the
+   * field session held 90 cues spanning the playhead at the instant of the
+   * switch and 3 cues four seconds later, all of them from pushes that arrived
+   * afterwards. From then on the track only ever holds what the walk finds
+   * ahead of the viewer, so nothing is ever drawn where they are.
+   * Reproduced in Chrome, five cues added to each of two tracks: an element
+   * with no `src` read `cues=5` before the switch and `cues=0` one task after
+   * it (`readyState=3`), while a track carrying an empty but valid WebVTT
+   * document kept all five across that switch and a second one.
+   *
+   * So the element is given a document: `WEBVTT` and nothing else. The load
+   * succeeds once, the readiness state settles at loaded, the algorithm never
+   * runs again, and cues added afterwards stay. It is started here rather than
+   * on the viewer's click, by putting the mode at `hidden` — which draws
+   * nothing — so the one load happens while the file is being opened.
+   *
+   * Why not `video.addTextTrack`, which owns no element and has no load
+   * algorithm at all: a track made that way cannot be taken OUT of
+   * `video.textTracks` — there is no removal API — so every episode switch
+   * would leave its tracks in the captions menu for as long as the page lives.
+   * A `<track>` element is removable, and its label can still be corrected once
+   * the language is detected; both matter here.
+   *
+   * @param {{ track: object, el: HTMLTrackElement, fileIndex: number, transport: object, sourceKey: string, epoch: number }} params
+   * @returns {Promise<void>}
+   */
+  async #armThenFeed({ track, el, fileIndex, transport, sourceKey, epoch }) {
+    await this.#armTrackElement(el);
+    if (epoch !== this.#subtitleEpoch) {
+      return;
+    }
+    this.#subtitleArmed.add(track.index);
+    // Only now: `#applySubtitleMode` may put this track at `showing`, and until
+    // the load has settled that is the very thing that empties it.
+    this.#applySubtitleMode(el.track, track.index, epoch);
+    this.#flushPendingCues(track.index, el.track);
+    await this.#seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch });
+  }
+
+  /**
+   * Give one track element an empty WebVTT document and wait for it to load.
+   *
+   * @param {HTMLTrackElement} el
+   * @returns {Promise<void>} Resolves when the load has settled either way.
+   */
+  #armTrackElement(el) {
+    const blobUrl = URL.createObjectURL(new Blob(["WEBVTT\n\n"], { type: "text/vtt" }));
+    this.#subtitleBlobUrls.push(blobUrl);
+    el.src = blobUrl;
+    // The load algorithm does not start while the mode is `disabled`, and
+    // `hidden` renders nothing — so this arms the element without putting
+    // anything on screen.
+    el.track.mode = "hidden";
+    return new Promise((resolve) => {
+      if (el.readyState === TRACK_READY_STATE_LOADED || el.readyState === TRACK_READY_STATE_ERROR) {
+        resolve();
+        return;
+      }
+      const settle = () => {
+        el.removeEventListener("load", settle);
+        el.removeEventListener("error", settle);
+        window.clearTimeout(timer);
+        resolve();
+      };
+      // A watchdog, not a measurement: the document is a few bytes already in
+      // memory, so this cannot legitimately take any time at all. If the event
+      // never comes, feeding the track is a better failure than never showing
+      // a subtitle again.
+      const timer = window.setTimeout(settle, TRACK_ARM_TIMEOUT_MS);
+      el.addEventListener("load", settle);
+      el.addEventListener("error", settle);
+    });
+  }
+
+  /**
+   * Add the cues that arrived while a track was still being armed.
+   *
+   * @param {number} planIndex
+   * @param {TextTrack} textTrack
+   * @returns {void}
+   */
+  #flushPendingCues(planIndex, textTrack) {
+    const waiting = this.#pendingCues.get(planIndex);
+    if (!waiting || waiting.length === 0) {
+      return;
+    }
+    this.#pendingCues.delete(planIndex);
+    let added = 0;
+    for (const cues of waiting) {
+      added += appendCues(textTrack, cues, this.#cueKeysOf(textTrack)).added;
+    }
+    console.debug(
+      `[torrent-tv][subtitles] track ${planIndex}: +${added} cue(s) held while the track was being armed`
+    );
+    // This can be the largest batch of the session, and it lands at the moment
+    // the track becomes usable — which is exactly when the reading is worth
+    // taking.
+    this.#reportSubtitleCoverage(`armed track ${planIndex}`);
+  }
+
+  /**
+   * Put cues into a track — or hold them if its element has not finished its
+   * own load, which would empty the list from under them.
+   *
+   * Every route in goes through here: the seed, the push, and the
+   * re-subscription after a reconnect. The last one is why it exists as one
+   * function rather than a check inside the push handler — a reconnect landing
+   * inside the arm window would otherwise write straight into a track whose
+   * load is still in flight, and cues lost that way cannot be recovered: their
+   * keys stay in the record of what the track holds, so nothing would ever
+   * deliver them again.
+   *
+   * @param {number} planIndex
+   * @param {TextTrack} textTrack
+   * @param {object[]} cues
+   * @returns {{ added: number, held: boolean }}
+   */
+  #deliverCues(planIndex, textTrack, cues) {
+    if (!Array.isArray(cues) || cues.length === 0) {
+      return { added: 0, held: false };
+    }
+    if (!this.#subtitleArmed.has(planIndex)) {
+      const waiting = this.#pendingCues.get(planIndex) ?? [];
+      waiting.push(cues);
+      this.#pendingCues.set(planIndex, waiting);
+      return { added: 0, held: true };
+    }
+    return { ...appendCues(textTrack, cues, this.#cueKeysOf(textTrack)), held: false };
+  }
+
+  /**
+   * Keep the furthest found-order position this page has been told about. A
+   * seed's answer and a push can arrive in either order, and a cursor that went
+   * backwards would have the next re-subscription ask for cues already held.
+   *
+   * @param {number} planIndex
+   * @param {number} cursor
+   * @returns {void}
+   */
+  #rememberCursor(planIndex, cursor) {
+    const known = this.#subtitleCursors.get(planIndex);
+    if (!Number.isInteger(known) || cursor > known) {
+      this.#subtitleCursors.set(planIndex, cursor);
     }
   }
 
@@ -3809,22 +3990,24 @@ export class Loading extends StateDerivedView {
    * @param {{ track: object, el: HTMLElement, fileIndex: number, transport: object, sourceKey: string, epoch: number }} params
    * @returns {Promise<void>}
    */
-  async #seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch }) {
+  async #seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch, since = null }) {
     try {
       // The proxy prepares an embedded track in the background and answers
       // 202 until it is ready — the fallback extraction path, for a container
       // this side cannot read cluster-by-cluster, makes ffmpeg read the whole
       // film. Measured 2026-08-19, one track produced 3040 bytes over 752
       // seconds; asking again is free, the answer is kept once it exists.
-      // Everything this page does not already hold. On the first seed that is
-      // the whole of what the proxy has read; on a re-subscription after a
-      // reconnect it is only what arrived while the channel was gone — asking
-      // for all of it again would add every cue a second time, since a cue
-      // already in the track is not recognised by its text.
-      const held = this.#subtitleCursors.get(track.index);
+      // Everything this page does not already hold. `since` is HANDED IN, never
+      // read here: a push landing between the element being created and its
+      // load settling would otherwise move the cursor forward before the first
+      // seed had asked anything, and the seed would then skip every cue the
+      // proxy read before that push — the whole opening stretch of the track,
+      // silently. On a first seed it is null; on a re-subscription after a
+      // reconnect it is where this page left off, so only what arrived while
+      // the channel was gone comes back.
       const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
         `&fileIndex=${fileIndex}&trackIndex=${track.index}` +
-        (Number.isFinite(held) ? `&since=${held}` : "");
+        (Number.isInteger(since) ? `&since=${since}` : "");
       let response = await transport.fetch(url, {
         signal: this.#session.abortController.signal,
         timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
@@ -3868,9 +4051,9 @@ export class Loading extends StateDerivedView {
 
       const cursor = Number.parseInt(response.headers.get("x-subtitle-cursor") ?? "", 10);
       if (Number.isInteger(cursor)) {
-        this.#subtitleCursors.set(track.index, cursor);
+        this.#rememberCursor(track.index, cursor);
       }
-      const added = appendCues(el.track, parseVttCues(vtt), this.#cueKeysOf(el.track));
+      const added = this.#deliverCues(track.index, el.track, parseVttCues(vtt));
       console.debug(
         `[torrent-tv][subtitles] embedded track seeded "${el.label}" with ${added.added} cue(s) ` +
         `(track ${track.index}, cursor ${Number.isInteger(cursor) ? cursor : "none"}, ` +
@@ -3910,13 +4093,16 @@ export class Loading extends StateDerivedView {
     // moves the proxy's count forward, and a cursor left behind would have this
     // page ask for those same seqs again after every reconnect.
     if (Number.isFinite(event.cursor)) {
-      this.#subtitleCursors.set(event.trackIndex, event.cursor);
+      this.#rememberCursor(event.trackIndex, event.cursor);
     }
     const textTrack = this.#embeddedTextTracks.get(event.trackIndex);
     if (!textTrack || !Array.isArray(event.cues) || event.cues.length === 0) {
       return;
     }
-    const added = appendCues(textTrack, event.cues, this.#cueKeysOf(textTrack));
+    const added = this.#deliverCues(event.trackIndex, textTrack, event.cues);
+    if (added.held) {
+      return; // still being armed; these are added the moment it is
+    }
     if (added.added > 0) {
       // Against the position being played, because that is the only thing that
       // decides whether these cues are of any use yet: a batch covering the
@@ -3961,49 +4147,31 @@ export class Loading extends StateDerivedView {
     for (const track of tracks) {
       if (track.mode !== "showing") {
         this.#subtitleStarvedAt.delete(track);
+        this.#subtitleReported.delete(track);
         continue;
       }
-      // `cues` is null on a track the browser has not started, and empty on one
-      // that holds nothing yet — the two say the same thing here.
-      const cues = track.cues;
-      const count = cues ? cues.length : 0;
-      let covering = 0;
-      let nextAhead = null;
-      for (let index = 0; index < count; index += 1) {
-        const cue = cues[index];
-        if (cue.startTime <= now && now < cue.endTime) {
-          covering += 1;
-        } else if (cue.startTime > now && (nextAhead === null || cue.startTime < nextAhead)) {
-          nextAhead = cue.startTime;
-        }
-      }
-      // A silent stretch of film is not a track with nothing in it. What tells
-      // them apart is whether the track holds ANY cue past the playhead: one
-      // ahead means the blank screen is the film's own pause, and the supply is
-      // fine. Nothing ahead means the track has run out where the viewer is,
-      // which is the state this reading was built for — and it is also what
-      // keeps the once-a-second line from printing through every pause in the
-      // dialogue for the length of a film.
-      const runOut = covering === 0 && nextAhead === null;
-      if (runOut && !this.#subtitleStarvedAt.has(track)) {
+      const coverage = readCoverage(track.cues, now);
+      if (coverage.unsupplied && !this.#subtitleStarvedAt.has(track)) {
         this.#subtitleStarvedAt.set(track, performance.now());
       }
-      if (!runOut) {
+      const startedAt = this.#subtitleStarvedAt.get(track);
+      const waited = startedAt === undefined ? null : (performance.now() - startedAt) / 1000;
+      // Print when what the track HOLDS or the verdict has changed, not on
+      // every tick of the clock. A film's opening minutes hold no dialogue at
+      // all, so a line per second there would say the same thing a hundred
+      // times and bury the occurrence it exists to record; every arrival of
+      // cues reports itself anyway, through its own cause.
+      const said = this.#subtitleReported.get(track);
+      if (said !== coverage.signature) {
+        this.#subtitleReported.set(track, coverage.signature);
+        console.debug(
+          describeCoverage(cause, track.label || track.language || "?", coverage, now, waited)
+        );
+      }
+      if (!coverage.unsupplied) {
         this.#subtitleStarvedAt.delete(track);
       }
-      const span = count > 0
-        ? `${cues[0].startTime.toFixed(1)}-${cues[count - 1].endTime.toFixed(1)}s`
-        : "none";
-      const starvedAt = this.#subtitleStarvedAt.get(track);
-      console.debug(
-        `[torrent-tv][subtitles] coverage (${cause}) "${track.label || track.language || "?"}": ` +
-        `cues=${count} span=${span} playhead=${now.toFixed(1)}s covering=${covering} ` +
-        `next=${nextAhead === null ? "none" : `${(nextAhead - now).toFixed(1)}s ahead`}` +
-        (starvedAt === undefined
-          ? ""
-          : ` nothingAheadFor=${((performance.now() - starvedAt) / 1000).toFixed(1)}s`)
-      );
-      if (runOut) {
+      if (coverage.unsupplied) {
         starved = true;
       }
     }
@@ -4041,7 +4209,7 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#subtitleCoverageTimer = window.setInterval(() => {
-      this.#reportSubtitleCoverage("nothing ahead");
+      this.#reportSubtitleCoverage("nothing where the viewer is");
     }, 1000);
   }
 
@@ -4089,7 +4257,10 @@ export class Loading extends StateDerivedView {
     const asked = [];
     for (const track of tracks) {
       const element = this.#trackElementFor(track.index);
-      if (!element) {
+      // A track still being armed has its own first seed coming, and that one
+      // asks from the beginning; a second request now would ask from a cursor
+      // this page has not yet caught up to.
+      if (!element || !this.#subtitleArmed.has(track.index)) {
         continue;
       }
       asked.push(this.#seedEmbeddedTrack({
@@ -4101,7 +4272,11 @@ export class Loading extends StateDerivedView {
         // one is named first all the same.
         transport: this.#transport ?? context.transport,
         sourceKey: context.sourceKey,
-        epoch
+        epoch,
+        // Where this page left off. Absent for a track that has never been told
+        // one — then the request asks for everything, which is what a page
+        // holding nothing wants.
+        since: this.#subtitleCursors.get(track.index) ?? null
       }));
     }
     void Promise.allSettled(asked).then(() => {
@@ -4111,8 +4286,9 @@ export class Loading extends StateDerivedView {
 
   /**
    * The `<track>` element carrying one source track index, found through the
-   * `TextTrack` it owns — the elements have no `src` and no attribute naming
-   * the index, so the map built when they were created is the only link.
+   * `TextTrack` it owns. Every element's `src` is the same empty document, and
+   * none carries an attribute naming the index, so the map built when they were
+   * created is the only link between the two.
    *
    * @param {number} trackIndex
    * @returns {HTMLTrackElement | null}
