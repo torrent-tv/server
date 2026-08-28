@@ -1,3 +1,7 @@
+## 0.21.0
+
+- **Fix**: The cushion reading stops when the player it watches does. It was stopped only in `clear()`, and the path that ends a session does not go through it, so on 2026-08-28 it went on printing `held 0.0s` for nine minutes after the viewer had left — and that zero, against the proxy's own report of 124.5 s held, was the whole of an apparent disagreement between the two sides. It now reads `hls.media` and stops when nothing is attached: the condition the reading is about, rather than a lifecycle event that some path may not fire.
+
 ## 0.20.0
 
 - **New**: The player says every ten seconds how deep a buffer it was asked to hold and how deep it actually held, with the floor, the ceiling, the byte budget and the level's bitrate beside them. The depth asked for is hls.js's own arithmetic reproduced — the larger of the floor and what the byte budget buys, capped by the ceiling — not the field we set, which would have read 120 s on a session holding 30. Without it a cushion that the supply could not fill was indistinguishable from one the device would not hold, and those have opposite remedies.

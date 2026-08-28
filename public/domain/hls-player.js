@@ -356,6 +356,18 @@ export function createHlsPlayer(onLog) {
       if (!instance?.config || !(media instanceof HTMLVideoElement)) {
         return;
       }
+      // Only while this player is actually driving the element. hls.js drops
+      // `media` on detach, and a sampler that does not check it goes on
+      // printing `held 0.0s` at a player nobody is watching — measured
+      // 2026-08-28, nine minutes of it after the viewer had left, and the whole
+      // of an apparent disagreement with the proxy, which was reporting the
+      // same buffer as 124.5 s while it still existed. Read from the instance
+      // rather than from a lifecycle event: this is the condition the reading
+      // is about, and it cannot be missed by a path nobody thought of.
+      if (!instance.media) {
+        stopCushionSampler();
+        return;
+      }
       const level = instance.levels?.[instance.currentLevel];
       const bitrate = Number(level?.maxBitrate) || Number(level?.bitrate) || 0;
       const asked = askedForwardBufferSeconds(instance.config, bitrate);
