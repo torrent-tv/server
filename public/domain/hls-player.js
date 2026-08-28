@@ -9,7 +9,14 @@
 
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
-import { bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
+import { bufferedAheadSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
+
+/**
+ * How often the cushion is read. Ten seconds is the same cadence the link
+ * report already uses, so the two readings line up in a log without either
+ * having to be interpolated.
+ */
+const CUSHION_SAMPLE_MS = 10_000;
 
 /**
  * @param {HTMLVideoElement} videoElement
@@ -119,6 +126,29 @@ export function bufferByteBudget(ceilingSeconds, levelBitrate) {
     return BYTE_BUDGET_WITHOUT_A_STATED_BITRATE;
   }
   return Math.max(BYTE_BUDGET_WITHOUT_A_STATED_BITRATE, Math.round((seconds * bitrate) / 8));
+}
+
+/**
+ * How deep hls.js will actually try to buffer, in seconds.
+ *
+ * Its own arithmetic, reproduced so a reading can state what the player was
+ * ASKED for beside what it HELD. Nothing else in the browser knows this figure:
+ * the three configuration fields do not answer it on their own, and the whole
+ * defect this work exists to remove was a cushion nobody had ever printed.
+ *
+ * Read from `getMaxBufferLength` in the vendored hls.js 1.6.16.
+ *
+ * @param {{ maxBufferLength?: number, maxMaxBufferLength?: number, maxBufferSize?: number }} config
+ * @param {unknown} levelBitrate - The level's declared bitrate, in bit/s.
+ * @returns {number} Seconds.
+ */
+export function askedForwardBufferSeconds(config, levelBitrate) {
+  const floor = Number(config?.maxBufferLength) || 0;
+  const ceiling = Number(config?.maxMaxBufferLength) || 0;
+  const budget = Number(config?.maxBufferSize) || 0;
+  const bitrate = Number(levelBitrate) || 0;
+  const fromBytes = bitrate > 0 ? (8 * budget) / bitrate : 0;
+  return Math.min(Math.max(fromBytes, floor), ceiling);
 }
 
 /**
@@ -290,6 +320,67 @@ export function describeTrackBuffers(instance, videoElement) {
  */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
+  /**
+   * The periodic reading of the cushion: what was asked for, what is held, and
+   * whether the device has refused the depth. Stopped with the instance.
+   *
+   * @type {{ timer: ReturnType<typeof setInterval> } | null}
+   */
+  let cushionSampler = null;
+  const stopCushionSampler = () => {
+    if (cushionSampler) {
+      clearInterval(cushionSampler.timer);
+      cushionSampler = null;
+    }
+  };
+  /**
+   * Say every ten seconds how deep the buffer was asked to go and how deep it
+   * actually went, and say ONCE whenever the device lowers the ceiling.
+   *
+   * Without this the cushion is unmeasurable from the field: a session that
+   * holds 30 s where 120 s were asked for looks exactly like one that holds
+   * 120 s, since the only figures anyone ever saw were the configuration's own.
+   * The two answers it separates are "the supply could not fill it" and "the
+   * device would not hold it", and they have opposite remedies (roadmap
+   * item 4).
+   *
+   * @param {object} instance
+   * @param {HTMLVideoElement} media
+   * @param {number} askedCeiling - The ceiling this player set.
+   * @returns {void}
+   */
+  const startCushionSampler = (instance, media, askedCeiling) => {
+    stopCushionSampler();
+    let lastCeilingSaid = askedCeiling;
+    const timer = setInterval(() => {
+      if (!instance?.config || !(media instanceof HTMLVideoElement)) {
+        return;
+      }
+      const level = instance.levels?.[instance.currentLevel];
+      const bitrate = Number(level?.maxBitrate) || Number(level?.bitrate) || 0;
+      const asked = askedForwardBufferSeconds(instance.config, bitrate);
+      const held = bufferedAheadSeconds(media);
+      const ceiling = Number(instance.config.maxMaxBufferLength) || 0;
+      // hls.js answers `QuotaExceededError` by lowering the ceiling
+      // (`reduceMaxBufferLength`). That is the device stating a limit — the one
+      // measurement of memory available to us — so it is said the moment it
+      // happens rather than left inside hls.js's own logger.
+      if (ceiling < lastCeilingSaid - 0.5) {
+        console.debug(
+          `[torrent-tv][cushion] the device refused the depth: ceiling lowered ` +
+          `${lastCeilingSaid.toFixed(0)}s → ${ceiling.toFixed(0)}s`
+        );
+        lastCeilingSaid = ceiling;
+      }
+      console.debug(
+        `[torrent-tv][cushion] held ${held.toFixed(1)}s of ${asked.toFixed(1)}s asked ` +
+        `(floor ${instance.config.maxBufferLength}s, ceiling ${ceiling.toFixed(0)}s, ` +
+        `budget ${(Number(instance.config.maxBufferSize) / 1e6).toFixed(0)}MB, ` +
+        `${level?.height ?? "?"}p at ${(bitrate / 1e6).toFixed(2)}Mbit/s)`
+      );
+    }, CUSHION_SAMPLE_MS);
+    cushionSampler = { timer };
+  };
   // The media this player is driving. Kept because two answers need the
   // playhead and have nothing else to read it from — where a switched audio
   // track resumes, and what a reconnect restores to.
@@ -444,6 +535,7 @@ export function createHlsPlayer(onLog) {
     },
     /** Destroy any active HLS.js instance and release its resources. */
     clear() {
+      stopCushionSampler();
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
@@ -624,6 +716,7 @@ export function createHlsPlayer(onLog) {
         };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
+        startCushionSampler(instance, videoElement, forwardBufferCeiling);
         // Set once the manifest is parsed, so post-manifest fatal errors (live
         // playback) are recovered in place, while warm-up fatals still reject
         // the play() promise below (startup error path).
