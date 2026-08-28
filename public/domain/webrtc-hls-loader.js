@@ -67,9 +67,13 @@ import { recordNetSample } from "./net-report.js";
  * ```
  *
  * @param {ProxyTransport} transport - The WebRTC-backed proxy transport.
+ * @param {string} [consumerId] - Which viewer these loads belong to. One proxy
+ *   session serves everyone watching a copied picture, so without it their
+ *   positions collapse into one and a seek by the viewer in front releases the
+ *   requests being held for the viewer behind.
  * @returns {HlsLoaderClass}
  */
-export function createWebRtcHlsLoader(transport) {
+export function createWebRtcHlsLoader(transport, consumerId = "") {
   return class WebRtcHlsLoader {
     constructor() {
       this._aborted = false;
@@ -104,6 +108,9 @@ export function createWebRtcHlsLoader(transport) {
       this.stats.loading.start = startedAt;
       this.stats.loading.first = startedAt;
       const parsed = new URL(context.url);
+      if (consumerId) {
+        parsed.searchParams.set("consumer", consumerId);
+      }
       const path = parsed.pathname + parsed.search;
 
       // proxy.fetch() is expected to return a Promise, but wrap the call in
