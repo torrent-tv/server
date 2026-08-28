@@ -198,7 +198,10 @@ export class TorrentSession {
       const init = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ positionSeconds })
+        // Who moved. A session can serve several viewers, and the seeking
+        // viewer's own position has to move with them or the proxy judges
+        // their next request against where they were before the jump.
+        body: JSON.stringify({ positionSeconds, consumerId: this.consumerId })
       };
       try {
         if (!transport.isHttp) {
@@ -617,7 +620,7 @@ export class TorrentSession {
       typeof options.sourceKey === "string" && options.sourceKey.length > 0
         ? options.sourceKey
         : await this.registerSourceOnProxy(transport);
-    const { playlistUrl, variantHeight, offeredHeights, mediaPlaylistUrl } = await this.tryCreateTranscodeSession(
+    const { playlistUrl, variantHeight, offeredHeights, lookaheadSeconds, mediaPlaylistUrl } = await this.tryCreateTranscodeSession(
       transport,
       sourceKey,
       fileIndex,
@@ -656,6 +659,9 @@ export class TorrentSession {
     // nothing to pin.
     await playHls(videoElement, playlistUrl, {
       preferredHeight: variantHeight,
+      // What the proxy holds ahead of the viewer. The player takes its forward
+      // buffer ceiling from it rather than from a figure of its own.
+      lookaheadSeconds,
       nativeManifestUrl: mediaPlaylistUrl
     });
 
@@ -801,7 +807,7 @@ export class TorrentSession {
    * @param {((progress: object) => void) | null} onTranscodeProgress
    * @param {boolean} transcodeVideo
    * @param {{ transcodeAudio?: boolean, targetWidth?: number, targetHeight?: number, startPositionSeconds?: number }} options
-   * @returns {Promise<{ playlistUrl: string, variantHeight: number, offeredHeights: number[] | null, mediaPlaylistUrl: string }>}
+   * @returns {Promise<{ playlistUrl: string, variantHeight: number, offeredHeights: number[] | null, lookaheadSeconds: number, mediaPlaylistUrl: string }>}
    *   The manifest to load — a master playlist when the session offers quality
    *   variants, its media playlist otherwise — the height of the variant the
    *   proxy is already encoding (0 when there are no variants), and the media
@@ -920,6 +926,11 @@ export class TorrentSession {
           .map((height) => Number(height))
           .filter((height) => Number.isFinite(height) && height > 0)
       : null;
+    // How far ahead of the viewer the proxy lets its encoder run, in seconds of
+    // playback. The player's forward buffer is sized from it, so the two sides
+    // agree by construction. Zero from a proxy that does not state it, and the
+    // player then keeps its own ceiling.
+    const lookaheadSeconds = Number(payload?.lookaheadSeconds) || 0;
     const mediaPlaylistUrl = transport.url(playlistPath);
     const playlistUrl = masterPath ? transport.url(masterPath) : mediaPlaylistUrl;
     const progressPath = sessionId
@@ -992,6 +1003,7 @@ export class TorrentSession {
       playlistUrl,
       variantHeight: masterPath ? variantHeight : 0,
       offeredHeights,
+      lookaheadSeconds,
       // The one-variant manifest, for a player that would adapt on its own.
       mediaPlaylistUrl
     };

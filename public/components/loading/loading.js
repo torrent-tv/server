@@ -5090,7 +5090,7 @@ export class Loading extends StateDerivedView {
     // reconnect (transport.replaceWebRtcProxy) redirects segment loads with no
     // player rebuild.
     const hlsLoader = !transport.isHttp
-      ? createWebRtcHlsLoader(transport)
+      ? createWebRtcHlsLoader(transport, this.#session.consumerId)
       : undefined;
 
     // Resuming: the transcode AND the pre-buffer begin AT the target position,
@@ -6543,15 +6543,20 @@ function canAppendCopiedAudio(codec, container) {
   return supported;
 }
 // Pre-buffer cushion accumulated before the player is revealed, so a transient
-// dip right after start does not immediately stall. Kept under the proxy's
-// look-ahead window (~32 s). The timeout starts playback anyway if a slow
-// encoder cannot fill the cushion in time.
-// Pre-buffer cushion. The target is adaptive (see #waitForPrebuffer): smaller
-// when production has comfortable margin over realtime, larger when it barely
-// keeps up. PREBUFFER_TARGET_SECONDS is the fallback before the fill rate is
-// measurable. PREBUFFER_MAX_SECONDS must stay under hls.js maxBufferLength (30)
-// and the proxy look-ahead window (~32 s), or buffering ahead triggers a
-// seek-restart.
+// dip right after start does not immediately stall. The timeout starts playback
+// anyway if a slow encoder cannot fill the cushion in time.
+// The target is adaptive (see #waitForPrebuffer): smaller when production has
+// comfortable margin over realtime, larger when it barely keeps up, and
+// smaller still when the proxy has measured what THIS file's own interruptions
+// demand. PREBUFFER_TARGET_SECONDS is the fallback before the fill rate is
+// measurable.
+// These figures used to be capped by "the proxy look-ahead window (~32 s)",
+// which was `MAX_LOOKAHEAD_SEGMENTS × 4 s` — eight segments ahead of the ENCODE
+// HEAD, and nothing to do with how much the player may hold ahead of the
+// VIEWER. Buffering deeper does not trigger a seek-restart: hls.js keeps one
+// fragment outstanding per track, so depth changes how many segments are asked
+// for and never how far ahead of the encode head the outstanding request sits
+// (roadmap item 4).
 // A scrub emits `seeking` on every pointer move; only where it settles counts.
 // Long enough to collapse a drag into one report, short enough that the encoder
 // starts on the real target promptly.

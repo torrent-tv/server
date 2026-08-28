@@ -49,6 +49,110 @@ function restorePosition(videoElement, seconds) {
 }
 
 /**
+ * The forward buffer ceiling, in seconds: what the proxy says it keeps produced
+ * ahead of the viewer.
+ *
+ * There is nothing to be gained by aiming past it — those seconds do not exist
+ * yet — and everything to be gained by reaching it, since a segment already on
+ * the proxy's disk is served without a wait and every second of it is a second
+ * of interruption the viewer does not see.
+ *
+ * A proxy that states nothing is an older one, and then the player keeps the
+ * ceiling it has always had. The floor below it is never raised from here: it
+ * is what the device's own refusal cannot go under.
+ *
+ * @param {unknown} statedSeconds - `lookaheadSeconds` from the session-create
+ *   response.
+ * @returns {number}
+ */
+export function forwardBufferCeilingSeconds(statedSeconds) {
+  const stated = Number(statedSeconds);
+  if (!Number.isFinite(stated) || stated <= FORWARD_BUFFER_CEILING_WITHOUT_A_PROXY_FIGURE) {
+    return FORWARD_BUFFER_CEILING_WITHOUT_A_PROXY_FIGURE;
+  }
+  return stated;
+}
+
+/**
+ * The ceiling used when the proxy does not state its look-ahead — the figure
+ * this player carried before it was told, kept so an older proxy behaves
+ * exactly as it did.
+ */
+const FORWARD_BUFFER_CEILING_WITHOUT_A_PROXY_FIGURE = 60;
+
+/**
+ * hls.js's own default byte budget, kept as the answer whenever the level's
+ * bitrate is not known — the same 60 MB it would have used itself.
+ */
+const BYTE_BUDGET_WITHOUT_A_STATED_BITRATE = 60 * 1000 * 1000;
+
+/**
+ * How many BYTES the forward buffer may hold, so that the SECONDS decide.
+ *
+ * hls.js takes the larger of `maxBufferLength` and what the byte budget buys at
+ * the level's bitrate, then caps that by `maxMaxBufferLength`:
+ *
+ *   min( max(8 × maxBufferSize / bitrate, maxBufferLength), maxMaxBufferLength )
+ *
+ * With the default 60 MB the byte term is what usually decides — 60 s at
+ * 8 Mbit/s, 30 s at 25 — so the cushion depended on the stream's bitrate
+ * through a figure nobody derived. Sized from the level's own declared bitrate
+ * it buys exactly the ceiling, and the duration governs at every bitrate.
+ *
+ * Never below hls.js's own default: on a thin level the ceiling already binds
+ * first, and lowering the budget there would take away a cushion the player
+ * managed before while gaining nothing.
+ *
+ * This is the term that decides how much memory a page holds, so it is also
+ * where a phone refuses. That refusal is a measurement and hls.js already acts
+ * on it — `QuotaExceededError` lowers `maxMaxBufferLength` — which is why the
+ * budget is raised here and the floor is left alone.
+ *
+ * @param {unknown} ceilingSeconds - The forward buffer ceiling, in seconds.
+ * @param {unknown} levelBitrate - The level's declared bitrate, in bit/s.
+ * @returns {number} Bytes.
+ */
+export function bufferByteBudget(ceilingSeconds, levelBitrate) {
+  const seconds = Number(ceilingSeconds);
+  const bitrate = Number(levelBitrate);
+  if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isFinite(bitrate) || bitrate <= 0) {
+    return BYTE_BUDGET_WITHOUT_A_STATED_BITRATE;
+  }
+  return Math.max(BYTE_BUDGET_WITHOUT_A_STATED_BITRATE, Math.round((seconds * bitrate) / 8));
+}
+
+/**
+ * Size the byte budget to the level now playing, so the seconds ceiling is
+ * reachable at this level's bitrate.
+ *
+ * Read from `instance.levels`, which carries what the master playlist declared,
+ * and applied to the live config — hls.js reads the config on every decision,
+ * so this takes effect from the next fragment.
+ *
+ * @param {object} instance - The hls.js instance.
+ * @param {number} levelIndex
+ * @param {number} ceilingSeconds
+ * @returns {void}
+ */
+function sizeByteBudgetForLevel(instance, levelIndex, ceilingSeconds) {
+  const level = Array.isArray(instance?.levels) ? instance.levels[levelIndex] : null;
+  if (!level || !instance?.config) {
+    return;
+  }
+  // The same field hls.js itself passes to `getMaxBufferLength`.
+  const bitrate = Number(level.maxBitrate) || Number(level.bitrate) || 0;
+  const budget = bufferByteBudget(ceilingSeconds, bitrate);
+  if (budget === instance.config.maxBufferSize) {
+    return;
+  }
+  instance.config.maxBufferSize = budget;
+  console.debug(
+    `[torrent-tv][hls] buffer budget ${(budget / 1e6).toFixed(0)}MB for ` +
+    `${level.height}p at ${(bitrate / 1e6).toFixed(2)}Mbit/s — ${ceilingSeconds}s of cushion`
+  );
+}
+
+/**
  * Which variant to start on.
  *
  * The height the proxy is already encoding, because an encoder is running for
@@ -455,16 +559,35 @@ export function createHlsPlayer(onLog) {
               }
             }
           : undefined;
+        // What the proxy says it keeps produced ahead of the viewer. Both the
+        // seconds ceiling and the byte budget are sized from this one figure,
+        // so they cannot disagree about how deep the cushion is meant to be.
+        const forwardBufferCeiling = forwardBufferCeilingSeconds(options.lookaheadSeconds);
         const hlsConfig = {
           ...(options.loader ? { loader: options.loader } : {}),
           ...(fragLoadPolicy ? { fragLoadPolicy } : {}),
           // Forward buffer cushion to ride out transient production/delivery
-          // dips. Keep maxBufferLength under the proxy's look-ahead window
-          // (MAX_LOOKAHEAD_SEGMENTS × segment duration ≈ 32 s): requesting
-          // further ahead than the encoder has produced is treated as a seek
-          // and restarts ffmpeg, so we must not over-buffer past that window.
+          // dips — the only thing that makes an interruption invisible,
+          // whatever caused it.
+          //
+          // The FLOOR: what this player insists on however little the device
+          // will give. It is a floor in hls.js's own arithmetic
+          // (`getMaxBufferLength` takes the larger of it and what the byte
+          // budget buys) and it is also the one figure the device's refusal
+          // cannot go under — `QuotaExceededError` lowers the CEILING and stops
+          // here. So the cushion is raised through the ceiling, never through
+          // this.
           maxBufferLength: 30,
-          maxMaxBufferLength: 60,
+          // The CEILING: what the proxy says it holds ahead of the viewer,
+          // because that is the quantity that decides how much there is to
+          // take. This used to be a local 60 justified by
+          // `MAX_LOOKAHEAD_SEGMENTS × 4 s ≈ 32 s` — the wrong constant: those
+          // eight segments bound a request ahead of the ENCODE HEAD, not ahead
+          // of the viewer, and hls.js keeps one fragment outstanding per track
+          // anyway, so buffer depth cannot push a request past that window. The
+          // proxy meanwhile keeps two minutes produced, and three quarters of
+          // it was left on the disk (roadmap item 4).
+          maxMaxBufferLength: forwardBufferCeiling,
           backBufferLength: 30,
           // What counts as one run of media rather than two. The default 0.1 s
           // is smaller than the joins this proxy produces: a copied video is
@@ -697,6 +820,11 @@ export function createHlsPlayer(onLog) {
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
             desiredLevel = pinStartLevel(instance, options.preferredHeight);
+            // Now that a level is chosen, its declared bitrate says how many
+            // bytes the cushion above costs. Before this the byte budget was
+            // hls.js's default and truncated the cushion at any bitrate over
+            // 8 Mbit/s.
+            sizeByteBudgetForLevel(instance, desiredLevel, forwardBufferCeiling);
             // Deferred to here by `autoStartLoad: false` above, so the first
             // fragment fetched belongs to the variant we chose.
             instance.startLoad(
@@ -928,6 +1056,9 @@ export function createHlsPlayer(onLog) {
             const level = instance.levels?.[data?.level];
             const height = Number(level?.height) || 0;
             console.debug(`[torrent-tv][hls] level switched to ${height}p (index ${data?.level})`);
+            // Another rung is another bitrate, so the cushion costs a different
+            // number of bytes to hold.
+            sizeByteBudgetForLevel(instance, data?.level, forwardBufferCeiling);
             if (typeof options.onLevelSwitched === "function") {
               options.onLevelSwitched(height);
             }
