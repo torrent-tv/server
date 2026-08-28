@@ -1,3 +1,9 @@
+## 0.20.0
+
+- **New**: The player says every ten seconds how deep a buffer it was asked to hold and how deep it actually held, with the floor, the ceiling, the byte budget and the level's bitrate beside them. The depth asked for is hls.js's own arithmetic reproduced — the larger of the floor and what the byte budget buys, capped by the ceiling — not the field we set, which would have read 120 s on a session holding 30. Without it a cushion that the supply could not fill was indistinguishable from one the device would not hold, and those have opposite remedies.
+- **New**: The device refusing the depth is said the moment it happens. hls.js answers `QuotaExceededError` by lowering its ceiling, which is a phone stating a limit — the only measurement of available memory there is — and until now it went no further than hls.js's own logger.
+- **New**: How long the picture stood still, per interruption and as a running total for the source. Counted by the same rule that decides whether to show the spinner at all — whether the PICTURE MOVED — so it is the interruption the viewer saw rather than every `waiting` the element fired. It is the figure that says whether a deeper cushion did the thing it exists for.
+
 ## 0.19.0
 
 - **New**: The forward buffer is as deep as the proxy says it keeps produced. The proxy states its look-ahead on the session-create response and both the seconds ceiling (`maxMaxBufferLength`) and the byte budget (`maxBufferSize`) are sized from that one figure, so they cannot disagree about how deep the cushion is meant to be. It was a local 60, justified in a comment by `MAX_LOOKAHEAD_SEGMENTS × 4 s ≈ 32 s` — a figure that bounds a request ahead of the ENCODE HEAD and says nothing about how much a player may hold ahead of the VIEWER. The proxy meanwhile keeps two minutes produced, and three quarters of it was left on its disk. A proxy that states nothing leaves the ceiling exactly where it was.

@@ -578,6 +578,22 @@ export class Loading extends StateDerivedView {
    */
   #bufferingEpoch = 0;
   /**
+   * When the picture stopped, and how long it has stood still in total on this
+   * source.
+   *
+   * The same rule that decides whether to show the spinner decides what counts
+   * here — `shouldReportWaiting`, which asks whether the PICTURE MOVED — so the
+   * figure is the interruption the viewer actually saw, not every `waiting`
+   * event the element fired. It is the one number that says whether a deeper
+   * cushion did the thing it exists for; before it, the only evidence was
+   * somebody remembering how a session felt (roadmap item 4).
+   *
+   * @type {number | null}
+   */
+  #stallStartedAt = null;
+  #stallTotalMs = 0;
+  #stallCount = 0;
+  /**
    * Byte offset the resume window is pinned to for the CURRENT buffering
    * episode. Captured from the proxy's first poll response and sent back on
    * every subsequent poll of the SAME episode, so the proxy computes "bytes
@@ -1025,6 +1041,9 @@ export class Loading extends StateDerivedView {
    */
   async #showBuffering() {
     const epoch = ++this.#bufferingEpoch;
+    if (this.#stallStartedAt === null) {
+      this.#stallStartedAt = Date.now();
+    }
     this.#bufferingShown = true;
     this.#bufferingResumeAnchorByteStart = null; // fresh episode — re-pin on the first poll
     this.#dispatchBuffering(true, ""); // spinner only until the first stats arrive
@@ -1188,6 +1207,16 @@ export class Loading extends StateDerivedView {
     if (this.#bufferingShown) {
       this.#bufferingShown = false;
       this.#dispatchBuffering(false);
+    }
+    if (this.#stallStartedAt !== null) {
+      const lastedMs = Date.now() - this.#stallStartedAt;
+      this.#stallStartedAt = null;
+      this.#stallTotalMs += lastedMs;
+      this.#stallCount += 1;
+      this.#logEvt(
+        `picture stood still ${(lastedMs / 1000).toFixed(1)}s ` +
+          `(${this.#stallCount} time(s), ${(this.#stallTotalMs / 1000).toFixed(1)}s total on this source)`
+      );
     }
     this.#bufferingResumeAnchorByteStart = null;
   }
@@ -2750,6 +2779,11 @@ export class Loading extends StateDerivedView {
     // host is a different encode, and until this one's session says otherwise
     // there is nothing to offer.
     this.#offeredHeights = null;
+    // The stall tally belongs to the source it was measured on. Carried over,
+    // it would say a fresh file had already been standing still.
+    this.#stallStartedAt = null;
+    this.#stallTotalMs = 0;
+    this.#stallCount = 0;
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
