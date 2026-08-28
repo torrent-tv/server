@@ -957,7 +957,12 @@ export class TorrentSession {
       startNetReporter({
         transport,
         sessionId,
-        getBufferedAheadSec: bufferedAheadSeconds
+        // Who is reporting, and where they are. A copied picture is one session
+        // shared by everyone watching it, so without these the proxy can only
+        // act on whichever viewer reported last.
+        consumerId: this.consumerId,
+        getBufferedAheadSec: bufferedAheadSeconds,
+        getPositionSeconds: playbackPositionSeconds
       });
     }
 
@@ -1329,6 +1334,27 @@ function bufferedAheadSeconds() {
     }
   }
   return 0;
+}
+
+/**
+ * Where the picture is, for the viewer net reporter. Looked up the same way
+ * and for the same reason as `bufferedAheadSeconds` above.
+ *
+ * Null rather than zero when there is no element to read, because the proxy
+ * places an audio run at the earliest position it is told and zero is a
+ * position: reporting it for a viewer forty minutes in would send the run back
+ * to the start of the film. The buffer above can answer zero safely — an
+ * unreadable buffer really is no cushion — but a position cannot.
+ *
+ * @returns {number | null}
+ */
+function playbackPositionSeconds() {
+  const video = document.querySelector("#player__video");
+  if (!(video instanceof HTMLVideoElement)) {
+    return null;
+  }
+  const at = video.currentTime;
+  return Number.isFinite(at) && at >= 0 ? at : null;
 }
 
 function isAbortError(error) {
