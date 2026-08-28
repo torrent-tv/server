@@ -1,3 +1,7 @@
+## 0.18.0
+
+- **New**: The link report says WHO sent it and WHERE the picture is — the consumer id and the playback position ride beside the throughput and the buffer. One session is shared by every viewer of a copied picture, so without them the proxy could only act on whichever viewer reported last, and it had to work out the position by subtracting one viewer's buffer from another viewer's read head. Both fields are optional on the wire: an older proxy ignores them, and this browser keeps working against one.
+
 ## 0.17.3
 
 - **New**: When the player asks for a fragment far from the end of its buffer, the line now carries the buffered ranges themselves, per track, not just where they end. Field case 2026-08-27: the player asked for fragment #812 while its buffer ended 52.4 s earlier, and the thirteen fragments in between had been delivered minutes before, ahead of a seek backwards. Whether they were still held and simply not joined, or had gone and were never asked for again, decides which defect that is — and one number for the end of the buffer cannot tell those apart.

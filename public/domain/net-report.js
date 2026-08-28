@@ -88,10 +88,16 @@ function medianLinkMbps() {
  * Start reporting for a transcode session. Stops any previous reporter (one
  * playback at a time) and resets the sample window.
  *
- * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, getBufferedAheadSec: () => number }} params
+ * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getPositionSeconds?: () => number | null }} params
  * @returns {void}
  */
-export function startNetReporter({ transport, sessionId, getBufferedAheadSec }) {
+export function startNetReporter({
+  transport,
+  sessionId,
+  consumerId = "",
+  getBufferedAheadSec,
+  getPositionSeconds
+}) {
   stopNetReporter();
   samples = [];
   const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/net-report`;
@@ -109,14 +115,34 @@ export function startNetReporter({ transport, sessionId, getBufferedAheadSec }) 
       // the link speed beside it, and zero is a truthful reading of a buffer
       // that cannot be read. The report still goes.
     }
+    // Where the picture is. A session is shared by every viewer of a copied
+    // stream, and the proxy used to work this out by subtracting the buffer
+    // above from its own read head — which is the furthest request of ANY
+    // viewer, so with two of them the answer belonged to neither. Saying it
+    // outright costs one field.
+    let positionSeconds = null;
+    try {
+      const value = typeof getPositionSeconds === "function" ? getPositionSeconds() : NaN;
+      positionSeconds = Number.isFinite(value) && value >= 0 ? value : null;
+    } catch {
+      // silent-ok: same reasoning as the buffer above — the report still goes,
+      // and the proxy falls back to the subtraction for a viewer who states
+      // nothing.
+    }
     console.debug(
-      `[torrent-tv] net-report link=${linkMbps.toFixed(2)}Mbps buffer=${bufferedAheadSec.toFixed(1)}s`
+      `[torrent-tv] net-report link=${linkMbps.toFixed(2)}Mbps buffer=${bufferedAheadSec.toFixed(1)}s` +
+        (positionSeconds === null ? "" : ` at=${positionSeconds.toFixed(1)}s`)
     );
     void transport
       .fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ linkMbps, bufferedAheadSec })
+        body: JSON.stringify({
+          linkMbps,
+          bufferedAheadSec,
+          ...(consumerId ? { consumerId } : {}),
+          ...(positionSeconds === null ? {} : { positionSeconds })
+        })
       })
       .catch(() => undefined); // best-effort — next tick simply tries again
   }, REPORT_INTERVAL_MS);
