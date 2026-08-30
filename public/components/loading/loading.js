@@ -53,8 +53,7 @@ const TRACK_READY_STATE_ERROR = 3;
 /** How long a track element's own load of a few bytes may take. See `#armTrackElement`. */
 const TRACK_ARM_TIMEOUT_MS = 5_000;
 
-/** A cold magnet needs swarm metadata before the file list exists. */
-const MAGNET_METADATA_TIMEOUT_MS = 180_000;
+
 
 // Auto-reconnect after a mid-playback connection loss (see the auto-reconnect
 // OpenSpec change). Attempts 1..2 retry the SAME proxy (seamless swap under
@@ -2124,9 +2123,10 @@ export class Loading extends StateDerivedView {
 
       // Poll for the swarm metadata: the proxy returns `pending` quickly while
       // it keeps fetching, so a single request never races the transport
-      // timeout and a slow-to-appear magnet is given a real chance instead of
-      // failing on the first miss (the metadata often arrives seconds later).
-      const metadataDeadline = Date.now() + MAGNET_METADATA_TIMEOUT_MS;
+      // timeout and a slow-to-appear magnet keeps trying. No wall-clock deadline —
+      // the loader shows `fetchingMagnetMetadata` until metadata arrives or the
+      // user cancels; a magnet with no trackers shows `magnetMetadataFailedNoTrackers`
+      // immediately via `#magnetFailureMessage`.
       let payload = null;
       for (;;) {
         this.#throwIfCancelled();
@@ -2141,11 +2141,6 @@ export class Loading extends StateDerivedView {
             payload = body;
             break;
           }
-        }
-        // `pending` (or a transient non-ok) — keep the status up and retry
-        // until the wall-clock deadline.
-        if (Date.now() >= metadataDeadline) {
-          throw new Error(this.#magnetFailureMessage(magnetUri));
         }
         this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
         await new Promise((resolve) => setTimeout(resolve, 2_000));

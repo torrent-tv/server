@@ -1,3 +1,7 @@
+## 0.22.0
+
+- **Fix**: Magnet metadata fetch has no wall-clock deadline. `MAGNET_METADATA_TIMEOUT 180s` (`loading.js:57`) threw `Could not fetch metadata` while the proxy was still polling `pending` every 2s, so a slow private tracker that needed 0.8s for first peer but 200s for metadata was killed with a message that looked like `no peers`. Now it polls `pending` indefinitely with `fetchingMagnetMetadata` until the proxy returns files or the user cancels; `magnetMetadataFailedNoTrackers` still shows immediately when the magnet carries no `tr`.
+
 ## 0.21.0
 
 - **Fix**: The cushion reading stops when the player it watches does. It was stopped only in `clear()`, and the path that ends a session does not go through it, so on 2026-08-28 it went on printing `held 0.0s` for nine minutes after the viewer had left — and that zero, against the proxy's own report of 124.5 s held, was the whole of an apparent disagreement between the two sides. It now reads `hls.media` and stops when nothing is attached: the condition the reading is about, rather than a lifecycle event that some path may not fire.
