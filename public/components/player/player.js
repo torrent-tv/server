@@ -511,6 +511,7 @@ export class Player extends StateDerivedView {
       this.#root.classList.remove(Player.CLASSES.isAnimated);
     });
 
+    this.#sendTheWholeViewFullscreen();
     this.#closeButton.addEventListener("click", this.#closeHandler);
     this.#playlistToggle.addEventListener("click", this.#togglePlaylist);
     this.#controller.addEventListener("click", this.#onControllerClick);
@@ -635,6 +636,33 @@ export class Player extends StateDerivedView {
   #closeHandler = () => {
     document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
   };
+
+  /**
+   * Send the whole player view fullscreen, not the media controller alone.
+   *
+   * The playlist drawer is the controller's SIBLING inside `<main id="player">`
+   * — the two sit in one flex row that slides sideways to reveal the drawer. A
+   * browser paints only the fullscreen element's own subtree, so with the
+   * controller as that element the drawer was not on the screen at all: the
+   * button worked and `player--playlist` was applied, and it opened where
+   * nobody could see it. Reported 2026-08-31.
+   *
+   * Set as a PROPERTY rather than by the `fullscreenelement` attribute that
+   * media-chrome documents. In 4.19.2 that attribute is absent from
+   * `observedAttributes`, so the branch resolving it never runs — verified in a
+   * browser: with the attribute in the markup, `controller.fullscreenElement`
+   * still answered with the controller. The property setter is the only route
+   * that works, and it clears the attribute itself.
+   *
+   * @returns {void}
+   */
+  #sendTheWholeViewFullscreen() {
+    // The element must be upgraded before it has the setter; the module may not
+    // have been evaluated yet when this component initialises.
+    void customElements.whenDefined("media-controller").then(() => {
+      this.#controller.fullscreenElement = this.#root;
+    });
+  }
 
   #togglePlaylist = (event) => {
     // Keep the click from reaching #onControllerClick, which would treat it as

@@ -52,6 +52,11 @@
     </dialog>
 
     <main id="player">
+      <!-- Which element goes fullscreen is set from player.js, NOT by the
+           `fullscreenelement` attribute media-chrome documents: 4.19.2 does not
+           list it in `observedAttributes`, so the branch that would resolve it
+           is unreachable from markup — verified in the browser, the attribute
+           left `fullscreenElement` pointing at the controller. -->
       <media-controller id="player__controller" autohide="2">
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
