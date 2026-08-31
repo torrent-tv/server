@@ -116,9 +116,16 @@ function parseSingleFile(name, length) {
   ];
 }
 
-/** Same categorisation rules the torrent picker applies to parsed files. */
+/**
+ * Same categorisation rules the torrent picker applies to parsed files.
+ *
+ * `.mka` and `.m4a` are containers rather than bare streams, and a release that
+ * ships its dub as a separate file almost always ships it as one of those — the
+ * list was missing both, so such a file fell into no group at all.
+ */
 const AUDIO_EXTENSIONS = new Set([
-  ".aac", ".ac3", ".alac", ".dts", ".eac3", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"
+  ".aac", ".ac3", ".alac", ".dts", ".dtshd", ".eac3", ".flac", ".m4a", ".mka",
+  ".mlp", ".mp2", ".mp3", ".oga", ".ogg", ".opus", ".thd", ".wav", ".wma"
 ]);
 const SUBTITLE_EXTENSIONS = new Set([
   ".ass", ".srt", ".ssa", ".sub", ".sup", ".ttml", ".vtt", ".webvtt"
