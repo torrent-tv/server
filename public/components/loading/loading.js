@@ -109,14 +109,63 @@ function trackLanguageCode(language) {
 }
 
 /**
- * Human label for a probe track: "English — Commentary", "Track 2", …
+ * How many channels a soundtrack carries, in the words a viewer uses for them.
  *
- * @param {{ index: number, language?: string, title?: string }} track
+ * @param {number | null | undefined} channels
  * @returns {string}
  */
-function buildTrackLabel(track) {
+function channelLayoutName(channels) {
+  const count = Number(channels);
+  if (!Number.isFinite(count) || count <= 0) {
+    return "";
+  }
+  if (count === 1) {
+    return "mono";
+  }
+  if (count === 2) {
+    return "stereo";
+  }
+  if (count === 6) {
+    return "5.1";
+  }
+  if (count === 8) {
+    return "7.1";
+  }
+  return `${count} channels`;
+}
+
+/**
+ * Human label for one soundtrack: its language, who made it, and what it is.
+ *
+ * Three things, and each has one source that is allowed to answer it:
+ *
+ * - the LANGUAGE is the container's own where the file states it, and where it
+ *   does not — which is usual for a dub shipped as a separate file — the folder
+ *   the release put it in (`Rus Sound/`);
+ * - the RELEASER is a bracketed group in that file's own path which the picture
+ *   does NOT also carry. A dub named exactly like the video says nothing about
+ *   its author, and naming the video's release group there would be inventing
+ *   one;
+ * - the TYPE is what the container declares about the track's role —
+ *   commentary, audio description, the original language — read from the flags
+ *   RFC 9559 defines for exactly this and which ffmpeg's banner does not carry.
+ *
+ * @param {{ index: number, language?: string, languageBcp47?: string, title?: string,
+ *   kind?: string, folders?: string[], fileName?: string, channels?: number | null,
+ *   isCommentary?: boolean, isVisualImpaired?: boolean, isOriginal?: boolean }} track
+ * @param {string} [videoName] - The picture's file name, for the releaser rule.
+ * @returns {string}
+ */
+function buildTrackLabel(track, videoName = "") {
   const parts = [];
-  const code = trackLanguageCode(track.language ?? "");
+  const naming = track?.kind === "sidecar"
+    ? sidecarNaming({
+        folders: Array.isArray(track.folders) ? track.folders : [],
+        fileName: typeof track.fileName === "string" ? track.fileName : "",
+        videoName
+      })
+    : { code: null, name: null, releaser: null };
+  const code = trackLanguageCode(trackLanguageTag(track) || "") || naming.code || "";
   if (code) {
     try {
       parts.push(LANGUAGE_DISPLAY?.of(code) ?? code);
@@ -125,20 +174,42 @@ function buildTrackLabel(track) {
       // so by refusing; the tag itself is then the best label there is.
       parts.push(code);
     }
+  } else if (naming.name) {
+    parts.push(naming.name);
   }
   if (typeof track.title === "string" && track.title.trim().length > 0) {
     parts.push(track.title.trim());
+  } else if (naming.releaser) {
+    parts.push(naming.releaser);
   }
   if (parts.length === 0) {
     parts.push(`Track ${Number(track.index) + 1}`);
   }
-  return parts.join(" — ");
+  const marks = [];
+  if (track?.isCommentary === true) {
+    marks.push("commentary");
+  }
+  if (track?.isVisualImpaired === true) {
+    marks.push("audio description");
+  }
+  // Only where the track is not the only one that could be original — saying it
+  // of a single-track file tells the viewer nothing they can act on.
+  if (track?.isOriginal === true && !track?.isCommentary) {
+    marks.push("original");
+  }
+  const layout = channelLayoutName(track?.channels);
+  if (layout) {
+    marks.push(layout);
+  }
+  const base = parts.join(" — ");
+  return marks.length > 0 ? `${base} · ${marks.join(" · ")}` : base;
 }
 import {
   detectSubtitleInfo,
   buildSubtitleLabel,
   matchSubtitlesForVideo,
-  containerDefaultSubtitleIndex
+  containerDefaultSubtitleIndex,
+  sidecarNaming
 } from "../../domain/subtitle-utils.js";
 
 /**
@@ -2921,8 +2992,21 @@ export class Loading extends StateDerivedView {
       this.#selectedAudioTrackIndex = 0;
     }
 
+    // The codec of the track that will actually be PLAYED, not of the file's
+    // first one. They are the same track until a viewer chooses another, and can
+    // differ entirely once a release ships its dub as a separate file: a picture
+    // whose own sound is AAC beside an AC-3 dub, where deciding from the picture
+    // would copy AC-3 into a browser that cannot decode it. The plan states a
+    // codec per track; the file-level one remains the answer when it does not.
+    const chosenAudioTrack = (this.#planTracks?.audio ?? []).find(
+      (track) => track?.index === this.#selectedAudioTrackIndex
+    );
+    const chosenAudioCodec =
+      typeof chosenAudioTrack?.codec === "string" && chosenAudioTrack.codec.length > 0
+        ? chosenAudioTrack.codec
+        : prepared.audioCodec;
     const codecSupport = await this.#predictCodecSupport({
-      audioCodec: prepared.audioCodec,
+      audioCodec: chosenAudioCodec,
       videoCodec: prepared.videoCodec
     });
     // Decide per stream, independently: transcode the video track only if the
@@ -2954,6 +3038,11 @@ export class Loading extends StateDerivedView {
       fileIndex,
       container: prepared.container,
       audioCodec: prepared.audioCodec,
+      // What the CHOSEN track is, which is what the decision was made on. Equal
+      // to the line above until the viewer picks another track, or the release
+      // ships its sound in a file of its own.
+      chosenAudioCodec,
+      chosenAudioTrackIndex: this.#selectedAudioTrackIndex,
       videoCodec: prepared.videoCodec,
       audioSupported: codecSupport.audioSupported,
       videoSupported: codecSupport.videoSupported,
@@ -2967,9 +3056,10 @@ export class Loading extends StateDerivedView {
     const directHintKey = this.#buildDirectPlaybackHintKey(prepared);
     const directHint = this.#getDirectPlaybackHint(directHintKey);
 
-    // A non-default audio track can only be delivered by the proxy remuxing
-    // with `-map 0:a:N` — direct play always carries the container's default
-    // track, so it is off the table for this attempt.
+    // A non-default audio track can only be delivered by the proxy selecting it
+    // — direct play always carries the container's default track, and a track
+    // that lives in a file of its own is not in the container being played at
+    // all. Either way this attempt cannot be a direct one.
     const forceAudioRemux = this.#selectedAudioTrackIndex > 0;
 
     // Direct URL probing only works for HTTP transports — WebRTC uses fake URLs.
@@ -3785,7 +3875,7 @@ export class Loading extends StateDerivedView {
 
         // Language priority: explicit code in the filename (author intent) →
         // proxy content detection (franc) → the film's audio language → und.
-        const info = detectSubtitleInfo(sub);
+        const info = detectSubtitleInfo(sub, videoFile);
         if (info.code === "und") {
           const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
           if (detected) {
@@ -6224,10 +6314,23 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #publishAudioTracks() {
-    const tracks = (this.#planTracks?.audio ?? []).map((track) => ({
-      index: track.index,
-      label: buildTrackLabel(track)
-    }));
+    // The picture's own file name, which is what tells a bracketed group naming
+    // the RELEASE apart from one naming whoever made a soundtrack beside it.
+    const files = this.#session.current?.files;
+    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0
+      ? files[this.#activeFileIndex]
+      : null;
+    const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
+    const tracks = (this.#planTracks?.audio ?? [])
+      // A track the container marks unusable is not offered. It keeps its number
+      // — every entry carries its own, and the proxy publishes a rendition for
+      // it either way — so leaving it out of the menu changes what the viewer
+      // sees and nothing else.
+      .filter((track) => track?.isEnabled !== false)
+      .map((track) => ({
+        index: track.index,
+        label: buildTrackLabel(track, videoName)
+      }));
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, {
         detail: { tracks, activeIndex: this.#selectedAudioTrackIndex }

@@ -140,9 +140,14 @@ function lookupLang(token) {
  * 3. Parts from the end of the base filename, split by `_`.
  *
  * @param {{ name: string, path?: string, relativePath?: string }} subtitleFile
+ * @param {{ name?: string }} [videoFile] - The picture these subtitles belong
+ *   to. Its name is what tells a bracketed group that names the RELEASE apart
+ *   from one that names the translator: only a bracket the video does not also
+ *   carry can be the author of a file beside it.
  * @returns {SubtitleInfo}
  */
-export function detectSubtitleInfo(subtitleFile) {
+export function detectSubtitleInfo(subtitleFile, videoFile = null) {
+  const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
   const relPath =
     (typeof subtitleFile.relativePath === "string" ? subtitleFile.relativePath : null) ??
     (typeof subtitleFile.path === "string" ? subtitleFile.path : null) ??
@@ -155,16 +160,11 @@ export function detectSubtitleInfo(subtitleFile) {
   const baseName = stripExtension(fileName);
 
   // 1. Try to find a language code in the directory hierarchy (innermost first).
-  let langCode = null;
-  let langName = null;
-  for (let i = dirSegments.length - 1; i >= 0; i--) {
-    const info = lookupLang(dirSegments[i]);
-    if (info) {
-      langCode = info.code;
-      langName = info.name;
-      break;
-    }
-  }
+  //    Whole segment first (`ENG/`), then its words — the second reads a folder
+  //    like `Rus Sub/`, which the whole-segment lookup alone could not.
+  const fromFolders = languageFromFolders(dirSegments);
+  let langCode = fromFolders?.code ?? null;
+  let langName = fromFolders?.name ?? null;
 
   // 2. Extract the suffix after the last `]` in the base name.
   //    e.g. "[_GROUP_]_EP01_[78EFD746]_rus_AT_Team" → suffix "_rus_AT_Team"
@@ -214,10 +214,166 @@ export function detectSubtitleInfo(subtitleFile) {
     }
   }
 
+  // 4. The team, where the suffix rule found none: a bracketed group in the
+  //    innermost folder or in the file name that the VIDEO does not also carry.
+  //    That last condition is what stops the picture's own release group being
+  //    reported as the author of somebody else's translation.
+  if (!group) {
+    group = releaserFrom({ folders: dirSegments, fileName, videoName });
+  }
+
   return {
     code: langCode ?? "und",
     name: langName ?? "Unknown",
     group: group ?? null
+  };
+}
+
+// ---------------------------------------------------------------------------
+// What a torrent's own names say about a track shipped as a file beside the
+// video: which language it is in, and who made it.
+//
+// Used for BOTH soundtracks and subtitles, because both are the same question
+// about the same kind of path. A release states these two things in the two
+// places it has: a folder that names a language (`Rus Sound/`, `ENG/`) and a
+// bracketed group that names a team (`[Stan WarHammer & Nesitach]/`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Bracketed groups that describe the ENCODE rather than a team — resolution,
+ * codec, source, audio format, bit depth. A releaser's name is what is left
+ * after these are set aside.
+ *
+ * @param {string} token
+ * @returns {boolean}
+ */
+function isTechnicalToken(token) {
+  const text = token.trim().toLowerCase();
+  if (text.length === 0) {
+    return true;
+  }
+  // A release hash: `[78EFD746]`. It identifies the file, not its author.
+  if (/^[0-9a-f]{4,10}$/.test(text) && /\d/.test(text)) {
+    return true;
+  }
+  if (/^\d{3,4}[pi]$/.test(text) || /^\d{3,4}x\d{3,4}$/.test(text)) {
+    return true;
+  }
+  if (/^(x|h)\.?26[45]$/.test(text) || /^(hevc|avc|av1|vp9|xvid|divx)$/.test(text)) {
+    return true;
+  }
+  if (/^(aac|ac3|eac3|dts(-?hd)?|flac|mp3|opus|truehd|atmos|pcm|\d\.\d)$/.test(text)) {
+    return true;
+  }
+  if (/^(web-?rip|web-?dl|bd-?rip|blu-?ray|hdtv|dvd-?rip|remux|hdr\d*|dv|sdr|\d{1,2}bit)$/.test(text)) {
+    return true;
+  }
+  // A bracket that names a language names a language, not a team.
+  return lookupLang(text) !== null;
+}
+
+/**
+ * The bracketed groups of a name, in order.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+function bracketTokens(text) {
+  const source = typeof text === "string" ? text : "";
+  const tokens = [];
+  for (const match of source.matchAll(/\[([^\]]+)\]/g)) {
+    const token = match[1].trim();
+    if (token.length > 0) {
+      tokens.push(token);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * The language a path states, looking at the folders from the innermost out.
+ *
+ * A whole segment is tried first (`ENG`, `Russian`), then its words — which is
+ * what reads `Rus Sound` as Russian. A word is only accepted from a multi-word
+ * segment when it is at least three letters, because two-letter codes are also
+ * ordinary words (`no`, `id`, `it`) and a folder called `No Subs` does not mean
+ * Norwegian.
+ *
+ * @param {string[]} folders
+ * @returns {{ code: string, name: string } | null}
+ */
+export function languageFromFolders(folders) {
+  const segments = Array.isArray(folders) ? folders : [];
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = String(segments[index] ?? "");
+    const whole = lookupLang(segment.trim());
+    if (whole) {
+      return whole;
+    }
+    const words = segment.split(/[^\p{L}]+/u).filter((word) => word.length >= 3);
+    for (const word of words) {
+      const found = lookupLang(word);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Who made a track that ships as its own file, when the torrent says so.
+ *
+ * The rule that keeps this honest: a bracketed group is only a releaser of the
+ * SIDECAR when it is not also in the video's own name. In the field case that
+ * settles it — a Russian dub named exactly like the picture,
+ * `[HorribleSubs] Drifters - 02 [1080p].mka`, sitting in `Rus Sound/` — every
+ * bracket it carries is the picture's, and attributing the dub to HorribleSubs
+ * would be inventing an author. The subtitles of the same release, in
+ * `Sub/[Stan WarHammer & Nesitach]/`, carry a bracket the video does not, and
+ * that one IS their author.
+ *
+ * The innermost folder is looked at before the file name, because that is where
+ * a release puts the team when several of them contributed.
+ *
+ * @param {object} params
+ * @param {string[]} params.folders - Folders above the file, innermost last.
+ * @param {string} params.fileName
+ * @param {string} [params.videoName] - The picture's own file name.
+ * @returns {string | null}
+ */
+export function releaserFrom({ folders, fileName, videoName = "" }) {
+  const shared = new Set(
+    bracketTokens(stripExtension(String(videoName ?? ""))).map((token) => token.toLowerCase())
+  );
+  const sources = [...(Array.isArray(folders) ? folders : [])].reverse();
+  sources.push(stripExtension(String(fileName ?? "")));
+  for (const source of sources) {
+    for (const token of bracketTokens(source)) {
+      if (shared.has(token.toLowerCase()) || isTechnicalToken(token)) {
+        continue;
+      }
+      return token;
+    }
+  }
+  return null;
+}
+
+/**
+ * Language and releaser for a track that ships as its own file.
+ *
+ * @param {object} params
+ * @param {string[]} params.folders
+ * @param {string} params.fileName
+ * @param {string} [params.videoName]
+ * @returns {{ code: string | null, name: string | null, releaser: string | null }}
+ */
+export function sidecarNaming({ folders, fileName, videoName = "" }) {
+  const language = languageFromFolders(folders);
+  return {
+    code: language?.code ?? null,
+    name: language?.name ?? null,
+    releaser: releaserFrom({ folders, fileName, videoName })
   };
 }
 
