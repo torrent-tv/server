@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import {
   askedForwardBufferSeconds,
   bufferByteBudget,
+  ceilingWorthRetrying,
   forwardBufferCeilingSeconds
 } from "../public/domain/hls-player.js";
 
@@ -106,4 +107,69 @@ test("a level with no stated bitrate falls back to the floor", () => {
     askedForwardBufferSeconds({ maxBufferLength: 30, maxMaxBufferLength: 120, maxBufferSize: 60e6 }, 0),
     30
   );
+});
+
+/**
+ * A refusal to buffer deeper is re-tested, because the first one is always
+ * taken at the worst possible moment.
+ *
+ * A media element may only evict frames the playhead has PASSED. Two minutes
+ * into a film there are none, so `QuotaExceededError` is certain whatever the
+ * device could hold — and hls.js only ever divides its ceiling, never raises
+ * it. Field 2026-08-31: 120 s → 73 s at 15:11:12 of a session that ran to
+ * 16:24, and the remaining 73 minutes held two thirds of what the proxy had
+ * ready for them.
+ */
+const REFUSED = { ceiling: 73, statedCeiling: 120, behindSeconds: 300, msSinceRefusal: 120_000, attempts: 0 };
+
+test("a refusal is tried again once there is something to evict, halfway back", () => {
+  assert.equal(ceilingWorthRetrying(REFUSED), 97, "halfway from 73 to 120");
+});
+
+test("nothing behind the playhead means the refusal would be certain again", () => {
+  // The condition that caused it has not changed, so asking again only earns a
+  // second refusal and another halving.
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, behindSeconds: 20 }), 0);
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, behindSeconds: 72.9 }), 0);
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, behindSeconds: 73 }), 97, "as much behind as it wants ahead");
+});
+
+test("a device at its real limit is left alone after a few rounds", () => {
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, attempts: 2 }), 97);
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, attempts: 3 }), 0);
+});
+
+test("a refusal is not argued with immediately", () => {
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, msSinceRefusal: 59_000 }), 0);
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, msSinceRefusal: 0 }), 0, "no refusal recorded yet");
+});
+
+test("a ceiling already at what the proxy holds is not raised past it", () => {
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, ceiling: 120 }), 0);
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, ceiling: 119.5 }), 0, "half a second is not worth a round");
+  // Halving the remaining distance means the steps get smaller, and a step of
+  // about a second buys nothing while costing a round of the three there are.
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, ceiling: 118 }), 0, "one second is not a step");
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, ceiling: 115 }), 118);
+});
+
+test("the steps converge and stop, without ever passing what the proxy holds", () => {
+  // The whole of a session that began with the field's own refusal.
+  const seen = [];
+  let ceiling = 73;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const next = ceilingWorthRetrying({ ...REFUSED, ceiling, attempts: attempt });
+    if (next === 0) {
+      break;
+    }
+    seen.push(next);
+    ceiling = next;
+  }
+  assert.deepEqual(seen, [97, 109, 115], "three attempts, each halving what is left");
+  assert.ok(seen.every((value) => value <= 120), "and never past what the proxy holds ahead");
+});
+
+test("no ceiling and no stated depth means nothing to do", () => {
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, ceiling: 0 }), 0);
+  assert.equal(ceilingWorthRetrying({ ...REFUSED, statedCeiling: 0 }), 0);
 });
