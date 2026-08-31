@@ -23,7 +23,7 @@ import {
   readUrlState,
   resumePositionFor
 } from "../../domain/url-state.js";
-import { classifyMediaFiles, magnetNamesATracker, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
+import { classifyMediaFiles, magnetNamesATracker, normalizeRemoteFileList, orderForDisplay } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 
@@ -2824,8 +2824,15 @@ export class Loading extends StateDerivedView {
     const video = Array.isArray(mediaFiles?.video) ? mediaFiles.video : parsedFiles.filter((entry) => entry.isVideo);
     const audio = Array.isArray(mediaFiles?.audio) ? mediaFiles.audio : [];
     const subtitles = Array.isArray(mediaFiles?.subtitles) ? mediaFiles.subtitles : [];
-    this.#subtitleFiles = subtitles;
-    return { video, audio, subtitles };
+    // Ordered and named HERE as well, because these lists usually arrive
+    // already classified from the picker and so never passed through
+    // `classifyMediaFiles`. That is why the playlist went on showing the
+    // torrent's own order — 08, 06, 07, 01 — and the full release names, while
+    // the classifier beside it sorted correctly and nothing used the result
+    // (field 2026-08-31, with the fix demonstrably deployed).
+    const ordered = orderForDisplay({ video, audio, subtitles });
+    this.#subtitleFiles = ordered.subtitles;
+    return ordered;
   }
 
   /**

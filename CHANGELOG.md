@@ -1,3 +1,7 @@
+## 0.23.3
+
+- **Fix**: The playlist really is ordered and shortened now. 0.23.2 put the rule in `classifyMediaFiles`, and the path the playlist actually takes does not go through it: the lists usually arrive already classified from the picker, and `#normalizeMediaFiles` passed them straight on. So the deployed code sorted correctly and nothing used the result — verified in the live browser, where the module returned `01 02 … 12` and `Drifters - 01` while the drawer beside it showed the torrent's own order and the full release names. The ordering is its own exported step now, applied on both paths.
+
 ## 0.23.2
 
 - **Fix**: The playlist showed episodes in the torrent's own order, which is routinely by SIZE — the Drifters release lists its twelve episodes 08, 06, 07, 01, 02, 10, 11, 05, 09, 04, 12, 03, and that is exactly what the viewer saw. Files are now offered in reading order: by folder, then by name, with runs of digits compared as numbers so 2 comes before 10 rather than after it. Sorted for display only — every entry keeps `index`, the torrent's own number, which is what a file is opened by, so reordering the list cannot open the wrong episode.

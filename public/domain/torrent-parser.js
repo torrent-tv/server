@@ -164,6 +164,25 @@ export function classifyMediaFiles(files) {
       subtitles.push(file);
     }
   }
+  return orderForDisplay({ video, audio, subtitles });
+}
+
+/**
+ * Put already-classified lists into the order and the naming a viewer reads.
+ *
+ * Separate from {@link classifyMediaFiles} because the lists do not always come
+ * from it: the picker builds its own and hands them on, and that path bypassed
+ * the ordering entirely — the playlist went on showing the torrent's own order
+ * and the full release names while the classifier beside it was sorting
+ * correctly and nobody was using the result (field 2026-08-31).
+ *
+ * @param {{ video: object[], audio: object[], subtitles: object[] }} lists
+ * @returns {{ video: object[], audio: object[], subtitles: object[] }}
+ */
+export function orderForDisplay(lists) {
+  const video = Array.isArray(lists?.video) ? lists.video : [];
+  const audio = Array.isArray(lists?.audio) ? lists.audio : [];
+  const subtitles = Array.isArray(lists?.subtitles) ? lists.subtitles : [];
   return {
     // Only the picture's list is shortened. A soundtrack and a subtitle file
     // are named by their language and their author, and those ARE what
