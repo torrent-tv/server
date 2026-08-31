@@ -263,6 +263,11 @@ export class Loading extends StateDerivedView {
     // viewer already has.
     /** @param {number} height */
     audioNotReady: "That soundtrack is not ready yet — still playing the one you had.",
+    // Shown with the picture STOPPED while the chosen soundtrack is prepared.
+    // The alternative is letting the film run on in a language the viewer does
+    // not understand and leaving them to seek back afterwards, which is a worse
+    // thing to do to them than a wait they can see the reason for.
+    audioPreparing: "Preparing the soundtrack you chose…",
     qualityNotReady: (height) =>
       `${height}p isn't ready yet — still playing the current quality. Try again in a moment.`,
     // Shown INSTEAD of failing once the ordinary wait has been exhausted. There
@@ -317,6 +322,18 @@ export class Loading extends StateDerivedView {
   // the wait continues with an honest message; the viewer leaves by cancelling
   // or by picking another video.
   static PLAN_WAIT_MS = 180_000;
+
+  // How long the picture waits, stopped, for a soundtrack the viewer chose.
+  //
+  // It has to outlast a COLD one: a soundtrack that ships as its own file may
+  // have nothing downloaded when it is asked for, and the swarm has to deliver
+  // its first pieces before anything can be encoded. Field 2026-08-31: the
+  // first piece of one took 27.7 s, which is longer than the proxy's own warm
+  // request waits before answering — so a single ask cannot settle it and this
+  // is the bound on asking repeatedly. Past it the viewer is told the track is
+  // not ready and keeps the one they had, which is recoverable; they can choose
+  // it again once more of it has arrived.
+  static AUDIO_TRACK_WAIT_MS = 120_000;
 
   // How far back the download-rate trend is measured. Long enough to see the
   // climb (the swarm takes 6-8 s to reach its plateau), short enough that a
@@ -1289,6 +1306,41 @@ export class Loading extends StateDerivedView {
       );
     }
     this.#bufferingResumeAnchorByteStart = null;
+  }
+
+  /**
+   * End the wait a soundtrack change puts the picture through: take the spinner
+   * off, put the viewer back exactly where they were, and start the picture
+   * again only if it was running when they chose.
+   *
+   * Called on EVERY way out of that wait — switched, refused, abandoned for
+   * another choice, or about to rebuild the session — because a spinner left
+   * over a paused picture is indistinguishable from the player having died.
+   *
+   * The stall counter is deliberately untouched. It measures interruptions the
+   * supply caused, which is what the cushion is judged by; a wait the viewer
+   * asked for by changing language is not one of those, and counting it would
+   * corrupt the only measurement that says whether playback is smooth.
+   *
+   * @param {unknown} video
+   * @param {number | null} resumeAt - Where to return to, or null to leave the
+   *   position alone (the session is being rebuilt and will choose its own).
+   * @param {boolean} wasPlaying
+   * @returns {void}
+   */
+  #finishAudioWait(video, resumeAt, wasPlaying) {
+    this.#dispatchBuffering(false);
+    if (!(video instanceof HTMLVideoElement)) {
+      return;
+    }
+    if (resumeAt !== null && Number.isFinite(resumeAt) && Math.abs(video.currentTime - resumeAt) > 0.05) {
+      video.currentTime = resumeAt;
+    }
+    if (wasPlaying) {
+      // A rejected `play()` is not a failure worth surfacing: the viewer can
+      // press play, and the alternative is an error over a working picture.
+      void video.play().catch(() => {});
+    }
   }
 
   /**
@@ -2922,6 +2974,15 @@ export class Loading extends StateDerivedView {
     const stopStatsPoll = this.#startTorrentStatsPoll(transport, earlySourceKey, fileIndex);
 
     let prepared;
+    // Warm the file that was actually chosen. The warm-up above runs while the
+    // viewer is still reading the list, so it can only name a file when the
+    // torrent holds exactly one — on a twelve-episode release it sends none, and
+    // everything that warm-up does for a CHOSEN file therefore never ran: field
+    // 2026-08-31, both calls answered "file not chosen yet", and the soundtrack
+    // beside the picture had nothing downloaded when the viewer asked for it,
+    // so the first switch to it timed out. Fire-and-forget, so the plan below is
+    // not held up by it.
+    this.#warmSourceInBackground(fileIndex);
     try {
       // Poll the playback plan until the file header has downloaded. On a cold
       // torrent (peers still connecting) the proxy returns `pending` quickly
@@ -4779,43 +4840,72 @@ export class Loading extends StateDerivedView {
     // rebuild below is a cold start with the screen empty — measured in tens of
     // seconds on a weak host — and it is what every stream without renditions
     // still gets.
+    /** Where the viewer is, so the wait below returns them to exactly here. */
+    let resumeAt = null;
+    /** Whether the picture was running, so it is only restarted if it was. */
+    let wasPlaying = false;
     if (this.#hlsPlayer.audioTracks().length > 1) {
-      // Made ready BEFORE the player is told to move. Changing track discards
-      // the audio the player holds and it cannot show a frame until the new
-      // track covers the playhead — so switching first and producing second
-      // shows the track's cold start as a spinner over a stopped picture
-      // (measured 2026-08-15). The picture keeps playing through this wait,
-      // exactly as it does while a quality rung is prepared.
-      const playhead =
-        this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
-          ? this.#videoElement.currentTime
-          : 0;
+      // The picture STOPS for this wait, and that is the point. Letting it run
+      // on means the viewer keeps watching in a language they do not
+      // understand, and then has to seek back over the part they could not
+      // follow — asked for 2026-08-31, in those words. A wait they can see the
+      // reason for is a smaller cost than a stretch of film they have to watch
+      // twice.
+      //
+      // It is also why the track is made ready BEFORE the player is told to
+      // move: changing track discards the audio the player holds, and it cannot
+      // show a frame until the new track covers the playhead (measured
+      // 2026-08-15, a track switched to before it was ready cost 48 s of
+      // spinner).
+      const video = this.#videoElement instanceof HTMLVideoElement ? this.#videoElement : null;
+      const playhead = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      resumeAt = playhead;
+      wasPlaying = video ? !video.paused : false;
+      video?.pause();
+      this.#dispatchBuffering(true);
+      this.setStatus(Loading.MESSAGES.audioPreparing);
       const readyAt = Date.now();
-      const answer = await this.#session.prepareAudioTrack(trackIndex, playhead);
-      // Only "not-ready" refuses. "unsupported" means this proxy cannot prepare
-      // tracks at all — older than 2.14.0, or a stream that does not publish
-      // them separately — and there the switch has always worked by rebuilding
-      // the session, so forbidding it would take away something that works.
+      let answer = "not-ready";
+      // Asked again rather than given up on. The proxy builds the track's
+      // session whether or not it finished in time to answer: field 2026-08-31,
+      // a first switch was refused after 20.3 s and the session it had started
+      // was ready 8 s later — the second switch then took 107 ms. One refusal
+      // was treated as final, so the viewer was told the track was not ready
+      // when it was about to be.
+      while (Date.now() - readyAt < Loading.AUDIO_TRACK_WAIT_MS) {
+        answer = await this.#session.prepareAudioTrack(trackIndex, playhead);
+        if (this.#audioPickSeq !== pick) {
+          this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
+          this.#finishAudioWait(video, resumeAt, wasPlaying);
+          return;
+        }
+        if (answer !== "not-ready") {
+          break;
+        }
+        this.#logEvt(
+          `audio track ${trackIndex} not ready after ${((Date.now() - readyAt) / 1000).toFixed(1)}s — ` +
+            "the proxy is preparing it, asking again"
+        );
+      }
+      // Only "not-ready" refuses, and now only after the whole wait.
+      // "unsupported" means this proxy cannot prepare tracks at all — older
+      // than 2.14.0, or a stream that does not publish them separately — and
+      // there the switch has always worked by rebuilding the session, so
+      // forbidding it would take away something that works.
       ready = answer !== "not-ready";
       this.#logEvt(
         `audio track ${trackIndex} ${answer} after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
       );
-      if (this.#audioPickSeq !== pick) {
-        this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
-        return;
-      }
     }
-    // A track that was not made ready in time is not switched to. The player
-    // discards the audio it holds the moment it is told to change, so switching
-    // into a track nobody has produced yet leaves the picture with nothing to
-    // play: measured 2026-08-15, a track that answered "not ready" after 14.4 s
-    // was switched to anyway and the viewer watched **48 seconds** of spinner.
-    // The rule is the one a quality change already follows — keep what is
-    // playing, put the menu back, and say the track was not ready.
+    // Still not ready after the whole wait. The player discards the audio it
+    // holds the moment it is told to change, so switching into a track nobody
+    // has produced leaves the picture with nothing to play. Keep what is
+    // playing, put the menu back, and say so.
     if (ready === false) {
       // Said on screen, not only in the log. A menu that snaps back with no
       // word for it reads as the player ignoring the viewer — the quality path
       // has said this since 0.9.5 and the audio path did not.
+      this.#finishAudioWait(this.#videoElement, resumeAt, wasPlaying);
       this.setStatus(Loading.MESSAGES.audioNotReady);
       this.#logEvt(`audio track ${trackIndex} was not ready; staying on ${this.#selectedAudioTrackIndex}`);
       this.#publishAudioTracks();
@@ -4833,9 +4923,16 @@ export class Loading extends StateDerivedView {
         `audio track ${trackIndex} switched in place, without rebuilding the session` +
         (applied >= 0 && applied !== trackIndex ? ` (the player settled on ${applied})` : "")
       );
+      // Back to exactly where the viewer was, with the new language. Nothing of
+      // the film is skipped and nothing has to be watched twice.
+      this.#finishAudioWait(this.#videoElement, resumeAt, wasPlaying);
       this.#publishAudioTracks();
       return;
     }
+    // The session is about to be rebuilt instead, which starts at a position of
+    // its own and shows the loading view. This wait's spinner belongs to a
+    // picture that is going away, so it comes off here.
+    this.#finishAudioWait(this.#videoElement, null, false);
     const fileIndex = this.#activeFileIndex;
     const position =
       this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
