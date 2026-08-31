@@ -87,6 +87,9 @@ export function forwardBufferCeilingSeconds(statedSeconds) {
  */
 const FORWARD_BUFFER_CEILING_WITHOUT_A_PROXY_FIGURE = 60;
 
+/** How many unasked-for level changes are undone before the wander stands. */
+const MAX_PIN_RESTORES = 3;
+
 /**
  * hls.js's own default byte budget, kept as the answer whenever the level's
  * bitrate is not known — the same 60 MB it would have used itself.
@@ -493,6 +496,15 @@ export function createHlsPlayer(onLog) {
   // on naming the rung the viewer has just left. Read that way, the menu would
   // snap back to the old height right after a switch and refuse to switch back.
   let desiredLevel = -1;
+  /**
+   * How many times a level change nobody asked for has been undone.
+   *
+   * Bounded because hls.js lowers the level to ESCAPE an error: if the error is
+   * real, putting the level back re-enters it, and a loop between the two is
+   * worse than either. Three attempts distinguish a stray wander from a rung
+   * the player genuinely cannot stay on.
+   */
+  let pinRestores = 0;
 
   return {
     /**
@@ -642,6 +654,7 @@ export function createHlsPlayer(onLog) {
         hlsInstance = null;
       }
       desiredLevel = -1;
+      pinRestores = 0;
       attachedMedia = null;
     },
     /**
@@ -1250,6 +1263,40 @@ export function createHlsPlayer(onLog) {
             const level = instance.levels?.[data?.level];
             const height = Number(level?.height) || 0;
             console.debug(`[torrent-tv][hls] level switched to ${height}p (index ${data?.level})`);
+            // A level nobody here asked for is hls.js moving itself, and it does
+            // that despite the pin. `hls.currentLevel = N` sets
+            // `manualLevelIndex` and the `nextLoadLevel` GETTER honours it — but
+            // the error controller assigns `hls.nextLoadLevel`, and that SETTER
+            // writes the level unconditionally, consulting `manualLevelIndex`
+            // only to decide whether to touch `nextAutoLevel` as well. So one
+            // fragment error steps the viewer down a rung.
+            //
+            // What that costs here is not a slightly softer picture: a rung
+            // below a COPIED source is a full re-encode on somebody's home
+            // machine. Field 2026-08-31 — one `fragLoadError` moved a viewer off
+            // a 1038p copy running at 3.22x onto an encode that ran at 0.71x for
+            // the next fifty minutes, and the picture stood still 161 times.
+            //
+            // Put back, with a bound: hls.js lowers the level to escape an
+            // error, so if the error is real this fights it, and a fight is
+            // worse than either outcome. After MAX_PIN_RESTORES the wander
+            // stands and the line says so.
+            if (desiredLevel >= 0 && data?.level !== desiredLevel) {
+              if (pinRestores < MAX_PIN_RESTORES) {
+                pinRestores += 1;
+                console.warn(
+                  `[torrent-tv][hls] level moved to ${height}p (index ${data?.level}) without being asked — ` +
+                  `putting it back to index ${desiredLevel}, attempt ${pinRestores} of ${MAX_PIN_RESTORES}`
+                );
+                instance.currentLevel = desiredLevel;
+                return;
+              }
+              console.warn(
+                `[torrent-tv][hls] level moved to ${height}p (index ${data?.level}) without being asked, ` +
+                `and it has been put back ${MAX_PIN_RESTORES} times already — letting it stand`
+              );
+              desiredLevel = data?.level;
+            }
             // Another rung is another bitrate, so the cushion costs a different
             // number of bytes to hold.
             sizeByteBudgetForLevel(instance, data?.level, forwardBufferCeiling);
