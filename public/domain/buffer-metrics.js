@@ -69,6 +69,39 @@ export function bufferedAheadSeconds(video) {
 }
 
 /**
+ * How much ALREADY PLAYED media is still buffered behind the playhead.
+ *
+ * This is the quantity a browser evicts from when a SourceBuffer runs out of
+ * room: a media element may only free coded frames the playhead has passed. It
+ * is therefore also the reason a refusal to buffer deeper says nothing durable
+ * when it arrives at the start of a film — there is nothing behind the playhead
+ * to free, `QuotaExceededError` is certain whatever the device could really
+ * hold, and the same depth fits without complaint ten minutes later.
+ *
+ * @param {HTMLVideoElement | null | undefined} video
+ * @returns {number} Seconds, zero when the playhead is in no buffered range.
+ */
+export function bufferedBehindSeconds(video) {
+  if (!video || typeof video.currentTime !== "number" || !video.buffered) {
+    return 0;
+  }
+  const { buffered, currentTime } = video;
+  for (let index = 0; index < buffered.length; index += 1) {
+    if (buffered.start(index) <= currentTime + 0.25 && currentTime < buffered.end(index)) {
+      let start = buffered.start(index);
+      for (let previous = index - 1; previous >= 0; previous -= 1) {
+        if (start - buffered.end(previous) >= MAX_BUFFER_HOLE_SECONDS) {
+          break;
+        }
+        start = buffered.start(previous);
+      }
+      return Math.max(0, currentTime - start);
+    }
+  }
+  return 0;
+}
+
+/**
  * Where the media the player already holds runs out, in seconds on the
  * timeline.
  *

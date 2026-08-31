@@ -9,7 +9,7 @@
 
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
-import { bufferedAheadSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
+import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
 
 /**
  * How often the cushion is read. Ten seconds is the same cadence the link
@@ -127,6 +127,67 @@ export function bufferByteBudget(ceilingSeconds, levelBitrate) {
   }
   return Math.max(BYTE_BUDGET_WITHOUT_A_STATED_BITRATE, Math.round((seconds * bitrate) / 8));
 }
+
+/**
+ * Whether a refusal to buffer deeper is worth testing again, and at what depth.
+ *
+ * A browser answers `QuotaExceededError` when a SourceBuffer cannot make room,
+ * and hls.js reads that as the device's limit and lowers its ceiling for good —
+ * `reduceMaxBufferLength` only ever divides, and nothing in hls.js raises it
+ * back. But a media element may only free frames the playhead has PASSED, so at
+ * the start of a film there is nothing to free and the refusal is certain
+ * whatever the device could really hold. Field 2026-08-31: two minutes into a
+ * 75-minute episode the ceiling fell 120 s → 73 s, and the remaining 73 minutes
+ * were watched with two thirds of the cushion the proxy was holding for them.
+ *
+ * So the refusal is re-tested, on the condition that the reason for it has
+ * changed: there is now at least as much played material behind the playhead as
+ * the player wants ahead of it, so eviction has somewhere to take from. Each
+ * attempt goes halfway back rather than all the way, a quiet period since the
+ * last refusal is required, and the attempts are counted — a device that really
+ * is at its limit refuses again, hls.js lowers the ceiling again, and after a
+ * few rounds the answer stands.
+ *
+ * @param {Object} state
+ * @param {number} state.ceiling - The ceiling in force now, seconds.
+ * @param {number} state.statedCeiling - What the proxy holds ahead, seconds.
+ * @param {number} state.behindSeconds - Played media still buffered behind the
+ *   playhead — what the browser may evict.
+ * @param {number} state.msSinceRefusal - Since the last refusal.
+ * @param {number} state.attempts - Re-tries already made this session.
+ * @returns {number} The ceiling to try, or zero for "leave it alone".
+ */
+export function ceilingWorthRetrying({
+  ceiling,
+  statedCeiling,
+  behindSeconds,
+  msSinceRefusal,
+  attempts
+}) {
+  const now = Number(ceiling) || 0;
+  const stated = Number(statedCeiling) || 0;
+  if (now <= 0 || stated <= now + 1) {
+    return 0;
+  }
+  if ((Number(attempts) || 0) >= CEILING_RETRIES_PER_SESSION) {
+    return 0;
+  }
+  if (!(Number(msSinceRefusal) >= CEILING_RETRY_QUIET_MS)) {
+    return 0;
+  }
+  // The condition that made the refusal inevitable: nothing behind the playhead
+  // to evict. Ask for as much behind as the player wants ahead.
+  if (!(Number(behindSeconds) >= now)) {
+    return 0;
+  }
+  const next = Math.min(stated, Math.round(now + (stated - now) / 2));
+  return next > now + 1 ? next : 0;
+}
+
+/** How many times a refused depth is tried again before the answer stands. */
+const CEILING_RETRIES_PER_SESSION = 3;
+/** How long after a refusal the same depth may be tried again. */
+const CEILING_RETRY_QUIET_MS = 60_000;
 
 /**
  * How deep hls.js will actually try to buffer, in seconds.
@@ -352,6 +413,8 @@ export function createHlsPlayer(onLog) {
   const startCushionSampler = (instance, media, askedCeiling) => {
     stopCushionSampler();
     let lastCeilingSaid = askedCeiling;
+    let lastRefusalAt = 0;
+    let retries = 0;
     const timer = setInterval(() => {
       if (!instance?.config || !(media instanceof HTMLVideoElement)) {
         return;
@@ -377,17 +440,43 @@ export function createHlsPlayer(onLog) {
       // (`reduceMaxBufferLength`). That is the device stating a limit — the one
       // measurement of memory available to us — so it is said the moment it
       // happens rather than left inside hls.js's own logger.
+      const behind = bufferedBehindSeconds(media);
       if (ceiling < lastCeilingSaid - 0.5) {
+        lastRefusalAt = Date.now();
         console.debug(
           `[torrent-tv][cushion] the device refused the depth: ceiling lowered ` +
-          `${lastCeilingSaid.toFixed(0)}s → ${ceiling.toFixed(0)}s`
+          `${lastCeilingSaid.toFixed(0)}s → ${ceiling.toFixed(0)}s ` +
+          `(${behind.toFixed(0)}s of played media behind the playhead to evict from)`
         );
         lastCeilingSaid = ceiling;
+      } else {
+        // A refusal taken at the start of a film is about the moment, not the
+        // device: nothing had been played, so nothing could be evicted. Once
+        // there is material behind the playhead the same depth may well fit,
+        // and hls.js will never ask again on its own.
+        const retryAt = ceilingWorthRetrying({
+          ceiling,
+          statedCeiling: askedCeiling,
+          behindSeconds: behind,
+          msSinceRefusal: lastRefusalAt === 0 ? 0 : Date.now() - lastRefusalAt,
+          attempts: retries
+        });
+        if (retryAt > 0) {
+          retries += 1;
+          instance.config.maxMaxBufferLength = retryAt;
+          lastCeilingSaid = retryAt;
+          console.debug(
+            `[torrent-tv][cushion] trying the depth again: ceiling ${ceiling.toFixed(0)}s → ` +
+            `${retryAt}s of the ${askedCeiling}s the proxy holds — ${behind.toFixed(0)}s behind the ` +
+            `playhead is now evictable, attempt ${retries} of ${CEILING_RETRIES_PER_SESSION}`
+          );
+        }
       }
       console.debug(
         `[torrent-tv][cushion] held ${held.toFixed(1)}s of ${asked.toFixed(1)}s asked ` +
         `(floor ${instance.config.maxBufferLength}s, ceiling ${ceiling.toFixed(0)}s, ` +
         `budget ${(Number(instance.config.maxBufferSize) / 1e6).toFixed(0)}MB, ` +
+        `${behind.toFixed(0)}s behind, ` +
         `${level?.height ?? "?"}p at ${(bitrate / 1e6).toFixed(2)}Mbit/s)`
       );
     }, CUSHION_SAMPLE_MS);

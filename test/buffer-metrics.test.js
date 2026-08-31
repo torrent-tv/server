@@ -10,7 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bufferedAheadSeconds, bufferedEndSeconds, fillRateFromSamples, withSample } from "../public/domain/buffer-metrics.js";
+import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, fillRateFromSamples, withSample } from "../public/domain/buffer-metrics.js";
 
 /**
  * A stand-in for the media element: only `currentTime` and `buffered` are read.
@@ -178,4 +178,35 @@ test("with nothing buffered the switch is prepared at the playhead", () => {
   const video = { currentTime: 42, buffered: { length: 0, start: () => 0, end: () => 0 } };
 
   assert.equal(bufferedEndSeconds(video), 42, "there is nowhere else it could land");
+});
+
+/**
+ * What is BEHIND the playhead is the only material a browser may evict when a
+ * SourceBuffer runs out of room. It is therefore what says whether a refusal to
+ * buffer deeper was about the device or about the moment.
+ */
+test("what is buffered behind is measured back from the playhead", () => {
+  assert.equal(bufferedBehindSeconds(video(600, [[520, 700]])), 80);
+});
+
+test("nothing has been played yet, so there is nothing to evict", () => {
+  // The shape at the start of a film — and the shape in which every refusal so
+  // far has been recorded as if it were the device's limit.
+  assert.equal(bufferedBehindSeconds(video(2, [[0, 120]])), 2);
+});
+
+test("a gap behind the playhead ends the count", () => {
+  // The browser evicted the older range already, or a seek left it stranded.
+  // Either way it is not room this playback can free.
+  assert.equal(bufferedBehindSeconds(video(600, [[100, 200], [520, 700]])), 80);
+});
+
+test("a join the player stepped over does not end the count", () => {
+  // The same 0.059 s seams a copied picture leaves, on the other side.
+  assert.equal(bufferedBehindSeconds(video(600, [[400, 500], [500.059, 700]])), 200);
+});
+
+test("a playhead in no buffered range has nothing behind it", () => {
+  assert.equal(bufferedBehindSeconds(video(42, [[100, 200]])), 0);
+  assert.equal(bufferedBehindSeconds(null), 0);
 });
