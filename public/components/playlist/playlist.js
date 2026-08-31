@@ -148,10 +148,14 @@ export class Playlist {
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.fileIndex = String(file?.index ?? -1);
+      // The name with the release's own repeated furniture taken off, when the
+      // list gave enough to work that out — see `withDisplayNames`.
       button.textContent =
-        typeof file?.relativePath === "string" && file.relativePath.length > 0
-          ? file.relativePath
-          : String(file?.name ?? "Video");
+        typeof file?.displayName === "string" && file.displayName.length > 0
+          ? file.displayName
+          : typeof file?.relativePath === "string" && file.relativePath.length > 0
+            ? file.relativePath
+            : String(file?.name ?? "Video");
       item.append(button);
       this.#root.append(item);
     }

@@ -164,7 +164,95 @@ export function classifyMediaFiles(files) {
       subtitles.push(file);
     }
   }
-  return { video, audio, subtitles };
+  return {
+    // Only the picture's list is shortened. A soundtrack and a subtitle file
+    // are named by their language and their author, and those ARE what
+    // distinguishes them — see `detectSidecarNaming`.
+    video: withDisplayNames(byPath(video)),
+    audio: byPath(audio),
+    subtitles: byPath(subtitles)
+  };
+}
+
+/**
+ * What to show for each file, with the release's own furniture taken off.
+ *
+ * A release repeats itself in every name — `[HorribleSubs] Drifters - 01
+ * [1080p].mkv` through `- 12 [1080p].mkv` — and the repetition is exactly the
+ * part that says nothing about which episode this is. So the rule needs no list
+ * of known release groups and no guess at which words are technical: a
+ * BRACKETED part that is present in EVERY name of the list is the release's, not
+ * this file's, and comes off. What is left is the title and the episode.
+ *
+ * Deliberately limited to bracketed parts. A releaser written without brackets
+ * (`Drifters.01.WEBRip-GROUP`) is left alone, because the only way to find it
+ * would be to strip the longest common text — and the title sits in that same
+ * common text, so it would go too.
+ *
+ * A list of one is left alone: with nothing to compare against, every part of
+ * the name is "common", and the whole name would come off.
+ *
+ * @template {{ relativePath?: string, path?: string, name?: string }} T
+ * @param {T[]} files
+ * @returns {T[]} The same entries, each with `displayName`.
+ */
+function withDisplayNames(files) {
+  const pathOf = (file) => String(file.relativePath ?? file.path ?? file.name ?? "");
+  if (files.length < 2) {
+    return files.map((file) => ({ ...file, displayName: pathOf(file) }));
+  }
+  const bracketsIn = (text) => (text.match(/\[[^\]]*\]/g) ?? []).map((token) => token.trim());
+  // Present in every name, so it describes the release rather than the file.
+  const shared = bracketsIn(pathOf(files[0])).filter((token) =>
+    files.every((file) => pathOf(file).includes(token))
+  );
+  return files.map((file) => {
+    const full = pathOf(file);
+    let shown = full;
+    for (const token of shared) {
+      shown = shown.split(token).join(" ");
+    }
+    shown = shown
+      // The extension names the container, which is the same for every file of
+      // a release and never tells a viewer which episode they are choosing.
+      .replace(/\.[a-z0-9]{2,4}$/i, "")
+      // Separators the removals left facing nothing.
+      .replace(/\s{2,}/g, " ")
+      .replace(/\s*[-–—_.]+\s*$/, "")
+      .replace(/^\s*[-–—_.]+\s*/, "")
+      .trim();
+    // Everything was furniture, so nothing is left to identify the file by.
+    // The full name says more than an empty line does.
+    return { ...file, displayName: shown.length > 0 ? shown : full };
+  });
+}
+
+/**
+ * Files in the order a person reads them: by folder, then by name, with runs of
+ * digits compared as numbers.
+ *
+ * A torrent's own order is whatever the tool that made it chose, and it is
+ * routinely by SIZE — the Drifters release lists its episodes 08, 06, 07, 01,
+ * 02, 10, …, and the playlist showed exactly that. Nothing downstream depends
+ * on the position: every entry carries `index`, the torrent's own number, and
+ * that is what a file is opened by.
+ *
+ * `localeCompare` with `numeric` is what makes 2 come before 10; comparing the
+ * strings would put "10" before "2", which is the same defect wearing different
+ * clothes.
+ *
+ * @template {{ relativePath?: string, path?: string, name?: string }} T
+ * @param {T[]} files
+ * @returns {T[]}
+ */
+function byPath(files) {
+  return [...files].sort((left, right) =>
+    String(left.relativePath ?? left.path ?? left.name ?? "").localeCompare(
+      String(right.relativePath ?? right.path ?? right.name ?? ""),
+      undefined,
+      { numeric: true, sensitivity: "base" }
+    )
+  );
 }
 
 /**
