@@ -8,90 +8,26 @@
  *   `<track>` element.
  */
 
-// ---------------------------------------------------------------------------
-// Language lookup table
-// Keys: ISO 639-1 (2-letter), ISO 639-2/T (3-letter), common English names.
-// Values: { code: BCP-47 / ISO 639-1, name: English display name }
-// ---------------------------------------------------------------------------
+import {
+  isNeutralWord,
+  languageFromFolderNames,
+  lookupLanguage,
+  readSidecarName
+} from "./track-naming.js";
 
-/** @type {Record<string, { code: string, name: string }>} */
-const LANG_MAP = {
-  // English
-  en: { code: "en", name: "English" }, eng: { code: "en", name: "English" }, english: { code: "en", name: "English" },
-  // Russian
-  ru: { code: "ru", name: "Russian" }, rus: { code: "ru", name: "Russian" }, russian: { code: "ru", name: "Russian" },
-  // Japanese
-  ja: { code: "ja", name: "Japanese" }, jpn: { code: "ja", name: "Japanese" }, japanese: { code: "ja", name: "Japanese" },
-  // Korean
-  ko: { code: "ko", name: "Korean" }, kor: { code: "ko", name: "Korean" }, korean: { code: "ko", name: "Korean" },
-  // Chinese (generic)
-  zh: { code: "zh", name: "Chinese" }, chi: { code: "zh", name: "Chinese" }, zho: { code: "zh", name: "Chinese" }, chinese: { code: "zh", name: "Chinese" },
-  // Simplified / Traditional
-  chs: { code: "zh-Hans", name: "Chinese (Simplified)" }, cht: { code: "zh-Hant", name: "Chinese (Traditional)" },
-  // Spanish
-  es: { code: "es", name: "Spanish" }, spa: { code: "es", name: "Spanish" }, spanish: { code: "es", name: "Spanish" },
-  // French
-  fr: { code: "fr", name: "French" }, fre: { code: "fr", name: "French" }, fra: { code: "fr", name: "French" }, french: { code: "fr", name: "French" },
-  // German
-  de: { code: "de", name: "German" }, ger: { code: "de", name: "German" }, deu: { code: "de", name: "German" }, german: { code: "de", name: "German" },
-  // Italian
-  it: { code: "it", name: "Italian" }, ita: { code: "it", name: "Italian" }, italian: { code: "it", name: "Italian" },
-  // Portuguese
-  pt: { code: "pt", name: "Portuguese" }, por: { code: "pt", name: "Portuguese" }, portuguese: { code: "pt", name: "Portuguese" },
-  // Polish
-  pl: { code: "pl", name: "Polish" }, pol: { code: "pl", name: "Polish" }, polish: { code: "pl", name: "Polish" },
-  // Dutch
-  nl: { code: "nl", name: "Dutch" }, nld: { code: "nl", name: "Dutch" }, dut: { code: "nl", name: "Dutch" }, dutch: { code: "nl", name: "Dutch" },
-  // Arabic
-  ar: { code: "ar", name: "Arabic" }, ara: { code: "ar", name: "Arabic" }, arabic: { code: "ar", name: "Arabic" },
-  // Turkish
-  tr: { code: "tr", name: "Turkish" }, tur: { code: "tr", name: "Turkish" }, turkish: { code: "tr", name: "Turkish" },
-  // Vietnamese
-  vi: { code: "vi", name: "Vietnamese" }, vie: { code: "vi", name: "Vietnamese" }, vietnamese: { code: "vi", name: "Vietnamese" },
-  // Thai
-  th: { code: "th", name: "Thai" }, tha: { code: "th", name: "Thai" }, thai: { code: "th", name: "Thai" },
-  // Hindi
-  hi: { code: "hi", name: "Hindi" }, hin: { code: "hi", name: "Hindi" }, hindi: { code: "hi", name: "Hindi" },
-  // Indonesian
-  id: { code: "id", name: "Indonesian" }, ind: { code: "id", name: "Indonesian" }, indonesian: { code: "id", name: "Indonesian" },
-  // Malay
-  ms: { code: "ms", name: "Malay" }, may: { code: "ms", name: "Malay" }, msa: { code: "ms", name: "Malay" }, malay: { code: "ms", name: "Malay" },
-  // Ukrainian
-  uk: { code: "uk", name: "Ukrainian" }, ukr: { code: "uk", name: "Ukrainian" }, ukrainian: { code: "uk", name: "Ukrainian" },
-  // Czech
-  cs: { code: "cs", name: "Czech" }, cze: { code: "cs", name: "Czech" }, ces: { code: "cs", name: "Czech" }, czech: { code: "cs", name: "Czech" },
-  // Slovak
-  sk: { code: "sk", name: "Slovak" }, slo: { code: "sk", name: "Slovak" }, slk: { code: "sk", name: "Slovak" }, slovak: { code: "sk", name: "Slovak" },
-  // Romanian
-  ro: { code: "ro", name: "Romanian" }, rum: { code: "ro", name: "Romanian" }, ron: { code: "ro", name: "Romanian" }, romanian: { code: "ro", name: "Romanian" },
-  // Hungarian
-  hu: { code: "hu", name: "Hungarian" }, hun: { code: "hu", name: "Hungarian" }, hungarian: { code: "hu", name: "Hungarian" },
-  // Serbian
-  sr: { code: "sr", name: "Serbian" }, srp: { code: "sr", name: "Serbian" }, serbian: { code: "sr", name: "Serbian" },
-  // Croatian
-  hr: { code: "hr", name: "Croatian" }, hrv: { code: "hr", name: "Croatian" }, croatian: { code: "hr", name: "Croatian" },
-  // Bulgarian
-  bg: { code: "bg", name: "Bulgarian" }, bul: { code: "bg", name: "Bulgarian" }, bulgarian: { code: "bg", name: "Bulgarian" },
-  // Greek
-  el: { code: "el", name: "Greek" }, gre: { code: "el", name: "Greek" }, ell: { code: "el", name: "Greek" }, greek: { code: "el", name: "Greek" },
-  // Hebrew
-  he: { code: "he", name: "Hebrew" }, heb: { code: "he", name: "Hebrew" }, hebrew: { code: "he", name: "Hebrew" },
-  // Danish
-  da: { code: "da", name: "Danish" }, dan: { code: "da", name: "Danish" }, danish: { code: "da", name: "Danish" },
-  // Finnish
-  fi: { code: "fi", name: "Finnish" }, fin: { code: "fi", name: "Finnish" }, finnish: { code: "fi", name: "Finnish" },
-  // Norwegian
-  no: { code: "no", name: "Norwegian" }, nor: { code: "no", name: "Norwegian" }, norwegian: { code: "no", name: "Norwegian" },
-  // Swedish
-  sv: { code: "sv", name: "Swedish" }, swe: { code: "sv", name: "Swedish" }, swedish: { code: "sv", name: "Swedish" }
-};
+// ---------------------------------------------------------------------------
+// The language table, the flag words and the name grammar live in
+// `track-naming.js`, because they are the same question for a soundtrack as for
+// a subtitle and the grammar is sourced from five other players. See that file.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Subtitle info detection
 // ---------------------------------------------------------------------------
 
 /**
- * @typedef {{ code: string, name: string, group: string | null }} SubtitleInfo
+ * @typedef {{ code: string, name: string, group: string | null,
+ *   isForced?: boolean, isHearingImpaired?: boolean, isDefault?: boolean }} SubtitleInfo
  */
 
 /**
@@ -121,29 +57,52 @@ function stripExtension(name) {
 }
 
 /**
- * Look up language info from a raw token (e.g. `"rus"`, `"ENG"`, `"polish"`).
+ * What is left of a name after the language and the flags, as a TITLE — or
+ * nothing, when what is left only describes the encode.
  *
- * @param {string} token
- * @returns {{ code: string, name: string } | null}
+ * Jellyfin keeps every leftover word ("Any arbitrary text not parsable to a
+ * language or flag will be combined and used as the title of the stream"), and
+ * on its own library that is right, because the part it reads is what the owner
+ * deliberately appended. A torrent is not that tidy: `Film.1080p.rus.srt` beside
+ * `Film.mkv` leaves `1080p`, and a track labelled "Russian (1080p)" is worse
+ * than one labelled "Russian". The same list that keeps a resolution from being
+ * read as a release group keeps it from being read as a title.
+ *
+ * @param {string | null} title
+ * @returns {string | null}
  */
-function lookupLang(token) {
-  return LANG_MAP[token.toLowerCase()] ?? null;
+function titleOf(title) {
+  if (typeof title !== "string") {
+    return null;
+  }
+  const words = title.split(/\s+/).filter((word) => word.length > 0);
+  if (words.length === 0) {
+    return null;
+  }
+  // ALL of it, or none. A word is only weighed on its own when it stands on its
+  // own: inside a phrase, a word that happens to name a language is part of the
+  // phrase — `English Commentary` is a title, and dropping `English` from it
+  // would leave a label nobody wrote.
+  return words.every((word) => isTechnicalToken(word)) ? null : words.join(" ");
 }
 
 /**
- * Detect the language and optional release-group name for a subtitle file.
+ * Detect the language, the flags and the optional release-group name a subtitle
+ * file's own path states.
  *
- * Detection order:
- * 1. Directory component of `relativePath` (e.g. `ENG/`, `RUS/`).
- * 2. Suffix in the filename after the last `]` bracket, split by `_`
- *    (e.g. `_rus_AT_Team` → lang `ru`, group `AT Team`).
- * 3. Parts from the end of the base filename, split by `_`.
+ * Reading order, and the reason for it: the FILE NAME first, then the folders.
+ * All five players surveyed read the name (`research/sidecar-naming-conventions-
+ * 2026-09-01.md`); only VLC and Kodi treat a folder as a place rather than as a
+ * statement about language. A name is also per-file, where a folder is per-group,
+ * so where both speak the name is the more specific of the two. The grammar
+ * itself is in `track-naming.js`.
  *
  * @param {{ name: string, path?: string, relativePath?: string }} subtitleFile
  * @param {{ name?: string }} [videoFile] - The picture these subtitles belong
- *   to. Its name is what tells a bracketed group that names the RELEASE apart
- *   from one that names the translator: only a bracket the video does not also
- *   carry can be the author of a file beside it.
+ *   to. Its name does two things: it marks where the film's own name ends and
+ *   the track's description begins, and it tells a bracketed group that names
+ *   the RELEASE apart from one that names the translator — only a bracket the
+ *   video does not also carry can be the author of a file beside it.
  * @returns {SubtitleInfo}
  */
 export function detectSubtitleInfo(subtitleFile, videoFile = null) {
@@ -154,78 +113,26 @@ export function detectSubtitleInfo(subtitleFile, videoFile = null) {
     subtitleFile.name;
 
   // Directory segments (everything before the filename).
-  const segments = relPath.replace(/\\/g, "/").split("/");
+  const segments = relPath.split(/[\\/]/);
   const dirSegments = segments.slice(0, -1);
   const fileName = segments[segments.length - 1] ?? subtitleFile.name;
   const baseName = stripExtension(fileName);
 
-  // 1. Try to find a language code in the directory hierarchy (innermost first).
-  //    Whole segment first (`ENG/`), then its words — the second reads a folder
-  //    like `Rus Sub/`, which the whole-segment lookup alone could not.
-  const fromFolders = languageFromFolders(dirSegments);
-  let langCode = fromFolders?.code ?? null;
-  let langName = fromFolders?.name ?? null;
+  const fromName = readSidecarName(baseName, stripExtension(videoName));
+  const fromFolders = fromName.language ? null : languageFromFolders(dirSegments);
+  const language = fromName.language ?? fromFolders;
 
-  // 2. Extract the suffix after the last `]` in the base name.
-  //    e.g. "[_GROUP_]_EP01_[78EFD746]_rus_AT_Team" → suffix "_rus_AT_Team"
-  const lastBracket = baseName.lastIndexOf("]");
-  const suffix = lastBracket >= 0 ? baseName.slice(lastBracket + 1) : "";
-  const suffixParts = suffix
-    .split("_")
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
-
-  let langFromSuffix = null;
-  let langIdxInSuffix = -1;
-  for (let i = 0; i < suffixParts.length; i++) {
-    const info = lookupLang(suffixParts[i]);
-    if (info) {
-      langFromSuffix = info;
-      langIdxInSuffix = i;
-      break;
-    }
-  }
-
-  if (!langCode && langFromSuffix) {
-    langCode = langFromSuffix.code;
-    langName = langFromSuffix.name;
-  }
-
-  // Group name: suffix parts after the language token.
-  let group = null;
-  if (langIdxInSuffix >= 0 && langIdxInSuffix < suffixParts.length - 1) {
-    group = suffixParts.slice(langIdxInSuffix + 1).join(" ") || null;
-  }
-
-  // 3. Fallback: scan underscore-parts of the full base name from the end
-  //    (for files without bracket tokens).
-  if (!langCode && lastBracket < 0) {
-    const parts = baseName.split("_");
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const info = lookupLang(parts[i]);
-      if (info) {
-        langCode = info.code;
-        langName = info.name;
-        // Parts after the language token are the group.
-        const groupParts = parts.slice(i + 1).filter((p) => p.length > 0);
-        group = groupParts.length > 0 ? groupParts.join(" ") : null;
-        break;
-      }
-    }
-  }
-
-  // 4. The team, where the suffix rule found none: a bracketed group in the
-  //    innermost folder or in the file name that the VIDEO does not also carry.
-  //    That last condition is what stops the picture's own release group being
-  //    reported as the author of somebody else's translation.
-  if (!group) {
-    group = releaserFrom({ folders: dirSegments, fileName, videoName });
-  }
+  // The team: what the name left over, else a bracketed group in the innermost
+  // folder or in the file name that the VIDEO does not also carry.
+  const group = titleOf(fromName.title) ?? releaserFrom({ folders: dirSegments, fileName, videoName });
 
   return {
-    code: langCode ?? "und",
-    name: langName ?? "Unknown",
-    group: group ?? null
+    code: language?.code ?? "und",
+    name: language?.name ?? "Unknown",
+    group: group ?? null,
+    isForced: fromName.isForced,
+    isHearingImpaired: fromName.isHearingImpaired,
+    isDefault: fromName.isDefault
   };
 }
 
@@ -268,8 +175,9 @@ function isTechnicalToken(token) {
   if (/^(web-?rip|web-?dl|bd-?rip|blu-?ray|hdtv|dvd-?rip|remux|hdr\d*|dv|sdr|\d{1,2}bit)$/.test(text)) {
     return true;
   }
-  // A bracket that names a language names a language, not a team.
-  return lookupLang(text) !== null;
+  // A bracket that names a language names a language, not a team; and one that
+  // names the KIND of track (`[Subs]`) names neither.
+  return lookupLanguage(text) !== null || isNeutralWord(text);
 }
 
 /**
@@ -293,32 +201,14 @@ function bracketTokens(text) {
 /**
  * The language a path states, looking at the folders from the innermost out.
  *
- * A whole segment is tried first (`ENG`, `Russian`), then its words — which is
- * what reads `Rus Sound` as Russian. A word is only accepted from a multi-word
- * segment when it is at least three letters, because two-letter codes are also
- * ordinary words (`no`, `id`, `it`) and a folder called `No Subs` does not mean
- * Norwegian.
+ * Kept as this module's name for it; the rule itself is `languageFromFolderNames`
+ * in `track-naming.js`, shared with soundtracks.
  *
  * @param {string[]} folders
  * @returns {{ code: string, name: string } | null}
  */
 export function languageFromFolders(folders) {
-  const segments = Array.isArray(folders) ? folders : [];
-  for (let index = segments.length - 1; index >= 0; index -= 1) {
-    const segment = String(segments[index] ?? "");
-    const whole = lookupLang(segment.trim());
-    if (whole) {
-      return whole;
-    }
-    const words = segment.split(/[^\p{L}]+/u).filter((word) => word.length >= 3);
-    for (const word of words) {
-      const found = lookupLang(word);
-      if (found) {
-        return found;
-      }
-    }
-  }
-  return null;
+  return languageFromFolderNames(folders);
 }
 
 /**
@@ -360,20 +250,33 @@ export function releaserFrom({ folders, fileName, videoName = "" }) {
 }
 
 /**
- * Language and releaser for a track that ships as its own file.
+ * Language, flags and releaser for a track that ships as its own file.
+ *
+ * The same reading order as `detectSubtitleInfo`: the file name first, the
+ * folders second. A soundtrack is named by the same conventions a subtitle is —
+ * Jellyfin's own example set carries `Film.en.ac3` and `Film.german.ac3` beside
+ * `Film.de.srt` — so it is the same grammar, applied to the same path.
  *
  * @param {object} params
  * @param {string[]} params.folders
  * @param {string} params.fileName
  * @param {string} [params.videoName]
- * @returns {{ code: string | null, name: string | null, releaser: string | null }}
+ * @returns {{ code: string | null, name: string | null, releaser: string | null,
+ *   isForced: boolean, isHearingImpaired: boolean, isDefault: boolean }}
  */
 export function sidecarNaming({ folders, fileName, videoName = "" }) {
-  const language = languageFromFolders(folders);
+  const fromName = readSidecarName(
+    stripExtension(String(fileName ?? "")),
+    stripExtension(String(videoName ?? ""))
+  );
+  const language = fromName.language ?? languageFromFolders(folders);
   return {
     code: language?.code ?? null,
     name: language?.name ?? null,
-    releaser: releaserFrom({ folders, fileName, videoName })
+    releaser: titleOf(fromName.title) ?? releaserFrom({ folders, fileName, videoName }),
+    isForced: fromName.isForced,
+    isHearingImpaired: fromName.isHearingImpaired,
+    isDefault: fromName.isDefault
   };
 }
 
