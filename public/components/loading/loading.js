@@ -487,6 +487,24 @@ export class Loading extends StateDerivedView {
    */
   #embeddedTextTracks = new Map();
   /**
+   * The `<track>` ELEMENT each embedded subtitle track owns, by the same index.
+   * Kept beside the `TextTrack` above because a label can only be changed on the
+   * element — `TextTrack.label` is read-only — and the label does change: a
+   * track whose language nothing states is labelled Unknown until enough of it
+   * has downloaded for the reading to mean anything (`#refineSubtitleLabel`).
+   *
+   * @type {Map<number, HTMLTrackElement>}
+   */
+  #embeddedTrackElements = new Map();
+  /**
+   * The tracks whose language the CONTAINER states. Their labels are never
+   * moved by anything read off the text: what the file says about itself was
+   * written by the person who made it, and a reading of the cues is a guess.
+   *
+   * @type {Set<number>}
+   */
+  #namedSubtitleTracks = new Set();
+  /**
    * Which set of subtitle tracks is the current one. Incremented whenever the
    * tracks are cleared — a new file, a new torrent — so that a seed fetch
    * still in flight from the previous set can tell that everything it holds is
@@ -3770,6 +3788,8 @@ export class Loading extends StateDerivedView {
     // current file from `#subtitleContext` rather than from a closure.
     this.#subtitleEpoch += 1;
     this.#embeddedTextTracks.clear();
+    this.#embeddedTrackElements.clear();
+    this.#namedSubtitleTracks.clear();
     this.#subtitleContext = null;
     this.#subtitleCursors.clear();
     this.#subtitleStarvedAt.clear();
@@ -4034,6 +4054,10 @@ export class Loading extends StateDerivedView {
       el.srclang = fallbackLang || "und";
       this.#videoElement.appendChild(el);
       this.#embeddedTextTracks.set(track.index, el.track);
+      this.#embeddedTrackElements.set(track.index, el);
+      if (fallbackLang && fallbackLang !== "und") {
+        this.#namedSubtitleTracks.add(track.index);
+      }
 
       void this.#armThenFeed({ track, el, fileIndex, transport, sourceKey, epoch });
     }
@@ -4283,13 +4307,63 @@ export class Loading extends StateDerivedView {
   }
 
   /**
+   * Move a track's label onto the language its CUES turn out to be in.
+   *
+   * Why this exists at all: a track whose container states no language cannot be
+   * read at the start of a session. The proxy delivers whatever cues have been
+   * downloaded, and a handful of lines is not a sample of a language — measured
+   * 2026-09-02, franc needs 650 characters of Russian before its answer stops
+   * walking between Bulgarian, Serbian and Russian, and the proxy's detector now
+   * refuses to answer below the figure measured for whichever language it is
+   * about to name. So at the start the honest label is Unknown, and the answer
+   * arrives later, as the film downloads
+   * (`research/franc-boundary-2026-09-02.md`).
+   *
+   * Only a label that came from a GUESS is moved. A language the container
+   * itself stated is a statement by the person who made the file and outranks
+   * anything read off the text; `#namedSubtitleTracks` is what remembers which
+   * is which.
+   *
+   * @param {number} trackIndex
+   * @param {{ code: string, name: string } | null | undefined} detected
+   * @returns {void}
+   */
+  #refineSubtitleLabel(trackIndex, detected) {
+    if (!detected?.code || this.#namedSubtitleTracks.has(trackIndex)) {
+      return;
+    }
+    const element = this.#embeddedTrackElements.get(trackIndex);
+    if (!element) {
+      return;
+    }
+    const track = (this.#planTracks?.subtitles ?? []).find((entry) => entry.index === trackIndex);
+    const label = buildSubtitleLabel({
+      code: detected.code,
+      name: detected.name || this.#languageName(detected.code) || "Unknown",
+      group: typeof track?.title === "string" && track.title.trim() ? track.title.trim() : null,
+      isForced: track?.isForced === true,
+      isHearingImpaired: track?.isHearingImpaired === true
+    });
+    if (element.label === label) {
+      return;
+    }
+    console.debug(
+      `[torrent-tv][subtitles] track ${trackIndex} reads as ${detected.code}; ` +
+      `"${element.label}" becomes "${label}"`
+    );
+    element.label = label;
+    element.srclang = detected.code;
+  }
+
+  /**
    * A track's new cues, pushed by the proxy the moment it read them off its
    * own download — the sole ongoing delivery path; nothing on this side asks
    * again. Applies to whichever track is named, `mode` included: a track the
    * viewer has not turned on yet still gets its cues, so turning it on later
    * shows them at once instead of waiting for a fetch.
    *
-   * @param {{ fileIndex: number, trackIndex: number, cues: object[], language: string }} event
+   * @param {{ fileIndex: number, trackIndex: number, cues: object[], language: string,
+   *   detectedLanguage?: { code: string, name: string } | null, cursor?: number }} event
    * @returns {void}
    */
   #onSubtitleCuesPush(event) {
@@ -4302,6 +4376,7 @@ export class Loading extends StateDerivedView {
     if (!this.#subtitleContext || this.#subtitleContext.fileIndex !== event.fileIndex) {
       return; // a push for a file that is no longer the one open
     }
+    this.#refineSubtitleLabel(event.trackIndex, event.detectedLanguage);
     // Before anything else: a batch whose cues all fell away as empty still
     // moves the proxy's count forward, and a cursor left behind would have this
     // page ask for those same seqs again after every reconnect.

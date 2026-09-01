@@ -84,7 +84,7 @@ test("language and author together, for the field case", () => {
       fileName: "[HorribleSubs] Drifters - 02 [1080p].mka",
       videoName: VIDEO_NAME
     }),
-    { code: "ru", name: "Russian", releaser: null }
+    { code: "ru", name: "Russian", releaser: null, isForced: false, isHearingImpaired: false, isDefault: false }
   );
   assert.deepEqual(
     sidecarNaming({
@@ -92,7 +92,14 @@ test("language and author together, for the field case", () => {
       fileName: "[HorribleSubs] Drifters - 02 [1080p].ass",
       videoName: VIDEO_NAME
     }),
-    { code: null, name: null, releaser: "Stan WarHammer & Nesitach" }
+    {
+      code: null,
+      name: null,
+      releaser: "Stan WarHammer & Nesitach",
+      isForced: false,
+      isHearingImpaired: false,
+      isDefault: false
+    }
   );
 });
 
