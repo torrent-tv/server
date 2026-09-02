@@ -258,6 +258,16 @@ export class Loading extends StateDerivedView {
     // starting again does work — the position is remembered.
     playerCannotContinue:
       "The video player stopped and can't continue. Press Retry to start it again from where you were.",
+    // Said instead of opening a session that will stall. The proxy answers what
+    // it can sustain for this file at every height, including copying the
+    // picture, which costs it no encoder at all; when nothing is left there is
+    // no quality that would work and starting anyway produces a slideshow —
+    // and takes the swarm and the processor from whoever is already watching.
+    // Retry is offered because the answer changes: it is measured against the
+    // machine as it is now, and a machine frees up.
+    proxyCannotKeepUp:
+      "This proxy can't keep up with this file right now — another viewer on it "
+      + "is using what it has. Press Retry in a moment, or pick a different file.",
     // A pick that did not happen has to say so. Switching regardless would empty
     // the buffer and stop the picture, which is worse than the quality the
     // viewer already has.
@@ -3111,6 +3121,15 @@ export class Loading extends StateDerivedView {
     // session exists, let alone an encoder. The proxy answered for both
     // branches because only this side knows which one it takes; a proxy too old
     // to answer leaves it null, and the browser keeps its own ladder.
+    // Refused before a session exists, because a session made here would stall.
+    // `cannotServe` is the proxy's own answer that it cannot sustain this file
+    // at ANY height — not even by copying the picture, which needs no encoder.
+    // Retryable, not fatal: the answer is measured against the machine as it is
+    // at this moment.
+    if (typeof prepared.cannotServe === "string" && prepared.cannotServe.length > 0) {
+      this.#debug("proxy cannot serve this file", { fileIndex, why: prepared.cannotServe });
+      throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.proxyCannotKeepUp);
+    }
     const planned = prepared.offeredHeights;
     if (planned) {
       this.#offeredHeights = shouldTranscodeVideo ? planned.transcode : planned.copy;
