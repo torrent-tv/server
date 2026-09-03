@@ -573,7 +573,7 @@ export class Player extends StateDerivedView {
       this.#root.classList.remove(Player.CLASSES.isAnimated);
     });
 
-    this.#sendTheWholeViewFullscreen();
+    this.#sendTheWholePageFullscreen();
     this.#closeButton.addEventListener("click", this.#closeHandler);
     this.#playlistToggle.addEventListener("click", this.#togglePlaylist);
     this.#controller.addEventListener("click", this.#onControllerClick);
@@ -700,14 +700,43 @@ export class Player extends StateDerivedView {
   };
 
   /**
-   * Send the whole player view fullscreen, not the media controller alone.
+   * Send the whole PAGE fullscreen — not the media controller, and not the
+   * player view either.
    *
-   * The playlist drawer is the controller's SIBLING inside `<main id="player">`
-   * — the two sit in one flex row that slides sideways to reveal the drawer. A
-   * browser paints only the fullscreen element's own subtree, so with the
-   * controller as that element the drawer was not on the screen at all: the
-   * button worked and `player--playlist` was applied, and it opened where
-   * nobody could see it. Reported 2026-08-31.
+   * Two earlier answers were wrong and both are recorded here, because each was
+   * arrived at by reasoning about the markup rather than by measuring the page.
+   *
+   * The controller alone was wrong for the reason it looks wrong: the playlist
+   * drawer is the controller's SIBLING inside `<main id="player">`, a browser
+   * paints only the fullscreen element's own subtree, so the drawer was not on
+   * the screen at all. Reported 2026-08-31.
+   *
+   * `#player` was then wrong for a reason that is not visible in the markup at
+   * all. That element is a flex row as wide as the screen PLUS the drawer
+   * (`calc(100dvw + …)`, player.css), and opening the drawer slides the row
+   * sideways; so the row's own width is the only thing keeping the drawer
+   * inside its box, and `#player { overflow: clip }` removes whatever falls
+   * outside. The Fullscreen Standard's user-agent style sheet gives the
+   * fullscreen element `width: 100% !important`, with `min-width: 0 !important`
+   * and `max-width: none !important` beside it. Measured live on a 1920-wide
+   * screen, 2026-09-03: the row came out 1920 instead of 2554, the controller
+   * refused to give anything back (`flex-shrink: 0`), the drawer was squeezed
+   * to its min-content 340 and placed at x = 1286 — exactly the row's right
+   * edge, wholly outside it — and the clip took it away. Lifting the clip for
+   * one frame made the episode list appear, which is what named the cause.
+   * The slide does not help: `translate` moves the box and its clip rectangle
+   * together, so the picture leaves and nothing arrives.
+   *
+   * Widening it back is not available. Important user-agent declarations
+   * outrank important author ones, and the same session measured `width` and
+   * `min-width` with `!important` leaving the computed width at 1920.
+   *
+   * So the rule has to land where a width means nothing, and on `<body>` it
+   * does: `#player` stays an ordinary child at its full `calc(100dvw + …)`,
+   * the drawer stays inside its box, and the slide behaves exactly as it does
+   * outside fullscreen. media-chrome's own fullscreen state stays correct — it
+   * compares `document.fullscreenElement` against this element, and in
+   * fullscreen both are `<body>`.
    *
    * Set as a PROPERTY rather than by the `fullscreenelement` attribute that
    * media-chrome documents. In 4.19.2 that attribute is absent from
@@ -718,11 +747,11 @@ export class Player extends StateDerivedView {
    *
    * @returns {void}
    */
-  #sendTheWholeViewFullscreen() {
+  #sendTheWholePageFullscreen() {
     // The element must be upgraded before it has the setter; the module may not
     // have been evaluated yet when this component initialises.
     void customElements.whenDefined("media-controller").then(() => {
-      this.#controller.fullscreenElement = this.#root;
+      this.#controller.fullscreenElement = document.body;
     });
   }
 
