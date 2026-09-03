@@ -618,6 +618,14 @@ export class Loading extends StateDerivedView {
    */
   #audioPickSeq = 0;
   /**
+   * Which pick the picture is being held for, or null when it is not held. A
+   * hold outlives the pick that took it — a second choice made during one
+   * inherits it rather than ending it — so the two numbers are kept apart.
+   *
+   * @type {number | null}
+   */
+  #audioHoldPick = null;
+  /**
    * The height automatic quality is producing right now, as reported by the
    * proxy. Zero when unknown or when the video is copied — then nothing is
    * being chosen and the source's own height is what plays.
@@ -1337,38 +1345,51 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * End the wait a soundtrack change puts the picture through: take the spinner
-   * off, put the viewer back exactly where they were, and start the picture
-   * again only if it was running when they chose.
+   * Hold the picture while a soundtrack the viewer chose is made ready.
    *
-   * Called on EVERY way out of that wait — switched, refused, abandoned for
-   * another choice, or about to rebuild the session — because a spinner left
-   * over a paused picture is indistinguishable from the player having died.
+   * The whole of it is one signal. Everything a hold looks like — the picture
+   * stopped, the waiting overlay on screen, the play control refusing input —
+   * is an output of the state and belongs to the views that derive it; this
+   * says only that the viewer asked for a change, which is the fact the machine
+   * needs. The pause is issued by the player as one of OURS, so the viewer's
+   * own last decision survives the wait and is what decides where it ends.
    *
    * The stall counter is deliberately untouched. It measures interruptions the
    * supply caused, which is what the cushion is judged by; a wait the viewer
    * asked for by changing language is not one of those, and counting it would
    * corrupt the only measurement that says whether playback is smooth.
    *
-   * @param {unknown} video
-   * @param {number | null} resumeAt - Where to return to, or null to leave the
-   *   position alone (the session is being rebuilt and will choose its own).
-   * @param {boolean} wasPlaying
+   * @param {number} pick - Which pick owns the hold, so a later one inherits it
+   *   rather than the earlier one releasing what it no longer owns.
    * @returns {void}
    */
-  #finishAudioWait(video, resumeAt, wasPlaying) {
-    this.#dispatchBuffering(false);
-    if (!(video instanceof HTMLVideoElement)) {
+  #holdForAudio(pick) {
+    this.#audioHoldPick = pick;
+    signalApp(APP_EVENT.SWITCH_REQUESTED);
+    this.setStatus(Loading.MESSAGES.audioPreparing);
+  }
+
+  /**
+   * Let the picture go again, however the change ended — applied, refused, or
+   * abandoned because the viewer picked something else meanwhile.
+   *
+   * Two guards, and each answers a case that happens. A pick that is no longer
+   * the latest releases nothing: the hold has passed to the pick that came
+   * after it, and ending it here would start the picture in the middle of a
+   * wait somebody is still in. And a hold that was never taken — a pick refused
+   * before it began, or the viewer choosing the track already playing — is
+   * released all the same when this pick is the latest, because that choice is
+   * exactly how a viewer changes their mind back.
+   *
+   * @param {number} pick
+   * @returns {void}
+   */
+  #releaseAudioHold(pick) {
+    if (this.#audioPickSeq !== pick || this.#audioHoldPick === null) {
       return;
     }
-    if (resumeAt !== null && Number.isFinite(resumeAt) && Math.abs(video.currentTime - resumeAt) > 0.05) {
-      video.currentTime = resumeAt;
-    }
-    if (wasPlaying) {
-      // A rejected `play()` is not a failure worth surfacing: the viewer can
-      // press play, and the alternative is an error over a working picture.
-      void video.play().catch(() => {});
-    }
+    this.#audioHoldPick = null;
+    signalApp(APP_EVENT.SWITCH_FINISHED);
   }
 
   /**
@@ -4917,6 +4938,13 @@ export class Loading extends StateDerivedView {
     // Whether the track was made ready before the switch. A track that is not
     // ready is not switched to.
     let ready = true;
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const trackIndex = Number(detail?.trackIndex);
+    // Read before anything is claimed. An event that names no track is not a
+    // pick, and treating it as one would cancel a wait the viewer is in.
+    if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+      return;
+    }
     // The viewer's LAST word wins. Preparing a track takes seconds, so two
     // quick picks would otherwise be applied in the order the proxy happened to
     // finish them — and the earlier one, landing last, would move the sound
@@ -4925,141 +4953,152 @@ export class Loading extends StateDerivedView {
     // when it is asked for the new one, and this side stops waiting for it.
     const pick = (this.#audioPickSeq ?? 0) + 1;
     this.#audioPickSeq = pick;
-    const detail = event instanceof CustomEvent ? event.detail : null;
-    const trackIndex = Number(detail?.trackIndex);
-    if (!Number.isInteger(trackIndex) || trackIndex < 0) {
-      return;
-    }
-    if (trackIndex === this.#selectedAudioTrackIndex) {
-      return;
-    }
-    if (this.#isProcessing || this.#activeFileIndex < 0 || !this.#session.current) {
-      return;
-    }
-    // Published as its own rendition, the track is the player's to switch: it
-    // fetches the other one and swaps it in without touching the picture. The
-    // rebuild below is a cold start with the screen empty — measured in tens of
-    // seconds on a weak host — and it is what every stream without renditions
-    // still gets.
-    /** Where the viewer is, so the wait below returns them to exactly here. */
-    let resumeAt = null;
-    /** Whether the picture was running, so it is only restarted if it was. */
-    let wasPlaying = false;
-    if (this.#hlsPlayer.audioTracks().length > 1) {
-      // The picture STOPS for this wait, and that is the point. Letting it run
-      // on means the viewer keeps watching in a language they do not
-      // understand, and then has to seek back over the part they could not
-      // follow — asked for 2026-08-31, in those words. A wait they can see the
-      // reason for is a smaller cost than a stretch of film they have to watch
-      // twice.
-      //
-      // It is also why the track is made ready BEFORE the player is told to
-      // move: changing track discards the audio the player holds, and it cannot
-      // show a frame until the new track covers the playhead (measured
-      // 2026-08-15, a track switched to before it was ready cost 48 s of
-      // spinner).
-      const video = this.#videoElement instanceof HTMLVideoElement ? this.#videoElement : null;
-      const playhead = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
-      resumeAt = playhead;
-      wasPlaying = video ? !video.paused : false;
-      video?.pause();
-      this.#dispatchBuffering(true);
-      this.setStatus(Loading.MESSAGES.audioPreparing);
-      const readyAt = Date.now();
-      let answer = "not-ready";
-      // Asked again rather than given up on. The proxy builds the track's
-      // session whether or not it finished in time to answer: field 2026-08-31,
-      // a first switch was refused after 20.3 s and the session it had started
-      // was ready 8 s later — the second switch then took 107 ms. One refusal
-      // was treated as final, so the viewer was told the track was not ready
-      // when it was about to be.
-      while (Date.now() - readyAt < Loading.AUDIO_TRACK_WAIT_MS) {
-        answer = await this.#session.prepareAudioTrack(trackIndex, playhead);
-        if (this.#audioPickSeq !== pick) {
-          this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
-          this.#finishAudioWait(video, resumeAt, wasPlaying);
-          return;
+    // Every way out of this handler releases the hold, including the ones that
+    // return before it was ever taken and the ones that throw. A hold nothing
+    // releases is a picture the viewer cannot restart, so it is released in one
+    // place rather than at each exit — `#releaseAudioHold` decides whether this
+    // pick is still the one that owns it.
+    try {
+      // Choosing the track that is already playing. Ordinarily there is nothing
+      // to do — but during a hold it is the viewer changing their mind back,
+      // and it is what takes the picture out of the hold the earlier pick put
+      // it in.
+      if (trackIndex === this.#selectedAudioTrackIndex) {
+        return;
+      }
+      if (this.#isProcessing || this.#activeFileIndex < 0 || !this.#session.current) {
+        return;
+      }
+      // Published as its own rendition, the track is the player's to switch: it
+      // fetches the other one and swaps it in without touching the picture. The
+      // rebuild below is a cold start with the screen empty — measured in tens
+      // of seconds on a weak host — and it is what every stream without
+      // renditions still gets.
+      if (this.#hlsPlayer.audioTracks().length > 1) {
+        // The picture is HELD for this wait, and that is the point. Letting it
+        // run on means the viewer keeps watching in a language they do not
+        // understand, and then has to seek back over the part they could not
+        // follow — asked for 2026-08-31, in those words. A wait they can see the
+        // reason for is a smaller cost than a stretch of film they have to watch
+        // twice.
+        //
+        // The hold is a STATE and not a pause of the element (server 0.24.2).
+        // Pausing it here was read as the viewer stopping playback, so the
+        // machine went to PAUSED: the overlay came off, the play button worked,
+        // and the viewer resumed into the language they had just replaced — then
+        // the track landed and the sound changed under them without warning.
+        //
+        // It is also why the track is made ready BEFORE the player is told to
+        // move: changing track discards the audio the player holds, and it
+        // cannot show a frame until the new track covers the playhead (measured
+        // 2026-08-15, a track switched to before it was ready cost 48 s of
+        // spinner).
+        const video = this.#videoElement instanceof HTMLVideoElement ? this.#videoElement : null;
+        const playhead = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+        this.#holdForAudio(pick);
+        const readyAt = Date.now();
+        let answer = "not-ready";
+        // Asked again rather than given up on. The proxy builds the track's
+        // session whether or not it finished in time to answer: field
+        // 2026-08-31, a first switch was refused after 20.3 s and the session it
+        // had started was ready 8 s later — the second switch then took 107 ms.
+        // One refusal was treated as final, so the viewer was told the track was
+        // not ready when it was about to be.
+        while (Date.now() - readyAt < Loading.AUDIO_TRACK_WAIT_MS) {
+          answer = await this.#session.prepareAudioTrack(trackIndex, playhead);
+          if (this.#audioPickSeq !== pick) {
+            this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
+            return;
+          }
+          if (answer !== "not-ready") {
+            break;
+          }
+          this.#logEvt(
+            `audio track ${trackIndex} not ready after ${((Date.now() - readyAt) / 1000).toFixed(1)}s — ` +
+              "the proxy is preparing it, asking again"
+          );
         }
-        if (answer !== "not-ready") {
-          break;
-        }
+        // Only "not-ready" refuses, and now only after the whole wait.
+        // "unsupported" means this proxy cannot prepare tracks at all — older
+        // than 2.14.0, or a stream that does not publish them separately — and
+        // there the switch has always worked by rebuilding the session, so
+        // forbidding it would take away something that works.
+        ready = answer !== "not-ready";
         this.#logEvt(
-          `audio track ${trackIndex} not ready after ${((Date.now() - readyAt) / 1000).toFixed(1)}s — ` +
-            "the proxy is preparing it, asking again"
+          `audio track ${trackIndex} ${answer} after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
         );
       }
-      // Only "not-ready" refuses, and now only after the whole wait.
-      // "unsupported" means this proxy cannot prepare tracks at all — older
-      // than 2.14.0, or a stream that does not publish them separately — and
-      // there the switch has always worked by rebuilding the session, so
-      // forbidding it would take away something that works.
-      ready = answer !== "not-ready";
-      this.#logEvt(
-        `audio track ${trackIndex} ${answer} after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
+      // Still not ready after the whole wait. The player discards the audio it
+      // holds the moment it is told to change, so switching into a track nobody
+      // has produced leaves the picture with nothing to play. Keep what is
+      // playing, put the menu back, and say so.
+      if (ready === false) {
+        // Written where the waiting overlay reads its step from. NOT seen by the
+        // viewer today, and the comment that used to claim otherwise was wrong
+        // in this version and in the one before it: releasing the hold takes the
+        // overlay off screen in the same turn, and the overlay clears its text
+        // when a wait ends. A menu that snaps back with no word for it reads as
+        // the player ignoring the viewer, so the message needs a place that
+        // outlives the wait — recorded as the open half of roadmap item 72.
+        this.setStatus(Loading.MESSAGES.audioNotReady);
+        this.#logEvt(`audio track ${trackIndex} was not ready; staying on ${this.#selectedAudioTrackIndex}`);
+        this.#publishAudioTracks();
+        return;
+      }
+      if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
+        // What the PLAYER settled on, not what was asked for. Assigning a track
+        // is a request: hls.js applies it asynchronously and can decline it or
+        // choose another itself (a level switch changes group), and nothing
+        // rebuilds the session here — so a menu written from the request would
+        // keep asserting a track that is not playing, with nothing to correct
+        // it.
+        const applied = this.#hlsPlayer.currentAudioTrack();
+        this.#selectedAudioTrackIndex = applied >= 0 ? applied : trackIndex;
+        this.#logEvt(
+          `audio track ${trackIndex} switched in place, without rebuilding the session` +
+          (applied >= 0 && applied !== trackIndex ? ` (the player settled on ${applied})` : "")
+        );
+        // The picture starts again from exactly where it was held, in the new
+        // language, and it is the player that starts it — releasing the hold
+        // leaves the machine in the state the viewer's own last decision names.
+        // Nothing of the film is skipped and nothing has to be watched twice.
+        this.#publishAudioTracks();
+        return;
+      }
+      // The session is about to be rebuilt instead, which starts at a position
+      // of its own and shows the waiting view. The hold belongs to a picture
+      // that is going away, so it is released before the rebuild is asked for:
+      // afterwards the machine is in OPENING, where releasing it means nothing.
+      this.#releaseAudioHold(pick);
+      const fileIndex = this.#activeFileIndex;
+      const position =
+        this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+          ? this.#videoElement.currentTime
+          : 0;
+      this.#selectedAudioTrackIndex = trackIndex;
+      document.dispatchEvent(
+        new CustomEvent(LOADING_EVENTS.SHOW, {
+          detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
+        })
       );
+      const epoch = this.#beginPlaybackAttempt();
+      void this.#switchToVideoFile(fileIndex)
+        .then(() => {
+          if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
+            this.#videoElement.currentTime = position;
+          }
+        })
+        .catch((error) => {
+          if (this.#isAbortError(error)) {
+            return;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          console.error("[torrent-tv] audio switch failed:", message, error);
+          this.#failPlayback(epoch, { description: message });
+        });
+    } finally {
+      this.#releaseAudioHold(pick);
     }
-    // Still not ready after the whole wait. The player discards the audio it
-    // holds the moment it is told to change, so switching into a track nobody
-    // has produced leaves the picture with nothing to play. Keep what is
-    // playing, put the menu back, and say so.
-    if (ready === false) {
-      // Said on screen, not only in the log. A menu that snaps back with no
-      // word for it reads as the player ignoring the viewer — the quality path
-      // has said this since 0.9.5 and the audio path did not.
-      this.#finishAudioWait(this.#videoElement, resumeAt, wasPlaying);
-      this.setStatus(Loading.MESSAGES.audioNotReady);
-      this.#logEvt(`audio track ${trackIndex} was not ready; staying on ${this.#selectedAudioTrackIndex}`);
-      this.#publishAudioTracks();
-      return;
-    }
-    if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
-      // What the PLAYER settled on, not what was asked for. Assigning a track
-      // is a request: hls.js applies it asynchronously and can decline it or
-      // choose another itself (a level switch changes group), and nothing
-      // rebuilds the session here — so a menu written from the request would
-      // keep asserting a track that is not playing, with nothing to correct it.
-      const applied = this.#hlsPlayer.currentAudioTrack();
-      this.#selectedAudioTrackIndex = applied >= 0 ? applied : trackIndex;
-      this.#logEvt(
-        `audio track ${trackIndex} switched in place, without rebuilding the session` +
-        (applied >= 0 && applied !== trackIndex ? ` (the player settled on ${applied})` : "")
-      );
-      // Back to exactly where the viewer was, with the new language. Nothing of
-      // the film is skipped and nothing has to be watched twice.
-      this.#finishAudioWait(this.#videoElement, resumeAt, wasPlaying);
-      this.#publishAudioTracks();
-      return;
-    }
-    // The session is about to be rebuilt instead, which starts at a position of
-    // its own and shows the loading view. This wait's spinner belongs to a
-    // picture that is going away, so it comes off here.
-    this.#finishAudioWait(this.#videoElement, null, false);
-    const fileIndex = this.#activeFileIndex;
-    const position =
-      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
-        ? this.#videoElement.currentTime
-        : 0;
-    this.#selectedAudioTrackIndex = trackIndex;
-    document.dispatchEvent(
-      new CustomEvent(LOADING_EVENTS.SHOW, {
-        detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
-      })
-    );
-    const epoch = this.#beginPlaybackAttempt();
-    void this.#switchToVideoFile(fileIndex)
-      .then(() => {
-        if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
-          this.#videoElement.currentTime = position;
-        }
-      })
-      .catch((error) => {
-        if (this.#isAbortError(error)) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("[torrent-tv] audio switch failed:", message, error);
-        this.#failPlayback(epoch, { description: message });
-      });
   };
 
   /**

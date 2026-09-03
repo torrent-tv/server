@@ -1,5 +1,12 @@
 import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
-import { APP_VIEW, MEDIA_INTENT, isWaiting, mediaIntentForState, viewForState } from "../../domain/app-state.js";
+import {
+  APP_VIEW,
+  MEDIA_INTENT,
+  acceptsPlaybackInput,
+  isWaiting,
+  mediaIntentForState,
+  viewForState
+} from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
@@ -18,6 +25,7 @@ export class Player extends StateDerivedView {
     root: "#player",
     controller: "#player__controller",
     video: "#player__video",
+    playButton: "#player__play",
     closeButton: "#player__close",
     playlistToggle: "#player__playlist-toggle",
     settingsButton: "#player__settings-button",
@@ -43,6 +51,7 @@ export class Player extends StateDerivedView {
   #root;
   #controller;
   #video;
+  #playButton;
   #playlistToggle;
   #closeButton;
   #settingsButton;
@@ -96,6 +105,15 @@ export class Player extends StateDerivedView {
   #qualityAvailable = false;
 
   /**
+   * The state currently applied. Held because a media element's own events
+   * arrive between transitions and have to be answered against the state that
+   * is in force at that moment — see #onPlayAttempt.
+   *
+   * @type {string}
+   */
+  #state = "";
+
+  /**
    * The player derives itself from the application's state and from nothing
    * else. It is not told to appear: under a Moore machine an output is a
    * function of the state, so being on screen is read from the state rather
@@ -119,6 +137,7 @@ export class Player extends StateDerivedView {
       this.#video.removeAttribute("src");
       this.#video.load();
     }
+    this.#state = state;
     super.applyAppState(state, belongsOnScreen);
     if (belongsOnScreen) {
       this.#logEvt(`view=player shown state=${state}`);
@@ -128,8 +147,49 @@ export class Player extends StateDerivedView {
     // PLAYER:SET_BUFFERING.
     this.#buffering.hidden = !(belongsOnScreen && isWaiting(state));
     this.#measureWhileWaiting(belongsOnScreen && isWaiting(state));
+    this.#applyPlaybackInput(state);
     this.#applyMediaIntent(state);
   }
+
+  /**
+   * Whether the play control accepts input, applied to every way there is of
+   * starting the picture: the button, the keyboard, and a press on the frame.
+   * All three exist, and blocking one of them leaves the other two — the
+   * controller mounts a gesture receiver of its own and binds space by default.
+   *
+   * The state where they are refused is the hold a change the viewer asked for
+   * puts the picture in. Playing on through it means watching in the language
+   * they have just replaced and then going back over it, which is the report
+   * this answers.
+   *
+   * @param {string} state
+   * @returns {void}
+   */
+  #applyPlaybackInput(state) {
+    const accepts = acceptsPlaybackInput(state);
+    this.#playButton.toggleAttribute("disabled", !accepts);
+    this.#controller.toggleAttribute("nohotkeys", !accepts);
+    this.#controller.toggleAttribute("gesturesdisabled", !accepts);
+  }
+
+  /**
+   * The picture started while the state forbids it. Refusing the controls is
+   * what a viewer meets; this is the guarantee behind it, for every other way
+   * an element can be started — a script, a remote control, a browser's own
+   * media keys, an `autoplay` after a source change.
+   *
+   * Marked as our pause, so the machine does not read it as the viewer stopping
+   * playback: that is precisely the confusion this whole change removes.
+   *
+   * @returns {void}
+   */
+  #onPlayAttempt = () => {
+    if (acceptsPlaybackInput(this.#state)) {
+      return;
+    }
+    this.#logEvt(`player.pause reason=held state=${this.#state}`);
+    pauseWithoutIntent(this.#video);
+  };
 
   /**
    * Start or stop the element according to what the state implies — never
@@ -468,7 +528,9 @@ export class Player extends StateDerivedView {
       // same event triggers is taken — otherwise the first sample of the new
       // position is compared against the old one across the flush.
       this.#video.addEventListener("seeking", this.#onSeeking);
+      this.#video.addEventListener("play", this.#onPlayAttempt);
     }
+    this.#playButton = document.querySelector(Player.SELECTOR.playButton);
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
     this.#settingsButton = document.querySelector(Player.SELECTOR.settingsButton);
@@ -482,7 +544,7 @@ export class Player extends StateDerivedView {
     this.#shareMenu = document.querySelector(Player.SELECTOR.shareMenu);
 
     if (
-      !this.#root || !this.#controller || !this.#video || !this.#playlistToggle ||
+      !this.#root || !this.#controller || !this.#video || !this.#playButton || !this.#playlistToggle ||
       !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
       !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering || !this.#bufferingPeers ||
       !this.#share || !this.#shareMenu

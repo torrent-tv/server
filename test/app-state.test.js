@@ -22,6 +22,7 @@ import {
   ABSENT_EDGE_INVARIANTS,
   INITIAL_STATE,
   MEDIA_INTENT,
+  acceptsPlaybackInput,
   declaredEdges,
   isWaiting,
   isWithin,
@@ -154,7 +155,8 @@ test("an edge on a superstate reaches every state inside it", () => {
       APP_STATE.CHOOSING_FILE,
       APP_STATE.OPENING,
       APP_STATE.PAUSED,
-      APP_STATE.STALLED
+      APP_STATE.STALLED,
+      APP_STATE.SWITCHING
     ].sort()
   );
   for (const state of open) {
@@ -183,7 +185,7 @@ test("a state's own edge wins over the one it inherits", () => {
   }
 });
 
-test("the one edge that leads back to its own state is deliberate", () => {
+test("the edges that lead back to their own state are deliberate", () => {
   // An earlier version of this file asserted the opposite — that no edge is a
   // self-loop, so that no event could re-run a state's entry work. That rule was
   // dropped knowingly, and this test records why rather than letting the two
@@ -197,6 +199,11 @@ test("the one edge that leads back to its own state is deliberate", () => {
   // the state did not change. The build starting again is the transition's
   // action, driven by the event — outputs, which are what Moore constrains, do
   // not move.
+  //
+  // The second is the same argument for a second pick: a viewer who changes
+  // their mind while a soundtrack is being prepared is still in a hold, so the
+  // state does not change and no output moves, while the pipeline abandons the
+  // earlier pick and waits for the new one.
   const selfEdges = [];
   for (const state of ALL_STATES) {
     for (const event of ALL_EVENTS) {
@@ -208,8 +215,11 @@ test("the one edge that leads back to its own state is deliberate", () => {
     }
   }
   assert.deepEqual(
-    [...new Set(selfEdges)],
-    [`${APP_STATE.OPENING} + ${APP_EVENT.REBUILD_REQUIRED}`],
+    [...new Set(selfEdges)].sort(),
+    [
+      `${APP_STATE.OPENING} + ${APP_EVENT.REBUILD_REQUIRED}`,
+      `${APP_STATE.SWITCHING} + ${APP_EVENT.SWITCH_REQUESTED}`
+    ].sort(),
     "a new edge that leads back to its own state must be argued for, not acquired"
   );
 });
@@ -263,23 +273,97 @@ test("waiting for a cold open and waiting for a seek look identical to the viewe
 // -------------------------------------------------------------------- outputs
 
 test("every output is a function of the state alone", () => {
-  /** state -> [view, waiting, what to tell the element] */
+  /** state -> [view, waiting, what to tell the element, play control live] */
   const expected = {
-    [APP_STATE.IDLE]: [APP_VIEW.PICKER, false, MEDIA_INTENT.PAUSE],
-    [APP_STATE.CHOOSING_FILE]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PAUSE],
-    [APP_STATE.OPENING]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.LEAVE],
-    [APP_STATE.ADVANCING]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PLAY],
-    [APP_STATE.STALLED]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.LEAVE],
-    [APP_STATE.PAUSED]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PAUSE],
-    [APP_STATE.ERROR]: [APP_VIEW.ERROR, false, MEDIA_INTENT.PAUSE]
+    [APP_STATE.IDLE]: [APP_VIEW.PICKER, false, MEDIA_INTENT.PAUSE, true],
+    [APP_STATE.CHOOSING_FILE]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PAUSE, true],
+    [APP_STATE.OPENING]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.LEAVE, true],
+    [APP_STATE.ADVANCING]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PLAY, true],
+    [APP_STATE.STALLED]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.LEAVE, true],
+    [APP_STATE.SWITCHING]: [APP_VIEW.PLAYER, true, MEDIA_INTENT.PAUSE, false],
+    [APP_STATE.PAUSED]: [APP_VIEW.PLAYER, false, MEDIA_INTENT.PAUSE, true],
+    [APP_STATE.ERROR]: [APP_VIEW.ERROR, false, MEDIA_INTENT.PAUSE, true]
   };
   for (const state of ALL_STATES) {
     assert.deepEqual(
-      [viewForState(state), isWaiting(state), mediaIntentForState(state)],
+      [viewForState(state), isWaiting(state), mediaIntentForState(state), acceptsPlaybackInput(state)],
       expected[state],
       `outputs for ${state}`
     );
   }
+});
+
+// ------------------------- the hold a change the viewer asked for puts it in
+
+test("a change the viewer asked for is waited out with the picture held", () => {
+  // The overlay is on screen, as for any other wait, and the play control is
+  // the one thing that separates this wait from the others: playing on through
+  // it means watching in the language just replaced and going back over it.
+  assert.equal(isWaiting(APP_STATE.SWITCHING), true);
+  assert.equal(mediaIntentForState(APP_STATE.SWITCHING), MEDIA_INTENT.PAUSE);
+  assert.equal(acceptsPlaybackInput(APP_STATE.SWITCHING), false);
+});
+
+test("the play control is refused in exactly one state", () => {
+  // Stated as a property, because the value of this output is that it is false
+  // in one place and true everywhere else. A second state refusing input would
+  // otherwise arrive unnoticed and take the play button away from a viewer who
+  // is merely waiting for data.
+  const refused = ALL_STATES.filter((state) => !acceptsPlaybackInput(state));
+  assert.deepEqual(refused, [APP_STATE.SWITCHING]);
+});
+
+test("a pick can be made from a moving picture, a stalled one and a stopped one", () => {
+  for (const from of [APP_STATE.ADVANCING, APP_STATE.STALLED, APP_STATE.PAUSED]) {
+    assert.equal(
+      nextState(from, APP_EVENT.SWITCH_REQUESTED),
+      APP_STATE.SWITCHING,
+      `${from} must accept a pick — the menu is reachable from all three`
+    );
+  }
+});
+
+test("a pick made while the stream is still being built changes nothing", () => {
+  // OPENING has no stream to change, and the build owns the picture there. The
+  // edge sits on LIVE for that reason, so this pair is ignored rather than
+  // holding a picture that is not running.
+  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.SWITCH_REQUESTED), null);
+});
+
+test("the hold ends where the viewer's own last decision says", () => {
+  // The pause that holds the picture is one of ours, so `viewerWantsPlayback`
+  // still carries what the viewer wanted before the pick — and it is what
+  // decides whether the picture starts again by itself.
+  assert.equal(
+    nextState(APP_STATE.SWITCHING, APP_EVENT.SWITCH_FINISHED, { viewerWantsPlayback: true }),
+    APP_STATE.ADVANCING
+  );
+  assert.equal(
+    nextState(APP_STATE.SWITCHING, APP_EVENT.SWITCH_FINISHED, { viewerWantsPlayback: false }),
+    APP_STATE.PAUSED
+  );
+  assert.equal(
+    nextState(APP_STATE.SWITCHING, APP_EVENT.SWITCH_FINISHED),
+    APP_STATE.ADVANCING,
+    "an unstated intent means the ordinary case: the viewer wants the picture"
+  );
+});
+
+test("nothing the element says lifts the hold", () => {
+  // The defect this whole state was written for: the element's own pause was
+  // read as the viewer stopping playback, the machine left the wait for PAUSED,
+  // and the viewer resumed into the soundtrack they had just replaced.
+  for (const event of [APP_EVENT.RESUMED, APP_EVENT.PAUSED_BY_VIEWER, APP_EVENT.FRAME_BLOCKED, APP_EVENT.FRAME_AVAILABLE]) {
+    assert.equal(nextState(APP_STATE.SWITCHING, event), null, `${event} must not move the hold`);
+  }
+});
+
+test("a hold does not survive the stream it belongs to", () => {
+  // A rebuild, a failure and the viewer closing the source all reach it through
+  // OPEN, so a hold cannot outlive the thing being held.
+  assert.equal(nextState(APP_STATE.SWITCHING, APP_EVENT.REBUILD_REQUIRED), APP_STATE.OPENING);
+  assert.equal(nextState(APP_STATE.SWITCHING, APP_EVENT.FATAL_FAILURE), APP_STATE.ERROR);
+  assert.equal(nextState(APP_STATE.SWITCHING, APP_EVENT.CLOSED), APP_STATE.IDLE);
 });
 
 test("a pause is not a wait", () => {

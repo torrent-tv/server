@@ -62,6 +62,20 @@ export const APP_STATE = Object.freeze({
   ADVANCING: "ADVANCING",
   /** A frame is wanted right now and is not available. */
   STALLED: "STALLED",
+  /**
+   * The viewer asked for a change to the stream and the picture is held until
+   * that change is ready. Today the one change that raises it is a soundtrack
+   * published as its own rendition: the player discards the audio it holds the
+   * moment it is told to move, so a switch made before the track exists leaves
+   * the picture with nothing to play.
+   *
+   * It is a state and not a variable because it changes both outputs a state is
+   * allowed to change: the waiting overlay is on screen, and the play control
+   * refuses input. Letting the picture run through the wait means the viewer
+   * watches on in a language they did not choose and then has to go back over
+   * it — which is the report this state was written for, 2026-09-03.
+   */
+  SWITCHING: "SWITCHING",
   /** The viewer stopped playback; no frame is wanted. */
   PAUSED: "PAUSED",
   /** A failure the pipeline declared unrecoverable. */
@@ -102,7 +116,7 @@ export const MEDIA_INTENT = Object.freeze({
  * @readonly
  */
 export const APP_SUPERSTATE = Object.freeze({
-  /** A stream exists: ADVANCING, STALLED, PAUSED. */
+  /** A stream exists: ADVANCING, STALLED, SWITCHING, PAUSED. */
   LIVE: "LIVE",
   /** A source is open: OPENING plus everything in LIVE. */
   OPEN: "OPEN"
@@ -140,6 +154,7 @@ const PARENT = Object.freeze({
   [APP_STATE.OPENING]: APP_SUPERSTATE.OPEN,
   [APP_STATE.ADVANCING]: APP_SUPERSTATE.LIVE,
   [APP_STATE.STALLED]: APP_SUPERSTATE.LIVE,
+  [APP_STATE.SWITCHING]: APP_SUPERSTATE.LIVE,
   [APP_STATE.PAUSED]: APP_SUPERSTATE.LIVE,
   [APP_SUPERSTATE.LIVE]: APP_SUPERSTATE.OPEN,
   [APP_SUPERSTATE.OPEN]: null
@@ -166,6 +181,20 @@ export const APP_EVENT = Object.freeze({
   PAUSED_BY_VIEWER: "PAUSED_BY_VIEWER",
   /** The viewer started playback again. */
   RESUMED: "RESUMED",
+  /**
+   * The viewer asked for a change the stream must be made ready for before the
+   * picture may move — today, a soundtrack published as its own rendition.
+   * Raised again for a second pick made while the first is still being
+   * prepared; that is the self-transition on LIVE.
+   */
+  SWITCH_REQUESTED: "SWITCH_REQUESTED",
+  /**
+   * The change is over, however it ended: applied, refused, or abandoned
+   * because the viewer picked something else. One event for all three, because
+   * they end the hold in exactly the same way and the state has no business
+   * knowing which of them happened.
+   */
+  SWITCH_FINISHED: "SWITCH_FINISHED",
   /** The stream must be built again: quality or audio switch, reconnect, Retry. */
   REBUILD_REQUIRED: "REBUILD_REQUIRED",
   /** A failure the pipeline says cannot be recovered from. */
@@ -241,6 +270,16 @@ const TRANSITIONS = deepFreeze({
     [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.PAUSED
   },
 
+  [APP_STATE.SWITCHING]: {
+    // Where the hold ends is decided by what the viewer wanted BEFORE it began.
+    // The pause that holds the picture is one of ours and is marked as such, so
+    // `viewerWantsPlayback` still carries their last real decision — which is
+    // the whole reason the hold is a state here rather than a pause of the
+    // element: read from `!video.paused`, this answer would always be "no".
+    [APP_EVENT.SWITCH_FINISHED]: (context) =>
+      context.viewerWantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING
+  },
+
   [APP_STATE.PAUSED]: {
     [APP_EVENT.RESUMED]: APP_STATE.ADVANCING,
     // Scrubbing while paused DOES want a frame — the target one — so it is a
@@ -249,6 +288,20 @@ const TRANSITIONS = deepFreeze({
     // shipped fix that drives the spinner from `video.seeking` instead of
     // `readyState` is correct rather than merely observed to work.
     [APP_EVENT.FRAME_BLOCKED]: APP_STATE.STALLED
+  },
+
+  // Declared once for everything in LIVE, SWITCHING included. A picture that is
+  // moving, one that is stalled and one the viewer stopped all answer a pick the
+  // same way — the picture is held and the overlay comes up — and a SECOND pick
+  // made during a hold is the self-transition that falls out of the same row:
+  // the state does not change, so no output moves, while the pipeline abandons
+  // the earlier pick and waits for the new one.
+  //
+  // It sits on LIVE and not on OPEN deliberately. A pick needs a stream to
+  // change, and OPENING has none: sent there it would hold a picture that is not
+  // yet running and then release it into a state the build had already left.
+  [APP_SUPERSTATE.LIVE]: {
+    [APP_EVENT.SWITCH_REQUESTED]: APP_STATE.SWITCHING
   },
 
   // Declared once for OPENING and everything in LIVE. `FATAL_FAILURE` and
@@ -315,6 +368,29 @@ export const ABSENT_EDGE_INVARIANTS = Object.freeze([
     event: APP_EVENT.SOURCE_OPENED,
     mustNotReach: APP_STATE.ADVANCING,
     because: "a file cannot start advancing without being opened"
+  },
+  {
+    from: APP_STATE.SWITCHING,
+    event: APP_EVENT.RESUMED,
+    mustNotReach: APP_STATE.ADVANCING,
+    because:
+      "nothing the element says lifts a hold the viewer asked for — only the change finishing does. " +
+      "A play that slips past the disabled control must not become the machine's decision, which is " +
+      "how the viewer used to end up watching on in the language they had just replaced"
+  },
+  {
+    from: APP_STATE.SWITCHING,
+    event: APP_EVENT.PAUSED_BY_VIEWER,
+    mustNotReach: APP_STATE.PAUSED,
+    because:
+      "the hold already stops the picture; leaving it for PAUSED would take the overlay off screen and " +
+      "hand the play control back while the track is still being made"
+  },
+  {
+    from: APP_STATE.SWITCHING,
+    event: APP_EVENT.FRAME_BLOCKED,
+    mustNotReach: APP_STATE.STALLED,
+    because: "a wait the viewer asked for is not starvation, and the two must not be counted as one"
   }
 ]);
 
@@ -400,7 +476,22 @@ export function viewForState(state) {
  * @returns {boolean}
  */
 export function isWaiting(state) {
-  return state === APP_STATE.OPENING || state === APP_STATE.STALLED;
+  return state === APP_STATE.OPENING || state === APP_STATE.STALLED || state === APP_STATE.SWITCHING;
+}
+
+/**
+ * Whether the play control accepts input. False while the picture is held for a
+ * change the viewer asked for, and true everywhere else.
+ *
+ * A separate output, and not something read off {@link mediaIntentForState}:
+ * PAUSED says "pause" too, and there the control must work. The two states
+ * differ in exactly this, which is what makes the hold a state at all.
+ *
+ * @param {string} state
+ * @returns {boolean}
+ */
+export function acceptsPlaybackInput(state) {
+  return state !== APP_STATE.SWITCHING;
 }
 
 /**
@@ -422,6 +513,13 @@ export function mediaIntentForState(state) {
   }
   if (state === APP_STATE.OPENING || state === APP_STATE.STALLED) {
     return MEDIA_INTENT.LEAVE;
+  }
+  if (state === APP_STATE.SWITCHING) {
+    // Stated here rather than left to fall through to the same answer below. The
+    // hold is the one wait that DOES command the element: holding the picture is
+    // what the state is for, and the pause is issued as ours so the viewer's own
+    // intent survives the wait and decides where it ends.
+    return MEDIA_INTENT.PAUSE;
   }
   // PAUSED, IDLE, ERROR. The last two keep the standing invariant that nothing
   // plays while the player is not on screen: a hidden <video> still emits audio.
