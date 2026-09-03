@@ -52,11 +52,15 @@
     </dialog>
 
     <main id="player">
-      <!-- Which element goes fullscreen is set from player.js, NOT by the
-           `fullscreenelement` attribute media-chrome documents: 4.19.2 does not
-           list it in `observedAttributes`, so the branch that would resolve it
-           is unreachable from markup — verified in the browser, the attribute
-           left `fullscreenElement` pointing at the controller. -->
+      <!-- `<body>` is what goes fullscreen, and it is set from player.js, NOT
+           by the `fullscreenelement` attribute media-chrome documents: 4.19.2
+           does not list it in `observedAttributes`, so the branch that would
+           resolve it is unreachable from markup — verified in the browser, the
+           attribute left `fullscreenElement` pointing at the controller.
+           Why the body and not this element: the fullscreen element is given
+           `width: 100% !important` by the browser, and this one's width is what
+           holds the playlist drawer inside its box. Measured, and written down
+           at `#sendTheWholePageFullscreen`. -->
       <media-controller id="player__controller" autohide="2">
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
