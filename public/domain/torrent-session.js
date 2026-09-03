@@ -118,7 +118,7 @@ export class TorrentSession {
     const { sessionId, transport } = current;
     const path =
       `/transcode/${encodeURIComponent(sessionId)}/v/${height}/warm` +
-      `?position=${positionSeconds.toFixed(3)}`;
+      `?position=${positionSeconds.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}`;
     try {
       const response = await transport.fetch(path);
       return response.status === 204;
@@ -153,7 +153,7 @@ export class TorrentSession {
     const { sessionId, transport } = current;
     const path =
       `/transcode/${encodeURIComponent(sessionId)}/a/${trackIndex}/warm` +
-      `?position=${positionSeconds.toFixed(3)}`;
+      `?position=${positionSeconds.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}`;
     try {
       const response = await transport.fetch(path);
       if (response.status === 204) {
@@ -311,7 +311,10 @@ export class TorrentSession {
       }
       for (const [sessionId, transport] of this.activeTranscodeSessions) {
         transport
-          .fetch(`/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`)
+          .fetch(
+            `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress` +
+            `?consumer=${encodeURIComponent(this.consumerId)}`
+          )
           .then(async (response) => {
             // The answer was being thrown away. It is the only reading of the
             // proxy's state during steady playback — everything else polls only
@@ -933,8 +936,13 @@ export class TorrentSession {
     const lookaheadSeconds = Number(payload?.lookaheadSeconds) || 0;
     const mediaPlaylistUrl = transport.url(playlistPath);
     const playlistUrl = masterPath ? transport.url(masterPath) : mediaPlaylistUrl;
+    // Whose progress. One picture serves everyone watching it, and after a
+    // quality change the stream on screen is a session of its own — a different
+    // one for each viewer who changed — so a poll that does not say who is
+    // asking can be answered from somebody else's step.
     const progressPath = sessionId
-      ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress`
+      ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress` +
+        `?consumer=${encodeURIComponent(this.consumerId)}`
       : "";
     const progressUrl = progressPath ? transport.url(progressPath) : "";
 
