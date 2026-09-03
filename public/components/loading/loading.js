@@ -268,6 +268,11 @@ export class Loading extends StateDerivedView {
     proxyCannotKeepUp:
       "This proxy can't keep up with this file right now — another viewer on it "
       + "is using what it has. Press Retry in a moment, or pick a different file.",
+    // Another proxy in the pool has said it can. Retry moves there, so the
+    // wording says what will happen rather than what went wrong.
+    proxyCannotKeepUpMoving:
+      "This proxy can't keep up with this file, but another one can. "
+      + "Press Retry to move to it.",
     // A pick that did not happen has to say so. Switching regardless would empty
     // the buffer and stop the picture, which is worse than the quality the
     // viewer already has.
@@ -411,6 +416,16 @@ export class Loading extends StateDerivedView {
   #directPlaybackHints = new Map();
   /** @type {import("../../domain/webrtc-proxy.js").WebRtcProxy | null} */
   #proxy = null;
+  /**
+   * Proxies that answered they could sustain the file being opened, or null.
+   *
+   * Set only after one has refused it. The next transport is chosen from these
+   * alone — the ordinary score cannot express "and it must be able to serve
+   * THIS file", because a viewer is given a proxy before the file is known.
+   *
+   * @type {string[] | null}
+   */
+  #restrictProxiesTo = null;
   /** @type {import("../../domain/proxy-transport.js").ProxyTransport | null} */
   #transport = null;
   /**
@@ -3149,8 +3164,29 @@ export class Loading extends StateDerivedView {
     // at this moment.
     if (typeof prepared.cannotServe === "string" && prepared.cannotServe.length > 0) {
       this.#debug("proxy cannot serve this file", { fileIndex, why: prepared.cannotServe });
+      // Before giving up: ask the rest of the pool the same question. They can
+      // answer it because the description travels with the refusal — the
+      // expensive half, finding out what this file IS, was paid once here, and
+      // everyone else answers by arithmetic against their own startup
+      // benchmarks without adding the torrent or fetching a byte. This is where
+      // the ordering is repaired: a viewer is given a proxy BEFORE the file is
+      // known, by a score that reads processor load and free memory, neither of
+      // which can answer a question about a particular source.
+      const elsewhere = await this.#proxiesThatCanServe(prepared.mediaInfoForOffer);
+      if (elsewhere.length > 0) {
+        this.#debug("moving to a proxy that can serve this file", {
+          fileIndex,
+          candidates: elsewhere
+        });
+        this.#restrictProxiesTo = elsewhere;
+        throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.proxyCannotKeepUpMoving);
+      }
       throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.proxyCannotKeepUp);
     }
+    // Cleared once a proxy has accepted the file: a refusal is about one file
+    // on one machine at one moment, and holding the pool narrow afterwards
+    // would send every later file to the same few.
+    this.#restrictProxiesTo = null;
     const planned = prepared.offeredHeights;
     if (planned) {
       this.#offeredHeights = shouldTranscodeVideo ? planned.transcode : planned.copy;
@@ -3356,6 +3392,41 @@ export class Loading extends StateDerivedView {
    * @param {{ onConnecting?: (proxyName: string) => void }} [options]
    * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
    */
+  /**
+   * Which proxies say they could sustain this file, the one that refused
+   * excluded.
+   *
+   * Costs one round trip for the whole pool: the server asks every connected
+   * proxy over the tunnel it already holds, and each answers from its own
+   * startup benchmarks and the description — no torrent, no bytes, no ffmpeg.
+   *
+   * @param {object | null | undefined} mediaInfo
+   * @returns {Promise<string[]>}
+   */
+  async #proxiesThatCanServe(mediaInfo) {
+    if (!mediaInfo || typeof mediaInfo !== "object") {
+      return [];
+    }
+    try {
+      const response = await fetch("/api/proxy-clients/can-serve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mediaInfo, exclude: this.#proxy?.proxyId ?? "" })
+      });
+      if (!response.ok) {
+        return [];
+      }
+      const payload = await response.json();
+      return Array.isArray(payload.clients)
+        ? payload.clients.map((client) => client.id).filter((id) => typeof id === "string")
+        : [];
+    } catch {
+      // silent-ok: an unanswered question is the same as nobody being able to
+      // help, and the viewer is told that instead.
+      return [];
+    }
+  }
+
   async #acquireTransport({ onConnecting } = {}) {
     if (this.#transport && (!this.#proxy || this.#proxy.isOpen)) {
       return this.#transport;
@@ -3457,7 +3528,8 @@ export class Loading extends StateDerivedView {
       proxy = await this.#proxySelector.chooseBestProxy({
         allowPrivateCandidates: false,
         connectTimeoutMs: 12_000,
-        onConnecting
+        onConnecting,
+        onlyIds: this.#restrictProxiesTo
       });
     } catch (publicOnlyError) {
       this.#throwIfCancelled();
@@ -3477,7 +3549,11 @@ export class Loading extends StateDerivedView {
       this.#throwIfAbandoned(record);
       // Attempt 2: all addresses, permission (when the browser has such a
       // mechanism) obtained above.
-      proxy = await this.#proxySelector.chooseBestProxy({ allowPrivateCandidates: true, onConnecting });
+      proxy = await this.#proxySelector.chooseBestProxy({
+        allowPrivateCandidates: true,
+        onConnecting,
+        onlyIds: this.#restrictProxiesTo
+      });
     }
     // Adopting now would hand a live proxy to a component that has torn its
     // own down, so the connection is closed rather than left running.

@@ -13,6 +13,7 @@ import { createReachabilityProber } from "./services/reachability-prober.js";
 import { handleApiProxyClientsRegisterPost } from "./routes/api/proxy-clients/register/post.js";
 import { handleApiProxyClientsGet } from "./routes/api/proxy-clients/get.js";
 import { handleApiProxyClientsHealthGet } from "./routes/api/proxy-clients/health/get.js";
+import { handleApiProxyClientsCanServePost } from "./routes/api/proxy-clients/can-serve/post.js";
 import { handleApiClientLogsPost } from "./routes/api/client-logs/post.js";
 import { handleWsProxyTunnel } from "./routes/ws/proxy-tunnel/get.js";
 import { handleWsBrowserSignal } from "./routes/ws/browser-signal/get.js";
@@ -98,6 +99,12 @@ app.get("/api/proxy-clients", async (req, reply) =>
 );
 app.get("/api/proxy-clients/health", async (req, reply) =>
   handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer })
+);
+// Which proxies could sustain a file the browser already has a description of.
+// Asked only after one has refused it, so the viewer is sent somewhere that
+// works instead of being shown an error on the one they happened to land on.
+app.post("/api/proxy-clients/can-serve", async (req, reply) =>
+  handleApiProxyClientsCanServePost(req, reply, { clientsStore, tunnelServer })
 );
 
 // Browser console-log forwarder (debugging aid; writes client logs to the

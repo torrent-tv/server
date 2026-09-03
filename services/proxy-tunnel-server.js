@@ -44,6 +44,8 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * @property {(proxyId: string, timeoutMs?: number) => Promise<{ metrics: import("../../../proxy/services/health-collector.js").HealthMetrics, rttMs: number }>} requestHealth
  *   Send a `health-request` to a proxy and resolve with the response.
  *   `rttMs` is the full tunnel round-trip time.
+ * @property {(proxyId: string, mediaInfo: object, timeoutMs?: number) => Promise<{ offer: { copy: number[], transcode: number[] } | null, rttMs: number }>} requestCanServe
+ *   Ask a proxy whether it could sustain a file it is only told about.
  * @property {(proxyId: string, sessionId: string, signal: WebRtcSignal) => void} sendSignal
  *   Forward a WebRTC signal from the browser to a proxy.
  * @property {(proxyId: string, payload: RelayPayload, reply: import("fastify").FastifyReply) => Promise<void>} relay
@@ -76,6 +78,18 @@ export function createProxyTunnelServer() {
 
   /** @type {Map<string, PendingHealthRequest>} */
   const pendingHealthRequests = new Map();
+
+  /**
+   * In-flight "could you serve this file" questions, by request id.
+   *
+   * Separate from the health ones because they answer a different question:
+   * health is about the machine, this is about the machine AND one file. A
+   * proxy can be idle and still unable to sustain a 4K HEVC source, and busy
+   * yet perfectly able to copy a 480p one.
+   *
+   * @type {Map<string, PendingHealthRequest>}
+   */
+  const pendingCanServeRequests = new Map();
 
   /**
    * Called when a signal arrives from the proxy side.
@@ -119,6 +133,17 @@ export function createProxyTunnelServer() {
     if (message.type === "proxy-endpoint") {
       if (message.endpoint && onEndpointFromProxy) {
         onEndpointFromProxy(proxyId, message.endpoint);
+      }
+      return;
+    }
+
+    // Answer to "could you sustain this file", asked of every proxy when the
+    // one a viewer landed on has refused it.
+    if (message.type === "can-serve-response") {
+      const pending = pendingCanServeRequests.get(message.requestId);
+      if (pending) {
+        pendingCanServeRequests.delete(message.requestId);
+        pending.resolve({ offer: message.offer ?? null, rttMs: Date.now() - pending.sentAt });
       }
       return;
     }
@@ -275,6 +300,44 @@ export function createProxyTunnelServer() {
         });
 
         socket.send(JSON.stringify({ type: "health-request", requestId }));
+      });
+    },
+
+    /**
+     * Ask a proxy whether it could sustain a file it is only told ABOUT.
+     *
+     * The description comes from the proxy that already probed the file, so
+     * nobody else adds the torrent, fetches a byte or runs ffmpeg: the answer
+     * is arithmetic against that host's own startup benchmarks and comes back
+     * in milliseconds. That is what makes it affordable to ask everyone.
+     *
+     * @param {string} proxyId
+     * @param {object} mediaInfo - Height, width, rate, bitrate, codec.
+     * @param {number} [timeoutMs]
+     * @returns {Promise<{ offer: { copy: number[], transcode: number[] } | null, rttMs: number }>}
+     */
+    requestCanServe(proxyId, mediaInfo, timeoutMs = 2_000) {
+      const socket = connections.get(proxyId);
+      if (!socket || socket.readyState !== 1 /* OPEN */) {
+        return Promise.reject(new Error("Proxy tunnel is not connected."));
+      }
+
+      const requestId = randomUUID();
+      const sentAt = Date.now();
+
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingCanServeRequests.delete(requestId);
+          reject(new Error("Capability request timed out."));
+        }, timeoutMs);
+
+        pendingCanServeRequests.set(requestId, {
+          resolve: (result) => { clearTimeout(timer); resolve(result); },
+          reject: (err) => { clearTimeout(timer); reject(err); },
+          sentAt
+        });
+
+        socket.send(JSON.stringify({ type: "can-serve-request", requestId, mediaInfo }));
       });
     },
 

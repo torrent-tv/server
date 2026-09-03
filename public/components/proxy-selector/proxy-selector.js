@@ -56,14 +56,27 @@ export class ProxySelector {
    *   between the (instant) selection and the (round-trip) connect.
    * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
    */
-  async chooseBestProxy({ allowPrivateCandidates = true, connectTimeoutMs, onConnecting } = {}) {
+  async chooseBestProxy({
+    allowPrivateCandidates = true,
+    connectTimeoutMs,
+    onConnecting,
+    // Only these proxies may be chosen. Used after one has refused a file:
+    // every proxy here has answered that it could sustain THIS source, which
+    // is a question the score below cannot ask — it reads processor load, free
+    // memory and round-trip time, all of which are about the machine and none
+    // of which is about the file.
+    onlyIds = null
+  } = {}) {
     const response = await fetch("/api/proxy-clients/health");
     if (!response.ok) {
       throw new Error(`Proxy health request failed (${response.status}).`);
     }
 
     const payload = await response.json();
-    const raw = Array.isArray(payload.clients) ? payload.clients : [];
+    const all = Array.isArray(payload.clients) ? payload.clients : [];
+    const raw = Array.isArray(onlyIds) && onlyIds.length > 0
+      ? all.filter((client) => onlyIds.includes(client.id))
+      : all;
 
     /** @type {Array<ProxyCandidate & { score: number, reachable: boolean | null, sameNetwork: boolean }>} */
     const scored = raw
