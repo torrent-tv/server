@@ -211,6 +211,34 @@ import {
   containerDefaultSubtitleIndex,
   sidecarNaming
 } from "../../domain/subtitle-utils.js";
+import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
+
+/**
+ * What a soundtrack IS, in the terms a choice of it survives an episode switch
+ * in: the language and whoever made it.
+ *
+ * Read from the same two sources `buildTrackLabel` shows the viewer, and in the
+ * same order — so what is remembered is what they picked by, and not some other
+ * reading of the same track.
+ *
+ * @param {object} track - One entry of the plan's audio list.
+ * @param {string} [videoName] - The picture's file name, for the releaser rule.
+ * @returns {{ code: string, releaser: string | null } | null}
+ */
+function audioTrackIdentity(track, videoName = "") {
+  const naming = track?.kind === "sidecar"
+    ? sidecarNaming({
+        folders: Array.isArray(track.folders) ? track.folders : [],
+        fileName: typeof track.fileName === "string" ? track.fileName : "",
+        videoName
+      })
+    : { code: null, releaser: null };
+  const title = typeof track?.title === "string" ? track.title.trim() : "";
+  return trackIdentity({
+    code: trackLanguageCode(trackLanguageTag(track) || "") || naming.code || "",
+    releaser: title.length > 0 ? title : naming.releaser
+  });
+}
 
 /**
  * Loading view.
@@ -554,6 +582,44 @@ export class Loading extends StateDerivedView {
    * @type {{ transport: object, sourceKey: string, fileIndex: number } | null}
    */
   #subtitleContext = null;
+  /**
+   * The soundtrack the viewer last chose, as a language and a team rather than
+   * a number, so it can be found again in the next episode. Held for the life
+   * of the page: a choice made in episode 1 is meant to survive the switch to
+   * episode 2, and nothing is written to disk (roadmap item 74; a preference
+   * that outlives the tab is item 75, deliberately separate).
+   *
+   * Null until the viewer picks one — the file's own default is what plays
+   * until then, and remembering it would turn a default into a decision.
+   *
+   * @type {{ code: string, releaser: string | null } | null}
+   */
+  #rememberedAudio = null;
+  /**
+   * The same for subtitles, with one more state: `{ off: true }`, the viewer
+   * having turned them off. Off has to be remembered as a choice of its own,
+   * or the next episode's container default would put subtitles back on
+   * somebody who has just said they do not want them.
+   *
+   * @type {{ code: string, releaser: string | null } | { off: true } | null}
+   */
+  #rememberedSubtitle = null;
+  /**
+   * What each text track IS, kept beside the track itself because the change
+   * event names the tracks and nothing else. Weak, so a track element removed
+   * with its episode takes its entry with it.
+   *
+   * @type {WeakMap<TextTrack, { code: string, releaser: string | null } | null>}
+   */
+  #subtitleIdentities = new WeakMap();
+  /**
+   * Which track this component last put at `showing`, so that a change to
+   * anything else is known to be the VIEWER's and not the echo of our own
+   * write. `null` means we last left every track off.
+   *
+   * @type {TextTrack | null}
+   */
+  #subtitleShowingWeApplied = null;
   /** @type {boolean} Whether the text-track `change` listener is registered. */
   #subtitleModesWatched = false;
   /**
@@ -3178,6 +3244,7 @@ export class Loading extends StateDerivedView {
     if (this.#selectedAudioTrackIndex >= this.#planTracks.audio.length) {
       this.#selectedAudioTrackIndex = 0;
     }
+    this.#applyRememberedAudioTrack(prepared);
 
     // The codec of the track that will actually be PLAYED, not of the file's
     // first one. They are the same track until a viewer chooses another, and can
@@ -3961,6 +4028,12 @@ export class Loading extends StateDerivedView {
     this.#embeddedTextTracks.clear();
     this.#embeddedTrackElements.clear();
     this.#namedSubtitleTracks.clear();
+    // What WE last showed belonged to the file being left. Carrying it into the
+    // next one would make the first change event there — where nothing is
+    // showing yet — read as the viewer turning subtitles off, and wipe the very
+    // choice this is meant to carry. The remembered choice itself is NOT reset:
+    // that is the point of it.
+    this.#subtitleShowingWeApplied = null;
     this.#subtitleContext = null;
     this.#subtitleCursors.clear();
     this.#subtitleStarvedAt.clear();
@@ -4156,6 +4229,8 @@ export class Loading extends StateDerivedView {
         // on by itself, which is half of what put three languages on screen at
         // once (field 2026-08-20).
         this.#videoElement.appendChild(track);
+        // What this track IS, for carrying a choice of it to the next episode.
+        this.#subtitleIdentities.set(track.track, trackIdentity({ code: info.code, releaser: info.group }));
         // A subtitle FILE is never the container's choice, so `null` — and the
         // mode reading is registered here too, because a video with only
         // external files never reaches the embedded loader at all.
@@ -4226,6 +4301,13 @@ export class Loading extends StateDerivedView {
       this.#videoElement.appendChild(el);
       this.#embeddedTextTracks.set(track.index, el.track);
       this.#embeddedTrackElements.set(track.index, el);
+      // What this track IS, for carrying a choice of it to the next episode.
+      // Corrected in `#refineSubtitleLabel` if the container said nothing and
+      // the cues answer later.
+      this.#subtitleIdentities.set(el.track, trackIdentity({
+        code: fallbackLang,
+        releaser: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
+      }));
       if (fallbackLang && fallbackLang !== "und") {
         this.#namedSubtitleTracks.add(track.index);
       }
@@ -4524,6 +4606,14 @@ export class Loading extends StateDerivedView {
     );
     element.label = label;
     element.srclang = detected.code;
+    // The identity follows the label. A track that opened as Unknown and is now
+    // known to be Russian must be findable as Russian in the next episode —
+    // otherwise a viewer who chose it while it was still Unknown carries a
+    // choice that can never match anything.
+    this.#subtitleIdentities.set(element.track, trackIdentity({
+      code: detected.code,
+      releaser: typeof track?.title === "string" && track.title.trim() ? track.title.trim() : null
+    }));
   }
 
   /**
@@ -4831,8 +4921,11 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #applySubtitleMode(textTrack, planIndex, epoch) {
-    const chosenIndex = containerDefaultSubtitleIndex(this.#planTracks?.subtitles ?? []);
-    const wanted = planIndex !== null && planIndex === chosenIndex ? "showing" : "disabled";
+    const show = this.#subtitleShouldShow(textTrack, planIndex);
+    const wanted = show ? "showing" : "disabled";
+    if (show) {
+      this.#subtitleShowingWeApplied = textTrack;
+    }
     const apply = () => {
       if (epoch !== this.#subtitleEpoch) {
         return;
@@ -4843,6 +4936,103 @@ export class Loading extends StateDerivedView {
     };
     apply();
     window.setTimeout(apply, 0);
+  }
+
+  /**
+   * Whether THIS track is the one to draw for this file.
+   *
+   * Two rules, in order, and the second is the one that has always been here:
+   *
+   * 1. **What the viewer chose in the previous episode**, where this file
+   *    carries its exact counterpart — the same language from the same team.
+   *    Turning subtitles OFF is such a choice too, and outranks any default.
+   * 2. **What the container says**, where the viewer has chosen nothing yet or
+   *    where nothing in this file answers what they chose. That second case is
+   *    deliberate and was settled with the user: no near matches, no ranked
+   *    alternatives — the file's own default plays, exactly as it does when the
+   *    first episode is opened.
+   *
+   * @param {TextTrack} textTrack
+   * @param {number | null} planIndex - Its index among the plan's subtitle
+   *   tracks, or null for a subtitle FILE.
+   * @returns {boolean}
+   */
+  #subtitleShouldShow(textTrack, planIndex) {
+    const remembered = this.#rememberedSubtitle;
+    if (remembered?.off === true) {
+      return false;
+    }
+    if (remembered && findTrackByIdentity(this.#subtitleCandidateIdentities(), remembered) >= 0) {
+      return sameTrackIdentity(this.#subtitleIdentities.get(textTrack) ?? null, remembered);
+    }
+    const chosenIndex = containerDefaultSubtitleIndex(this.#planTracks?.subtitles ?? []);
+    return planIndex !== null && planIndex === chosenIndex;
+  }
+
+  /**
+   * What every subtitle track this file can offer IS, in one list.
+   *
+   * Needed whole rather than one at a time, because a remembered choice with no
+   * counterpart here must fall back to the container's default — and that
+   * cannot be told from a single track. Tracks are attached over time (a
+   * sidecar costs a fetch), so the list is built from what the file DECLARES,
+   * which is known before any of them is attached.
+   *
+   * @returns {Array<{ code: string, releaser: string | null } | null>}
+   */
+  #subtitleCandidateIdentities() {
+    const identities = (this.#planTracks?.subtitles ?? [])
+      .filter((track) => track?.textBased === true && track?.isEnabled !== false)
+      .map((track) => {
+        const title = typeof track.title === "string" ? track.title.trim() : "";
+        return trackIdentity({
+          code: trackLanguageCode(trackLanguageTag(track) || ""),
+          releaser: title.length > 0 ? title : null
+        });
+      });
+    const files = this.#session.current?.files;
+    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0 ? files[this.#activeFileIndex] : null;
+    if (videoFile && this.#subtitleFiles.length > 0) {
+      for (const sub of matchSubtitlesForVideo(videoFile, this.#subtitleFiles)) {
+        const info = detectSubtitleInfo(sub, videoFile);
+        identities.push(trackIdentity({ code: info.code, releaser: info.group }));
+      }
+    }
+    return identities;
+  }
+
+  /**
+   * Note what the viewer has just chosen, so the next episode opens with it.
+   *
+   * Called from the text-track change listener, which cannot tell WHO made the
+   * change — so our own last write is compared against, and only a difference
+   * counts as the viewer's. Without that the default this component applies on
+   * every new file would immediately overwrite the very choice it is meant to
+   * honour.
+   *
+   * @param {TextTrackList} tracks
+   * @returns {void}
+   */
+  #rememberSubtitleChoice(tracks) {
+    let showing = null;
+    for (const track of tracks) {
+      if (track.mode === "showing") {
+        showing = track;
+        break;
+      }
+    }
+    if (showing === this.#subtitleShowingWeApplied) {
+      return;
+    }
+    this.#subtitleShowingWeApplied = showing;
+    this.#rememberedSubtitle = showing === null
+      ? { off: true }
+      : this.#subtitleIdentities.get(showing) ?? null;
+    this.#logEvt(
+      this.#rememberedSubtitle?.off === true
+        ? "subtitles turned off — the next episode will open without them"
+        : `subtitles ${JSON.stringify(this.#rememberedSubtitle)} remembered for the next episode`
+    );
   }
 
   #watchSubtitleModes() {
@@ -4857,6 +5047,9 @@ export class Loading extends StateDerivedView {
         described.push(`"${track.label || track.language || "?"}"=${track.mode}`);
       }
       console.debug(`[torrent-tv][subtitles] modes ${described.join(" ")}`);
+      // A change this component did not make is the viewer's, and it is what
+      // the next episode opens with.
+      this.#rememberSubtitleChoice(tracks);
       // What a track just switched on can draw at this position — see
       // `#reportSubtitleCoverage`.
       this.#reportSubtitleCoverage("mode change");
@@ -5185,6 +5378,7 @@ export class Loading extends StateDerivedView {
         // it.
         const applied = this.#hlsPlayer.currentAudioTrack();
         this.#selectedAudioTrackIndex = applied >= 0 ? applied : trackIndex;
+        this.#rememberAudioChoice();
         this.#logEvt(
           `audio track ${trackIndex} switched in place, without rebuilding the session` +
           (applied >= 0 && applied !== trackIndex ? ` (the player settled on ${applied})` : "")
@@ -5207,6 +5401,7 @@ export class Loading extends StateDerivedView {
           ? this.#videoElement.currentTime
           : 0;
       this.#selectedAudioTrackIndex = trackIndex;
+      this.#rememberAudioChoice();
       document.dispatchEvent(
         new CustomEvent(LOADING_EVENTS.SHOW, {
           detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
@@ -6704,6 +6899,75 @@ export class Loading extends StateDerivedView {
    *
    * @returns {void}
    */
+  /**
+   * Open this file on the soundtrack the viewer chose in the previous one.
+   *
+   * Here, and not after the session exists, because here it costs nothing: the
+   * track is chosen before the codec decision is made and before the session is
+   * created, so the file simply starts in the right language. Applying it later
+   * would be a rendition switch, with the picture held while the proxy prepares
+   * the track — which is what a viewer does when they change their mind, not
+   * what they should meet on opening an episode.
+   *
+   * Nothing to match means nothing to do: the file's own default plays, exactly
+   * as it does when the first episode is opened (roadmap item 74).
+   *
+   * @param {{ audioTracks?: object[] }} _prepared - The plan just read; the
+   *   tracks are taken from `#planTracks`, which it has already filled.
+   * @returns {void}
+   */
+  #applyRememberedAudioTrack(_prepared) {
+    if (!this.#rememberedAudio) {
+      return;
+    }
+    const tracks = this.#planTracks?.audio ?? [];
+    const files = this.#session.current?.files;
+    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0 ? files[this.#activeFileIndex] : null;
+    const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
+    const position = findTrackByIdentity(
+      tracks.map((track) => audioTrackIdentity(track, videoName)),
+      this.#rememberedAudio
+    );
+    if (position < 0) {
+      this.#logEvt(
+        "the soundtrack chosen earlier is not in this file — playing the one it names itself"
+      );
+      return;
+    }
+    const index = Number(tracks[position]?.index);
+    if (!Number.isInteger(index) || index === this.#selectedAudioTrackIndex) {
+      return;
+    }
+    this.#selectedAudioTrackIndex = index;
+    this.#logEvt(`opening on audio track ${index}, chosen in an earlier episode`);
+  }
+
+  /**
+   * Note the soundtrack the viewer has just chosen, so the next episode opens
+   * with it. Called only from the menu handler, which is the viewer by
+   * construction — nothing here reads a track this component selected itself.
+   *
+   * @returns {void}
+   */
+  #rememberAudioChoice() {
+    const files = this.#session.current?.files;
+    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0 ? files[this.#activeFileIndex] : null;
+    const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
+    const track = (this.#planTracks?.audio ?? []).find(
+      (candidate) => candidate?.index === this.#selectedAudioTrackIndex
+    );
+    const identity = track ? audioTrackIdentity(track, videoName) : null;
+    if (!identity) {
+      // A track whose language nothing states cannot be looked for in another
+      // file. Leaving the previous memory in place would be worse than none:
+      // the next episode would open on a track the viewer moved AWAY from.
+      this.#rememberedAudio = null;
+      return;
+    }
+    this.#rememberedAudio = identity;
+    this.#logEvt(`audio ${JSON.stringify(identity)} remembered for the next episode`);
+  }
+
   #publishAudioTracks() {
     // The picture's own file name, which is what tells a bracketed group naming
     // the RELEASE apart from one naming whoever made a soundtrack beside it.
