@@ -1,3 +1,8 @@
+## 0.25.0
+
+- **New**: A viewer whose proxy cannot sustain their file is moved to one that can, instead of being shown an error on the machine they happened to land on. The ordering is what makes this necessary: a proxy is chosen before the file is known, by a score that reads processor load, free memory and round-trip time — none of which can answer a question about a particular source. So the repair happens after the fact and only when it went wrong. `POST /api/proxy-clients/can-serve` asks every connected proxy over the tunnel the server already holds, and the browser's next attempt is restricted to those that said yes. The restriction is dropped as soon as one accepts the file: a refusal is about one file on one machine at one moment, and keeping the pool narrow afterwards would send every later file to the same few.
+- **New**: The message says what will happen rather than what went wrong. When another proxy can serve the file, Retry moves there and the text says so; when nobody can, the old wording stands.
+
 ## 0.24.2
 
 - **Fix**: Choosing another soundtrack now holds the picture behind the ordinary waiting overlay until the track is ready, and playback continues by itself the moment it is. Before, the picture simply stopped: the pipeline paused the element with a plain `pause()`, which is indistinguishable from the viewer pressing the button, so the application went to PAUSED — the overlay switched on a line earlier went straight off again, the play button worked, and a viewer who used it watched on in the language they had just replaced until the new one arrived and the position jumped back under them.
