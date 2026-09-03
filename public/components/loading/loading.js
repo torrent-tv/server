@@ -2,7 +2,7 @@ import { createHlsPlayer } from "../../domain/hls-player.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { appendCues, parseVttCues } from "../../domain/vtt-cues.js";
 import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.js";
-import { APP_EVENT, APP_STATE, } from "../../domain/app-state.js";
+import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
@@ -1542,6 +1542,24 @@ export class Loading extends StateDerivedView {
         console.warn("[torrent-tv] scoring the wait that just ended failed", error);
       }
     }
+    // A wait that is over stops being measured. LAST, so the scoring above —
+    // which is about the wait that just ended — still has its samples.
+    //
+    // Nothing used to end this: the polls are stopped by whoever started them,
+    // and a failure leaves by another door. Field 2026-09-03, after the app had
+    // already declared the session unrecoverable and released it, this component
+    // went on polling a dead session every 1.5 s and feeding the readings to a
+    // model that had just been reset — which started a FRESH countdown from 28 s
+    // down to zero over a session that no longer existed, and would have gone on
+    // for as long as the page stayed open. The state says the wait is over; that
+    // is the one place the answer belongs.
+    //
+    // PAUSED is not the end of a wait — the viewer stopped the picture, the
+    // pipeline did not — which is the same exception the overlay makes.
+    if (!isWaiting(state) && state !== APP_STATE.PAUSED) {
+      this.#clearBuffering();
+      this.#waitingModel.reset();
+    }
   }
 
   /**
@@ -2201,7 +2219,29 @@ export class Loading extends StateDerivedView {
    *   nobody opened.
    * @returns {void}
    */
-  #warmSourceInBackground(fileIndex) {
+  /**
+   * Where this file would start if it were opened now, WITHOUT consuming the
+   * field that holds it.
+   *
+   * Two callers need the same answer at two different moments: the warm-up, as
+   * soon as a file is chosen, and the pipeline, when it builds the session. The
+   * pipeline clears the field afterwards; the warm-up must not, or the position
+   * would be lost before anything used it.
+   *
+   * @param {number} fileIndex
+   * @returns {{ fromField: number | null, fromUrl: number, position: number | null }}
+   */
+  #resumePositionFor(fileIndex) {
+    const fromField = this.#pendingCurrentTime;
+    const fromUrl = resumePositionFor(readUrlState(location.search), fileIndex);
+    return {
+      fromField,
+      fromUrl,
+      position: fromField != null && fromField > 0 ? fromField : (fromUrl > 0 ? fromUrl : null)
+    };
+  }
+
+  #warmSourceInBackground(fileIndex, positionSeconds = 0) {
     const epoch = this.#playbackEpoch;
     void (async () => {
       try {
@@ -2222,9 +2262,24 @@ export class Loading extends StateDerivedView {
         const response = await transport.fetch(`/api/sources/${sourceKey}/warm`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(fileIndex === null ? {} : { fileIndex })
+          body: JSON.stringify(
+            fileIndex === null
+              ? {}
+              : {
+                fileIndex,
+                // Where this viewer will start. The proxy fetches the file's
+                // edges because the codec probe reads them; the region under
+                // the viewer's own position was asked for by nobody until the
+                // encoder opened its input, which on a cold retry is nearly a
+                // minute after the button was pressed.
+                ...(positionSeconds > 0 ? { positionSeconds } : {})
+              }
+          )
         });
-        this.#logEvt(`warm-up requested (${response.ok ? "accepted" : `refused ${response.status}`})`);
+        this.#logEvt(
+          `warm-up requested (${response.ok ? "accepted" : `refused ${response.status}`})` +
+          `${positionSeconds > 0 ? `, resuming at ${Math.round(positionSeconds)}s` : ""}`
+        );
       } catch (error) {
         if (this.#isAbortError(error)) {
           // Abandoned work says so. An aborted warm-up is ordinary — the viewer
@@ -3053,7 +3108,7 @@ export class Loading extends StateDerivedView {
     // beside the picture had nothing downloaded when the viewer asked for it,
     // so the first switch to it timed out. Fire-and-forget, so the plan below is
     // not held up by it.
-    this.#warmSourceInBackground(fileIndex);
+    this.#warmSourceInBackground(fileIndex, this.#resumePositionFor(fileIndex).position ?? 0);
     try {
       // Poll the playback plan until the file header has downloaded. On a cold
       // torrent (peers still connecting) the proxy returns `pending` quickly
@@ -5550,7 +5605,7 @@ export class Loading extends StateDerivedView {
     // The address bar does not race. It is written before the load begins, it
     // survives a reload, and it is the state by design, so it is consulted
     // whenever the field is empty.
-    const fromField = this.#pendingCurrentTime;
+    const { fromField, fromUrl, position: resumeStartPosition } = this.#resumePositionFor(fileIndex);
     this.#pendingCurrentTime = null;
     // The address bar's position belongs to the file it was written for, and at
     // this moment it still describes the PREVIOUS one: the address is rewritten
@@ -5561,10 +5616,6 @@ export class Loading extends StateDerivedView {
     // began.
     const urlState = readUrlState(location.search);
     const urlIsForThisFile = urlState.fileIndex === fileIndex;
-    const fromUrl = resumePositionFor(urlState, fileIndex);
-    const resumeStartPosition = fromField != null && fromField > 0
-      ? fromField
-      : (fromUrl > 0 ? fromUrl : null);
     // Said out loud because the two sides have disagreed about it twice: the
     // position reached hls.js, which duly asked for segment #127, while the
     // proxy was told to start at zero and the viewer waited 45.6 s for a
@@ -5722,7 +5773,13 @@ export class Loading extends StateDerivedView {
     // the viewer has anything to watch yet.
     let bestProcessedSeconds = -1;
     let lastProcessedGrowthAt = Date.now();
-    const stillMakingProgress = () => Date.now() - lastProcessedGrowthAt < PREBUFFER_PROGRESS_GRACE_MS;
+    // And the bytes reaching that run's input, which is the only thing that can
+    // move while it is still waiting for its first frame.
+    let bestInputBytes = -1;
+    let lastInputGrowthAt = Date.now();
+    const stillMakingProgress = () =>
+      Date.now() - lastProcessedGrowthAt < PREBUFFER_PROGRESS_GRACE_MS ||
+      Date.now() - lastInputGrowthAt < PREBUFFER_PROGRESS_GRACE_MS;
     while (
       Date.now() - startedAt < timeoutMs ||
       (stillMakingProgress() && Date.now() - startedAt < PREBUFFER_ABSOLUTE_TIMEOUT_MS)
@@ -5757,6 +5814,19 @@ export class Loading extends StateDerivedView {
       if (Number.isFinite(processedSeconds) && processedSeconds > bestProcessedSeconds) {
         bestProcessedSeconds = processedSeconds;
         lastProcessedGrowthAt = Date.now();
+      }
+      // The second sign of life, and on a cold start the only one there can be:
+      // bytes the swarm has delivered to THIS session's own input read. The
+      // encoder's own progress cannot move until it has decoded a frame, so
+      // while the first piece is on its way `processedSeconds` stands still
+      // however healthy the proxy is. Field 2026-09-03: one piece took 46.3 s,
+      // `processedSeconds` never left the start position, and this wait timed
+      // out 0.4 s before that piece landed — on a proxy that was reading from
+      // the swarm the whole time.
+      const inputBytes = Number(cachedProgress?.inputBytes);
+      if (Number.isFinite(inputBytes) && inputBytes > bestInputBytes) {
+        bestInputBytes = inputBytes;
+        lastInputGrowthAt = Date.now();
       }
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
@@ -5838,10 +5908,18 @@ export class Loading extends StateDerivedView {
     const totalWaitedMs = Date.now() - startedAt;
     this.#logEvt(
       `prebuffer timeout ahead=${finalAhead.toFixed(1)}s waited=${Math.round(totalWaitedMs / 1000)}s ` +
-      `processedSeconds=${bestProcessedSeconds >= 0 ? bestProcessedSeconds.toFixed(1) : "n/a"}`
+      `processedSeconds=${bestProcessedSeconds >= 0 ? bestProcessedSeconds.toFixed(1) : "n/a"} ` +
+      `inputBytes=${bestInputBytes >= 0 ? bestInputBytes : "n/a"}`
     );
     if (finalAhead < PREBUFFER_MIN_START_SECONDS) {
-      throw new Error(Loading.MESSAGES.prebufferStalled);
+      const stalled = new Error(Loading.MESSAGES.prebufferStalled);
+      // Retryable, and it always was: running out of patience while data is on
+      // its way says nothing about whether a second attempt would succeed. Until
+      // now this error carried no such flag, so the error card offered the
+      // viewer no Retry at all — the failure that opened this work ended with a
+      // screen whose only ways on were "new torrent" and "back to episodes".
+      stalled.canRetry = true;
+      throw stalled;
     }
     // Proceeding into playback despite the timeout — still a (degraded) start.
     this.#logColdStart();
