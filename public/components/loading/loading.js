@@ -158,13 +158,10 @@ function channelLayoutName(channels) {
  */
 function buildTrackLabel(track, videoName = "") {
   const parts = [];
-  const naming = track?.kind === "sidecar"
-    ? sidecarNaming({
-        folders: Array.isArray(track.folders) ? track.folders : [],
-        fileName: typeof track.fileName === "string" ? track.fileName : "",
-        videoName
-      })
-    : { code: null, name: null, releaser: null };
+  // Read by the PROXY, by the grammar that also paired this file with this
+  // picture. Reading the same path again here is how one name came to have
+  // two answers.
+  const naming = track?.naming ?? { code: null, name: null, releaser: null };
   const code = trackLanguageCode(trackLanguageTag(track) || "") || naming.code || "";
   if (code) {
     try {
@@ -205,13 +202,25 @@ function buildTrackLabel(track, videoName = "") {
   return marks.length > 0 ? `${base} · ${marks.join(" · ")}` : base;
 }
 import {
-  detectSubtitleInfo,
   buildSubtitleLabel,
-  matchSubtitlesForVideo,
-  containerDefaultSubtitleIndex,
-  sidecarNaming
+  containerDefaultSubtitleIndex
 } from "../../domain/subtitle-utils.js";
 import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
+
+/**
+ * Where a file beside the picture lies, for a log line.
+ *
+ * The proxy states the folders relative to the torrent root and the file's own
+ * name; a path is those joined, and there is no second place that joins them.
+ *
+ * @param {{ folders?: string[], name?: string }} sidecar
+ * @returns {string}
+ */
+function subtitlePath(sidecar) {
+  const folders = Array.isArray(sidecar?.folders) ? sidecar.folders : [];
+  const name = typeof sidecar?.name === "string" ? sidecar.name : "";
+  return [...folders, name].filter((part) => part.length > 0).join("/");
+}
 
 /**
  * What a soundtrack IS, in the terms a choice of it survives an episode switch
@@ -226,13 +235,10 @@ import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../dom
  * @returns {{ code: string, releaser: string | null } | null}
  */
 function audioTrackIdentity(track, videoName = "") {
-  const naming = track?.kind === "sidecar"
-    ? sidecarNaming({
-        folders: Array.isArray(track.folders) ? track.folders : [],
-        fileName: typeof track.fileName === "string" ? track.fileName : "",
-        videoName
-      })
-    : { code: null, releaser: null };
+  // Read by the PROXY, by the grammar that also paired this file with this
+  // picture. Reading the same path again here is how one name came to have
+  // two answers.
+  const naming = track?.naming ?? { code: null, releaser: null };
   const title = typeof track?.title === "string" ? track.title.trim() : "";
   return trackIdentity({
     code: trackLanguageCode(trackLanguageTag(track) || "") || naming.code || "",
@@ -3225,7 +3231,17 @@ export class Loading extends StateDerivedView {
     // embedded-subtitle loading).
     this.#planTracks = {
       audio: Array.isArray(prepared.audioTracks) ? prepared.audioTracks : [],
-      subtitles: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : []
+      subtitles: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : [],
+      // The files BESIDE this picture that belong to it, paired and read by the
+      // proxy. This browser used to pair them again, with a looser rule, and
+      // read their names with a stricter one — two answers about the same file,
+      // compared nowhere. Measured 2026-09-04 over 115 real torrents: of 1249
+      // video files the two pairings differed on ten, and every difference
+      // reached the viewer, because the proxy warms what IT paired while this
+      // side offered what IT paired. A track offered but never warmed waits for
+      // its first piece off the swarm.
+      sidecarSubtitles: Array.isArray(prepared.sidecarSubtitles) ? prepared.sidecarSubtitles : [],
+      sidecarImages: Array.isArray(prepared.sidecarImages) ? prepared.sidecarImages : []
     };
     // Source coded resolution — drives the manual quality menu.
     this.#sourceVideoWidth = Number.isFinite(prepared.videoWidth) ? prepared.videoWidth : 0;
@@ -4163,7 +4179,10 @@ export class Loading extends StateDerivedView {
       return false;
     }
 
-    const matched = matchSubtitlesForVideo(videoFile, this.#subtitleFiles);
+    // Paired by the proxy, in the torrent layer, where "the file next to this
+    // one" is a notion that exists at all. This side reads none of it: it used
+    // to pair again with a rule of its own, and the two answers differed.
+    const matched = this.#planTracks.sidecarSubtitles ?? [];
     if (matched.length === 0) {
       return false;
     }
@@ -4182,13 +4201,13 @@ export class Loading extends StateDerivedView {
         // (UTF-8/Windows-1251) and detects the language from the full text,
         // returning it in X-Subtitle-Language. The browser no longer converts.
         const response = await transport.fetch(
-          `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${sub.index}`,
+          `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${sub.fileIndex}`,
           { signal: this.#session.abortController.signal, timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS }
         );
         if (!response.ok) {
           console.warn(
             `[torrent-tv][subtitles] fetch failed (${response.status}) for`,
-            sub.relativePath ?? sub.name
+            subtitlePath(sub)
           );
           continue;
         }
@@ -4207,7 +4226,18 @@ export class Loading extends StateDerivedView {
 
         // Language priority: explicit code in the filename (author intent) →
         // proxy content detection (franc) → the film's audio language → und.
-        const info = detectSubtitleInfo(sub, videoFile);
+        //
+        // The first of the three is read by the proxy now, by the same grammar
+        // that decided this file belongs to this picture. Nothing is re-read
+        // here: a label built from a second reading of the same name is how the
+        // two sides came to disagree.
+        const info = {
+          code: sub.naming?.code ?? "und",
+          name: sub.naming?.name ?? null,
+          group: sub.naming?.releaser ?? null,
+          isForced: sub.naming?.isForced === true,
+          isHearingImpaired: sub.naming?.isHearingImpaired === true
+        };
         if (info.code === "und") {
           const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage();
           if (detected) {
@@ -4239,7 +4269,7 @@ export class Loading extends StateDerivedView {
         added = true;
         console.debug(
           `[torrent-tv][subtitles] loaded "${label}" (${info.code}) from`,
-          sub.relativePath ?? sub.name
+          subtitlePath(sub)
         );
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") {
@@ -4247,7 +4277,7 @@ export class Loading extends StateDerivedView {
         }
         console.warn(
           "[torrent-tv][subtitles] error loading",
-          sub.relativePath ?? sub.name,
+          subtitlePath(sub),
           e
         );
       }
@@ -4990,13 +5020,12 @@ export class Loading extends StateDerivedView {
           releaser: title.length > 0 ? title : null
         });
       });
-    const files = this.#session.current?.files;
-    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0 ? files[this.#activeFileIndex] : null;
-    if (videoFile && this.#subtitleFiles.length > 0) {
-      for (const sub of matchSubtitlesForVideo(videoFile, this.#subtitleFiles)) {
-        const info = detectSubtitleInfo(sub, videoFile);
-        identities.push(trackIdentity({ code: info.code, releaser: info.group }));
-      }
+    // The files beside the picture, as the proxy paired and read them.
+    for (const sub of this.#planTracks.sidecarSubtitles ?? []) {
+      identities.push(trackIdentity({
+        code: sub.naming?.code ?? "und",
+        releaser: sub.naming?.releaser ?? null
+      }));
     }
     return identities;
   }
