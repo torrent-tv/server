@@ -3,6 +3,7 @@
 
 import { getDebugState } from "../../shared/debug-state.js";
 import { WebRtcProxy } from "../../domain/webrtc-proxy.js";
+import { choosePool } from "../../domain/proxy-preference.js";
 
 // Same-LAN public-only connect budget. When the browser and proxy share a
 // public IP, the public-only attempt can only succeed via router hairpin,
@@ -60,6 +61,11 @@ export class ProxySelector {
     allowPrivateCandidates = true,
     connectTimeoutMs,
     onConnecting,
+    // The film about to be opened, by its own infohash. A proxy already
+    // downloading it is preferred over one that is not — see the pool below.
+    // Absent (a viewer who has not chosen a film yet) leaves selection exactly
+    // as it was.
+    infoHash = "",
     // Only these proxies may be chosen. Used after one has refused a file:
     // every proxy here has answered that it could sustain THIS source, which
     // is a question the score below cannot ask — it reads processor load, free
@@ -90,6 +96,14 @@ export class ProxySelector {
         channelRttMs: null,
         reachable: typeof c.reachable === "boolean" ? c.reachable : null,
         sameNetwork: c.sameNetwork === true,
+        // Whether this proxy is already downloading the film being opened. The
+        // proxy reports what it holds; matching it against what is being asked
+        // for happens here, because this is the only side that knows which film
+        // that is.
+        holdsThisFilm:
+          infoHash.length > 0 &&
+          Array.isArray(c.holds) &&
+          c.holds.some((held) => String(held?.infoHash ?? "").toLowerCase() === infoHash.toLowerCase()),
         score: this.#scoreProxy(c.metrics, c.rttMs)
       }))
       .sort((a, b) => b.score - a.score);
@@ -97,8 +111,8 @@ export class ProxySelector {
     const debugState = getDebugState();
     debugState.proxies = {
       fetchedAt: new Date().toISOString(),
-      candidates: scored.map(({ id, name, score, metrics, tunnelRttMs, reachable, sameNetwork }) => ({
-        id, name, score, metrics, tunnelRttMs, reachable, sameNetwork
+      candidates: scored.map(({ id, name, score, metrics, tunnelRttMs, reachable, sameNetwork, holdsThisFilm }) => ({
+        id, name, score, metrics, tunnelRttMs, reachable, sameNetwork, holdsThisFilm
       })),
       selectedId: ""
     };
@@ -107,14 +121,16 @@ export class ProxySelector {
       throw new Error("No proxy clients are available.");
     }
 
-    // Prefer proxies verified reachable from the internet or sitting on the
-    // viewer's own network. This is a PREFERENCE, not a filter: a failed
-    // inbound-TCP probe does not prove WebRTC cannot connect (hole punching),
-    // so when no candidate qualifies, everyone stays eligible.
-    const preferred = scored.filter((c) => c.reachable === true || c.sameNetwork === true);
-    const pool = preferred.length > 0 ? preferred : scored;
-    if (preferred.length === 0 && scored.length > 0) {
-      console.info("[proxy-selector] no reachable/same-network proxies; falling back to all candidates");
+    // Which of them may be chosen: reachable from the internet or on the
+    // viewer's own network, and among those one that is already downloading
+    // this film. The rule itself is in `domain/proxy-preference.js` — it is
+    // pure, and a decision this easy to get quietly wrong should be exercised
+    // without a browser.
+    const { pool, narrowedBy } = choosePool(scored);
+    if (narrowedBy !== "") {
+      console.info(
+        `[proxy-selector] ${pool.length} of ${scored.length} candidate(s) after ${narrowedBy}`
+      );
     }
 
     const best = pool[0];

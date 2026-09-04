@@ -48,11 +48,13 @@ export async function handleApiProxyClientsHealthGet(req, reply, { clientsStore,
     connected.map(async (client) => {
       let metrics = null;
       let rttMs = null;
+      let holds = [];
 
       try {
         const result = await tunnelServer.requestHealth(client.id);
         metrics = result.metrics;
         rttMs = result.rttMs;
+        holds = Array.isArray(result.holds) ? result.holds : [];
       } catch {
         // Proxy timed out or disconnected — include it with null metrics.
       }
@@ -65,6 +67,12 @@ export async function handleApiProxyClientsHealthGet(req, reply, { clientsStore,
         lastSeenAt: client.lastSeenAt,
         metrics,
         rttMs,
+        // The films this proxy is already downloading. A viewer of one of them
+        // costs it the encode and nothing else, while the same viewer sent
+        // anywhere else starts the download from nothing — which is the whole
+        // of what content affinity is. Reported, not acted on: only the browser
+        // knows which film it is about to open.
+        holds,
         // Dial-back probe result (null = not probed yet). A false value means
         // the inbound TCP probe failed — NOT that WebRTC cannot connect.
         reachable: client.reachable ?? null,

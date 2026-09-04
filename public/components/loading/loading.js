@@ -3565,6 +3565,29 @@ export class Loading extends StateDerivedView {
     }
   }
 
+  /**
+   * The infohash of the film being opened, or "".
+   *
+   * The one name a proxy and this page share for a film: a magnet and a
+   * `.torrent` describing the same content carry it identically, which is why
+   * the proxy keys its sources by it too. Used to prefer a proxy that is already
+   * downloading this film — see `chooseBestProxy`.
+   *
+   * @returns {string}
+   */
+  #currentInfoHash() {
+    const current = this.#session?.current;
+    const parsed = typeof current?.infoHashHex === "string" ? current.infoHashHex.trim() : "";
+    if (/^[0-9a-f]{40}$/i.test(parsed)) {
+      return parsed.toLowerCase();
+    }
+    // A magnet is opened before anything is parsed, and carries the hash itself.
+    const magnet = current?.sourceType === "magnet" && typeof current.sourceValue === "string"
+      ? /xt=urn:btih:([0-9a-z]{40})/i.exec(current.sourceValue)
+      : null;
+    return magnet ? magnet[1].toLowerCase() : "";
+  }
+
   async #acquireTransport({ onConnecting } = {}) {
     if (this.#transport && (!this.#proxy || this.#proxy.isOpen)) {
       return this.#transport;
@@ -3667,6 +3690,7 @@ export class Loading extends StateDerivedView {
         allowPrivateCandidates: false,
         connectTimeoutMs: 12_000,
         onConnecting,
+        infoHash: this.#currentInfoHash(),
         onlyIds: this.#restrictProxiesTo
       });
     } catch (publicOnlyError) {
@@ -3690,6 +3714,7 @@ export class Loading extends StateDerivedView {
       proxy = await this.#proxySelector.chooseBestProxy({
         allowPrivateCandidates: true,
         onConnecting,
+        infoHash: this.#currentInfoHash(),
         onlyIds: this.#restrictProxiesTo
       });
     }
