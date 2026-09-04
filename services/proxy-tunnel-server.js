@@ -41,7 +41,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * @property {(handler: (proxyId: string, endpoint: { externalIp: string | null, externalPort: number, protocol: string }) => void) => void} setEndpointHandler
  *   Wire up the callback that receives `proxy-endpoint` reports (the UPnP-mapped
  *   external endpoint). Called once during server bootstrap.
- * @property {(proxyId: string, timeoutMs?: number) => Promise<{ metrics: import("../../../proxy/services/health-collector.js").HealthMetrics, rttMs: number }>} requestHealth
+ * @property {(proxyId: string, timeoutMs?: number) => Promise<{ metrics: import("../../../proxy/services/health-collector.js").HealthMetrics, holds: { infoHash: string, progress: number, bytes: number }[], rttMs: number }>} requestHealth
  *   Send a `health-request` to a proxy and resolve with the response.
  *   `rttMs` is the full tunnel round-trip time.
  * @property {(proxyId: string, mediaInfo: object, timeoutMs?: number) => Promise<{ offer: { copy: number[], transcode: number[] } | null, rttMs: number }>} requestCanServe
@@ -153,7 +153,14 @@ export function createProxyTunnelServer() {
       const pending = pendingHealthRequests.get(message.requestId);
       if (pending) {
         pendingHealthRequests.delete(message.requestId);
-        pending.resolve({ metrics: message.metrics ?? {}, rttMs: Date.now() - pending.sentAt });
+        pending.resolve({
+          metrics: message.metrics ?? {},
+          // Which films that proxy holds. Passed through rather than judged
+          // here: what to do with it is the browser's, which is the only side
+          // that knows which film is being opened.
+          holds: Array.isArray(message.holds) ? message.holds : [],
+          rttMs: Date.now() - pending.sentAt
+        });
       }
       return;
     }
