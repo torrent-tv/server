@@ -1,3 +1,8 @@
+## 0.27.2
+
+- **New**: The page names itself to the proxy over the control channel, once, as soon as that channel opens — and again on every rung of the reconnect ladder, since a reconnect builds a new connection under a player that never stopped. That is what lets the proxy treat a closed connection as this person leaving, rather than waiting out a silence that a viewer on pause produces just as well as a closed tab. The name is the one the page already mints per film opened, so one person stays one person across a transport swap.
+- **Chore**: The loop that polls a session's progress no longer claims to be asserting presence — presence is the connection's answer now. What it is for is the reading it brings back, which is the only sample of the proxy's state during steady playback.
+
 ## 0.27.1
 
 - **New**: A viewer is sent to a proxy that is already downloading their film, where there is one. Everything proxy selection read until now — processor load, free memory, round-trip time — is about the machine and none of it is about the film, so two strangers watching one film landed together only by chance, and the work they could share was work nobody shared. The proxy reports what it holds with the health poll that already happens before selection; matching it against the film being opened happens in the browser, which is the only side that knows what that film is.

@@ -291,11 +291,18 @@ export class TorrentSession {
    * answered 404 while the player sat frozen on a spinner. Reproducible at
    * will: pause and wait ten minutes.
    *
-   * So presence is re-asserted rather than assumed. The ping is the progress
-   * endpoint, which the proxy already treats as an access, at an interval far
-   * below its timeout; it costs a 44-byte response. It stops on its own when
-   * the last session is released, so a viewer who really has gone still frees
-   * the session — by the proxy's timer, exactly as before.
+   * **Presence is no longer what this is for.** Since 2026-09-05 the proxy
+   * learns that a viewer is here from the CONNECTION — the page names itself on
+   * the control channel when it opens — and learns that they have gone when
+   * that connection closes. A paused viewer's connection stays open, so the
+   * failure this loop was written against cannot recur through silence.
+   *
+   * What it is for now is the READING it brings back, which is a genuine
+   * sample of something that changes continuously with nothing to announce it:
+   * the height the proxy has settled on, and the rest of the progress detail.
+   * It is the only such reading during steady playback — everything else polls
+   * only while the picture is stopped. It stops on its own when the last
+   * session is released.
    *
    * @returns {void}
    */
