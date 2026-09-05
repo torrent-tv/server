@@ -1,3 +1,8 @@
+## 0.27.3
+
+- **New**: The page says whether the picture is moving, beside where it is and how much it holds, and says it the moment it changes rather than at the next ten-second report. A viewer who has stopped consumes nothing, so nothing in front of them falls due and the proxy's work goes to whoever is watching. Working it out from a position that has not moved takes two reports and is wrong whenever a full cushion makes a playing browser go quiet between segments, which it does.
+- **Fix**: A report is no longer dropped for want of a fresh link measurement. A viewer who has stopped the picture measures nothing by construction, and their stopping is the fact the report exists to carry; the last figure the connection showed stands in.
+
 ## 0.27.2
 
 - **New**: The page names itself to the proxy over the control channel, once, as soon as that channel opens — and again on every rung of the reconnect ladder, since a reconnect builds a new connection under a player that never stopped. That is what lets the proxy treat a closed connection as this person leaving, rather than waiting out a silence that a viewer on pause produces just as well as a closed tab. The name is the one the page already mints per film opened, so one person stays one person across a transport swap.

@@ -26,6 +26,18 @@ let samples = [];
 let active = null;
 
 /**
+ * The last link speed this connection ever showed.
+ *
+ * A viewer who has stopped the picture stops measuring, and a report skipped
+ * for want of a fresh figure would lose the very fact it is being sent to
+ * carry. The last figure is what is known about the link, and it is truer than
+ * sending nothing.
+ *
+ * @type {number | null}
+ */
+let lastLinkMbps = null;
+
+/**
  * Record one completed segment transfer (called by the HLS loader).
  *
  * @param {number} bytes
@@ -96,15 +108,24 @@ export function startNetReporter({
   sessionId,
   consumerId = "",
   getBufferedAheadSec,
-  getPositionSeconds
+  getPositionSeconds,
+  getPlaying
 }) {
   stopNetReporter();
   samples = [];
   const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/net-report`;
-  const timer = setInterval(() => {
-    const linkMbps = medianLinkMbps();
+  const send = () => {
+    // The last figure stands when nothing has been measured recently. A viewer
+    // who has stopped the picture measures nothing by construction, and their
+    // stopping is the fact this report exists to carry — skipping the report
+    // for want of a link reading would lose exactly the case that matters.
+    const measured = medianLinkMbps();
+    if (measured !== null) {
+      lastLinkMbps = measured;
+    }
+    const linkMbps = lastLinkMbps;
     if (linkMbps === null) {
-      return; // nothing measured recently (paused / idle) — skip this tick
+      return; // nothing has ever been measured on this connection
     }
     let bufferedAheadSec = 0;
     try {
@@ -129,9 +150,22 @@ export function startNetReporter({
       // and the proxy falls back to the subtraction for a viewer who states
       // nothing.
     }
+    // Whether the picture is moving. A stopped viewer consumes nothing, so
+    // nothing in front of them ever falls due and the proxy gives the work to
+    // whoever is watching. The page knows this exactly; working it out from a
+    // position that has not moved takes two reports and is wrong whenever a
+    // full cushion makes a playing browser go quiet between segments.
+    let playing = true;
+    try {
+      playing = typeof getPlaying === "function" ? Boolean(getPlaying()) : true;
+    } catch {
+      // silent-ok: same as the two readings above — the report still goes, and
+      // a viewer who says nothing about the picture counts as playing.
+    }
     console.debug(
       `[torrent-tv] net-report link=${linkMbps.toFixed(2)}Mbps buffer=${bufferedAheadSec.toFixed(1)}s` +
-        (positionSeconds === null ? "" : ` at=${positionSeconds.toFixed(1)}s`)
+        (positionSeconds === null ? "" : ` at=${positionSeconds.toFixed(1)}s`) +
+        (playing ? "" : " paused")
     );
     void transport
       .fetch(path, {
@@ -140,13 +174,28 @@ export function startNetReporter({
         body: JSON.stringify({
           linkMbps,
           bufferedAheadSec,
+          playing,
           ...(consumerId ? { consumerId } : {}),
           ...(positionSeconds === null ? {} : { positionSeconds })
         })
       })
       .catch(() => undefined); // best-effort — next tick simply tries again
-  }, REPORT_INTERVAL_MS);
-  active = { timer };
+  };
+  const timer = setInterval(send, REPORT_INTERVAL_MS);
+  active = { timer, send };
+}
+
+/**
+ * Say it now rather than at the next tick.
+ *
+ * For the facts that are EVENTS: the viewer stopped the picture, or started it
+ * again. Waiting up to ten seconds to mention either would leave the proxy
+ * working for somebody who is not watching, or not working for somebody who is.
+ *
+ * @returns {void}
+ */
+export function reportNow() {
+  active?.send?.();
 }
 
 /**

@@ -5,6 +5,7 @@ import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.j
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
+import { reportNow } from "../../domain/net-report.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -958,6 +959,14 @@ export class Loading extends StateDerivedView {
           signalApp(APP_EVENT.RESUMED, { viewerWantsPlayback: true });
         }
         this.#reportSeekIntent(name, videoElement);
+        // Whether the picture is moving is a fact the proxy orders its work by:
+        // a viewer who has stopped consumes nothing, so nothing in front of them
+        // falls due and the work goes to whoever is watching. Sent the moment it
+        // changes, like a seek — waiting up to ten seconds for the next periodic
+        // report would leave the proxy working for somebody who is not watching.
+        if (name === "pause" || name === "playing" || name === "ended") {
+          reportNow();
+        }
         // The moments where the position has definitely changed and settled.
         if (name === "seeked" || name === "pause" || name === "playing") {
           this.#reflectStateInUrl();
