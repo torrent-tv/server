@@ -3619,7 +3619,14 @@ export class Loading extends StateDerivedView {
       listeners: new Set(typeof onConnecting === "function" ? [onConnecting] : []),
       announced: null
     };
-    record.promise = this.#connectTransport(record).finally(() => {
+    record.promise = this.#connectTransport(record).then((transport) => {
+      // Say who is watching, over the connection itself. The proxy can then
+      // treat that connection closing as this PERSON leaving — every output
+      // they were watching at once — instead of waiting out a silence that a
+      // paused viewer produces just as well as a closed tab.
+      transport?.identifyViewer?.(this.#session?.consumerId);
+      return transport;
+    }).finally(() => {
       // Only if it is still ours: an abandoned attempt was replaced long ago
       // and must not clear the connect that replaced it.
       if (this.#transportAcquisition === record) {

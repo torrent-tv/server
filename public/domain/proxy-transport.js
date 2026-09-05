@@ -62,6 +62,12 @@ export class ProxyTransport {
   #webRtcProxy = null;
 
   /**
+   * Who is watching over this transport. See `identifyViewer`.
+   * @type {string}
+   */
+  #viewerName = "";
+
+  /**
    * @param {ProxyTransportInit} params
    */
   constructor({ fetchFn, baseUrl }) {
@@ -82,6 +88,34 @@ export class ProxyTransport {
       throw new Error("replaceWebRtcProxy is only valid for WebRTC transports.");
     }
     this.#webRtcProxy = newProxy;
+    // The person did not change when the connection did. A new connection that
+    // never says who is on it leaves the proxy unable to tell a viewer leaving
+    // from a viewer whose transport was swapped underneath them.
+    if (this.#viewerName) {
+      newProxy.identifyViewer?.(this.#viewerName);
+    }
+  }
+
+  /**
+   * Name the person watching over this transport.
+   *
+   * Kept here as well as on the connection, because the connection is replaced
+   * on every rung of the reconnect ladder while this object is not: this is
+   * where the name outlives the thing that carries it.
+   *
+   * On an HTTP transport there is nothing to tell — presence there is a
+   * question for the transport that replaces this one (roadmap: the direct
+   * HTTPS path), and until then the proxy falls back to the silence rule.
+   *
+   * @param {string} consumerId
+   * @returns {void}
+   */
+  identifyViewer(consumerId) {
+    if (typeof consumerId !== "string" || consumerId.length === 0) {
+      return;
+    }
+    this.#viewerName = consumerId;
+    this.#webRtcProxy?.identifyViewer?.(consumerId);
   }
 
   /**

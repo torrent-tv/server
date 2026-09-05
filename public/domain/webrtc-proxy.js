@@ -143,6 +143,18 @@ export class WebRtcProxy {
    */
   #controlChannel = null;
   /**
+   * Who is watching over this connection: the page's own consumer id.
+   *
+   * Held here so it can be re-announced whenever a control channel opens —
+   * which happens again on every rung of the reconnect ladder, since a
+   * reconnect builds a new peer connection under a player that never stopped.
+   * The name is the PAGE's and not this connection's, so one person stays one
+   * person across a transport swap.
+   *
+   * @type {string}
+   */
+  #viewerName = "";
+  /**
    * A third channel, opened UNORDERED and with no retransmission.
    *
    * It carries nothing but the proxy's numbered probes, and it exists to answer
@@ -518,6 +530,13 @@ export class WebRtcProxy {
     });
     this.#controlChannel.addEventListener("close", () => {
       this.#controlChannel = null;
+    });
+    // Say who is here, the moment there is something to say it on. This is
+    // what lets the proxy treat a closed connection as a PERSON leaving: until
+    // it was sent, a connection knew nothing about who was on it, and a killed
+    // tab released nothing at all.
+    this.#controlChannel.addEventListener("open", () => {
+      this.#announceViewer();
     });
 
     // The unordered, non-retransmitting channel. It carries probes only, so a
@@ -1121,6 +1140,52 @@ export class WebRtcProxy {
 
     this.#channel.send(JSON.stringify({ type: "ping", id }));
     return rttPromise;
+  }
+
+  /**
+   * Name the person watching over this connection.
+   *
+   * Called once by whoever owns the page's consumer id, and remembered, so that
+   * every control channel opened afterwards — including the ones the reconnect
+   * ladder opens under a player that never stopped — says the same name again.
+   *
+   * @param {string} consumerId
+   * @returns {void}
+   */
+  identifyViewer(consumerId) {
+    if (typeof consumerId !== "string" || consumerId.length === 0) {
+      return;
+    }
+    if (this.#viewerName === consumerId) {
+      return;
+    }
+    this.#viewerName = consumerId;
+    this.#announceViewer();
+  }
+
+  /**
+   * Send the name, if there is one and there is somewhere to send it.
+   *
+   * Silent when the control channel is not open: the open handler sends it, so
+   * announcing before the channel exists is not a loss.
+   *
+   * @returns {void}
+   */
+  #announceViewer() {
+    if (!this.#viewerName || this.#controlChannel?.readyState !== "open") {
+      return;
+    }
+    try {
+      this.#controlChannel.send(
+        JSON.stringify({ type: "viewer", consumerId: this.#viewerName })
+      );
+    } catch (error) {
+      // Not fatal and not retried here: the next control channel to open says
+      // it again, and until then the proxy falls back to the silence rule.
+      console.debug(
+        `[dc] could not name the viewer on the control channel: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   /**
