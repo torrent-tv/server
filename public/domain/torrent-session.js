@@ -988,7 +988,8 @@ export class TorrentSession {
         // act on whichever viewer reported last.
         consumerId: this.consumerId,
         getBufferedAheadSec: bufferedAheadSeconds,
-        getPositionSeconds: playbackPositionSeconds
+        getPositionSeconds: playbackPositionSeconds,
+        getPlaying: pictureIsMoving
       });
     }
 
@@ -1382,6 +1383,28 @@ function playbackPositionSeconds() {
   }
   const at = video.currentTime;
   return Number.isFinite(at) && at >= 0 ? at : null;
+}
+
+/**
+ * Whether the picture is moving.
+ *
+ * The third fact a viewer states about itself, beside where it is and how much
+ * it holds. A viewer who has stopped consumes nothing, so nothing in front of
+ * them falls due and the proxy's work goes to whoever is watching — and that
+ * follows from this one boolean without any rule about pauses anywhere.
+ *
+ * Read from the element rather than remembered, so it is true at the moment it
+ * is asked. An element that cannot be read counts as playing, which is the
+ * cautious direction: it keeps the viewer's own work being made.
+ *
+ * @returns {boolean}
+ */
+function pictureIsMoving() {
+  const video = document.querySelector("#player__video");
+  if (!(video instanceof HTMLVideoElement)) {
+    return true;
+  }
+  return !video.paused && !video.ended;
 }
 
 function isAbortError(error) {
