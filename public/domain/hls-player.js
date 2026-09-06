@@ -506,6 +506,21 @@ export function createHlsPlayer(onLog) {
    */
   let pinRestores = 0;
 
+  /**
+   * The last jump the PLAYER made over a hole in its own buffer, and when.
+   *
+   * hls.js moves `currentTime` itself when a fragment lands with a gap before
+   * it, and the media element then fires `seeking` exactly as it does for a
+   * person dragging the time bar. Nothing downstream could tell the two apart,
+   * so our own hole was reported to the proxy as the viewer having seeked —
+   * eight seek requests against one action by a person, field 2026-09-06 — and
+   * each of those moves the priority map, and through it every encoder, for
+   * every viewer on that film.
+   *
+   * @type {{ to: number, at: number } | null}
+   */
+  let ownJump = null;
+
   return {
     /**
      * The quality variants this stream offers, in the player's own order.
@@ -518,6 +533,33 @@ export function createHlsPlayer(onLog) {
      *
      * @returns {{ index: number, height: number, width: number, bitrate: number }[]}
      */
+    /**
+     * Was the seek now in progress the player's own jump over a hole?
+     *
+     * Answered by position and by age together: the jump is announced the
+     * instant before the media element fires `seeking`, and a person cannot
+     * have arrived at the same hundredth of a second by hand in that window. A
+     * true answer is consumed, so one jump excuses one `seeking` and a later
+     * one by a person is reported as it should be.
+     *
+     * @param {number} position - Where the element now stands.
+     * @param {number} [withinMs] - How recent the jump must be. The default is
+     *   the same order as one media event loop turn.
+     * @returns {boolean}
+     */
+    wasOwnJump(position, withinMs = 1000) {
+      if (ownJump === null) {
+        return false;
+      }
+      const fresh = Date.now() - ownJump.at <= withinMs;
+      const same = Math.abs(Number(position) - ownJump.to) < 0.01;
+      if (fresh && same) {
+        ownJump = null;
+        return true;
+      }
+      return false;
+    },
+
     levels() {
       const levels = Array.isArray(hlsInstance?.levels) ? hlsInstance.levels : [];
       if (levels.length < 2) {
@@ -1357,6 +1399,15 @@ export function createHlsPlayer(onLog) {
             const t = new Date().toISOString().slice(11, 23);
             const currentTime = typeof videoElement?.currentTime === "number" ? videoElement.currentTime.toFixed(2) : "?";
             const hole = typeof data?.hole === "number" ? ` hole=${data.hole.toFixed(3)}s` : "";
+            // The player moving itself. Recorded with the position it landed on
+            // so that the `seeking` this causes can be recognised and not
+            // reported as somebody's decision.
+            if (data?.details === "bufferSeekOverHole") {
+              const landed = Number(videoElement?.currentTime);
+              if (Number.isFinite(landed)) {
+                ownJump = { to: landed, at: Date.now() };
+              }
+            }
             if (data?.fatal) {
               // What actually went wrong, named. Logging the whole `data` put a
               // dump of the segment's bytes into the line, and the forwarded

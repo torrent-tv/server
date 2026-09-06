@@ -1101,6 +1101,22 @@ export class Loading extends StateDerivedView {
       if (!Number.isFinite(position)) {
         return;
       }
+      // OUR OWN JUMP IS NOT SOMEBODY'S DECISION.
+      //
+      // hls.js moves `currentTime` when a fragment lands with a gap before it,
+      // and the media element fires `seeking` exactly as it does for a person
+      // dragging the time bar. Reported as a seek, that moves the priority map
+      // and through it every encoder — for every viewer of that film, not only
+      // this one. Field 2026-09-06: eight seek requests against one action by a
+      // person, the other seven all following a jump over a hole this proxy had
+      // itself created.
+      //
+      // The position is still updated by the ordinary reports; what is withheld
+      // is the claim that somebody chose to go there.
+      if (this.#hlsPlayer?.wasOwnJump?.(position)) {
+        this.#logEvt(`jumped its own hole to ${position.toFixed(1)}s — not reported as a seek`);
+        return;
+      }
       this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
       // A new destination is a new wait: the countdown for the old one no
       // longer describes anything, so it may start over from a larger number.

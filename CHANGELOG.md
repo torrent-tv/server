@@ -1,3 +1,7 @@
+## 0.27.4
+
+- **Fix**: The player jumping over a hole in its own buffer is no longer reported to the proxy as the viewer having seeked. hls.js moves `currentTime` itself when a fragment lands with a gap before it, and the media element then fires `seeking` exactly as it does for somebody dragging the time bar — so a hole this proxy had itself created came back to it as a decision. Field 2026-09-06: eight seek requests against one action by a person, the other seven all following such a jump. Each of them moves the priority map and through it every encoder, for every viewer of that film and not only the one who jumped. The player records where it moved itself and the report is withheld for that position; the viewer's own position is still updated by the ordinary reports.
+
 ## 0.27.3
 
 - **New**: The page says whether the picture is moving, beside where it is and how much it holds, and says it the moment it changes rather than at the next ten-second report. A viewer who has stopped consumes nothing, so nothing in front of them falls due and the proxy's work goes to whoever is watching. Working it out from a position that has not moved takes two reports and is wrong whenever a full cushion makes a playing browser go quiet between segments, which it does.
