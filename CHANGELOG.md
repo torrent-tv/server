@@ -1,6 +1,7 @@
 ## 0.27.4
 
 - **Fix**: The player jumping over a hole in its own buffer is no longer reported to the proxy as the viewer having seeked. hls.js moves `currentTime` itself when a fragment lands with a gap before it, and the media element then fires `seeking` exactly as it does for somebody dragging the time bar — so a hole this proxy had itself created came back to it as a decision. Field 2026-09-06: eight seek requests against one action by a person, the other seven all following such a jump. Each of them moves the priority map and through it every encoder, for every viewer of that film and not only the one who jumped. The player records where it moved itself and the report is withheld for that position; the viewer's own position is still updated by the ordinary reports.
+- **Chore**: The real `MediaSource`'s own `readyState` is now read directly, from `sourceopen`/`sourceended`/`sourceclose` listeners attached to the object itself, and printed beside every fatal and non-fatal hls.js error and beside the media-attaching/detaching lines — labelled `msReadyState` to keep it apart from the unrelated `readyState` the video element already carries under that name. Two field deaths (2026-08-31, 2026-09-07) both ended in `MediaSource readyState: ended` with nothing in the log saying when it actually closed, because only hls.js's own derived events (`BUFFER_EOS`, `MEDIA_DETACHING`) were watched and neither had fired before either one — these listeners are what that question was waiting on.
 
 ## 0.27.3
 

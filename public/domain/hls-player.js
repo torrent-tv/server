@@ -887,6 +887,20 @@ export function createHlsPlayer(onLog) {
         let recovering = false;
         // Said once per player.
         let unrecoverableAnnounced = false;
+        // The real, native MediaSource — read off MEDIA_ATTACHED's own event
+        // data, the same field hls.js's own GapController reads internally
+        // (`onMediaAttached(event, data) { this.mediaSource = data.mediaSource; }`).
+        // Its `readyState` ("closed"/"open"/"ended") is a DIFFERENT thing from
+        // the video ELEMENT's `readyState` (0-4, HAVE_NOTHING..HAVE_ENOUGH_DATA)
+        // that every log line below already prints under the same field name —
+        // the two have been conflated before, which is why this one is kept in
+        // its own variable and printed under its own name, `msReadyState`.
+        // 2026-08-31/2026-09-07 both left the question "did the MediaSource
+        // close before or after the stall that killed the player" unanswered
+        // because nothing held this reference and nothing listened on it
+        // directly — only hls.js's own derived events (BUFFER_EOS,
+        // MEDIA_DETACHING) were watched, and neither fired before either death.
+        let liveMediaSource = null;
         /**
          * An append refused by an ENDED MediaSource is the end of this player:
          * nothing downstream can mend it, and the viewer is otherwise left with
@@ -937,7 +951,10 @@ export function createHlsPlayer(onLog) {
             }
           }
           unrecoverableAnnounced = true;
-          console.warn(`[torrent-tv][hls] ${t} unrecoverable: the media source has ended; the player cannot continue`);
+          console.warn(
+            `[torrent-tv][hls] ${t} unrecoverable: the media source has ended; the player cannot continue ` +
+            `(msReadyState=${liveMediaSource?.readyState ?? "-"})`
+          );
           if (typeof options.onUnrecoverable === "function") {
             options.onUnrecoverable(details);
           }
@@ -1346,7 +1363,7 @@ export function createHlsPlayer(onLog) {
               options.onLevelSwitched(height);
             }
           });
-          instance.on(HlsClass.Events.MEDIA_ATTACHED, () => {
+          instance.on(HlsClass.Events.MEDIA_ATTACHED, (_event, data) => {
             const attachTookMs = Math.round(performance.now() - attachRequestedAt);
             stopWatchingTasks();
             noteStage(
@@ -1357,6 +1374,25 @@ export function createHlsPlayer(onLog) {
                   : " — this browser does not report long tasks, so what the main thread was doing is unmeasured")
                 : "")
             );
+            // The real MediaSource, listened to directly instead of through
+            // hls.js's own derived events — see the comment beside
+            // `liveMediaSource`'s declaration for why. `sourceclose` is
+            // included beside the two the project already knew about: it is
+            // the third state transition the native object can make and
+            // nothing here watched for it before.
+            liveMediaSource = data?.mediaSource ?? null;
+            if (liveMediaSource) {
+              const at = () => (videoElement instanceof HTMLVideoElement ? videoElement.currentTime.toFixed(2) : "?");
+              for (const name of ["sourceopen", "sourceended", "sourceclose"]) {
+                liveMediaSource.addEventListener(name, () => {
+                  console.warn(
+                    `[torrent-tv][hls] MediaSource ${name} currentTime=${at()} ` +
+                    `msReadyState=${liveMediaSource?.readyState ?? "-"}`
+                  );
+                });
+              }
+              console.debug(`[torrent-tv][hls] MediaSource attached, msReadyState=${liveMediaSource.readyState}`);
+            }
             instance.loadSource(manifestUrl);
             noteStage("manifest requested");
           });
@@ -1378,11 +1414,15 @@ export function createHlsPlayer(onLog) {
             }
             instance.on(event, (_evt, data) => {
               const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime.toFixed(2) : "?";
-              const ready = videoElement instanceof HTMLVideoElement ? videoElement.readyState : "?";
+              const videoReadyState = videoElement instanceof HTMLVideoElement ? videoElement.readyState : "?";
               console.warn(
-                `[torrent-tv][hls] ${name} currentTime=${at} readyState=${ready} ` +
+                `[torrent-tv][hls] ${name} currentTime=${at} videoReadyState=${videoReadyState} ` +
+                `msReadyState=${liveMediaSource?.readyState ?? "-"} ` +
                 `type=${data?.type ?? "-"} transfer=${data?.transferMedia ? "yes" : "no"}`
               );
+              if (name === "media-detached") {
+                liveMediaSource = null;
+              }
             });
           }
           instance.on(HlsClass.Events.ERROR, (_event, data) => {
@@ -1418,6 +1458,7 @@ export function createHlsPlayer(onLog) {
               // buffer refused it, and which file.
               console.warn(
                 `[torrent-tv][hls] ${t} fatal: ${details} currentTime=${currentTime}${hole} ` +
+                `msReadyState=${liveMediaSource?.readyState ?? "-"} ` +
                 `reason=${data?.reason ?? "-"} buffer=${data?.sourceBufferName ?? "-"} ` +
                 `level=${data?.level ?? "-"} frag=${data?.frag?.relurl ?? "-"} sn=${data?.frag?.sn ?? "-"} ` +
                 `error=${data?.error?.name ?? "-"}: ${data?.error?.message ?? "-"}`
@@ -1452,7 +1493,10 @@ export function createHlsPlayer(onLog) {
               const level = data?.error
                 ? console.warn.bind(console)
                 : console.debug.bind(console);
-              level(`[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole}${cause}`);
+              level(
+                `[torrent-tv][hls] ${t} non-fatal: ${details} currentTime=${currentTime}${hole} ` +
+                `msReadyState=${liveMediaSource?.readyState ?? "-"}${cause}`
+              );
               // An append refused by an ENDED MediaSource is the end of this
               // player, and this is where it actually arrives: non-fatal, twice,
               // and never escalated. Measured 2026-08-15 — `bufferAppendingError`
