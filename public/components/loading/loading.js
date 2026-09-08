@@ -992,10 +992,23 @@ export class Loading extends StateDerivedView {
     // Leaving, or being sent to the background, is the last chance to record
     // where the viewer got to. `pagehide` and `visibilitychange` are the pair
     // that fire reliably on iOS, where `beforeunload` is ignored.
+    // Entering or leaving picture-in-picture is a change of who is watching:
+    // the tab may be hidden while the viewer watches the picture floating over
+    // something else. Said at once, like a pause, because a hidden tab has its
+    // timers throttled and the periodic report may be a long way off.
+    for (const name of ["enterpictureinpicture", "leavepictureinpicture"]) {
+      videoElement.addEventListener(name, () => reportNow());
+    }
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") {
         this.#reflectStateInUrl();
       }
+      // WHETHER THIS PAGE IS ON SCREEN, said the moment it changes. A hidden tab
+      // asks for nothing and looked exactly like a viewer holding a full
+      // cushion; sent on the change, because once hidden the browser throttles
+      // the timer that would otherwise carry it — measured 800 ms of event-loop
+      // lag in the field, against a ten-second reporting interval.
+      reportNow();
     });
     window.addEventListener("pagehide", () => this.#reflectStateInUrl());
     document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
