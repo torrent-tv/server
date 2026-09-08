@@ -1,3 +1,14 @@
+## 0.27.5
+
+- **New**: Every viewer report says whether the page is ON SCREEN and whether the
+  picture has been pulled out of it into picture-in-picture, and says it the
+  moment either changes rather than at the next ten-second tick. A hidden tab has
+  its timers throttled by the browser — 800 ms of event-loop lag measured in the
+  field — so it asks for nothing and looked to the proxy exactly like a viewer
+  holding a full cushion: delivery stood still for the last six minutes of the
+  session of 2026-09-08 and nothing anywhere said the tab had gone away. Two
+  facts and not one, because picture-in-picture is watching WITH the tab hidden.
+
 ## 0.27.4
 
 - **Fix**: The player jumping over a hole in its own buffer is no longer reported to the proxy as the viewer having seeked. hls.js moves `currentTime` itself when a fragment lands with a gap before it, and the media element then fires `seeking` exactly as it does for somebody dragging the time bar — so a hole this proxy had itself created came back to it as a decision. Field 2026-09-06: eight seek requests against one action by a person, the other seven all following such a jump. Each of them moves the priority map and through it every encoder, for every viewer of that film and not only the one who jumped. The player records where it moved itself and the report is withheld for that position; the viewer's own position is still updated by the ordinary reports.

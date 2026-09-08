@@ -162,10 +162,32 @@ export function startNetReporter({
       // silent-ok: same as the two readings above — the report still goes, and
       // a viewer who says nothing about the picture counts as playing.
     }
+    // WHETHER THIS PAGE IS ON SCREEN AT ALL, and if not, whether the picture was
+    // pulled out of it. The browser knows both exactly and the proxy could not
+    // tell them apart: a hidden tab has its timers throttled — measured
+    // `loopLag=800ms` in the field — so it asks for nothing and looks precisely
+    // like a viewer holding a full cushion. Field 2026-09-08: delivery stood
+    // still for the last six minutes of a session and nothing anywhere said
+    // that the tab had gone away.
+    //
+    // Picture-in-picture is the case that makes the distinction necessary rather
+    // than merely tidy: the tab is hidden and the viewer is watching.
+    let onScreen = true;
+    let inPictureInPicture = false;
+    try {
+      inPictureInPicture = Boolean(document.pictureInPictureElement);
+      onScreen = document.visibilityState !== "hidden" || inPictureInPicture;
+    } catch {
+      // silent-ok: same as the readings above — an environment that cannot
+      // answer counts as on screen, which is what every page meant before it
+      // could say otherwise.
+    }
     console.debug(
       `[torrent-tv] net-report link=${linkMbps.toFixed(2)}Mbps buffer=${bufferedAheadSec.toFixed(1)}s` +
         (positionSeconds === null ? "" : ` at=${positionSeconds.toFixed(1)}s`) +
-        (playing ? "" : " paused")
+        (playing ? "" : " paused") +
+        (onScreen ? "" : " off-screen") +
+        (inPictureInPicture ? " in-pip" : "")
     );
     void transport
       .fetch(path, {
@@ -175,6 +197,8 @@ export function startNetReporter({
           linkMbps,
           bufferedAheadSec,
           playing,
+          onScreen,
+          inPictureInPicture,
           ...(consumerId ? { consumerId } : {}),
           ...(positionSeconds === null ? {} : { positionSeconds })
         })
