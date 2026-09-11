@@ -256,6 +256,17 @@ export class WaitingModel {
     // keeping the last one made the first render of the next wait state a
     // cushion that belonged to the wait before it.
     this.#bufferedAhead = null;
+    // AND WHAT THE PROXY LAST SAID, which belonged to the file that has just
+    // been left. Both are kept between polls on purpose — the answer arrives
+    // every second or two and the estimate is recomputed on every buffer
+    // sample — but nothing cleared them when the wait ended, so the first
+    // seconds of the NEXT wait were estimated from the previous film. Field
+    // 2026-09-11: waiting for the second episode, the line read
+    // `proxyProcessed=3194.44 proxyProduced=3194.44 speedRaw=15x` for four
+    // minutes — the first episode, which had finished, against a session that
+    // did not exist yet.
+    this.#transcodeProgress = null;
+    this.#downloadStats = null;
     this.#downloadRateSamples = [];
     this.#stageMarks = {
       startedAt: Date.now(),

@@ -406,3 +406,24 @@ test("a wait in which nothing was ever predicted is summarised, not thrown on", 
 
   assert.ok(true, "summarising a wait that predicted nothing must not throw");
 });
+
+test("a wait that has ended leaves no figures for the next film", () => {
+  const model = new WaitingModel();
+  // A film being watched: the proxy answers about it, and the estimate is built
+  // from that answer.
+  model.update({
+    transcodeProgress: { processedSeconds: 3194.44, startPositionSeconds: 0, speed: 15 },
+    downloadStats: { downloadSpeed: 4096, downloaded: 1, length: 2 }
+  });
+  model.reset();
+
+  // The viewer picks the next episode. Until the new session answers, there is
+  // nothing to say — and what must NOT be said is the previous film's figures,
+  // which the line carried for four minutes in the field on 2026-09-11.
+  const after = model.update({});
+  assert.equal(after.encodeSpeedText, null, "the previous film's speed was carried into the next wait");
+  assert.ok(
+    after.etaSeconds === null || after.etaSeconds === undefined,
+    "and so was its estimate"
+  );
+});

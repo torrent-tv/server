@@ -1,3 +1,8 @@
+## 0.27.6
+
+- **Fix**: THE WAIT FOR THE NEXT FILM WAS ESTIMATED FROM THE PREVIOUS ONE. What the proxy last said is kept between polls on purpose — the answer arrives every second or two while the estimate is recomputed on every buffer sample — but nothing cleared it when a wait ended. Field 2026-09-11: waiting for the second episode, the diagnostic line read `proxyProcessed=3194.44 proxyProduced=3194.44 speedRaw=15x` once a second for four minutes, which is the first episode, finished, against a session that did not exist yet.
+- **Chore**: NOT yet seen in the field. What the next session must show: the `[eta]` line saying `n/a` between one film and the next, instead of the one before.
+
 ## 0.27.5
 
 - **New**: Every viewer report says whether the page is ON SCREEN and whether the
