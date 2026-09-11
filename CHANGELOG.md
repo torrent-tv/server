@@ -1,3 +1,7 @@
+## 0.27.7
+
+- **Chore**: The same build as 0.27.6, published twice. `npm run patch` was run a second time while the first was still finishing, so a version was minted that carries no change of its own. Recorded rather than hidden: a changelog with a silent gap in it is worse than one that says what happened.
+
 ## 0.27.6
 
 - **New**: The page tells the proxy WHEN each channel's newest probe arrived and when its report leaves, both on its own clock. With the time the proxy stamped into that probe and the time the report arrives, those are the four timestamps that separate the difference between the two clocks from the time a probe actually takes one way — and the proxy needs the second of those to tell a probe waiting behind queued film from an association that has stopped. The clocks are never assumed to agree: the proxy estimates the difference from the exchange and keeps the estimate from whichever report crossed with the least queueing, because the two directions here are as unequal as they get.
