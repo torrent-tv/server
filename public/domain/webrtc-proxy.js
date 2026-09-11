@@ -177,6 +177,20 @@ export class WebRtcProxy {
    * @type {Map<string, number>}
    */
   #probeSeen = new Map();
+
+  /**
+   * When the highest probe on each channel arrived here, by this machine's
+   * clock.
+   *
+   * Sent back with the report, so the proxy can work out the difference between
+   * the two clocks and, with it, how long the probe itself took one way. The
+   * clocks are never assumed to agree: the proxy estimates the difference from
+   * the exchange, and takes the estimate from whichever report crossed with the
+   * least queueing.
+   *
+   * @type {Map<string, number>}
+   */
+  #probeSeenAt = new Map();
   /** Handle of the echo timer; see #startProbeEcho. */
   #probeEchoTimer = null;
   /**
@@ -714,6 +728,12 @@ export class WebRtcProxy {
         const previous = this.#probeSeen.get(label);
         if (previous === undefined || msg.seq > previous) {
           this.#probeSeen.set(label, msg.seq);
+          // WHEN it arrived, on this machine's clock. With the time the proxy
+          // stamped into the probe, this is the second of the four timestamps
+          // that separate the two directions: without it the proxy can only
+          // measure how old the newest probe it has HEARD ABOUT is, which
+          // includes this page's own reporting cadence and the way back.
+          this.#probeSeenAt.set(label, Date.now());
         }
       }
       return;
@@ -1407,6 +1427,12 @@ export class WebRtcProxy {
           JSON.stringify({
             type: "probe-echo",
             seen: Object.fromEntries(this.#probeSeen),
+            // The two timestamps that turn a count into a time. `seenAt` is
+            // when each channel's newest probe arrived here, `sentAt` is when
+            // this report leaves — both on this machine's clock, which the
+            // proxy does not assume agrees with its own.
+            seenAt: Object.fromEntries(this.#probeSeenAt),
+            sentAt: Date.now(),
             report: {
               visibility: typeof document === "undefined" ? "?" : document.visibilityState,
               loopLagMs: Math.round(this.#loopLagMs),
