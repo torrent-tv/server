@@ -1,5 +1,5 @@
 import { APP_EVENTS, ERROR_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
-import { classifyMediaFiles, parseTorrentBytes } from "../../domain/torrent-parser.js";
+import { parseTorrentBytes } from "../../domain/torrent-parser.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 
@@ -360,11 +360,6 @@ export class Torrent extends StateDerivedView {
     try {
       const torrentBytes = new Uint8Array(await torrentFile.arrayBuffer());
       const meta = await parseTorrentBytes(torrentBytes);
-      // The same grouping the rest of the product uses, and the same one the
-      // proxy states its downloading from. This component carried a third copy
-      // of the rules, with two extension lists of its own that were already
-      // shorter than either of the others.
-      const mediaFiles = classifyMediaFiles(meta.files);
       // Consume any pending position/file from a shared URL (one-shot).
       const currentTime = this.#pendingCurrentTime;
       const fileIndex = this.#pendingFileIndex;
@@ -377,7 +372,6 @@ export class Torrent extends StateDerivedView {
             file: torrentFile,
             torrentBytes,
             meta,
-            mediaFiles,
             currentTime,
             fileIndex
           }

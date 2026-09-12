@@ -26,7 +26,6 @@
     "@fastify/helmet": "^13.0.2",
     "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.0.2",
-    "@torrent-tv/torrent-contents": "^1.0.0",
     "fastify": "^5.8.5",
     "get-port": "^7.1.0",
     "hls.js": "^1.6.0",

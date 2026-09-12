@@ -125,18 +125,19 @@ class TorrentTV {
     const file = payload?.file;
     const torrentBytes = payload?.torrentBytes;
     const meta = payload?.meta;
-    const mediaFiles = payload?.mediaFiles;
     if (!(file instanceof File) || !(torrentBytes instanceof Uint8Array) || !meta || typeof meta !== "object") {
       return;
     }
-    this.#videoCount = Array.isArray(mediaFiles?.video) ? mediaFiles.video.length : 0;
+    // How many pictures this torrent holds is not known yet: the proxy is the
+    // one that says so, and it answers on `SET_MEDIA_FILES` a moment later.
+    this.#videoCount = 0;
     this.#openSource();
     this.#setLoadingContent(file.name, TorrentTV.MESSAGES.playbackPreparing);
 
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PROCESS_PLAYBACK, {
         detail: {
-          file, torrentBytes, meta, mediaFiles,
+          file, torrentBytes, meta,
           currentTime: payload?.currentTime ?? null,
           fileIndex: payload?.fileIndex ?? null
         }

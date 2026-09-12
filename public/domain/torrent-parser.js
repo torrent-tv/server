@@ -1,18 +1,17 @@
 import { bytesToHex, bytesToUtf8, decodeBencode } from "./bencode.js";
-// WHAT A TORRENT'S FILES ARE, decided in one place for both sides of the
-// product. This module and the picker beside it each used to carry their own
-// list of extensions and their own grouping, and the proxy carried a third —
-// and the three had already diverged: measured 2026-09-12, `.dat` was offered
-// here as video and not counted there, which also changes whether a sidecar
-// with a name in common with nothing can belong to the only video there is.
-import { TorrentContents } from "@torrent-tv/torrent-contents/Contents.js";
-import {
-  AUDIO_SIDECAR_EXTENSIONS,
-  SUBTITLE_SIDECAR_EXTENSIONS,
-  VIDEO_FILE_EXTENSIONS,
-  extensionOf
-} from "@torrent-tv/torrent-contents/files.js";
 
+/**
+ * WHAT A TORRENT'S FILES ARE IS NOT DECIDED HERE ANY MORE.
+ *
+ * This module carried a list of video extensions, the picker beside it carried
+ * a second and shorter pair of its own, and the proxy carried a third — and the
+ * three had already diverged: measured 2026-09-12, `.dat` was offered here as
+ * video and not counted there, which also decides whether a sidecar whose name
+ * matches nothing can belong to the only video present. The proxy answers it
+ * now, over the route that lists a source's files, and everything below either
+ * reads the bytes this browser holds (the trackers and the web seeds, which
+ * nothing else can see) or decides how a name is SHOWN.
+ */
 
 function normalizeBytes(value) {
   if (value instanceof Uint8Array) {
@@ -48,17 +47,6 @@ function toStringList(value) {
     .filter((item) => item.length > 0);
 }
 
-/**
- * Whether this file carries a picture, by the one list both sides read.
- *
- * @param {string} path
- * @returns {boolean}
- */
-function isVideoPath(path) {
-  const name = String(path ?? "");
-  return VIDEO_FILE_EXTENSIONS.has(extensionOf(name.slice(name.lastIndexOf("/") + 1)));
-}
-
 function parseMultiFile(baseName, filesNode) {
   if (!Array.isArray(filesNode)) {
     return [];
@@ -77,8 +65,7 @@ function parseMultiFile(baseName, filesNode) {
       name: pathSegments[pathSegments.length - 1] ?? `file-${index}`,
       path: `${baseName}/${relativePath}`,
       relativePath,
-      length,
-      isVideo: isVideoPath(relativePath)
+      length
     };
   });
 }
@@ -90,89 +77,65 @@ function parseSingleFile(name, length) {
       name,
       path: name,
       relativePath: name,
-      length,
-      isVideo: isVideoPath(name)
+      length
     }
   ];
 }
 
 /**
- * Group file entries into video / audio / subtitle lists (the shape the
- * player and subtitle pipeline consume).
+ * The proxy's answer about a torrent, as the three lists the player and the
+ * subtitle pipeline consume.
  *
- * @param {Array<{ relativePath?: string, path?: string, isVideo?: boolean }>} files
- * @returns {{ video: Array<object>, audio: Array<object>, subtitles: Array<object> }}
- */
-export function classifyMediaFiles(files) {
-  const list = Array.isArray(files) ? files : [];
-  // The paths are already relative to the torrent root here, so the torrent's
-  // own name is not passed: there is nothing left to strip from the front.
-  const contents = new TorrentContents({
-    files: list.map((file) => ({
-      path: String(file.relativePath ?? file.path ?? file.name ?? ""),
-      length: Number(file.length) || 0
-    })),
-    name: ""
-  });
-  const video = [];
-  const audio = [];
-  const subtitles = [];
-  for (const item of contents.items) {
-    if (list[item.fileIndex]) {
-      video.push(list[item.fileIndex]);
-    }
-    for (const part of item.audio) {
-      if (list[part.fileIndex]) {
-        audio.push(list[part.fileIndex]);
-      }
-    }
-    for (const part of item.subtitles) {
-      if (list[part.fileIndex]) {
-        subtitles.push(list[part.fileIndex]);
-      }
-    }
-  }
-  // A soundtrack or a subtitle file that pairs with no picture is still offered:
-  // a viewer can choose it, and refusing to show it because a name did not match
-  // would hide something the release ships.
-  for (const leftover of contents.leftovers) {
-    const file = list[leftover.fileIndex];
-    if (!file) {
-      continue;
-    }
-    const extension = extensionOf(leftover.name);
-    if (AUDIO_SIDECAR_EXTENSIONS.has(extension)) {
-      audio.push(file);
-    } else if (SUBTITLE_SIDECAR_EXTENSIONS.has(extension)) {
-      subtitles.push(file);
-    }
-  }
-  return orderForDisplay({ video, audio, subtitles });
-}
-
-/**
- * Put already-classified lists into the order and the naming a viewer reads.
+ * The grouping is the proxy's — which files carry a picture, and which
+ * soundtracks and subtitle files belong to each of them. All this does is put
+ * the answer in the shape the rest of this page already speaks, and decide how
+ * each name is SHOWN, which is the one half of it that is presentation.
  *
- * Separate from {@link classifyMediaFiles} because the lists do not always come
- * from it: the picker builds its own and hands them on, and that path bypassed
- * the ordering entirely — the playlist went on showing the torrent's own order
- * and the full release names while the classifier beside it was sorting
- * correctly and nobody was using the result (field 2026-08-31).
- *
- * @param {{ video: object[], audio: object[], subtitles: object[] }} lists
+ * @param {Array<object>} files - The proxy's list, already normalized.
+ * @param {Array<{ fileIndex: number, audio?: number[], subtitles?: number[] }>} items
  * @returns {{ video: object[], audio: object[], subtitles: object[] }}
  */
-export function orderForDisplay(lists) {
-  const video = Array.isArray(lists?.video) ? lists.video : [];
-  const audio = Array.isArray(lists?.audio) ? lists.audio : [];
-  const subtitles = Array.isArray(lists?.subtitles) ? lists.subtitles : [];
+export function mediaFilesFrom(files, items) {
+  const entries = Array.isArray(files) ? files : [];
+  const byIndex = new Map(entries.map((entry) => [entry.index, entry]));
+  /** @type {Map<string, Map<number, object>>} */
+  const lists = new Map([
+    ["video", new Map()],
+    ["audio", new Map()],
+    ["subtitles", new Map()]
+  ]);
+  const put = (list, fileIndex) => {
+    const entry = byIndex.get(fileIndex);
+    if (entry) {
+      lists.get(list).set(fileIndex, entry);
+    }
+  };
+  for (const item of Array.isArray(items) ? items : []) {
+    put("video", item.fileIndex);
+    for (const fileIndex of item.audio ?? []) {
+      put("audio", fileIndex);
+    }
+    for (const fileIndex of item.subtitles ?? []) {
+      put("subtitles", fileIndex);
+    }
+  }
+  // A soundtrack or a subtitle file that belongs to no picture is still
+  // offered: a viewer can choose it, and hiding it because a name matched
+  // nothing would take away something the release ships.
+  for (const entry of entries) {
+    if (entry.kind === "audio") {
+      put("audio", entry.index);
+    } else if (entry.kind === "subtitle") {
+      put("subtitles", entry.index);
+    }
+  }
   return {
     // Only the picture's list is shortened. A soundtrack and a subtitle file
     // are named by their language and their author, and those ARE what
-    // distinguishes them — see `detectSidecarNaming`.
-    video: withDisplayNames(byPath(video)),
-    audio: byPath(audio),
-    subtitles: byPath(subtitles)
+    // distinguishes them.
+    video: withDisplayNames([...lists.get("video").values()]),
+    audio: [...lists.get("audio").values()],
+    subtitles: [...lists.get("subtitles").values()]
   };
 }
 
@@ -230,39 +193,15 @@ function withDisplayNames(files) {
 }
 
 /**
- * Files in the order a person reads them: by folder, then by name, with runs of
- * digits compared as numbers.
+ * The proxy's file list, in the entry shape the rest of this page speaks.
  *
- * A torrent's own order is whatever the tool that made it chose, and it is
- * routinely by SIZE — the Drifters release lists its episodes 08, 06, 07, 01,
- * 02, 10, …, and the playlist showed exactly that. Nothing downstream depends
- * on the position: every entry carries `index`, the torrent's own number, and
- * that is what a file is opened by.
+ * The paths arrive already relative to the torrent root — the proxy strips its
+ * own name, so there is one stripping rule in the product rather than two that
+ * can disagree — and what each file IS was decided there too. Nothing here
+ * looks at a name.
  *
- * `localeCompare` with `numeric` is what makes 2 come before 10; comparing the
- * strings would put "10" before "2", which is the same defect wearing different
- * clothes.
- *
- * @template {{ relativePath?: string, path?: string, name?: string }} T
- * @param {T[]} files
- * @returns {T[]}
- */
-function byPath(files) {
-  return [...files].sort((left, right) =>
-    String(left.relativePath ?? left.path ?? left.name ?? "").localeCompare(
-      String(right.relativePath ?? right.path ?? right.name ?? ""),
-      undefined,
-      { numeric: true, sensitivity: "base" }
-    )
-  );
-}
-
-/**
- * Normalize a proxy-reported file list (magnet metadata) into the same file
- * entries `parseTorrentBytes` produces from a `.torrent` file.
- *
- * @param {string} baseName - Torrent name (path prefix for multi-file).
- * @param {Array<{ index?: number, name?: string, relativePath?: string, length?: number }>} rawFiles
+ * @param {string} baseName - The torrent's name, for the absolute path only.
+ * @param {Array<{ fileIndex?: number, name?: string, relativePath?: string, length?: number, kind?: string }>} rawFiles
  * @returns {Array<{ index: number, name: string, path: string, relativePath: string, length: number, isVideo: boolean }>}
  */
 export function normalizeRemoteFileList(baseName, rawFiles) {
@@ -271,23 +210,18 @@ export function normalizeRemoteFileList(baseName, rawFiles) {
   }
   const multi = rawFiles.length > 1;
   return rawFiles.map((entry, position) => {
-    const index = Number.isInteger(entry?.index) ? entry.index : position;
+    const index = Number.isInteger(entry?.fileIndex) ? entry.fileIndex : position;
     const name = typeof entry?.name === "string" && entry.name.length > 0 ? entry.name : `file-${index}`;
-    // WebTorrent's file.path already includes the torrent name for multi-file
-    // torrents; keep relativePath relative to the torrent root like the
-    // .torrent parser does.
-    const reported = typeof entry?.relativePath === "string" && entry.relativePath.length > 0 ? entry.relativePath : name;
     const relativePath =
-      multi && baseName && reported.startsWith(`${baseName}/`)
-        ? reported.slice(baseName.length + 1)
-        : reported;
+      typeof entry?.relativePath === "string" && entry.relativePath.length > 0 ? entry.relativePath : name;
     return {
       index,
       name,
       path: multi && baseName ? `${baseName}/${relativePath}` : relativePath,
       relativePath,
       length: Number.isFinite(entry?.length) ? entry.length : 0,
-      isVideo: isVideoPath(relativePath)
+      kind: typeof entry?.kind === "string" ? entry.kind : "other",
+      isVideo: entry?.kind === "video"
     };
   });
 }
