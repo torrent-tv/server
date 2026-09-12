@@ -24,7 +24,12 @@ import {
   readUrlState,
   resumePositionFor
 } from "../../domain/url-state.js";
-import { magnetNamesATracker, mediaFilesFrom, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
+import {
+  magnetNamesATracker,
+  mediaFilesFrom,
+  normalizeRemoteFileList,
+  statesWhatIsInTheTorrent
+} from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 
@@ -276,6 +281,8 @@ export class Loading extends StateDerivedView {
     startingDirectPlayback: "Starting direct playback...",
     probingDirectPlayback: "Verifying direct playback before transcoding...",
     noVideoFile: "No video file found in this torrent.",
+    torrentContentsNotStated:
+      "This proxy could not say what is in this torrent. Try again — another proxy may answer.",
     noProxyAndNoWebseed: "No proxy is available and this torrent has no webseed video source.",
     alreadyProcessing: "Already processing another .torrent file.",
     selectedFileNotFound: "Selected video file was not found in torrent metadata.",
@@ -2421,7 +2428,8 @@ export class Loading extends StateDerivedView {
    * @param {object} transport
    * @param {string} sourceKey
    * @param {() => void} [whileWaiting] - Called before each further attempt.
-   * @returns {Promise<{ name?: string, infoHash?: string, files?: object[], items?: object[] }>}
+   * @returns {Promise<{ name?: string, infoHash?: string, files?: object[], items: object[] }>}
+   * @throws {Error} When the answer carries no statement of what is in the torrent.
    */
   async #askWhatIsInTheTorrent(transport, sourceKey, whileWaiting) {
     for (;;) {
@@ -2434,6 +2442,14 @@ export class Loading extends StateDerivedView {
       if (response.ok) {
         const body = await response.json();
         if (!body?.pending) {
+          // A STATEMENT, or nothing — the difference is `statesWhatIsInTheTorrent`
+          // and is explained there. Retryable, because the next attempt may be
+          // answered by another proxy.
+          if (!statesWhatIsInTheTorrent(body)) {
+            const error = new Error(Loading.MESSAGES.torrentContentsNotStated);
+            error.canRetry = true;
+            throw error;
+          }
           return body;
         }
       }
