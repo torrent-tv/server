@@ -24,7 +24,7 @@ import {
   readUrlState,
   resumePositionFor
 } from "../../domain/url-state.js";
-import { classifyMediaFiles, magnetNamesATracker, normalizeRemoteFileList, orderForDisplay } from "../../domain/torrent-parser.js";
+import { magnetNamesATracker, mediaFilesFrom, normalizeRemoteFileList } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 
@@ -1959,7 +1959,28 @@ export class Loading extends StateDerivedView {
     });
     this.#loadDirectPlaybackHints();
     this.#setupEventHandlers();
+    this.#connectEarly();
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.REQUEST_READY));
+  }
+
+  /**
+   * TAKE A PROXY THE MOMENT THE PAGE OPENS, before anything has been chosen.
+   *
+   * Everything a viewer does needs one — the list of what is in a torrent as
+   * much as the video itself — and choosing one and connecting to it is seconds
+   * of round trips that used to begin only after a file had been picked. Begun
+   * here, it runs while the person is finding their torrent, and by the time
+   * they drop it the connection is usually already there.
+   *
+   * Deliberately silent. It says nothing on screen, because nobody is waiting
+   * for it yet, and it swallows its failure: the real attempt is made by
+   * whatever the viewer does next, which reports for itself. `#acquireTransport`
+   * is joinable, so that attempt joins this one rather than starting a second.
+   *
+   * @returns {void}
+   */
+  #connectEarly() {
+    void this.#acquireTransport().catch(() => undefined);
   }
 
   #setupEventHandlers() {
@@ -2187,7 +2208,7 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * @param {{ file?: File, torrentBytes?: Uint8Array, meta?: object, mediaFiles?: { video?: Array<object>, audio?: Array<object>, subtitles?: Array<object> } } | null} payload
+   * @param {{ file?: File, torrentBytes?: Uint8Array, meta?: object } | null} payload
    * @returns {Promise<void>}
    */
   async #processPlayback(payload) {
@@ -2226,7 +2247,42 @@ export class Loading extends StateDerivedView {
         torrentBytes,
         meta
       });
-      const mediaFiles = this.#normalizeMediaFiles(payload.mediaFiles, parsed.files);
+
+      this.visible = true;
+      this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
+      this.setStatus(Loading.MESSAGES.startingTorrentProcessing);
+      this.setProgress(0);
+      this.setStatus(Loading.MESSAGES.readingMetadata);
+
+      // WHAT IS IN THIS TORRENT COMES FROM THE PROXY, for a dropped `.torrent`
+      // exactly as for a magnet. The bytes of the file say what the trackers
+      // and the web seeds are, which nothing else can see; which files carry a
+      // picture, and what belongs to each of them, is one answer and it is
+      // given there.
+      //
+      // It costs a connection before the list of episodes appears, and that
+      // connection is being opened from the moment this page loads — see
+      // `#connectEarly` — so by the time a file has been dropped it is usually
+      // already there.
+      const transport = await this.#acquireTransport();
+      this.#throwIfCancelled();
+      if (!transport) {
+        throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+      }
+      const sourceKey = await this.#session.registerSourceOnProxy(transport);
+      const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
+        this.setStatus(Loading.MESSAGES.readingMetadata);
+      });
+      const files = normalizeRemoteFileList(
+        typeof contents?.name === "string" && contents.name.length > 0 ? contents.name : parsed.name,
+        contents?.files
+      );
+      if (files.length > 0) {
+        parsed.files = files;
+        parsed.isMultiFile = files.length > 1;
+      }
+      const mediaFiles = mediaFilesFrom(parsed.files, contents?.items);
+      this.#subtitleFiles = mediaFiles.subtitles;
       const debugState = getDebugState();
       debugState.torrent = {
         fileName: file.name,
@@ -2256,12 +2312,6 @@ export class Loading extends StateDerivedView {
         })
       );
       this.#setPlaylistButtonVisible(mediaFiles.video.length > 1);
-
-      this.visible = true;
-      this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
-      this.setStatus(Loading.MESSAGES.startingTorrentProcessing);
-      this.setProgress(0);
-      this.setStatus(Loading.MESSAGES.readingMetadata);
 
       const videoCount = mediaFiles.video.length;
       if (videoCount <= 0) {
@@ -2349,6 +2399,47 @@ export class Loading extends StateDerivedView {
       fromUrl,
       position: fromField != null && fromField > 0 ? fromField : (fromUrl > 0 ? fromUrl : null)
     };
+  }
+
+  /**
+   * ASK THE PROXY WHAT IS IN THIS TORRENT, and take its answer as the truth.
+   *
+   * Which files carry a picture, and which soundtracks and subtitle files
+   * belong to each of them, is decided there and nowhere else. This page used
+   * to decide it as well — a list of extensions in the torrent parser and a
+   * second, shorter pair inside the picker — and the three answers had already
+   * diverged: measured 2026-09-12, `.dat` was offered here as video and not
+   * counted there, which also decides whether a sidecar whose name matches
+   * nothing can belong to the only video present.
+   *
+   * The answer comes back `pending` while a magnet's metadata is still being
+   * fetched, so a single request never races the transport timeout and a
+   * slow-to-appear source keeps trying. There is no wall-clock deadline: the
+   * loading screen says what it is waiting for until it arrives or the viewer
+   * cancels.
+   *
+   * @param {object} transport
+   * @param {string} sourceKey
+   * @param {() => void} [whileWaiting] - Called before each further attempt.
+   * @returns {Promise<{ name?: string, infoHash?: string, files?: object[], items?: object[] }>}
+   */
+  async #askWhatIsInTheTorrent(transport, sourceKey, whileWaiting) {
+    for (;;) {
+      this.#throwIfCancelled();
+      const response = await transport.fetch(
+        `/api/sources/${encodeURIComponent(sourceKey)}/files?maxWaitMs=8000`,
+        { signal: this.#session.abortController.signal, timeoutMs: 15_000 }
+      );
+      this.#throwIfCancelled();
+      if (response.ok) {
+        const body = await response.json();
+        if (!body?.pending) {
+          return body;
+        }
+      }
+      whileWaiting?.();
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
   }
 
   #warmSourceInBackground(fileIndex, positionSeconds = 0) {
@@ -2473,34 +2564,13 @@ export class Loading extends StateDerivedView {
       const sourceKey = await this.#session.registerSourceOnProxy(transport);
       this.#throwIfCancelled();
 
-      // Poll for the swarm metadata: the proxy returns `pending` quickly while
-      // it keeps fetching, so a single request never races the transport
-      // timeout and a slow-to-appear magnet keeps trying. No wall-clock deadline —
-      // the loader shows `fetchingMagnetMetadata` until metadata arrives or the
-      // user cancels; a magnet with no trackers shows `magnetMetadataFailedNoTrackers`
-      // immediately via `#magnetFailureMessage`.
-      let payload = null;
-      for (;;) {
-        this.#throwIfCancelled();
-        const response = await transport.fetch(
-          `/api/sources/${encodeURIComponent(sourceKey)}/files?maxWaitMs=8000`,
-          { signal: this.#session.abortController.signal, timeoutMs: 15_000 }
-        );
-        this.#throwIfCancelled();
-        if (response.ok) {
-          const body = await response.json();
-          if (!body?.pending) {
-            payload = body;
-            break;
-          }
-        }
+      const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
         this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
-      }
+      });
 
       const name =
-        typeof payload?.name === "string" && payload.name.length > 0 ? payload.name : displayName;
-      const files = normalizeRemoteFileList(name, payload?.files);
+        typeof contents?.name === "string" && contents.name.length > 0 ? contents.name : displayName;
+      const files = normalizeRemoteFileList(name, contents?.files);
       if (files.length === 0) {
         throw new Error(this.#magnetFailureMessage(magnetUri));
       }
@@ -2510,7 +2580,7 @@ export class Loading extends StateDerivedView {
       current.isMultiFile = files.length > 1;
       this.setFileName(name);
 
-      const mediaFiles = classifyMediaFiles(files);
+      const mediaFiles = mediaFilesFrom(files, contents?.items);
       this.#subtitleFiles = mediaFiles.subtitles;
       document.dispatchEvent(
         new CustomEvent(PLAYER_EVENTS.SET_MEDIA_FILES, {
@@ -3049,20 +3119,6 @@ export class Loading extends StateDerivedView {
     return error;
   }
 
-  #normalizeMediaFiles(mediaFiles, parsedFiles) {
-    const video = Array.isArray(mediaFiles?.video) ? mediaFiles.video : parsedFiles.filter((entry) => entry.isVideo);
-    const audio = Array.isArray(mediaFiles?.audio) ? mediaFiles.audio : [];
-    const subtitles = Array.isArray(mediaFiles?.subtitles) ? mediaFiles.subtitles : [];
-    // Ordered and named HERE as well, because these lists usually arrive
-    // already classified from the picker and so never passed through
-    // `classifyMediaFiles`. That is why the playlist went on showing the
-    // torrent's own order — 08, 06, 07, 01 — and the full release names, while
-    // the classifier beside it sorted correctly and nothing used the result
-    // (field 2026-08-31, with the fix demonstrably deployed).
-    const ordered = orderForDisplay({ video, audio, subtitles });
-    this.#subtitleFiles = ordered.subtitles;
-    return ordered;
-  }
 
   /**
    * @param {number} fileIndex
