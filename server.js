@@ -29,6 +29,13 @@ const { version } = require("./package.json");
 const publicRoot = path.resolve(__dirname, "./public");
 const vendorRoot = path.resolve(__dirname, "./node_modules/hls.js/dist");
 const mediaChromeRoot = path.resolve(__dirname, "./node_modules/media-chrome/dist");
+// WHAT IS IN A TORRENT, decided in one place and read by both sides of the
+// product. The browser needs the answer at once — the list of episodes appears
+// the instant a `.torrent` is opened, before a proxy has even been chosen — and
+// the proxy needs the same answer to state what to fetch. Served straight from
+// the package, like hls.js above: these are plain modules with no dependencies,
+// so there is nothing to build.
+const torrentContentsRoot = path.resolve(__dirname, "./node_modules/@torrent-tv/torrent-contents");
 
 const preferredPort = Number(process.env.PORT ?? 8080);
 const serverToken = process.env.PROXY_TOKEN ?? "";
@@ -140,6 +147,11 @@ await app.register(fastifyStatic, {
 await app.register(fastifyStatic, {
   root: mediaChromeRoot,
   prefix: "/vendor/media-chrome/",
+  decorateReply: false
+});
+await app.register(fastifyStatic, {
+  root: torrentContentsRoot,
+  prefix: "/vendor/torrent-contents/",
   decorateReply: false
 });
 

@@ -1,39 +1,18 @@
 import { bytesToHex, bytesToUtf8, decodeBencode } from "./bencode.js";
+// WHAT A TORRENT'S FILES ARE, decided in one place for both sides of the
+// product. This module and the picker beside it each used to carry their own
+// list of extensions and their own grouping, and the proxy carried a third —
+// and the three had already diverged: measured 2026-09-12, `.dat` was offered
+// here as video and not counted there, which also changes whether a sidecar
+// with a name in common with nothing can belong to the only video there is.
+import { TorrentContents } from "@torrent-tv/torrent-contents/Contents.js";
+import {
+  AUDIO_SIDECAR_EXTENSIONS,
+  SUBTITLE_SIDECAR_EXTENSIONS,
+  VIDEO_FILE_EXTENSIONS,
+  extensionOf
+} from "@torrent-tv/torrent-contents/files.js";
 
-// Container extensions offered as playable video. The list only decides "treat
-// this file as a video to offer"; actual playability is handled downstream —
-// the proxy probes codecs and transcodes to HLS anything the browser cannot
-// decode natively. So this spans every container ffmpeg reliably demuxes, not
-// just the browser-native ones (e.g. .wmv/.asf → VC-1/WMV, .flv → H.264/VP6).
-const VIDEO_EXTENSIONS = new Set([
-  ".mp4",
-  ".mkv",
-  ".webm",
-  ".mov",
-  ".m4v",
-  ".avi",
-  ".mpg",
-  ".mpeg",
-  ".ts",
-  ".m2ts",
-  ".wmv",
-  ".asf",
-  ".flv",
-  ".f4v",
-  ".ogv",
-  ".ogm",
-  ".3gp",
-  ".3g2",
-  ".divx",
-  ".vob",
-  ".mts",
-  ".m2v",
-  ".m2p",
-  ".mxf",
-  ".rm",
-  ".rmvb",
-  ".dat"
-]);
 
 function normalizeBytes(value) {
   if (value instanceof Uint8Array) {
@@ -69,14 +48,15 @@ function toStringList(value) {
     .filter((item) => item.length > 0);
 }
 
+/**
+ * Whether this file carries a picture, by the one list both sides read.
+ *
+ * @param {string} path
+ * @returns {boolean}
+ */
 function isVideoPath(path) {
-  const lower = path.toLowerCase();
-  for (const ext of VIDEO_EXTENSIONS) {
-    if (lower.endsWith(ext)) {
-      return true;
-    }
-  }
-  return false;
+  const name = String(path ?? "");
+  return VIDEO_FILE_EXTENSIONS.has(extensionOf(name.slice(name.lastIndexOf("/") + 1)));
 }
 
 function parseMultiFile(baseName, filesNode) {
@@ -117,21 +97,6 @@ function parseSingleFile(name, length) {
 }
 
 /**
- * Same categorisation rules the torrent picker applies to parsed files.
- *
- * `.mka` and `.m4a` are containers rather than bare streams, and a release that
- * ships its dub as a separate file almost always ships it as one of those — the
- * list was missing both, so such a file fell into no group at all.
- */
-const AUDIO_EXTENSIONS = new Set([
-  ".aac", ".ac3", ".alac", ".dts", ".dtshd", ".eac3", ".flac", ".m4a", ".mka",
-  ".mlp", ".mp2", ".mp3", ".oga", ".ogg", ".opus", ".thd", ".wav", ".wma"
-]);
-const SUBTITLE_EXTENSIONS = new Set([
-  ".ass", ".srt", ".ssa", ".sub", ".sup", ".ttml", ".vtt", ".webvtt"
-]);
-
-/**
  * Group file entries into video / audio / subtitle lists (the shape the
  * player and subtitle pipeline consume).
  *
@@ -139,28 +104,46 @@ const SUBTITLE_EXTENSIONS = new Set([
  * @returns {{ video: Array<object>, audio: Array<object>, subtitles: Array<object> }}
  */
 export function classifyMediaFiles(files) {
+  const list = Array.isArray(files) ? files : [];
+  // The paths are already relative to the torrent root here, so the torrent's
+  // own name is not passed: there is nothing left to strip from the front.
+  const contents = new TorrentContents({
+    files: list.map((file) => ({
+      path: String(file.relativePath ?? file.path ?? file.name ?? ""),
+      length: Number(file.length) || 0
+    })),
+    name: ""
+  });
   const video = [];
   const audio = [];
   const subtitles = [];
-  const hasExtension = (lowerPath, extensions) => {
-    for (const ext of extensions) {
-      if (lowerPath.endsWith(ext)) {
-        return true;
+  for (const item of contents.items) {
+    if (list[item.fileIndex]) {
+      video.push(list[item.fileIndex]);
+    }
+    for (const part of item.audio) {
+      if (list[part.fileIndex]) {
+        audio.push(list[part.fileIndex]);
       }
     }
-    return false;
-  };
-  for (const file of Array.isArray(files) ? files : []) {
-    const lowerPath = String(file.relativePath ?? file.path ?? "").toLowerCase();
-    if (file.isVideo) {
-      video.push(file);
+    for (const part of item.subtitles) {
+      if (list[part.fileIndex]) {
+        subtitles.push(list[part.fileIndex]);
+      }
+    }
+  }
+  // A soundtrack or a subtitle file that pairs with no picture is still offered:
+  // a viewer can choose it, and refusing to show it because a name did not match
+  // would hide something the release ships.
+  for (const leftover of contents.leftovers) {
+    const file = list[leftover.fileIndex];
+    if (!file) {
       continue;
     }
-    if (hasExtension(lowerPath, AUDIO_EXTENSIONS)) {
+    const extension = extensionOf(leftover.name);
+    if (AUDIO_SIDECAR_EXTENSIONS.has(extension)) {
       audio.push(file);
-      continue;
-    }
-    if (hasExtension(lowerPath, SUBTITLE_EXTENSIONS)) {
+    } else if (SUBTITLE_SIDECAR_EXTENSIONS.has(extension)) {
       subtitles.push(file);
     }
   }

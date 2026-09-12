@@ -1,3 +1,9 @@
+## 0.27.8
+
+- **New**: WHAT IS IN A TORRENT IS READ FROM ONE PLACE, shared with the proxy. This page decided it twice — a list of video extensions in `torrent-parser.js` and a second, shorter pair of lists inside the picker — and the proxy decided it a third time. The three had already diverged: measured 2026-09-12, `.dat` was offered here as video and not counted there, which also changes whether a sidecar whose name has nothing in common with the film can still belong to the only video in the torrent. All three are now `@torrent-tv/torrent-contents`, published from the proxy's own source.
+- **Chore**: The package is imported by its bare name in both runtimes: under Node it resolves out of `node_modules`, and in the browser an import map points that same name at `/vendor/torrent-contents/`, which the server serves straight from the installed package. Nothing is bundled and nothing is copied, so the two sides cannot drift apart by one of them being rebuilt and the other not.
+- **Chore**: A check covers the wiring itself — the import map, the static route and every file the page asks for by that name — because a mistake in any of the three is invisible until the page dies at load, which is the failure `public-parses` was written for.
+
 ## 0.27.7
 
 - **Chore**: The same build as 0.27.6, published twice. `npm run patch` was run a second time while the first was still finishing, so a version was minted that carries no change of its own. Recorded rather than hidden: a changelog with a silent gap in it is worse than one that says what happened.
