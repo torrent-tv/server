@@ -83,6 +83,27 @@ function parseSingleFile(name, length) {
 }
 
 /**
+ * Did the proxy STATE what is in this torrent, or merely answer?
+ *
+ * `items` is the statement: which files carry a picture, and what belongs to
+ * each of them. An EMPTY list is a statement — the proxy looked and found no
+ * picture — while its ABSENCE is not: the proxy never said. One step further on
+ * the two are the same thing, an empty list of pictures, so the difference can
+ * only be kept here.
+ *
+ * Field 2026-09-12: a proxy one release behind answered the shape that predated
+ * this question, carrying no `items` at all, and every torrent opened on it was
+ * reported to the viewer as carrying no video — a fact about the torrent that
+ * nothing had established.
+ *
+ * @param {{ items?: unknown }} [answer] - The proxy's answer, already parsed.
+ * @returns {boolean} True when the answer carries a statement.
+ */
+export function statesWhatIsInTheTorrent(answer) {
+  return Array.isArray(answer?.items);
+}
+
+/**
  * The proxy's answer about a torrent, as the three lists the player and the
  * subtitle pipeline consume.
  *
