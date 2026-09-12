@@ -1,5 +1,5 @@
 import { APP_EVENTS, ERROR_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
-import { parseTorrentBytes } from "../../domain/torrent-parser.js";
+import { classifyMediaFiles, parseTorrentBytes } from "../../domain/torrent-parser.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 
@@ -47,29 +47,6 @@ export class Torrent extends StateDerivedView {
    * manual typing ("magnet:?") never auto-starts the flow with garbage.
    */
   static MAGNET_RE = /^magnet:\?.*xt=urn:bt(?:ih|mh):[a-z0-9]{16,}/i;
-  static AUDIO_EXTENSIONS = new Set([
-    ".aac",
-    ".ac3",
-    ".alac",
-    ".dts",
-    ".eac3",
-    ".flac",
-    ".m4a",
-    ".mp3",
-    ".ogg",
-    ".opus",
-    ".wav"
-  ]);
-  static SUBTITLE_EXTENSIONS = new Set([
-    ".ass",
-    ".srt",
-    ".ssa",
-    ".sub",
-    ".sup",
-    ".ttml",
-    ".vtt",
-    ".webvtt"
-  ]);
 
   #dialog;
   #form;
@@ -383,7 +360,11 @@ export class Torrent extends StateDerivedView {
     try {
       const torrentBytes = new Uint8Array(await torrentFile.arrayBuffer());
       const meta = await parseTorrentBytes(torrentBytes);
-      const mediaFiles = this.#extractMediaFiles(meta.files);
+      // The same grouping the rest of the product uses, and the same one the
+      // proxy states its downloading from. This component carried a third copy
+      // of the rules, with two extension lists of its own that were already
+      // shorter than either of the others.
+      const mediaFiles = classifyMediaFiles(meta.files);
       // Consume any pending position/file from a shared URL (one-shot).
       const currentTime = this.#pendingCurrentTime;
       const fileIndex = this.#pendingFileIndex;
@@ -423,45 +404,6 @@ export class Torrent extends StateDerivedView {
    */
   #isPickerOpen() {
     return this.#dialog.hasAttribute("open");
-  }
-
-  /**
-   * @param {Array<{ index: number, name: string, path: string, relativePath: string, length: number, isVideo: boolean }>} files
-   * @returns {{ video: Array<object>, audio: Array<object>, subtitles: Array<object> }}
-   */
-  #extractMediaFiles(files) {
-    const video = [];
-    const audio = [];
-    const subtitles = [];
-    for (const file of files) {
-      const lowerPath = (typeof file.relativePath === "string" ? file.relativePath : file.path).toLowerCase();
-      if (file.isVideo) {
-        video.push(file);
-        continue;
-      }
-      if (this.#hasExtension(lowerPath, Torrent.AUDIO_EXTENSIONS)) {
-        audio.push(file);
-        continue;
-      }
-      if (this.#hasExtension(lowerPath, Torrent.SUBTITLE_EXTENSIONS)) {
-        subtitles.push(file);
-      }
-    }
-    return { video, audio, subtitles };
-  }
-
-  /**
-   * @param {string} lowerPath
-   * @param {Set<string>} extensions
-   * @returns {boolean}
-   */
-  #hasExtension(lowerPath, extensions) {
-    for (const ext of extensions) {
-      if (lowerPath.endsWith(ext)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /** @param {boolean} value */
