@@ -57,22 +57,18 @@ export class ProxySelector {
    *   between the (instant) selection and the (round-trip) connect.
    * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
    */
-  async chooseBestProxy({
-    allowPrivateCandidates = true,
-    connectTimeoutMs,
-    onConnecting,
-    // The film about to be opened, by its own infohash. A proxy already
-    // downloading it is preferred over one that is not — see the pool below.
-    // Absent (a viewer who has not chosen a film yet) leaves selection exactly
-    // as it was.
-    infoHash = "",
-    // Only these proxies may be chosen. Used after one has refused a file:
-    // every proxy here has answered that it could sustain THIS source, which
-    // is a question the score below cannot ask — it reads processor load, free
-    // memory and round-trip time, all of which are about the machine and none
-    // of which is about the file.
-    onlyIds = null
-  } = {}) {
+  /**
+   * The candidates worth choosing between, best first, for one film.
+   *
+   * Split out because the same question is asked twice and must be answered
+   * the same way both times: once when a proxy is being connected, and once
+   * when a film has been chosen and the proxy already in hand may be the wrong
+   * one for it. Two copies of this would be two answers.
+   *
+   * @param {{ infoHash?: string, onlyIds?: string[] | null }} about
+   * @returns {Promise<{ pool: any[], debugState: any }>}
+   */
+  async #poolOf({ infoHash = "", onlyIds = null } = {}) {
     const response = await fetch("/api/proxy-clients/health");
     if (!response.ok) {
       throw new Error(`Proxy health request failed (${response.status}).`);
@@ -133,6 +129,50 @@ export class ProxySelector {
       );
     }
 
+    return { pool, debugState };
+  }
+
+  /**
+   * Which proxy WOULD be chosen for this film, without connecting to it.
+   *
+   * Asked once a torrent is known, against the proxy already connected. A
+   * proxy is taken the moment the page opens — before any film exists — so
+   * without this the choice is made with no film in hand and never revisited,
+   * and the preference for a proxy that already holds the film can never
+   * apply. Field 2026-09-13: two viewers of one film, 76 seconds apart, on two
+   * different proxies, each downloading and encoding it separately.
+   *
+   * @param {{ infoHash?: string, onlyIds?: string[] | null }} about
+   * @returns {Promise<string>} The id, or "" when nothing can be chosen.
+   */
+  async bestProxyIdFor(about = {}) {
+    try {
+      const { pool } = await this.#poolOf(about);
+      return pool[0]?.id ?? "";
+    } catch {
+      // A question that cannot be answered leaves the connection in hand
+      // alone; it is a preference, not a requirement.
+      return "";
+    }
+  }
+
+  async chooseBestProxy({
+    allowPrivateCandidates = true,
+    connectTimeoutMs,
+    onConnecting,
+    // The film about to be opened, by its own infohash. A proxy already
+    // downloading it is preferred over one that is not — see the pool below.
+    // Absent (a viewer who has not chosen a film yet) leaves selection exactly
+    // as it was.
+    infoHash = "",
+    // Only these proxies may be chosen. Used after one has refused a file:
+    // every proxy here has answered that it could sustain THIS source, which
+    // is a question the score below cannot ask — it reads processor load, free
+    // memory and round-trip time, all of which are about the machine and none
+    // of which is about the file.
+    onlyIds = null
+  } = {}) {
+    const { pool, debugState } = await this.#poolOf({ infoHash, onlyIds });
     const best = pool[0];
     debugState.proxies.selectedId = best.id;
 
