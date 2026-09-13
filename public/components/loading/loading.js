@@ -971,7 +971,13 @@ export class Loading extends StateDerivedView {
         // falls due and the work goes to whoever is watching. Sent the moment it
         // changes, like a seek — waiting up to ten seconds for the next periodic
         // report would leave the proxy working for somebody who is not watching.
-        if (name === "pause" || name === "playing" || name === "ended") {
+        //
+        // `waiting` is in this list because a picture starved of data has
+        // stopped without being paused, and the proxy carries a viewer's
+        // position forward by the clock between reports: unsaid, a frozen
+        // player goes on "moving" for up to ten seconds of film it never
+        // played.
+        if (name === "pause" || name === "playing" || name === "ended" || name === "waiting") {
           reportNow();
         }
         // The moments where the position has definitely changed and settled.
@@ -6907,15 +6913,19 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * Build the transcode target for the request, honouring a manual quality
-   * choice. On Auto (`#selectedQualityHeight === 0`) this is the
+   * Build the transcode target for the request, honouring a height the viewer
+   * picked. On Auto (`#selectedQualityHeight === 0`) this is the
    * orientation-independent ceiling (realtime budget decides the rest on the
-   * proxy). When the viewer forced a resolution, the target is exactly that
-   * height at the source aspect ratio, flagged `manualQuality` so the proxy
-   * encodes it as-is (capped to source) with the budget disabled.
+   * proxy). When the viewer picked a height, the target is exactly that
+   * height at the source aspect ratio, flagged `exactSize` so the proxy
+   * produces that box as-is (capped to source) with the budget disabled.
+   *
+   * `exactSize` describes the OUTPUT, not who asked for it: the proxy sets it
+   * on every rung of a master playlist as well. Do not read it back as
+   * evidence that a viewer touched the quality menu.
    *
    * @param {boolean} shouldTranscodeVideo
-   * @returns {{ targetWidth?: number, targetHeight?: number, manualQuality?: boolean }}
+   * @returns {{ targetWidth?: number, targetHeight?: number, exactSize?: boolean }}
    */
   #buildQualityTargetConfig(shouldTranscodeVideo) {
     if (!shouldTranscodeVideo) {
@@ -6932,7 +6942,7 @@ export class Loading extends StateDerivedView {
       const width = this.#toEvenDimension((this.#sourceVideoWidth * height) / this.#sourceVideoHeight);
       const evenHeight = this.#toEvenDimension(height);
       if (width > 0 && evenHeight > 0) {
-        return { targetWidth: width, targetHeight: evenHeight, manualQuality: true };
+        return { targetWidth: width, targetHeight: evenHeight, exactSize: true };
       }
     }
     return this.#buildVideoTargetConfig(shouldTranscodeVideo);

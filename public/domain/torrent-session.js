@@ -620,7 +620,7 @@ export class TorrentSession {
     const targetWidth = Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : 0;
     const targetHeight =
       Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : 0;
-    const manualQuality = options.manualQuality === true;
+    const exactSize = options.exactSize === true;
     const audioTrackIndex =
       Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
         ? options.audioTrackIndex
@@ -640,7 +640,7 @@ export class TorrentSession {
         transcodeAudio,
         targetWidth,
         targetHeight,
-        manualQuality,
+        exactSize,
         audioTrackIndex,
         // Where the proxy must start encoding. Without it a resume told only
         // hls.js, which then asked for a segment the encoder had never been
@@ -854,7 +854,7 @@ export class TorrentSession {
             Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : undefined,
           targetHeight:
             Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : undefined,
-          manualQuality: options.manualQuality === true ? true : undefined,
+          exactSize: options.exactSize === true ? true : undefined,
           // This browser takes its audio from the master playlist's rendition
           // group, so the picture is encoded without it and each track is
           // encoded once for the file rather than once per quality rung. The
@@ -1397,6 +1397,14 @@ function playbackPositionSeconds() {
  * is asked. An element that cannot be read counts as playing, which is the
  * cautious direction: it keeps the viewer's own work being made.
  *
+ * A PICTURE STARVED OF DATA IS NOT MOVING, and `paused` does not say so: an
+ * element waiting for bytes reports `paused === false` while nothing advances.
+ * `readyState` is what separates them — below `HAVE_FUTURE_DATA` the element is
+ * stating that it cannot continue from where it is. This matters because the
+ * proxy carries the position forward by the clock between reports: told the
+ * picture is moving while it stands still, it walks the viewer away from where
+ * they actually are, which is exactly the case a frozen player is in.
+ *
  * @returns {boolean}
  */
 function pictureIsMoving() {
@@ -1404,7 +1412,7 @@ function pictureIsMoving() {
   if (!(video instanceof HTMLVideoElement)) {
     return true;
   }
-  return !video.paused && !video.ended;
+  return !video.paused && !video.ended && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
 }
 
 function isAbortError(error) {
