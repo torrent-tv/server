@@ -2271,8 +2271,13 @@ export class Loading extends StateDerivedView {
       // connection is being opened from the moment this page loads — see
       // `#connectEarly` — so by the time a file has been dropped it is usually
       // already there.
-      const transport = await this.#acquireTransport();
+      await this.#acquireTransport();
       this.#throwIfCancelled();
+      // The film is known now and the torrent has not been handed to anybody
+      // yet: the last moment at which changing proxy is still cheap.
+      await this.#useProxyThatHoldsTheFilm();
+      this.#throwIfCancelled();
+      const transport = await this.#acquireTransport();
       if (!transport) {
         throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
       }
@@ -3700,6 +3705,54 @@ export class Loading extends StateDerivedView {
       ? /xt=urn:btih:([0-9a-z]{40})/i.exec(current.sourceValue)
       : null;
     return magnet ? magnet[1].toLowerCase() : "";
+  }
+
+  /**
+   * Make sure the proxy in hand is the right one for the film about to be
+   * opened, and change it if it is not.
+   *
+   * WHY THIS EXISTS. A proxy is taken the moment the page opens — before any
+   * film has been chosen — so the choice is made with no infohash, and
+   * `#acquireTransport` then returns that same connection to everyone who asks
+   * afterwards. The preference for a proxy that is ALREADY downloading this
+   * film therefore never applied to anybody: it is computed from the infohash,
+   * and the infohash did not exist when the decision was made.
+   *
+   * Field 2026-09-13: two viewers opened one film 76 seconds apart and landed
+   * on two different proxies, each of which downloaded and encoded it
+   * separately. The second could have joined the first for the cost of an
+   * encode.
+   *
+   * Called before the torrent is handed to a proxy, which is the last moment
+   * that is still cheap: what is warmed by then is one connection, 232 ms
+   * measured. After it, the torrent is added, peers are found, metadata is
+   * fetched and header pieces are downloaded — and all of that is lost on a
+   * change.
+   *
+   * @returns {Promise<void>}
+   */
+  async #useProxyThatHoldsTheFilm() {
+    const infoHash = this.#currentInfoHash();
+    if (!infoHash || !this.#proxy) {
+      return;
+    }
+    const wanted = await this.#proxySelector.bestProxyIdFor({
+      infoHash,
+      onlyIds: this.#restrictProxiesTo
+    });
+    if (!wanted || wanted === this.#proxy.proxyId) {
+      return;
+    }
+    this.#logEvt(`proxy ${this.#proxy.proxyId?.slice(0, 8)} is not the best for this film; moving to ${wanted.slice(0, 8)}`);
+    this.#abandonTransportAcquisition();
+    try {
+      this.#proxy.close();
+    } catch {
+      // A connection that is already gone needs no closing, and this one is
+      // being replaced either way.
+    }
+    this.#proxy = null;
+    this.#transport = null;
   }
 
   async #acquireTransport({ onConnecting } = {}) {
