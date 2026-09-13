@@ -19,6 +19,8 @@
  * 8. All subsequent communication uses `fetch()` / `ping()` on the channel.
  */
 
+import { wedgeVerdict } from "./transport/wedge-verdict.js";
+
 /**
  * A minimal `Response`-like object assembled from data channel chunks.
  *
@@ -60,19 +62,6 @@ const TRANSPORT_SAMPLE_MS = 5_000;
 const PROBE_ECHO_MS = 500;
 /** How often the event loop is asked how late it is running. */
 const LOOP_LAG_PROBE_MS = 200;
-/**
- * How long the media channel may deliver nothing, while requests are waiting on
- * it and the connection reports itself healthy, before this is a wedge.
- *
- * Fifteen seconds is far longer than any segment takes to arrive on a working
- * link (measured: 6-11 MB in well under a second on the LAN, tens of seconds at
- * the worst cellular rates) and far shorter than the 48 and 88 minute episodes
- * it exists to catch. It only starts a READING, never a recovery, so a false
- * positive costs one test connection and a log line.
- */
-const DELIVERY_WEDGE_AFTER_MS = 15_000;
-/** How many bytes the second association is asked to carry to prove itself. */
-const SECOND_ASSOCIATION_BYTES = 4 * 1024 * 1024;
 
 const ASCII_DECODER = new TextDecoder();
 
@@ -216,10 +205,8 @@ export class WebRtcProxy {
   #lastChannelMessages = null;
   /** When the media channel last delivered a message, or 0 while none is expected. */
   #lastDeliveryAt = 0;
-  /** True while a wedge is being reported, so the second-association test runs once per episode. */
+  /** True once this connection has been declared wedged, so it is declared once. */
   #wedgeReported = false;
-  /** True while this connection IS the second-association test, so a test cannot spawn a test. */
-  #isDiagnosticProbe = false;
   /** @type {WebSocket | null} */
   #ws = null;
   /**
@@ -1470,9 +1457,6 @@ export class WebRtcProxy {
    * @returns {void}
    */
   #considerWedge(messagesReceived) {
-    if (this.#isDiagnosticProbe) {
-      return;
-    }
     const now = Date.now();
     const delivered =
       messagesReceived === null ||
@@ -1488,60 +1472,28 @@ export class WebRtcProxy {
       this.#lastDeliveryAt = now;
       return;
     }
-    const stalledMs = now - this.#lastDeliveryAt;
-    if (stalledMs < DELIVERY_WEDGE_AFTER_MS || this.#wedgeReported) {
+    const verdict = wedgeVerdict({
+      silentMs: now - this.#lastDeliveryAt,
+      pendingRequests: this.#pending.size,
+      requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      channelOpen: this.isOpen
+    });
+    if (!verdict.wedged || this.#wedgeReported) {
       return;
     }
     this.#wedgeReported = true;
     console.warn(
-      `[dc-wedge] nothing delivered for ${stalledMs}ms with ${this.#pending.size} request(s) waiting; ` +
+      `[dc-wedge] ${verdict.reason}; ` +
       `state=${this.#pc?.connectionState} ice=${this.#pc?.iceConnectionState} ` +
       `probes=[${[...this.#probeSeen.entries()].map(([name, seq]) => `${name}:${seq}`).join(" ")}] ` +
       `at=${new Date(now).toISOString()}`
     );
-    void this.#runSecondAssociationTest();
-  }
-
-  /**
-   * Raise a second association to the same proxy and try to carry bytes over it.
-   *
-   * Best-effort and self-contained: it never touches this connection, never
-   * becomes the transport, and closes itself whatever happens. The only output
-   * is the log line.
-   *
-   * @returns {Promise<void>}
-   */
-  async #runSecondAssociationTest() {
-    const startedAt = performance.now();
-    let probe = null;
-    try {
-      probe = new WebRtcProxy(this.#proxyId, this.#proxyLocalPort, this.#allowPrivateCandidates);
-      probe.#isDiagnosticProbe = true;
-      await probe.connect();
-      const connectedMs = Math.round(performance.now() - startedAt);
-      const response = await probe.fetch(`/api/delivery-sink?bytes=${SECOND_ASSOCIATION_BYTES}`);
-      const body = await response.arrayBuffer();
-      const totalMs = Math.round(performance.now() - startedAt);
-      console.warn(
-        `[dc-wedge] second association carried ${body.byteLength}B of ${SECOND_ASSOCIATION_BYTES} ` +
-        `status=${response.status} connect=${connectedMs}ms total=${totalMs}ms — ` +
-        `${body.byteLength === SECOND_ASSOCIATION_BYTES
-          ? "the fault is held in the wedged association"
-          : "a fresh association fails too: the path or this end"}`
-      );
-    } catch (error) {
-      console.warn(
-        `[dc-wedge] second association failed after ${Math.round(performance.now() - startedAt)}ms: ` +
-        `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
-      );
-    } finally {
-      try {
-        probe?.close();
-      } catch {
-        // silent-ok: closing a connection that never opened changes nothing and
-        // leaves nothing undone.
-      }
-    }
+    // A wedged association never recovers — measured, twice, out of the live
+    // association: the congestion window is full and the retransmission timer
+    // is not scheduled, so nothing drains it. Declaring the transport lost is
+    // what lets the reconnect ladder run; it already works on a closed channel
+    // and only ever missed this case because the channel stays `connected`.
+    this.#fireConnectionLost();
   }
 
   /** @returns {void} */
