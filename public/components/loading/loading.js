@@ -4665,8 +4665,14 @@ export class Loading extends StateDerivedView {
       // silently. On a first seed it is null; on a re-subscription after a
       // reconnect it is where this page left off, so only what arrived while
       // the channel was gone comes back.
+      // The consumer id is what subscribes this VIEWER to pushed cues for this
+      // file. The proxy used to infer the subscriber from the channel the
+      // request arrived on, which meant a reconnect silently lost subtitles for
+      // the rest of the session; named here, the subscription outlives the
+      // channel.
       const url = `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}` +
         `&fileIndex=${fileIndex}&trackIndex=${track.index}` +
+        `&consumerId=${encodeURIComponent(this.#session.consumerId)}` +
         (Number.isInteger(since) ? `&since=${since}` : "");
       let response = await transport.fetch(url, {
         signal: this.#session.abortController.signal,
