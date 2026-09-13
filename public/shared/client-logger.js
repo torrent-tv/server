@@ -97,6 +97,21 @@ const tag = deviceBrowserTag(typeof navigator === "object" ? navigator.userAgent
 const userAgent = typeof navigator === "object" && typeof navigator.userAgent === "string" ? navigator.userAgent : "";
 const sessionId = makeSessionId();
 
+/** When this page's session began, so its two log halves join by name. */
+const startedAt = new Date().toISOString();
+/** What is being watched, once a torrent has been chosen. */
+let film = { name: "", infoHash: "" };
+/**
+ * Where batches go when the page has a proxy.
+ *
+ * The proxy writes them beside its OWN log, on the host's durable disk. The
+ * registry server writes them to its standard output, which every release of
+ * it destroys — and both halves of a failure are needed to explain one.
+ *
+ * @type {((body: string) => Promise<unknown>) | null}
+ */
+let proxySink = null;
+
 /**
  * Render a single console argument as a string.
  *
@@ -151,12 +166,39 @@ function flush(useBeacon = false) {
     return;
   }
   const lines = buffer.splice(0, MAX_BATCH);
-  const body = JSON.stringify({ sessionId, tag, userAgent, signalSessionId: currentSignalSession, lines });
+  const body = JSON.stringify({
+    sessionId, tag, userAgent, signalSessionId: currentSignalSession, lines,
+    startedAt, torrentName: film.name, infoHash: film.infoHash
+  });
   try {
     if (useBeacon && typeof navigator.sendBeacon === "function") {
+      // Unload: only the server can be reached this way. A data channel cannot
+      // be used from a page that is going away.
       navigator.sendBeacon(ENDPOINT, new Blob([body], { type: "application/json" }));
       return;
     }
+    if (proxySink) {
+      // A batch that cannot reach the proxy goes to the server rather than
+      // being dropped: the moments when the proxy is unreachable are exactly
+      // the ones worth having.
+      void Promise.resolve(proxySink(body)).catch(() => sendToServer(body));
+      return;
+    }
+    sendToServer(body);
+  } catch {
+    // silent-ok: same as above — this IS the forwarder, so it has no channel of
+    // its own to complain through.
+  }
+}
+
+/**
+ * The registry server: where a page with no proxy, or a failed proxy, is heard.
+ *
+ * @param {string} body
+ * @returns {void}
+ */
+function sendToServer(body) {
+  try {
     void fetch(ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -166,8 +208,7 @@ function flush(useBeacon = false) {
       // Best-effort: drop on failure (do NOT console.* here — would loop).
     });
   } catch {
-    // silent-ok: same as above — this IS the forwarder, so it has no channel of
-    // its own to complain through.
+    // silent-ok: nothing here may throw into the code being logged.
   }
 }
 
@@ -204,6 +245,27 @@ function install() {
      * @param {unknown} id
      * @returns {void}
      */
+    /**
+     * Send batches through the proxy from now on, or stop doing so.
+     *
+     * @param {((body: string) => Promise<unknown>) | null} sink
+     * @returns {void}
+     */
+    setProxySink(sink) {
+      proxySink = typeof sink === "function" ? sink : null;
+    },
+    /**
+     * Name what is being watched, so the log file says which film it is.
+     *
+     * @param {{ name?: string, infoHash?: string }} chosen
+     * @returns {void}
+     */
+    setFilm(chosen) {
+      film = {
+        name: typeof chosen?.name === "string" ? chosen.name : "",
+        infoHash: typeof chosen?.infoHash === "string" ? chosen.infoHash : ""
+      };
+    },
     setSignalSession(id) {
       if (typeof id !== "string" || id.length === 0 || id === currentSignalSession) {
         return;

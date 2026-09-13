@@ -2288,6 +2288,10 @@ export class Loading extends StateDerivedView {
         parsed.files = files;
         parsed.isMultiFile = files.length > 1;
       }
+      window.__ttvClientLogger?.setFilm?.({
+        name: typeof parsed.name === "string" ? parsed.name : "",
+        infoHash: typeof parsed.infoHashHex === "string" ? parsed.infoHashHex : ""
+      });
       const mediaFiles = mediaFilesFrom(parsed.files, contents?.items);
       this.#subtitleFiles = mediaFiles.subtitles;
       const debugState = getDebugState();
@@ -3735,6 +3739,17 @@ export class Loading extends StateDerivedView {
       // they were watching at once — instead of waiting out a silence that a
       // paused viewer produces just as well as a closed tab.
       transport?.identifyViewer?.(this.#session?.consumerId);
+      // From here the page's own log goes to the PROXY, which keeps it beside
+      // its own on a durable disk. Until now it went to the registry server's
+      // standard output, which every release of it destroys — and explaining a
+      // failure needs both halves.
+      window.__ttvClientLogger?.setProxySink?.((body) =>
+        transport.fetch("/api/client-logs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body
+        })
+      );
       return transport;
     }).finally(() => {
       // Only if it is still ours: an abandoned attempt was replaced long ago
