@@ -1,3 +1,8 @@
+## 0.27.12
+
+- **New**: THE PAGE SENDS ITS LOG TO THE PROXY, WHICH KEEPS IT. It went to this server's standard output, and every release of this server destroys it — so half the evidence for any failure was gone by the time it was looked for. It now goes over the data channel to the proxy, which writes it beside its own log on a durable disk (proxy 2.83.8). The batch carries when the session began, the film's name and its infohash, which is what names the file and joins the two halves.
+- **Chore**: This server's route stays and is the fallback, deliberately: a page that has no proxy yet, or whose connection to one just failed, still has something to say, and those are the moments that matter most. A batch that cannot reach the proxy comes here rather than being dropped, and the unload path always comes here — a data channel cannot be used from a page that is going away.
+
 ## 0.27.11
 
 - **Fix**: THE REQUEST THAT TURNS SUBTITLES ON NOW SAYS WHO IS ASKING. A subscription to pushed cues is a fact about a person, and it was held against the data CHANNEL, so a seamless reconnect lost subtitles for the rest of the session — and the proxy could only build it by sniffing `/api/subtitles` out of the request path and deriving a torrent key inside the layer that is only supposed to carry bytes. The embedded-track request now carries `consumerId`, which is the page's own name for the viewer and already survives the reconnect ladder swapping the transport underneath a running player. Ships BEFORE the matching proxy release on purpose: an old proxy ignores the extra parameter and keeps subscribing the old way, while a new proxy with an old page would find nobody subscribed.
