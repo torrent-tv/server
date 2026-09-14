@@ -150,8 +150,9 @@ export class ProxySelector {
       const { pool } = await this.#poolOf(about);
       return pool[0]?.id ?? "";
     } catch {
-      // A question that cannot be answered leaves the connection in hand
-      // alone; it is a preference, not a requirement.
+      // silent-ok: a question that cannot be answered leaves the connection in
+      // hand alone — it is a preference, not a requirement, and the empty
+      // answer IS the result the caller acts on.
       return "";
     }
   }

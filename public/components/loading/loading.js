@@ -4,8 +4,9 @@ import { appendCues, parseVttCues } from "../../domain/vtt-cues.js";
 import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
-import { consumeOurPause, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { reportNow } from "../../domain/net-report.js";
+import { consumeOurPause, noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
+import { measureLink, reportNow } from "../../domain/net-report.js";
+import { lastProxyRefusal } from "../../domain/proxy-refusal.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -345,7 +346,10 @@ export class Loading extends StateDerivedView {
     // answered in 9-43 ms — the one thing known to be in order. The real fault
     // was on the proxy, and this message cost real time on the way to finding
     // it. A message must not name a cause it has not established.
-    prebufferStalled: "Could not start playback: the proxy accepted the request but sent no video. Nothing here says why — the proxy's own log will.",
+    // Names only what was observed, and no longer sends the viewer to a log
+    // they cannot read: when the proxy states a reason for refusing, that
+    // reason is appended by `#prebufferFailure` instead.
+    prebufferStalled: "Could not start playback: the proxy accepted the request but sent no video.",
     lanPermissionExplainer:
       "The video source is a device on your own network. Your browser asks for permission before a website may talk to it — press Allow and confirm the browser's question.",
     lanPermissionWaiting: "Waiting for the browser's local network permission...",
@@ -959,10 +963,12 @@ export class Loading extends StateDerivedView {
           // A pause we caused ourselves is not a decision by the viewer.
           if (!consumeOurPause(videoElement)) {
             this.#viewerPaused = true;
+            noteViewerStopped(videoElement, true);
             signalApp(APP_EVENT.PAUSED_BY_VIEWER, { viewerWantsPlayback: false });
           }
         } else if (name === "playing") {
           this.#viewerPaused = false;
+          noteViewerStopped(videoElement, false);
           signalApp(APP_EVENT.RESUMED, { viewerWantsPlayback: true });
         }
         this.#reportSeekIntent(name, videoElement);
@@ -3754,8 +3760,8 @@ export class Loading extends StateDerivedView {
     try {
       this.#proxy.close();
     } catch {
-      // A connection that is already gone needs no closing, and this one is
-      // being replaced either way.
+      // silent-ok: a connection that is already gone needs no closing, and this
+      // one is being replaced either way — the failure carries no information.
     }
     this.#proxy = null;
     this.#transport = null;
@@ -3809,6 +3815,11 @@ export class Loading extends StateDerivedView {
           body
         })
       );
+      // MEASURE THE LINK NOW, while the person is still finding their film. The
+      // figure used to come only from segments of the film itself, so it did
+      // not exist until playback had begun — after every decision that wants
+      // it. Best-effort and unawaited: nothing here waits on it.
+      void measureLink(transport);
       return transport;
     }).finally(() => {
       // Only if it is still ours: an abandoned attempt was replaced long ago
@@ -6358,7 +6369,12 @@ export class Loading extends StateDerivedView {
       `inputBytes=${bestInputBytes >= 0 ? bestInputBytes : "n/a"}`
     );
     if (finalAhead < PREBUFFER_MIN_START_SECONDS) {
-      const stalled = new Error(Loading.MESSAGES.prebufferStalled);
+      // WHAT THE PROXY SAID, if it said anything. Every refusal states its
+      // reason now; it used to reach only the proxy's own log.
+      const said = lastProxyRefusal();
+      const stalled = new Error(
+        said ? `${Loading.MESSAGES.prebufferStalled} ${said}` : Loading.MESSAGES.prebufferStalled
+      );
       // Retryable, and it always was: running out of patience while data is on
       // its way says nothing about whether a second attempt would succeed. Until
       // now this error carried no such flag, so the error card offered the

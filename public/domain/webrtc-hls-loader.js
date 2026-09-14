@@ -19,6 +19,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { recordNetSample } from "./net-report.js";
+import { clearProxyRefusal, noteProxyRefusal } from "./proxy-refusal.js";
 
 /**
  * The loader context object passed by HLS.js to `load()`.
@@ -151,13 +152,32 @@ export function createWebRtcHlsLoader(transport, consumerId = "") {
           if (this._aborted) return;
 
           if (!response.ok) {
+            // WHAT THE PROXY SAID, kept for the viewer. A refusal states its
+            // reason — which segment, and what the priority map thinks of it —
+            // and until 2026-09-14 that reason reached nobody: the page told
+            // the viewer it did not know why and pointed at a log they cannot
+            // read, while the proxy had answered the question sixty seconds
+            // earlier.
+            let said = "";
+            try {
+              const body = await response.text();
+              const parsed = JSON.parse(body);
+              said = typeof parsed?.reason === "string" ? parsed.reason : "";
+            } catch {
+              // silent-ok: a body that is not our own JSON says nothing, and
+              // the status alone still reaches the player.
+            }
+            if (said) {
+              noteProxyRefusal(said);
+            }
             callbacks.onError(
-              { code: response.status, text: `HTTP ${response.status}` },
+              { code: response.status, text: said || `HTTP ${response.status}` },
               context,
               null
             );
             return;
           }
+          clearProxyRefusal();
 
           let data;
           if (context.responseType === "arraybuffer") {
