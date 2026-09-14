@@ -1,6 +1,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { PLAYER_EVENTS } from "../shared/events.js";
+import { viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
 import { startNetReporter, stopNetReporter } from "./net-report.js";
@@ -989,7 +990,8 @@ export class TorrentSession {
         consumerId: this.consumerId,
         getBufferedAheadSec: bufferedAheadSeconds,
         getPositionSeconds: playbackPositionSeconds,
-        getPlaying: pictureIsMoving
+        getPlaying: pictureIsMoving,
+        getWaiting: viewerIsWaiting
       });
     }
 
@@ -1410,9 +1412,41 @@ function playbackPositionSeconds() {
 function pictureIsMoving() {
   const video = document.querySelector("#player__video");
   if (!(video instanceof HTMLVideoElement)) {
-    return true;
+    return false;
   }
   return !video.paused && !video.ended && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+}
+
+/**
+ * Whether this viewer is WAITING for material we owe them.
+ *
+ * The third state, and the reason one boolean was not enough. A picture that is
+ * not advancing is in one of two entirely different situations, and they are
+ * opposite instructions to the proxy:
+ *
+ *   the viewer stopped it       they consume nothing and can wait;
+ *   we have delivered nothing   they are the most urgent viewer there is.
+ *
+ * Reported as one boolean, the second read as the first: a viewer frozen on a
+ * segment that had not been made counted as somebody who had chosen to stop, so
+ * nothing of theirs fell due. A cold open is in this state by definition —
+ * paused, holding nothing, having asked for a film — which is when it matters
+ * most.
+ *
+ * Whose pause it was is not readable from the element (`paused` is true for
+ * both) and is recorded where it is known: the handler of the element's own
+ * events, which already tells our pauses from the viewer's.
+ *
+ * @returns {boolean}
+ */
+function viewerIsWaiting() {
+  const video = document.querySelector("#player__video");
+  if (!(video instanceof HTMLVideoElement)) {
+    // No element to read: a session exists, so a film has been asked for, and
+    // nothing is playing it. That is waiting.
+    return true;
+  }
+  return !video.ended && !viewerHasStopped(video) && !pictureIsMoving();
 }
 
 function isAbortError(error) {

@@ -55,3 +55,50 @@ export function consumeOurPause(video) {
   ourPauses.delete(video);
   return true;
 }
+
+/**
+ * Elements the VIEWER has stopped, as opposed to elements that are merely not
+ * advancing.
+ *
+ * The second fact this file exists for, and the one that separates the three
+ * states a picture can be in: advancing, stopped by the person watching, or
+ * stopped because nothing has been delivered to play. `video.paused` is true in
+ * the last two and false in the first, so it cannot tell them apart — and they
+ * are opposite instructions to the proxy. A viewer who stopped the picture
+ * consumes nothing and can wait; a viewer waiting on material is the most
+ * urgent there is.
+ *
+ * Written by whoever handles the element's own `pause` and `playing` events,
+ * which is the one place that already knows whether a pause was ours.
+ *
+ * @type {WeakSet<HTMLVideoElement>}
+ */
+const stoppedByViewer = new WeakSet();
+
+/**
+ * Record that this element is, or is no longer, stopped by the viewer.
+ *
+ * @param {HTMLVideoElement} video
+ * @param {boolean} stopped
+ * @returns {void}
+ */
+export function noteViewerStopped(video, stopped) {
+  if (!(video instanceof HTMLVideoElement)) {
+    return;
+  }
+  if (stopped) {
+    stoppedByViewer.add(video);
+  } else {
+    stoppedByViewer.delete(video);
+  }
+}
+
+/**
+ * Whether the viewer has stopped this element themselves.
+ *
+ * @param {HTMLVideoElement} video
+ * @returns {boolean}
+ */
+export function viewerHasStopped(video) {
+  return video instanceof HTMLVideoElement && stoppedByViewer.has(video);
+}
