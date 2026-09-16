@@ -6102,6 +6102,10 @@ export class Loading extends StateDerivedView {
       startPositionSeconds:
         typeof resumeStartPosition === "number" && resumeStartPosition > 0 ? resumeStartPosition : 0,
       ...this.#buildQualityTargetConfig(options.transcodeVideo === true),
+      // Read at every report, because it changes while the film plays: a size
+      // picked from the menu is served exactly, the automatic choice may be
+      // served by an output of the same quality or better the proxy has made.
+      getQualityMode: () => (this.#selectedQualityHeight > 0 ? "manual" : "auto"),
       playHls: (videoElement, manifestUrl, playOptions = {}) =>
         this.#hlsPlayer.play(videoElement, manifestUrl, {
           ...(hlsLoader ? { loader: hlsLoader } : {}),
