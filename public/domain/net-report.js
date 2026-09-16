@@ -102,7 +102,7 @@ function medianLinkMbps() {
  * Start reporting for a transcode session. Stops any previous reporter (one
  * playback at a time) and resets the sample window.
  *
- * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getPositionSeconds?: () => number | null, getPlaying?: () => boolean, getWaiting?: () => boolean }} params
+ * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getPositionSeconds?: () => number | null, getPlaying?: () => boolean, getWaiting?: () => boolean, getQualityMode?: () => "auto" | "manual" }} params
  * @returns {void}
  */
 export function startNetReporter({
@@ -112,7 +112,8 @@ export function startNetReporter({
   getBufferedAheadSec,
   getPositionSeconds,
   getPlaying,
-  getWaiting
+  getWaiting,
+  getQualityMode
 }) {
   stopNetReporter();
   samples = [];
@@ -200,6 +201,18 @@ export function startNetReporter({
     //
     // Picture-in-picture is the case that makes the distinction necessary rather
     // than merely tidy: the tab is hidden and the viewer is watching.
+    // WHETHER THE SIZE ON SCREEN WAS PICKED BY HAND. A size picked from the menu
+    // is served exactly; the automatic choice may be served by an output of the
+    // same quality or better that the proxy has already made. Left out when the
+    // page cannot say, and the proxy then treats the size as picked.
+    let qualityMode = null;
+    try {
+      const value = typeof getQualityMode === "function" ? getQualityMode() : null;
+      qualityMode = value === "auto" || value === "manual" ? value : null;
+    } catch {
+      // silent-ok: same as the readings above — the report still goes, and the
+      // proxy keeps what it does without this field.
+    }
     let onScreen = true;
     let inPictureInPicture = false;
     try {
@@ -227,6 +240,7 @@ export function startNetReporter({
           waiting,
           onScreen,
           inPictureInPicture,
+          ...(qualityMode ? { qualityMode } : {}),
           ...(consumerId ? { consumerId } : {}),
           ...(linkMbps === null ? {} : { linkMbps }),
           ...(positionSeconds === null ? {} : { positionSeconds })

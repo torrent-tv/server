@@ -1,3 +1,8 @@
+## 0.29.0
+
+- **New**: The viewer's report says whether the size on screen was picked from the menu or is the automatic choice (`qualityMode`). The proxy serves a picked size exactly and may serve the automatic choice with an output of the same quality or better that it has already made (proxy 2.87.0). A proxy that does not read the field ignores it; the proxy ships first.
+- **New**: `test/net-report-quality-mode.test.js` — the mode is sent as stated, and left out when the page cannot say.
+
 ## 0.28.0
 
 - **Fix**: THE PAGE'S REPORT ABOUT ITSELF NO LONGER DEPENDS ON HAVING MEASURED ITS LINK. Where the viewer is, how much film they hold, whether the picture is moving, whether they are blocked on us, whether the tab is on screen — all of it rode inside a report that was skipped whenever no link speed had ever been measured. A link is measured from completed transfers, so at a cold open there is no figure and the page said nothing at all. Field 2026-09-14: one transfer completed in the whole session, the median needs two, and every `reportNow()` — the pauses, the starvation, the tab going hidden — returned on that line. The proxy filled the silence by assuming the film was running and placed a viewer who had not seen a frame 146 seconds into it. The link figure is one field of the report now, present when it is a measurement.

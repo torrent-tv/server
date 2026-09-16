@@ -650,7 +650,8 @@ export class TorrentSession {
           Number.isFinite(options.startPositionSeconds) && options.startPositionSeconds > 0
             ? options.startPositionSeconds
             : 0,
-        segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : ""
+        segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
+        getQualityMode: typeof options.getQualityMode === "function" ? options.getQualityMode : undefined
       }
     );
     if (!playlistUrl) {
@@ -991,7 +992,8 @@ export class TorrentSession {
         getBufferedAheadSec: bufferedAheadSeconds,
         getPositionSeconds: playbackPositionSeconds,
         getPlaying: pictureIsMoving,
-        getWaiting: viewerIsWaiting
+        getWaiting: viewerIsWaiting,
+        getQualityMode: options.getQualityMode
       });
     }
 
