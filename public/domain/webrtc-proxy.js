@@ -144,6 +144,15 @@ export class WebRtcProxy {
    */
   #viewerName = "";
   /**
+   * The last round trip measured to this proxy, in milliseconds, or null
+   * before any ping has answered. What a held request's answer takes to come
+   * back, and therefore how much earlier than this page's own deadline the
+   * proxy has to answer it.
+   *
+   * @type {number | null}
+   */
+  #lastRoundTripMs = null;
+  /**
    * A third channel, opened UNORDERED and with no retransmission.
    *
    * It carries nothing but the proxy's numbered probes, and it exists to answer
@@ -948,7 +957,13 @@ export class WebRtcProxy {
     const method = options.method ?? "GET";
     const reqPath = url.pathname;
     const query = url.search.slice(1);
-    const headers = options.headers ?? {};
+    // HOW LONG THIS PAGE WILL WAIT, told to the proxy, so a request it holds is
+    // answered while somebody is still waiting for the answer: this request's
+    // own deadline, less the round trip the answer needs to come back. The
+    // proxy used to hold for a figure of its own that happened to equal this
+    // page's, so its "retry" reached a page that had given up at that instant.
+    const holdMs = Math.max(0, timeoutMs - (this.#lastRoundTripMs ?? 0));
+    const headers = { "x-hold-ms": String(holdMs), ...(options.headers ?? {}) };
     // Measure the body in UTF-8 bytes (what the proxy reassembles), not string
     // length — a body may contain multi-byte characters.
     const payload = options.body != null ? new TextEncoder().encode(options.body) : null;
@@ -1137,7 +1152,12 @@ export class WebRtcProxy {
       }, PING_TIMEOUT_MS);
 
       this.#pending.set(`ping:${id}`, {
-        resolve: () => { clearTimeout(timer); resolve(Math.round(performance.now() - sentAt)); },
+        resolve: () => {
+          clearTimeout(timer);
+          const roundTripMs = Math.round(performance.now() - sentAt);
+          this.#lastRoundTripMs = roundTripMs;
+          resolve(roundTripMs);
+        },
         reject: (err) => { clearTimeout(timer); reject(err); },
         chunks: [],
         status: 0,

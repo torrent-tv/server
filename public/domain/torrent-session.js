@@ -5,6 +5,8 @@ import { viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
 import { startNetReporter, stopNetReporter } from "./net-report.js";
+import { NoCapacityError, OutputUnavailableError } from "./proxy-outcome.js";
+import { pictureSizeOf } from "./visible-picture.js";
 
 // How often the browser re-asserts that it is still watching. Must sit well
 // below the proxy's ten-minute session timeout — 30 s leaves twenty chances to
@@ -14,6 +16,29 @@ const SESSION_KEEPALIVE_MS = 30_000;
 export class TorrentSession {
   /** @type {(() => void) | null} */
   #seekCleanup = null;
+
+  /**
+   * How many times this viewer has left a position, raised when THEY seek.
+   *
+   * IT IS THE PAGE'S, and that is the whole point of it being here. A seek
+   * begins on this side — it is `video.currentTime` after a scrub — and every
+   * request that follows is issued from this side too. So the number that says
+   * "which viewing this request belongs to" can only be stamped where the
+   * request is built; a proxy that assigned its own current value at the moment
+   * a request ARRIVED would put a request made just before a seek into the
+   * generation that came after it, and answer it as though it were current.
+   *
+   * The proxy is TOLD this number rather than counting its own, so there is one
+   * of it. Monotonic: the proxy never takes a lower one.
+   *
+   * @type {number}
+   */
+  #viewGeneration = 0;
+
+  /** Which viewing a request issued now belongs to. @returns {number} */
+  get viewGeneration() {
+    return this.#viewGeneration;
+  }
 
   /**
    * Sessions whose keepalive answer could not be read, and sessions whose
@@ -109,12 +134,14 @@ export class TorrentSession {
    *
    * @param {number} height
    * @param {number} positionSeconds
-   * @returns {Promise<boolean>} Whether the rung reported itself ready.
+   * @returns {Promise<{ ready: boolean, unavailable: OutputUnavailableError | null }>}
+   *   Whether the rung reported itself ready, and — when the proxy answered
+   *   that nothing at that height suits this viewer's link — why.
    */
   async prepareQualityVariant(height, positionSeconds) {
     const current = this.currentTranscodeSession;
     if (!current || !this.activeTranscodeSessions.has(current.sessionId) || !Number.isFinite(positionSeconds)) {
-      return false;
+      return { ready: false, unavailable: null };
     }
     const { sessionId, transport } = current;
     const path =
@@ -122,10 +149,22 @@ export class TorrentSession {
       `?position=${positionSeconds.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}`;
     try {
       const response = await transport.fetch(path);
-      return response.status === 204;
+      if (response.status === 409) {
+        let body = null;
+        try {
+          body = await response.json();
+        } catch {
+          // silent-ok: a 409 without our JSON is some other refusal, answered
+          // below as "not ready" as before.
+        }
+        if (body?.outcome === "output-unavailable") {
+          return { ready: false, unavailable: new OutputUnavailableError(body) };
+        }
+      }
+      return { ready: response.status === 204, unavailable: null };
     } catch (error) {
       console.debug("[torrent-tv] warming the quality variant failed", error);
-      return false;
+      return { ready: false, unavailable: null };
     }
   }
 
@@ -193,6 +232,12 @@ export class TorrentSession {
     if (!Number.isFinite(positionSeconds) || positionSeconds < 0) {
       return;
     }
+    // A NEW VIEWING BEGINS HERE, before anything is sent, because every request
+    // this page issues from now on belongs to it — including the ones that race
+    // this notification out. Raised once for the seek, not once per session:
+    // the viewer moved, and the several sessions they hold are one viewing.
+    this.#viewGeneration += 1;
+    const generation = this.#viewGeneration;
     const sessions = Array.from(this.activeTranscodeSessions.entries());
     for (const [sessionId, transport] of sessions) {
       const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/seek`;
@@ -202,7 +247,7 @@ export class TorrentSession {
         // Who moved. A session can serve several viewers, and the seeking
         // viewer's own position has to move with them or the proxy judges
         // their next request against where they were before the jump.
-        body: JSON.stringify({ positionSeconds, consumerId: this.consumerId })
+        body: JSON.stringify({ positionSeconds, consumerId: this.consumerId, generation })
       };
       try {
         if (!transport.isHttp) {
@@ -592,8 +637,9 @@ export class TorrentSession {
    *   onTranscodeProgress?: (progress: object) => void,
    *   transcodeVideo?: boolean,
    *   transcodeAudio?: boolean,
-   *   targetWidth?: number,
-   *   targetHeight?: number
+   *   visiblePicture?: { width: number, height: number } | null,
+   *   getVisiblePicture?: () => { width: number, height: number } | null,
+   *   getPlayingHeight?: () => number
    * }} options
    * @returns {Promise<{ mode: "proxy-hls", offeredHeights: number[] | null }>}
    */
@@ -618,10 +664,7 @@ export class TorrentSession {
       typeof options.onTranscodeProgress === "function" ? options.onTranscodeProgress : null;
     const transcodeVideo = options.transcodeVideo === true;
     const transcodeAudio = options.transcodeAudio === true;
-    const targetWidth = Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : 0;
-    const targetHeight =
-      Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : 0;
-    const exactSize = options.exactSize === true;
+    const visiblePicture = pictureSizeOf(options.visiblePicture);
     const audioTrackIndex =
       Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
         ? options.audioTrackIndex
@@ -639,9 +682,7 @@ export class TorrentSession {
       transcodeVideo,
       {
         transcodeAudio,
-        targetWidth,
-        targetHeight,
-        exactSize,
+        visiblePicture,
         audioTrackIndex,
         // Where the proxy must start encoding. Without it a resume told only
         // hls.js, which then asked for a segment the encoder had never been
@@ -651,7 +692,8 @@ export class TorrentSession {
             ? options.startPositionSeconds
             : 0,
         segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
-        getQualityMode: typeof options.getQualityMode === "function" ? options.getQualityMode : undefined
+        getPlayingHeight: typeof options.getPlayingHeight === "function" ? options.getPlayingHeight : undefined,
+        getVisiblePicture: typeof options.getVisiblePicture === "function" ? options.getVisiblePicture : undefined
       }
     );
     if (!playlistUrl) {
@@ -818,7 +860,7 @@ export class TorrentSession {
    * @param {number} fileIndex
    * @param {((progress: object) => void) | null} onTranscodeProgress
    * @param {boolean} transcodeVideo
-   * @param {{ transcodeAudio?: boolean, targetWidth?: number, targetHeight?: number, startPositionSeconds?: number }} options
+   * @param {{ transcodeAudio?: boolean, visiblePicture?: { width: number, height: number } | null, startPositionSeconds?: number }} options
    * @returns {Promise<{ playlistUrl: string, variantHeight: number, offeredHeights: number[] | null, lookaheadSeconds: number, mediaPlaylistUrl: string }>}
    *   The manifest to load — a master playlist when the session offers quality
    *   variants, its media playlist otherwise — the height of the variant the
@@ -852,11 +894,10 @@ export class TorrentSession {
           fileIndex,
           transcodeVideo,
           transcodeAudio: options.transcodeAudio !== false,
-          targetWidth:
-            Number.isInteger(options.targetWidth) && options.targetWidth > 0 ? options.targetWidth : undefined,
-          targetHeight:
-            Number.isInteger(options.targetHeight) && options.targetHeight > 0 ? options.targetHeight : undefined,
-          exactSize: options.exactSize === true ? true : undefined,
+          // The picture as the viewer sees it, in physical pixels. The proxy
+          // bounds a re-encoded output's height by it: the smallest rung whose
+          // frame is not smaller than this (roadmap item 98).
+          visiblePicture: pictureSizeOf(options.visiblePicture) ?? undefined,
           // This browser takes its audio from the master playlist's rendition
           // group, so the picture is encoded without it and each track is
           // encoded once for the file rather than once per quality rung. The
@@ -886,13 +927,30 @@ export class TorrentSession {
       }
 
       let details = "";
+      let unavailable = null;
       try {
         const payload = await response.json();
         details = typeof payload?.error === "string" ? payload.error : "";
+        // Nothing this proxy holds or could make suits this viewer's link. Not
+        // a failure to retry against the same link: the loading flow explains
+        // it in terms of their connection.
+        if (response.status === 409 && payload?.outcome === "output-unavailable") {
+          unavailable = new OutputUnavailableError(payload);
+        }
+        // This proxy has no place for this video right now, or has not shown
+        // it can encode it at all. Not about the viewer's link: another proxy
+        // may serve it, and the loading flow asks the pool before anything
+        // plays (roadmap item 97, step 14).
+        if (response.status === 409 && payload?.outcome === "no-capacity") {
+          unavailable = new NoCapacityError(payload);
+        }
       } catch (_error) {
         // silent-ok: the body is optional detail on top of a status the caller
         // already acts on and already reports. A proxy that answers without
         // JSON has still answered.
+      }
+      if (unavailable) {
+        throw unavailable;
       }
 
       const isWarmupError =
@@ -993,7 +1051,8 @@ export class TorrentSession {
         getPositionSeconds: playbackPositionSeconds,
         getPlaying: pictureIsMoving,
         getWaiting: viewerIsWaiting,
-        getQualityMode: options.getQualityMode
+        getPlayingHeight: options.getPlayingHeight,
+        getVisiblePicture: options.getVisiblePicture
       });
     }
 

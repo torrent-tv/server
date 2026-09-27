@@ -98,23 +98,11 @@
         </media-control-bar>
 
         <media-captions-menu hidden anchor="auto"></media-captions-menu>
-        <!-- Settings menu: extension point for the future audio-track and
-             quality items. The button and both items stay hidden until the
-             backing features land (separate changes). -->
-        <media-settings-menu id="player__settings-menu" hidden anchor="auto">
-          <media-settings-menu-item id="player__settings-audio" hidden>
-            Audio
-            <media-chrome-menu id="player__audio-menu" slot="submenu" hidden>
-              <div slot="title">Audio</div>
-            </media-chrome-menu>
-          </media-settings-menu-item>
-          <media-settings-menu-item id="player__settings-quality" hidden>
-            Quality
-            <media-chrome-menu id="player__quality-menu" slot="submenu" hidden>
-              <div slot="title">Quality</div>
-            </media-chrome-menu>
-          </media-settings-menu-item>
-        </media-settings-menu>
+        <!-- The soundtrack menu, opened by the button beside the captions
+             button. A plain media-chrome menu: the tracks are the proxy's, not
+             the element's own `audioTracks`, which Chrome does not implement.
+             The button stays hidden until a file has more than one track. -->
+        <media-chrome-menu id="player__audio-menu" hidden anchor="player__audio-button"></media-chrome-menu>
 
         <media-control-bar id="player__control-bar">
           <media-play-button id="player__play"></media-play-button>
@@ -123,7 +111,17 @@
           <media-time-display showduration></media-time-display>
           <media-time-range></media-time-range>
           <media-captions-menu-button></media-captions-menu-button>
-          <media-settings-menu-button id="player__settings-button" hidden></media-settings-menu-button>
+          <media-chrome-menu-button
+            id="player__audio-button"
+            invoketarget="player__audio-menu"
+            hidden
+            aria-label="Audio track">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18V6l10-2v12"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="16" cy="16" r="3"/>
+            </svg>
+          </media-chrome-menu-button>
           <button
             id="player__share"
             class="player__button"

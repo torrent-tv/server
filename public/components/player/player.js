@@ -28,11 +28,8 @@ export class Player extends StateDerivedView {
     playButton: "#player__play",
     closeButton: "#player__close",
     playlistToggle: "#player__playlist-toggle",
-    settingsButton: "#player__settings-button",
-    settingsAudioItem: "#player__settings-audio",
+    audioButton: "#player__audio-button",
     audioMenu: "#player__audio-menu",
-    settingsQualityItem: "#player__settings-quality",
-    qualityMenu: "#player__quality-menu",
     buffering: "#player__buffering",
     bufferingPeers: "#player__buffering-peers",
     share: "#player__share",
@@ -54,11 +51,8 @@ export class Player extends StateDerivedView {
   #playButton;
   #playlistToggle;
   #closeButton;
-  #settingsButton;
-  #settingsAudioItem;
+  #audioButton;
   #audioMenu;
-  #settingsQualityItem;
-  #qualityMenu;
   #buffering;
   #bufferingPeers;
   #share;
@@ -99,10 +93,6 @@ export class Player extends StateDerivedView {
    * @type {{ video: boolean, audio: boolean } | null}
    */
   #declaredTracks = null;
-  // The settings button is shared by the Audio and Quality submenus; it shows
-  // when either has something to offer.
-  #audioAvailable = false;
-  #qualityAvailable = false;
 
   /**
    * The state currently applied. Held because a media element's own events
@@ -533,11 +523,8 @@ export class Player extends StateDerivedView {
     this.#playButton = document.querySelector(Player.SELECTOR.playButton);
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
-    this.#settingsButton = document.querySelector(Player.SELECTOR.settingsButton);
-    this.#settingsAudioItem = document.querySelector(Player.SELECTOR.settingsAudioItem);
+    this.#audioButton = document.querySelector(Player.SELECTOR.audioButton);
     this.#audioMenu = document.querySelector(Player.SELECTOR.audioMenu);
-    this.#settingsQualityItem = document.querySelector(Player.SELECTOR.settingsQualityItem);
-    this.#qualityMenu = document.querySelector(Player.SELECTOR.qualityMenu);
     this.#buffering = document.querySelector(Player.SELECTOR.buffering);
     this.#bufferingPeers = document.querySelector(Player.SELECTOR.bufferingPeers);
     this.#share = document.querySelector(Player.SELECTOR.share);
@@ -545,8 +532,8 @@ export class Player extends StateDerivedView {
 
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playButton || !this.#playlistToggle ||
-      !this.#closeButton || !this.#settingsButton || !this.#settingsAudioItem || !this.#audioMenu ||
-      !this.#settingsQualityItem || !this.#qualityMenu || !this.#buffering || !this.#bufferingPeers ||
+      !this.#closeButton || !this.#audioButton || !this.#audioMenu ||
+      !this.#buffering || !this.#bufferingPeers ||
       !this.#share || !this.#shareMenu
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
@@ -579,21 +566,11 @@ export class Player extends StateDerivedView {
     this.#controller.addEventListener("click", this.#onControllerClick);
     document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
     this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
-    document.addEventListener(PLAYER_EVENTS.SET_QUALITY_OPTIONS, this.#onSetQualityOptions);
-    this.#qualityMenu.addEventListener("click", this.#onQualityMenuClick);
   }
 
   /**
-   * The settings button is shown when either the Audio or the Quality submenu
-   * has something to offer.
-   */
-  #updateSettingsVisibility() {
-    this.#settingsButton.hidden = !(this.#audioAvailable || this.#qualityAvailable);
-  }
-
-  /**
-   * Populate the audio submenu from the playback plan's track inventory.
-   * The settings button and the Audio item stay hidden until a file actually
+   * Populate the audio menu from the playback plan's track inventory. The
+   * audio button beside the captions button stays hidden until a file actually
    * has more than one audio track.
    *
    * @param {CustomEvent} event
@@ -608,9 +585,7 @@ export class Player extends StateDerivedView {
     }
 
     const show = tracks.length > 1;
-    this.#audioAvailable = show;
-    this.#settingsAudioItem.hidden = !show;
-    this.#updateSettingsVisibility();
+    this.#audioButton.hidden = !show;
     if (!show) {
       return;
     }
@@ -636,61 +611,12 @@ export class Player extends StateDerivedView {
     for (const sibling of this.#audioMenu.querySelectorAll("media-chrome-menu-item")) {
       sibling.toggleAttribute("checked", sibling === item);
     }
+    // A choice made closes the menu; it is a menu of its own now, not a
+    // submenu the settings menu used to close.
+    this.#audioMenu.hidden = true;
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SELECT_AUDIO_TRACK, {
         detail: { trackIndex: Number(item.dataset.audioTrackIndex) }
-      })
-    );
-  };
-
-  /**
-   * Populate the Quality submenu. Options are `{ height, label }`; `height: 0`
-   * is Auto (the proxy's realtime budget). The item stays hidden unless there
-   * is a real choice (Auto plus at least one forced resolution).
-   *
-   * @param {CustomEvent} event
-   */
-  #onSetQualityOptions = (event) => {
-    const detail = event instanceof CustomEvent ? event.detail : null;
-    const options = Array.isArray(detail?.options) ? detail.options : [];
-    const activeHeight = Number.isInteger(detail?.activeHeight) ? detail.activeHeight : 0;
-
-    for (const item of this.#qualityMenu.querySelectorAll("media-chrome-menu-item")) {
-      item.remove();
-    }
-
-    const show = options.length > 1;
-    this.#qualityAvailable = show;
-    this.#settingsQualityItem.hidden = !show;
-    this.#updateSettingsVisibility();
-    if (!show) {
-      return;
-    }
-
-    for (const option of options) {
-      const item = document.createElement("media-chrome-menu-item");
-      item.setAttribute("type", "radio");
-      item.dataset.qualityHeight = String(option.height);
-      if (option.height === activeHeight) {
-        item.setAttribute("checked", "");
-      }
-      item.textContent = option.label;
-      this.#qualityMenu.appendChild(item);
-    }
-  };
-
-  /** @param {MouseEvent} event */
-  #onQualityMenuClick = (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const item = target.closest("media-chrome-menu-item[data-quality-height]");
-    if (!item || item.hasAttribute("checked")) return;
-    for (const sibling of this.#qualityMenu.querySelectorAll("media-chrome-menu-item")) {
-      sibling.toggleAttribute("checked", sibling === item);
-    }
-    document.dispatchEvent(
-      new CustomEvent(PLAYER_EVENTS.SELECT_QUALITY, {
-        detail: { height: Number(item.dataset.qualityHeight) }
       })
     );
   };

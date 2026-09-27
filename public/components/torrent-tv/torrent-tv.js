@@ -176,8 +176,8 @@ class TorrentTV {
   };
 
   /**
-   * The pipeline is rebuilding the stream — a quality or audio switch, a
-   * reconnect, a manual Retry. Each of these used to re-show the loading view
+   * The pipeline is rebuilding the stream — an audio switch, a reconnect, a
+   * manual Retry. Each of these used to re-show the loading view
    * WITHOUT any transition, so the machine said PLAYING while the screen said
    * loading. They now say what they are.
    */

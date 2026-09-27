@@ -102,7 +102,7 @@ function medianLinkMbps() {
  * Start reporting for a transcode session. Stops any previous reporter (one
  * playback at a time) and resets the sample window.
  *
- * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getPositionSeconds?: () => number | null, getPlaying?: () => boolean, getWaiting?: () => boolean, getQualityMode?: () => "auto" | "manual" }} params
+ * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getPositionSeconds?: () => number | null, getPlaying?: () => boolean, getWaiting?: () => boolean, getPlayingHeight?: () => number, getVisiblePicture?: () => { width: number, height: number } | null }} params
  * @returns {void}
  */
 export function startNetReporter({
@@ -113,7 +113,8 @@ export function startNetReporter({
   getPositionSeconds,
   getPlaying,
   getWaiting,
-  getQualityMode
+  getPlayingHeight,
+  getVisiblePicture
 }) {
   stopNetReporter();
   samples = [];
@@ -201,17 +202,35 @@ export function startNetReporter({
     //
     // Picture-in-picture is the case that makes the distinction necessary rather
     // than merely tidy: the tab is hidden and the viewer is watching.
-    // WHETHER THE SIZE ON SCREEN WAS PICKED BY HAND. A size picked from the menu
-    // is served exactly; the automatic choice may be served by an output of the
-    // same quality or better that the proxy has already made. Left out when the
-    // page cannot say, and the proxy then treats the size as picked.
-    let qualityMode = null;
+    // THE QUALITY IS ALWAYS THE AUTOMATIC CHOICE (roadmap item 98): the page
+    // has no manual quality. Said on every report, because a proxy treats a page
+    // that says nothing as one that picked its size by hand.
+    const qualityMode = "auto";
+    // WHICH RUNG THE PLAYER IS PLAYING, by its height. The proxy used to infer
+    // it from the first segment requested of a rung, which is the player
+    // FETCHING rather than the picture having moved; the page knows the moment
+    // the switch has happened. Left out when the page cannot say.
+    let playingHeight = 0;
     try {
-      const value = typeof getQualityMode === "function" ? getQualityMode() : null;
-      qualityMode = value === "auto" || value === "manual" ? value : null;
+      const value = typeof getPlayingHeight === "function" ? Number(getPlayingHeight()) : 0;
+      playingHeight = Number.isInteger(value) && value > 0 ? value : 0;
     } catch {
       // silent-ok: same as the readings above — the report still goes, and the
-      // proxy keeps what it does without this field.
+      // proxy keeps the rung it had.
+    }
+    // THE PICTURE AS THE VIEWER SEES IT, in physical pixels: the size of the
+    // frame that would be shown without being enlarged. The proxy takes it as
+    // the upper bound of a re-encoded output's height. Left out when the page
+    // cannot measure it yet.
+    let visiblePicture = null;
+    try {
+      const value = typeof getVisiblePicture === "function" ? getVisiblePicture() : null;
+      const width = Math.round(Number(value?.width));
+      const height = Math.round(Number(value?.height));
+      visiblePicture = width > 0 && height > 0 ? { width, height } : null;
+    } catch {
+      // silent-ok: same as the readings above — the report still goes, and the
+      // proxy keeps the size it had.
     }
     let onScreen = true;
     let inPictureInPicture = false;
@@ -240,7 +259,9 @@ export function startNetReporter({
           waiting,
           onScreen,
           inPictureInPicture,
-          ...(qualityMode ? { qualityMode } : {}),
+          qualityMode,
+          ...(playingHeight > 0 ? { playingHeight } : {}),
+          ...(visiblePicture ? { visiblePicture } : {}),
           ...(consumerId ? { consumerId } : {}),
           ...(linkMbps === null ? {} : { linkMbps }),
           ...(positionSeconds === null ? {} : { positionSeconds })

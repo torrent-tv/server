@@ -20,6 +20,7 @@
 
 import { recordNetSample } from "./net-report.js";
 import { clearProxyRefusal, noteProxyRefusal } from "./proxy-refusal.js";
+import { noteProxyOutcome, outcomeOf } from "./proxy-outcome.js";
 
 /**
  * The loader context object passed by HLS.js to `load()`.
@@ -72,9 +73,15 @@ import { clearProxyRefusal, noteProxyRefusal } from "./proxy-refusal.js";
  *   session serves everyone watching a copied picture, so without it their
  *   positions collapse into one and a seek by the viewer in front releases the
  *   requests being held for the viewer behind.
+ * @param {() => number} [generationOf] - Which VIEWING this load belongs to,
+ *   read at the moment the request is built rather than captured when the
+ *   loader was made. A loader outlives every seek of a session, so a captured
+ *   number would stamp the whole viewing with the generation it opened in; and
+ *   the proxy cannot supply one, because a request made just before a seek
+ *   arrives after it and would be read as current.
  * @returns {HlsLoaderClass}
  */
-export function createWebRtcHlsLoader(transport, consumerId = "") {
+export function createWebRtcHlsLoader(transport, consumerId = "", generationOf = null) {
   return class WebRtcHlsLoader {
     constructor() {
       this._aborted = false;
@@ -111,6 +118,12 @@ export function createWebRtcHlsLoader(transport, consumerId = "") {
       const parsed = new URL(context.url);
       if (consumerId) {
         parsed.searchParams.set("consumer", consumerId);
+      }
+      if (generationOf) {
+        const generation = generationOf();
+        if (Number.isInteger(generation) && generation >= 0) {
+          parsed.searchParams.set("generation", String(generation));
+        }
       }
       const path = parsed.pathname + parsed.search;
 
@@ -159,16 +172,25 @@ export function createWebRtcHlsLoader(transport, consumerId = "") {
             // read, while the proxy had answered the question sixty seconds
             // earlier.
             let said = "";
+            let outcome = null;
             try {
               const body = await response.text();
               const parsed = JSON.parse(body);
               said = typeof parsed?.reason === "string" ? parsed.reason : "";
+              outcome = outcomeOf(parsed, path);
             } catch {
               // silent-ok: a body that is not our own JSON says nothing, and
               // the status alone still reaches the player.
             }
             if (said) {
               noteProxyRefusal(said);
+            }
+            // An answer about THIS viewer's output — nothing suits their link,
+            // or a part they were given can no longer be given again — is the
+            // page's to act on, and it is told before the player hears of the
+            // failure, so the player's own recovery does not act first.
+            if (outcome) {
+              noteProxyOutcome(outcome);
             }
             callbacks.onError(
               { code: response.status, text: said || `HTTP ${response.status}` },
