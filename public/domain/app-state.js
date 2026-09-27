@@ -195,7 +195,7 @@ export const APP_EVENT = Object.freeze({
    * knowing which of them happened.
    */
   SWITCH_FINISHED: "SWITCH_FINISHED",
-  /** The stream must be built again: quality or audio switch, reconnect, Retry. */
+  /** The stream must be built again: audio switch, reconnect, Retry. */
   REBUILD_REQUIRED: "REBUILD_REQUIRED",
   /** A failure the pipeline says cannot be recovered from. */
   FATAL_FAILURE: "FATAL_FAILURE",
@@ -309,9 +309,9 @@ const TRANSITIONS = deepFreeze({
   //
   // `REBUILD_REQUIRED` sits here rather than on LIVE, and the difference is not
   // cosmetic: OPENING's parent is OPEN, not LIVE, so on LIVE it would not reach
-  // a rebuild asked for while the stream is still being built. Two real cases
-  // live in that window — changing quality during a cold open, and the transport
-  // dying mid-load, which is the failure server 0.8.84 was written for. From
+  // a rebuild asked for while the stream is still being built. The real case in
+  // that window is the transport dying mid-load, which is the failure server
+  // 0.8.84 was written for. From
   // OPENING it is an EXTERNAL SELF-TRANSITION: the state does not change, so no
   // output changes, while the build itself starts again. Whether the rebuild
   // action re-runs is decided by the event, not by the state changing.

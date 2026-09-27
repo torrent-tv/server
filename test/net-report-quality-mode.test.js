@@ -1,16 +1,17 @@
 /**
- * @file The viewer's report says whether the size on screen was picked by hand.
+ * @file The viewer's report: the quality is always the automatic choice, which
+ * rung the player is playing, and the picture as the viewer sees it.
  *
- * A size picked from the menu is served exactly; the automatic choice may be
- * served by an output of the same quality or better that the proxy has made.
- * The proxy can tell them apart only if the page says.
+ * The page has no manual quality (roadmap item 98), and a proxy treats a page
+ * that says nothing about the mode as one that picked its size by hand — so
+ * the mode is said on every report.
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { reportNow, startNetReporter, stopNetReporter } from "../public/domain/net-report.js";
 
-function captureReport(getQualityMode) {
+function capture(extra) {
   let body = null;
   startNetReporter({
     transport: {
@@ -21,19 +22,56 @@ function captureReport(getQualityMode) {
     },
     sessionId: "aaaaaaaabbbbcccc",
     getBufferedAheadSec: () => 0,
-    getQualityMode
+    ...extra
   });
   reportNow();
   stopNetReporter();
   return body;
 }
 
-test("the report carries the mode the page states", () => {
-  assert.equal(captureReport(() => "auto").qualityMode, "auto");
-  assert.equal(captureReport(() => "manual").qualityMode, "manual");
+test("every report says the quality is the automatic choice", () => {
+  assert.equal(capture({}).qualityMode, "auto");
 });
 
-test("a page that cannot say leaves the mode out rather than guessing", () => {
-  assert.equal("qualityMode" in captureReport(undefined), false);
-  assert.equal("qualityMode" in captureReport(() => "sometimes"), false);
+test("the report carries the picture as the viewer sees it", () => {
+  assert.deepEqual(capture({ getVisiblePicture: () => ({ width: 1280, height: 720 }) }).visiblePicture, {
+    width: 1280,
+    height: 720
+  });
+});
+
+test("a picture that cannot be measured yet is left out", () => {
+  assert.equal("visiblePicture" in capture({ getVisiblePicture: () => null }), false);
+  assert.equal("visiblePicture" in capture({ getVisiblePicture: () => ({ width: 0, height: 720 }) }), false);
+  assert.equal("visiblePicture" in capture({}), false);
+});
+
+function capturePlaying(getPlayingHeight) {
+  let body = null;
+  startNetReporter({
+    transport: {
+      fetch: (_path, options) => {
+        body = JSON.parse(options.body);
+        return Promise.resolve();
+      }
+    },
+    sessionId: "aaaaaaaabbbbcccc",
+    getBufferedAheadSec: () => 0,
+    getPlayingHeight
+  });
+  reportNow();
+  stopNetReporter();
+  return body;
+}
+
+test("the report carries the height of the rung the player is playing", () => {
+  // The proxy used to infer the rung from which segments were requested, which
+  // is the player fetching, not the picture having moved.
+  assert.equal(capturePlaying(() => 540).playingHeight, 540);
+});
+
+test("a page that does not know the rung yet leaves the height out", () => {
+  assert.equal("playingHeight" in capturePlaying(() => 0), false);
+  assert.equal("playingHeight" in capturePlaying(undefined), false);
+  assert.equal("playingHeight" in capturePlaying(() => Number.NaN), false);
 });

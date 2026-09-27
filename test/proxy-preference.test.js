@@ -36,6 +36,35 @@ test("a saturated holder is not preferred, so a popular film does not pile onto 
     "nobody is preferred, and the score's own order decides");
 });
 
+test("a proxy without measured room is left out while another reports room", () => {
+  const { pool, narrowedBy } = choosePool([
+    reachable("full", { holdsThisFilm: true, metrics: { encodeSpeedX: 0.94 } }),
+    reachable("available", { metrics: { encodeSpeedX: 1.31 } })
+  ]);
+
+  assert.deepEqual(pool.map((one) => one.id), ["available"]);
+  assert.equal(narrowedBy, "room");
+});
+
+test("all proxies without measured room remain candidates so the opening can answer", () => {
+  const { pool, narrowedBy } = choosePool([
+    reachable("one", { metrics: { encodeSpeedX: 0 } }),
+    reachable("two", { metrics: { encodeSpeedX: 1 } })
+  ]);
+
+  assert.deepEqual(pool.map((one) => one.id), ["one", "two"]);
+  assert.equal(narrowedBy, "", "capacity preference does not remove every possible proxy");
+});
+
+test("a missing headroom report does not exclude a proxy", () => {
+  const { pool } = choosePool([
+    reachable("unreported"),
+    reachable("full", { metrics: { encodeSpeedX: 0.9 } })
+  ]);
+
+  assert.deepEqual(pool.map((one) => one.id), ["unreported"]);
+});
+
 test("nobody holding it leaves every reachable candidate eligible", () => {
   const { pool, narrowedBy } = choosePool([reachable("one"), reachable("two")]);
 

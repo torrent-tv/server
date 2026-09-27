@@ -1,8 +1,7 @@
 #playlist {
-  /* Shares the theme tokens defined on #player (the playlist is inside it). */
-  background: var(--player-surface, #141416);
-  color: var(--player-text, #f2f2f2);
-  font-family: var(--media-font-family, system-ui, sans-serif);
+  background: #141416;
+  color: #f2f2f2;
+  font-family: system-ui, sans-serif;
 
   block-size: 100dvh;
   inline-size: min(80dvw, 48rem);
@@ -41,17 +40,17 @@
        Focus renders as an inset outline instead (inset because the list
        clips overflow). */
     &:hover {
-      background-color: var(--player-accent, #c00);
+      background-color: #c00;
       color: #fff;
     }
 
     &:focus-visible {
-      outline: 0.125rem solid var(--player-accent, #c00);
+      outline: 0.125rem solid #c00;
       outline-offset: -0.125rem;
     }
 
     &[aria-current="true"] {
-      background-color: color-mix(in srgb, var(--player-accent, #c00) 90%, #000 10%);
+      background-color: color-mix(in srgb, #c00 90%, #000 10%);
       color: #fff;
     }
   }

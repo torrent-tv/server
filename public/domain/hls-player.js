@@ -755,6 +755,47 @@ export function createHlsPlayer(onLog) {
       return true;
     },
     /**
+     * Load the stream again from its own address and fetch from a position,
+     * keeping the level that was playing.
+     *
+     * WHY A RELOAD AND NOT `startLoad`. A part of the film this viewer was
+     * given came from an output that has gone (`assignment-lost`), and the
+     * header hls.js holds for that level belongs to it: hls.js fetches a
+     * level's init once and keeps the bytes, so resuming would put the next
+     * piece under a header that may not match it. Loading the source again
+     * makes new playlist details, and with them a fresh fetch of the init —
+     * under the new viewing the page has just started, which the proxy decides
+     * afresh.
+     *
+     * @param {number} position - Seconds on the timeline.
+     * @returns {boolean} False when there is no hls.js instance to reload.
+     */
+    reloadAt(position) {
+      const HlsClass = globalThis.Hls;
+      const instance = hlsInstance;
+      if (!instance || !HlsClass || !Number.isFinite(position) || position < 0 || !instance.url) {
+        return false;
+      }
+      const url = instance.url;
+      const level = instance.currentLevel;
+      instance.stopLoad();
+      const onParsed = () => {
+        instance.off(HlsClass.Events.MANIFEST_PARSED, onParsed);
+        if (hlsInstance !== instance) {
+          return; // cleared or replaced meanwhile
+        }
+        // The level the viewer was on stays theirs: loading configures
+        // `autoStartLoad: false`, so nothing is fetched before it is set.
+        if (Number.isInteger(level) && level >= 0) {
+          instance.currentLevel = level;
+        }
+        instance.startLoad(position);
+      };
+      instance.on(HlsClass.Events.MANIFEST_PARSED, onParsed);
+      instance.loadSource(url);
+      return true;
+    },
+    /**
      * Start HLS playback on `videoElement`.
      *
      * Uses HLS.js when available (Chrome / Firefox / Edge).  Falls back to

@@ -7,6 +7,8 @@ import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { measureLink, reportNow } from "../../domain/net-report.js";
 import { lastProxyRefusal } from "../../domain/proxy-refusal.js";
+import { onProxyOutcome, outcomeBelongsTo } from "../../domain/proxy-outcome.js";
+import { VisiblePictureWatch } from "../../domain/visible-picture.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
 import { getDebugState } from "../../shared/debug-state.js";
@@ -311,11 +313,6 @@ export class Loading extends StateDerivedView {
     proxyCannotKeepUp:
       "This proxy can't keep up with this file right now — another viewer on it "
       + "is using what it has. Press Retry in a moment, or pick a different file.",
-    // Another proxy in the pool has said it can. Retry moves there, so the
-    // wording says what will happen rather than what went wrong.
-    proxyCannotKeepUpMoving:
-      "This proxy can't keep up with this file, but another one can. "
-      + "Press Retry to move to it.",
     // A pick that did not happen has to say so. Switching regardless would empty
     // the buffer and stop the picture, which is worse than the quality the
     // viewer already has.
@@ -326,8 +323,6 @@ export class Loading extends StateDerivedView {
     // not understand and leaving them to seek back afterwards, which is a worse
     // thing to do to them than a wait they can see the reason for.
     audioPreparing: "Preparing the soundtrack you chose…",
-    qualityNotReady: (height) =>
-      `${height}p isn't ready yet — still playing the current quality. Try again in a moment.`,
     // Shown INSTEAD of failing once the ordinary wait has been exhausted. There
     // is nothing wrong on our side and nothing to retry: the file simply has
     // nobody to download it from, and that can change at any moment or never.
@@ -339,7 +334,6 @@ export class Loading extends StateDerivedView {
     reconnecting: "Reconnecting...",
     waitingForNetwork: "Waiting for the network to come back…",
     switchingAudio: "Switching audio track...",
-    switchingQuality: "Switching quality...",
     // Says what was observed and nothing else. It used to name the local
     // network as the cause, and on 2026-08-09 it did so while ICE was complete
     // over global IPv6, the send queue was empty and progress polls were being
@@ -472,6 +466,19 @@ export class Loading extends StateDerivedView {
    * @type {string[] | null}
    */
   #restrictProxiesTo = null;
+  /** Proxies already refused for the file in the current opening attempt. @type {Set<string>} */
+  #refusedProxiesForThisOpen = new Set();
+
+  /**
+   * The description of the file being opened that the rest of the pool
+   * answers by arithmetic, as the proxy's plan carried it. Kept for the one
+   * moment it is needed after the plan: the output being opened is refused
+   * for want of a place on that machine, and the pool is asked before anything
+   * plays (roadmap item 97, step 14).
+   *
+   * @type {object | null}
+   */
+  #mediaInfoForOffer = null;
   /** @type {import("../../domain/proxy-transport.js").ProxyTransport | null} */
   #transport = null;
   /**
@@ -698,8 +705,8 @@ export class Loading extends StateDerivedView {
    * @type {ReturnType<typeof setInterval> | null}
    */
   #subtitleCoverageTimer = null;
-  /** @type {number} Viewer-forced output height (0 = Auto / realtime budget). */
-  #selectedQualityHeight = 0;
+  /** @type {number} The height of the rung the player is playing, as hls.js last switched to (0 = not known yet). */
+  #playingHeight = 0;
   // The height an automatic move is being made to right now, so a request
   // restated in every progress report (polled about every 1.5 s) is acted on
   // once rather than started afresh while the first move is still warming.
@@ -710,6 +717,20 @@ export class Loading extends StateDerivedView {
    * happen to be ready — not the order they were made.
    */
   #qualityPickSeq = 0;
+  /**
+   * The cushion this file needs before a switch between outputs is made, in
+   * seconds, as the proxy last said (`minimumBufferSeconds`). Null until said.
+   * @type {number | null}
+   */
+  #minimumBufferSeconds = null;
+  /** Follows the picture as the viewer sees it (roadmap item 98). @type {VisiblePictureWatch | null} */
+  #visiblePictureWatch = null;
+  /** On what the proxy judged the output this viewer is given. @type {object | null} */
+  #servingVerdict = null;
+  /** Stops listening to the proxy's answers about this viewer's output, for the player it served. @type {(() => void) | null} */
+  #stopOutcomes = null;
+  /** A new viewing is being started after an address could no longer be given. @type {boolean} */
+  #recoveringAssignment = false;
   /**
    * Which audio pick is the viewer's latest. Preparing a track takes seconds,
    * and only one plays — so a later pick cancels an earlier one rather than
@@ -724,23 +745,11 @@ export class Loading extends StateDerivedView {
    * @type {number | null}
    */
   #audioHoldPick = null;
-  /**
-   * The height automatic quality is producing right now, as reported by the
-   * proxy. Zero when unknown or when the video is copied — then nothing is
-   * being chosen and the source's own height is what plays.
-   */
-  #autoEffectiveHeight = 0;
   /** Whether the current stream's video is re-encoded rather than copied. */
   #videoIsReencoded = false;
   /** @type {number} Source coded width/height from the proxy plan (0 = unknown / not proxy-served). */
   #sourceVideoWidth = 0;
   #sourceVideoHeight = 0;
-  /**
-   * Heights the proxy says it will serve this file at, largest first — null
-   * until a session says, and against a proxy too old to be asked.
-   * @type {number[] | null}
-   */
-  #offeredHeights = null;
   /**
    * Cold-start phase marks (performance.now()) for the proxy-served flow, used
    * to log one summary line on a successful start. Set at the top of the
@@ -928,6 +937,7 @@ export class Loading extends StateDerivedView {
     if (videoElement instanceof HTMLVideoElement) {
       this.#videoElement = videoElement;
       this.#attachPlaybackDiagnostics(videoElement);
+      this.#watchVisiblePicture(videoElement);
     }
   };
 
@@ -1744,7 +1754,7 @@ export class Loading extends StateDerivedView {
     }
     // A different file has its own tracks and resolution — reset audio + quality.
     this.#selectedAudioTrackIndex = 0;
-    this.#selectedQualityHeight = 0;
+    this.#playingHeight = 0;
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SHOW, {
         detail: {
@@ -2011,7 +2021,6 @@ export class Loading extends StateDerivedView {
     document.addEventListener(LOADING_EVENTS.PROCESS_MAGNET, this.#onProcessMagnet);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
     document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
-    document.addEventListener(PLAYER_EVENTS.SELECT_QUALITY, this.#onSelectQuality);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
@@ -2063,6 +2072,7 @@ export class Loading extends StateDerivedView {
     // The previous attempt's rate history says nothing about this one.
     this.#downloadRateSamples = [];
     this.#waitingModel.reset();
+    this.#refusedProxiesForThisOpen.clear();
     return this.#playbackEpoch;
   }
 
@@ -2250,7 +2260,7 @@ export class Loading extends StateDerivedView {
     this.#resumeState = null;
     this.#cancelRequested = false;
     this.#selectedAudioTrackIndex = 0;
-    this.#selectedQualityHeight = 0;
+    this.#playingHeight = 0;
     this.#planTracks = null;
     // Shared-link position/file, applied once the player is shown / files known.
     this.#pendingCurrentTime = Number.isFinite(payload?.currentTime) ? payload.currentTime : null;
@@ -2562,7 +2572,7 @@ export class Loading extends StateDerivedView {
     this.#resumeState = null;
     this.#cancelRequested = false;
     this.#selectedAudioTrackIndex = 0;
-    this.#selectedQualityHeight = 0;
+    this.#playingHeight = 0;
     this.#planTracks = null;
     // Shared-link position/file, applied once the player is shown / files known.
     this.#pendingCurrentTime = Number.isFinite(currentTime) ? currentTime : null;
@@ -3219,13 +3229,8 @@ export class Loading extends StateDerivedView {
     // (a direct webseed play, which cannot be transcoded, leaves it 0 → no menu).
     this.#sourceVideoWidth = 0;
     this.#sourceVideoHeight = 0;
-    // A new file answers the quality question afresh; the previous one's
-    // height must not survive into its menu.
-    this.#autoEffectiveHeight = 0;
-    // Nor may the rungs the proxy offered for it: a different file on the same
-    // host is a different encode, and until this one's session says otherwise
-    // there is nothing to offer.
-    this.#offeredHeights = null;
+    // The cushion a switch waits for belongs to the file it was said for.
+    this.#minimumBufferSeconds = null;
     // The stall tally belongs to the source it was measured on. Carried over,
     // it would say a fresh file had already been standing still.
     this.#stallStartedAt = null;
@@ -3415,17 +3420,12 @@ export class Loading extends StateDerivedView {
     // cannot decode the audio codec.  The proxy's advisory `mode` is NOT used
     // to force audio transcoding — we transcode strictly what is unsupported.
     //
-    // A forced quality (viewer picked a resolution, not Auto) ALSO forces a
-    // video re-encode even for a directly-playable codec: the whole point is to
-    // downscale for bandwidth, which only the transcode path can do. Auto
-    // (`#selectedQualityHeight === 0`) keeps the copy-if-playable behaviour.
-    const forceQualityTranscode = this.#selectedQualityHeight > 0;
-    const shouldTranscodeVideo = codecSupport.videoSupported === false || forceQualityTranscode;
+    // A copy of the source is never re-encoded here because it is taller than
+    // the picture on screen (roadmap item 98): only a codec this browser cannot
+    // play makes the page ask for a re-encode, and a link that cannot carry the
+    // copy is the proxy's to answer.
+    const shouldTranscodeVideo = codecSupport.videoSupported === false;
     const shouldTranscodeAudio = codecSupport.audioSupported === false;
-    // The quality menu, filled the moment the branch is known — before any
-    // session exists, let alone an encoder. The proxy answered for both
-    // branches because only this side knows which one it takes; a proxy too old
-    // to answer leaves it null, and the browser keeps its own ladder.
     // Refused before a session exists, because a session made here would stall.
     // `cannotServe` is the proxy's own answer that it cannot sustain this file
     // at ANY height — not even by copying the picture, which needs no encoder.
@@ -3441,14 +3441,18 @@ export class Loading extends StateDerivedView {
       // the ordering is repaired: a viewer is given a proxy BEFORE the file is
       // known, by a score that reads processor load and free memory, neither of
       // which can answer a question about a particular source.
-      const elsewhere = await this.#proxiesThatCanServe(prepared.mediaInfoForOffer);
+      if (this.#proxy?.proxyId) {
+        this.#refusedProxiesForThisOpen.add(this.#proxy.proxyId);
+      }
+      const elsewhere = (await this.#proxiesThatCanServe(prepared.mediaInfoForOffer))
+        .filter((id) => !this.#refusedProxiesForThisOpen.has(id));
       if (elsewhere.length > 0) {
-        this.#debug("moving to a proxy that can serve this file", {
+        this.#debug("retrying the file on another proxy that can serve it", {
           fileIndex,
           candidates: elsewhere
         });
-        this.#restrictProxiesTo = elsewhere;
-        throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.proxyCannotKeepUpMoving);
+        this.#restrictProxiesToPool(elsewhere);
+        return await this.#playVideoFile(fileIndex);
       }
       throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.proxyCannotKeepUp);
     }
@@ -3456,11 +3460,7 @@ export class Loading extends StateDerivedView {
     // on one machine at one moment, and holding the pool narrow afterwards
     // would send every later file to the same few.
     this.#restrictProxiesTo = null;
-    const planned = prepared.offeredHeights;
-    if (planned) {
-      this.#offeredHeights = shouldTranscodeVideo ? planned.transcode : planned.copy;
-      this.#publishQualityOptions();
-    }
+    this.#mediaInfoForOffer = prepared.mediaInfoForOffer ?? null;
     // The plan is what the torrent and the probe together produced: from here
     // the pre-roll is our own session work, and the stage line separates the
     // two rather than reporting one span nobody can act on.
@@ -3480,7 +3480,6 @@ export class Loading extends StateDerivedView {
       plannerMode: prepared.mode,
       shouldTranscodeVideo,
       shouldTranscodeAudio,
-      forceQualityTranscode,
       transport: transport.isHttp ? "http" : "webrtc"
     });
     const directRetryKey = this.#buildDirectRetryCacheKey(fileIndex, prepared);
@@ -3496,7 +3495,7 @@ export class Loading extends StateDerivedView {
     // Direct URL probing only works for HTTP transports — WebRTC uses fake URLs.
     // A forced quality must go through the transcode path, so skip every
     // direct-play shortcut when it is set.
-    const canProbeDirectUrl = transport.isHttp && !forceAudioRemux && !forceQualityTranscode;
+    const canProbeDirectUrl = transport.isHttp && !forceAudioRemux;
 
     if (
       canProbeDirectUrl &&
@@ -3694,6 +3693,24 @@ export class Loading extends StateDerivedView {
       // help, and the viewer is told that instead.
       return [];
     }
+  }
+
+  /**
+   * Limit the next transport to proxies that answered they can serve this file.
+   *
+   * @param {string[]} proxyIds
+   * @returns {void}
+   */
+  #restrictProxiesToPool(proxyIds) {
+    this.#restrictProxiesTo = proxyIds;
+    this.#abandonTransportAcquisition();
+    try {
+      this.#proxy?.close();
+    } catch {
+      // silent-ok: the refused connection is being replaced either way.
+    }
+    this.#proxy = null;
+    this.#transport = null;
   }
 
   /**
@@ -5337,85 +5354,13 @@ export class Loading extends StateDerivedView {
       })
     );
     this.#publishAudioTracks();
-    // What automatic quality has settled on, as far as is known BEFORE the
-    // first progress report. When the video is copied the answer is final —
-    // nothing is being re-encoded, so what plays is the source's own height,
-    // and it came with the plan. When it is re-encoded this is the ceiling and
-    // the first report may lower it. Without this the menu's first render
-    // always read a bare "Auto" and only gained its height a second or two
-    // later, on the first poll that carried one; a viewer who opened the menu
-    // in that window was told nothing.
-    if (this.#autoEffectiveHeight === 0 && !this.#videoIsReencoded && this.#sourceVideoHeight > 0) {
-      this.#autoEffectiveHeight = this.#sourceVideoHeight;
-    }
-    // Feed the player's quality menu — the stream's own variants where it has
-    // them, otherwise Auto plus forced resolutions at or below the source.
-    this.#publishQualityOptions();
   }
 
   /**
-   * The viewer picked a quality.
-   *
-   * Where the stream has variants the player switches between them itself: it
-   * fetches the other variant, appends it after what is already buffered and
-   * changes the decoder's type if the codec parameters differ — playback never
-   * stops. Where it has none (a copied video, or a source with nothing to step
-   * down to) the only way to change resolution is still to re-open the session
-   * at a fixed size, which costs a cold start with the picture gone.
-   *
-   * @param {CustomEvent} event
-   */
-  #onSelectQuality = (event) => {
-    const detail = event instanceof CustomEvent ? event.detail : null;
-    const height = Number(detail?.height);
-    if (!Number.isInteger(height) || height < 0) {
-      return;
-    }
-    const level = this.#hlsPlayer.levels().find((candidate) => candidate.height === height);
-    if (level) {
-      if (level.index === this.#hlsPlayer.currentLevel()) {
-        return;
-      }
-      void this.#switchQualityLevel(level, height);
-      return;
-    }
-    if (height === this.#selectedQualityHeight) {
-      return;
-    }
-    if (this.#isProcessing || this.#activeFileIndex < 0 || !this.#session.current) {
-      return;
-    }
-    const fileIndex = this.#activeFileIndex;
-    const position =
-      this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
-        ? this.#videoElement.currentTime
-        : 0;
-    this.#selectedQualityHeight = height;
-    document.dispatchEvent(
-      new CustomEvent(LOADING_EVENTS.SHOW, {
-        detail: { status: Loading.MESSAGES.switchingQuality, progress: 0 }
-      })
-    );
-    const epoch = this.#beginPlaybackAttempt();
-    void this.#switchToVideoFile(fileIndex)
-      .then(() => {
-        if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
-          this.#videoElement.currentTime = position;
-        }
-      })
-      .catch((error) => {
-        if (this.#isAbortError(error)) {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("[torrent-tv] quality switch failed:", message, error);
-        this.#failPlayback(epoch, { description: message });
-      });
-  };
-
-  /**
-   * Move the player to another quality rung, having first asked the proxy to
-   * make one ready.
+   * Move the player to the quality rung the proxy asked for, having first asked
+   * the proxy to make one ready. The quality is always the automatic choice
+   * (roadmap item 98): nothing on the page picks a rung, so every move here is
+   * the proxy's.
    *
    * The rung does not exist until it is asked for: its encoder starts from
    * nothing and its first segment takes as long as it takes — 15 988 ms
@@ -5423,34 +5368,28 @@ export class Loading extends StateDerivedView {
    * on screen as a spinner. Asking first puts it behind the picture that is
    * still playing, and the switch happens when there is something to switch to.
    *
-   * The wait is not allowed to be indefinite: a rung that is not ready in time
-   * is still switched to, because the viewer asked for it and waiting is what
-   * they would have done anyway.
+   * READY is the proxy's answer that the piece the player will ask for next is
+   * closed on the rung — not that the whole film has been made.
+   *
+   * THEN THE CUSHION, for a move that is not urgent — a step up, or a move to a
+   * smaller picture on screen: the switch waits until the viewer holds the
+   * cushion this file needs (`minimumBufferSeconds`, stated by the proxy). A
+   * move asked for because the viewer's buffer would run dry before anything
+   * else could arrive is made at once: a cushion that is shrinking would be
+   * waited for for ever. A file for which the proxy has stated no cushion yet
+   * has none to wait for.
    *
    * @param {{ index: number, height: number }} level
    * @param {number} height
-   * @param {{ chosenByViewer?: boolean }} [options]
-   *   `chosenByViewer` false means the PROXY asked for this move. Then the
-   *   height is not remembered as a pick: the viewer is still on automatic, and
-   *   writing their setting here would silently convert a measurement this host
-   *   took into a choice they never made — after which nothing on either side
-   *   would be allowed to move them again.
+   * @param {{ urgent?: boolean }} [options]
    * @returns {Promise<void>}
    */
-  async #switchQualityLevel(level, height, { chosenByViewer = true } = {}) {
-    // What to go back to if the rung never becomes ready.
-    const previousHeight = this.#selectedQualityHeight;
-    // Remembered up front: it is what the NEXT file of this torrent opens at,
-    // and that is true whether or not this switch turns out to be quick.
-    if (chosenByViewer) {
-      this.#selectedQualityHeight = height;
-    }
+  async #switchQualityLevel(level, height, { urgent = false } = {}) {
     // Which pick this is. Warming waits on the proxy, so two picks in quick
     // succession are two waits that finish in whatever order the rungs happen
     // to be ready — and without this the one that finishes LAST wins, which is
-    // not the one the viewer made last. A rung that was already warm answers in
-    // a second while a cold one takes thirty, so the older pick would routinely
-    // land on top and move the picture back on its own.
+    // not the one asked for last. A later request, or the proxy withdrawing
+    // this one, supersedes it (`#followQualityRequest`).
     const pick = (this.#qualityPickSeq ?? 0) + 1;
     this.#qualityPickSeq = pick;
     // Prepare at the PLAYHEAD, and let the run cover everything after it.
@@ -5481,9 +5420,19 @@ export class Loading extends StateDerivedView {
       `(buffered to ${Math.round(this.#videoElement instanceof HTMLVideoElement ? bufferedEndSeconds(this.#videoElement) : 0)}s) ` +
       `before switching`
     );
-    const ready = await this.#session.prepareQualityVariant(height, position);
+    const { ready, unavailable } = await this.#session.prepareQualityVariant(height, position);
     if (this.#qualityPickSeq !== pick) {
-      this.#logEvt(`quality: ${height}p was superseded by a later pick; not switching`);
+      this.#logEvt(`quality: ${height}p was superseded; not switching`);
+      return;
+    }
+    // Nothing at that height suits this viewer's link. The viewer keeps what is
+    // playing; nobody is waiting on a move they did not ask for, so it is said
+    // in the log only.
+    if (unavailable) {
+      this.#logEvt(
+        `quality: ${height}p is not available for this link — ${unavailable.reason} ` +
+        `${JSON.stringify(unavailable.figures)}`
+      );
       return;
     }
     // Not ready means not ready. Switching regardless throws away everything
@@ -5491,27 +5440,70 @@ export class Loading extends StateDerivedView {
     // place: measured 2026-08-14, a 64 s cushion went to 1.1 s, the picture
     // stopped for thirteen seconds, and the rung's first segment then took
     // another 21.6 s because the encoder had been restarted by the switch
-    // itself. The viewer keeps what they were watching instead, and the rung
-    // stays warm for a second attempt.
+    // itself. The viewer keeps what they were watching; the proxy asks again
+    // if it still wants the move.
     if (!ready) {
       this.#logEvt(`quality: ${height}p is not ready; staying on the current one rather than emptying the buffer`);
-      // Back to what the viewer had, not to whatever automatic happens to say —
-      // this is a pick that did not happen, and it must not silently change a
-      // setting the viewer made earlier.
-      this.#selectedQualityHeight = previousHeight;
-      this.#publishQualityOptions();
-      // Silent when the proxy asked rather than the viewer. Nobody is waiting
-      // on an answer to a request they did not make, and the proxy will ask
-      // again if it still wants the move.
-      if (chosenByViewer) {
-        this.setStatus(Loading.MESSAGES.qualityNotReady(height));
-      }
       return;
     }
-    this.#logEvt(`quality: ${height}p is ready, switching`);
+    if (!urgent && !(await this.#cushionHeld(pick, height))) {
+      this.#logEvt(`quality: ${height}p was superseded while the cushion was filling; not switching`);
+      return;
+    }
+    this.#logEvt(`quality: ${height}p is ready, switching${urgent ? " at once — the buffer would run dry first" : ""}`);
     if (!this.#hlsPlayer.switchLevel(level.index)) {
       this.#logEvt(`quality: the player refused the switch to ${height}p`);
     }
+  }
+
+  /**
+   * Wait until the viewer holds the cushion this file needs, or until the pick
+   * is superseded.
+   *
+   * Driven by the element's own events — `progress` as data arrives,
+   * `timeupdate` as the picture moves, `emptied` when the source goes — and
+   * nothing polls.
+   *
+   * @param {number} pick
+   * @param {number} height
+   * @returns {Promise<boolean>} True when the cushion is held; false when the
+   *   pick was superseded or the element let go of its source.
+   */
+  #cushionHeld(pick, height) {
+    const video = this.#videoElement;
+    if (!(video instanceof HTMLVideoElement)) {
+      return Promise.resolve(false);
+    }
+    const holds = () => {
+      const needed = this.#minimumBufferSeconds;
+      return !(Number.isFinite(needed) && needed > 0) || bufferedAheadSeconds(video) >= needed;
+    };
+    if (holds()) {
+      return Promise.resolve(true);
+    }
+    this.#logEvt(
+      `quality: ${height}p is ready; switching once ${this.#minimumBufferSeconds}s are held ` +
+      `(holding ${bufferedAheadSeconds(video).toFixed(1)}s)`
+    );
+    return new Promise((resolve) => {
+      const finish = (held) => {
+        video.removeEventListener("progress", check);
+        video.removeEventListener("timeupdate", check);
+        video.removeEventListener("emptied", gone);
+        resolve(held);
+      };
+      const check = () => {
+        if (this.#qualityPickSeq !== pick) {
+          finish(false);
+        } else if (holds()) {
+          finish(true);
+        }
+      };
+      const gone = () => finish(false);
+      video.addEventListener("progress", check);
+      video.addEventListener("timeupdate", check);
+      video.addEventListener("emptied", gone);
+    });
   }
 
   /**
@@ -6034,8 +6026,12 @@ export class Loading extends StateDerivedView {
     // reconnect (transport.replaceWebRtcProxy) redirects segment loads with no
     // player rebuild.
     const hlsLoader = !transport.isHttp
-      ? createWebRtcHlsLoader(transport, this.#session.consumerId)
+      ? createWebRtcHlsLoader(transport, this.#session.consumerId, () => this.#session.viewGeneration)
       : undefined;
+    // What the proxy answers about THIS viewer's output other than bytes. One
+    // listener per player: the previous one goes with the player it served.
+    this.#stopOutcomes?.();
+    this.#stopOutcomes = onProxyOutcome((outcome) => this.#onProxyOutcome(outcome));
 
     // Resuming: the transcode AND the pre-buffer begin AT the target position,
     // so there is a SINGLE loading at the resume point. Loading from 0 and
@@ -6092,50 +6088,62 @@ export class Loading extends StateDerivedView {
 
     // The attempt this player belongs to. See `onUnrecoverable` below.
     const playerEpoch = this.#playbackEpoch;
-    const started = await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
-      transport,
-      sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
-      transcodeVideo: options.transcodeVideo === true,
-      transcodeAudio: options.transcodeAudio === true,
-      segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
-      audioTrackIndex: this.#selectedAudioTrackIndex,
-      startPositionSeconds:
-        typeof resumeStartPosition === "number" && resumeStartPosition > 0 ? resumeStartPosition : 0,
-      ...this.#buildQualityTargetConfig(options.transcodeVideo === true),
-      // Read at every report, because it changes while the film plays: a size
-      // picked from the menu is served exactly, the automatic choice may be
-      // served by an output of the same quality or better the proxy has made.
-      getQualityMode: () => (this.#selectedQualityHeight > 0 ? "manual" : "auto"),
-      playHls: (videoElement, manifestUrl, playOptions = {}) =>
-        this.#hlsPlayer.play(videoElement, manifestUrl, {
-          ...(hlsLoader ? { loader: hlsLoader } : {}),
-          ...(typeof resumeStartPosition === "number" && resumeStartPosition > 0
-            ? { startPosition: resumeStartPosition }
-            : {}),
-          onLevelSwitched: (height) => this.#onHlsLevelSwitched(height),
-          onFragmentFar: (report) => this.#reportFragmentFar(report),
-          // The epoch this player belongs to, captured now. Read at report time
-          // it would always equal the current one, which is the same as having
-          // no guard: a fault from an abandoned attempt's player would then be
-          // able to kill the live one.
-          onUnrecoverable: (details) => this.#onPlayerUnrecoverable(details, playerEpoch),
-          ...playOptions
-        }),
-      onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
-    });
-    // The heights this proxy will serve, from the proxy. Which rungs exist is a
-    // question about the host that would encode them, not about the file: a
-    // weak host offering 240p it runs at a third of realtime is how choosing a
-    // LOWER quality came to break playback (measured 2026-08-14).
-    // Through the same reader the progress reports use, so it cannot overwrite a
-    // list that has already been corrected: creating the session and the first
-    // progress reports overlap, and this line used to win whatever arrived
-    // while it was awaited. It also rounds and filters the same way.
-    this.#noteOfferedHeights(started?.offeredHeights);
-    // The variants are known only once the manifest has been parsed, which
-    // happens inside the call above. The menu was published before it, from the
-    // source's height alone.
-    this.#publishQualityOptions();
+    try {
+      await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
+        transport,
+        sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
+        transcodeVideo: options.transcodeVideo === true,
+        transcodeAudio: options.transcodeAudio === true,
+        segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
+        audioTrackIndex: this.#selectedAudioTrackIndex,
+        startPositionSeconds:
+          typeof resumeStartPosition === "number" && resumeStartPosition > 0 ? resumeStartPosition : 0,
+        // The picture as the viewer sees it, which bounds the height of a
+        // re-encoded output (roadmap item 98). Sent with the request that opens
+        // the output, and restated in every report the moment it changes.
+        visiblePicture: options.transcodeVideo === true ? this.#visiblePictureNow() : null,
+        getVisiblePicture: () => this.#visiblePictureNow(),
+        // Which rung is playing, so the proxy does not have to infer it from
+        // which segments are requested.
+        getPlayingHeight: () => this.#playingHeight,
+        playHls: (videoElement, manifestUrl, playOptions = {}) =>
+          this.#hlsPlayer.play(videoElement, manifestUrl, {
+            ...(hlsLoader ? { loader: hlsLoader } : {}),
+            ...(typeof resumeStartPosition === "number" && resumeStartPosition > 0
+              ? { startPosition: resumeStartPosition }
+              : {}),
+            onLevelSwitched: (height) => this.#onHlsLevelSwitched(height),
+            onFragmentFar: (report) => this.#reportFragmentFar(report),
+            // The epoch this player belongs to, captured now. Read at report time
+            // it would always equal the current one, which is the same as having
+            // no guard: a fault from an abandoned attempt's player would then be
+            // able to kill the live one.
+            onUnrecoverable: (details) => this.#onPlayerUnrecoverable(details, playerEpoch),
+            ...playOptions
+          }),
+        onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
+      });
+    } catch (error) {
+      // THIS MACHINE HAS NO PLACE FOR IT NOW (roadmap item 97, step 14). Found
+      // when the output is opened, before a frame is shown, so the viewer is
+      // moved to a proxy that says it can serve the file instead of being left
+      // on one that would stall — the same question the plan's refusal asks.
+      if (error?.outcome === "no-capacity") {
+        this.#debug("proxy has no place for this video", { fileIndex, why: error.reason, figures: error.figures });
+        if (this.#proxy?.proxyId) {
+          this.#refusedProxiesForThisOpen.add(this.#proxy.proxyId);
+        }
+        const elsewhere = (await this.#proxiesThatCanServe(this.#mediaInfoForOffer))
+          .filter((id) => !this.#refusedProxiesForThisOpen.has(id));
+        if (elsewhere.length > 0) {
+          this.#debug("retrying the file on another proxy that can serve it", { fileIndex, candidates: elsewhere });
+          this.#restrictProxiesToPool(elsewhere);
+          return await this.#playVideoFile(fileIndex);
+        }
+        throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.proxyCannotKeepUp);
+      }
+      throw error;
+    }
     // Transcoded HLS is always browser-compatible (proxy outputs H.264/AAC), so
     // a codec-decodability check is unnecessary. More importantly, waiting for a
     // presented frame here deadlocks on iOS because the player view is still
@@ -6893,100 +6901,45 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * Build the transcode target resolution sent to the proxy.
+   * The picture as the viewer sees it, in physical pixels, or null before it
+   * can be measured.
    *
-   * Orientation-independent by design: the target is sized from the viewport's
-   * LONG and SHORT edges (not the current width/height, and not the
-   * `<video>` bounding box, which shrinks in portrait because a landscape clip
-   * is letterboxed there). So the target is identical in portrait and
-   * landscape and always provisions for the landscape (larger) case. Rotating
-   * the device mid-playback therefore never needs more pixels and never forces
-   * a transcode restart; in portrait the player just downscales the extra
-   * pixels. The proxy caps this box to the source size (never upscales), and
-   * the realtime budget scales DOWN from this ceiling — orientation itself
-   * never changes the encode resolution.
+   * It replaced a box made of the window's long and short edges times the
+   * pixel ratio times a chosen 0.95: a landscape film on an upright phone
+   * fills the width and a strip of the height, and that box asked for a
+   * picture about three times taller than the one on screen. The measurement
+   * and its reasons are in `domain/visible-picture.js`.
    *
-   * @param {boolean} shouldTranscodeVideo
-   * @returns {{ targetWidth?: number, targetHeight?: number }}
+   * @returns {{ width: number, height: number } | null}
    */
-  #buildVideoTargetConfig(shouldTranscodeVideo) {
-    if (!shouldTranscodeVideo || !(this.#videoElement instanceof HTMLVideoElement)) {
-      return {};
-    }
-    const viewportWidth = Number.isFinite(window.innerWidth) && window.innerWidth > 0 ? window.innerWidth : 0;
-    const viewportHeight = Number.isFinite(window.innerHeight) && window.innerHeight > 0 ? window.innerHeight : 0;
-    const longEdge = Math.max(viewportWidth, viewportHeight);
-    const shortEdge = Math.min(viewportWidth, viewportHeight);
-    if (longEdge <= 0 || shortEdge <= 0) {
-      return {};
-    }
-    const dpr = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
-      ? window.devicePixelRatio
-      : 1;
-    const scaleFactor = 0.95;
-    const targetWidth = this.#toEvenDimension(Math.round(longEdge * dpr * scaleFactor));
-    const targetHeight = this.#toEvenDimension(Math.round(shortEdge * dpr * scaleFactor));
-    if (targetWidth <= 0 || targetHeight <= 0) {
-      return {};
-    }
-    return { targetWidth, targetHeight };
+  #visiblePictureNow() {
+    return this.#visiblePictureWatch?.current() ?? null;
   }
 
   /**
-   * Build the transcode target for the request, honouring a height the viewer
-   * picked. On Auto (`#selectedQualityHeight === 0`) this is the
-   * orientation-independent ceiling (realtime budget decides the rest on the
-   * proxy). When the viewer picked a height, the target is exactly that
-   * height at the source aspect ratio, flagged `exactSize` so the proxy
-   * produces that box as-is (capped to source) with the budget disabled.
+   * Start following the picture as the viewer sees it. Each change is said to
+   * the proxy at once rather than at the next tick of the report: it is the
+   * upper bound of the height being made for them.
    *
-   * `exactSize` describes the OUTPUT, not who asked for it: the proxy sets it
-   * on every rung of a master playlist as well. Do not read it back as
-   * evidence that a viewer touched the quality menu.
-   *
-   * @param {boolean} shouldTranscodeVideo
-   * @returns {{ targetWidth?: number, targetHeight?: number, exactSize?: boolean }}
-   */
-  #buildQualityTargetConfig(shouldTranscodeVideo) {
-    if (!shouldTranscodeVideo) {
-      return {};
-    }
-    const forcedHeight = this.#selectedQualityHeight;
-    if (
-      Number.isInteger(forcedHeight) &&
-      forcedHeight > 0 &&
-      this.#sourceVideoWidth > 0 &&
-      this.#sourceVideoHeight > 0
-    ) {
-      const height = Math.min(forcedHeight, this.#sourceVideoHeight);
-      const width = this.#toEvenDimension((this.#sourceVideoWidth * height) / this.#sourceVideoHeight);
-      const evenHeight = this.#toEvenDimension(height);
-      if (width > 0 && evenHeight > 0) {
-        return { targetWidth: width, targetHeight: evenHeight, exactSize: true };
-      }
-    }
-    return this.#buildVideoTargetConfig(shouldTranscodeVideo);
-  }
-
-  /**
-   * Quality options for the player menu: Auto plus each standard resolution at
-   * or below the source height. Shown for any proxy-served stream whose source
-   * resolution is known (empty → menu hidden) — including a directly-played
-   * codec, where picking a resolution forces a downscaling re-encode (Auto
-   * keeps the copy). Only downscales are offered; the source is the ceiling.
-   *
-   * @returns {Array<{ height: number, label: string }>}
-   */
-  /**
-   * Take the height the proxy is producing from a progress report, and refresh
-   * the menu when it has changed under automatic quality.
-   *
-   * Only then: a forced resolution does not move, and rebuilding the menu on
-   * every poll would replace its items about once a second for no reason.
-   *
-   * @param {{ currentHeight?: number } | null} progress
+   * @param {HTMLVideoElement} videoElement
    * @returns {void}
    */
+  #watchVisiblePicture(videoElement) {
+    this.#visiblePictureWatch?.stop();
+    this.#visiblePictureWatch = new VisiblePictureWatch(videoElement, {
+      onChange: (size) => {
+        this.#logEvt(`visible picture ${size.width}x${size.height} physical pixels`);
+        reportNow();
+      },
+      // Before the element has its metadata, the video's proportions are the
+      // source's, which the plan carried.
+      fallbackVideoSize: () => (this.#sourceVideoWidth > 0 && this.#sourceVideoHeight > 0
+        ? { width: this.#sourceVideoWidth, height: this.#sourceVideoHeight }
+        : null)
+    });
+    this.#visiblePictureWatch.start();
+  }
+
   /**
    * Take the host's own timings from a progress report.
    *
@@ -7017,11 +6970,111 @@ export class Loading extends StateDerivedView {
    * @param {number} height
    * @returns {void}
    */
+  /**
+   * On what the proxy judged the output it gives this viewer: `fits` against
+   * their link, `estimated to fit` (an average, not a bound — admitted and not
+   * confirmed), or `no measurement`. Logged when it changes.
+   *
+   * @param {object | null | undefined} verdict
+   * @returns {void}
+   */
+  #noteServingVerdict(verdict) {
+    const next = verdict && typeof verdict.verdict === "string" ? verdict : null;
+    const before = this.#servingVerdict?.verdict ?? "";
+    this.#servingVerdict = next;
+    if ((next?.verdict ?? "") !== before) {
+      this.#logEvt(`quality: the proxy judged this output "${next?.verdict ?? "unknown"}" ${JSON.stringify(next)}`);
+    }
+  }
+
+  #onProxyOutcome(outcome) {
+    // ONLY AN OUTCOME OF THE VIEWING ON SCREEN is acted on. The channel is one
+    // list for the page, and an answer to a request made before a seek, or for
+    // the file played before this one, can arrive after the page has moved on;
+    // acted on, it would seek and reload the video now playing.
+    const belongs = outcomeBelongsTo(outcome, this.#currentViewing());
+    if (!belongs.belongs) {
+      this.#logEvt(`playback: ${outcome.outcome} for ${outcome.path} is not this viewing's (${belongs.reason}); ignored`);
+      return;
+    }
+    if (outcome.outcome === "assignment-lost") {
+      void this.#recoverLostAssignment(outcome);
+      return;
+    }
+    if (outcome.outcome === "output-unavailable") {
+      // Met by the player itself, mid-stream — a level it moved to that the
+      // proxy will not serve to this link. Said in the log with the reason; the
+      // player keeps what it holds, and the viewer asked for nothing.
+      const height = Number(/\/v\/(\d+)\//.exec(outcome.path)?.[1]) || 0;
+      this.#logEvt(`quality: the proxy has no output for ${height || "this"}p that fits this link — ${outcome.reason}`);
+    }
+  }
+
+  /**
+   * The output the page is playing and the viewing it is in now.
+   *
+   * @returns {{ sessionId: string | null, generation: number }}
+   */
+  #currentViewing() {
+    return {
+      sessionId: this.#session?.currentTranscodeSession?.sessionId ?? null,
+      generation: this.#session?.viewGeneration ?? 0
+    };
+  }
+
+  /**
+   * A part of the film this viewer was already given came from an output that
+   * has gone, and nothing proven to match its header can stand in.
+   *
+   * WHAT IS DONE: a new viewing, where the picture is. The page raises its
+   * generation (a seek to where it stands), so every request from now on is
+   * decided afresh; and the player is made to fetch its headers again, because
+   * the one it holds belongs to the output that has gone. Nothing is repeated
+   * against the old viewing — the proxy would answer it the same way for ever.
+   *
+   * One recovery at a time: a burst of refusals for neighbouring parts is one
+   * event.
+   *
+   * @param {{ reason: string, path: string }} outcome
+   * @returns {Promise<void>}
+   */
+  async #recoverLostAssignment(outcome) {
+    if (this.#recoveringAssignment) {
+      return;
+    }
+    this.#recoveringAssignment = true;
+    try {
+      const at = this.#videoElement instanceof HTMLVideoElement
+        ? Math.max(0, this.#videoElement.currentTime)
+        : 0;
+      this.#logEvt(
+        `playback: ${outcome.path} can no longer be given as it was (${outcome.reason}); ` +
+        `starting a new viewing at ${at.toFixed(1)}s`
+      );
+      const viewing = this.#currentViewing();
+      await this.#session.reportSeek(at);
+      // The seek report is awaited, and the viewer can change the file meanwhile.
+      // The reload is for the output that lost the part, and for no other.
+      if (this.#session?.currentTranscodeSession?.sessionId !== viewing.sessionId) {
+        this.#logEvt("playback: the output changed while the new viewing was being reported; not reloading");
+        return;
+      }
+      if (!this.#hlsPlayer.reloadAt(at)) {
+        this.#logEvt("playback: no player to reload for the new viewing");
+      }
+    } finally {
+      this.#recoveringAssignment = false;
+    }
+  }
+
   #onHlsLevelSwitched(height) {
     if (height > 0) {
       this.#logEvt(`quality: now playing ${height}p`);
+      this.#playingHeight = height;
+      // A switch is an event, and the proxy decides which rung's encoder is
+      // this viewer's from it: said now, not at the next tick of the report.
+      reportNow();
     }
-    this.#publishQualityOptions();
   }
 
   /**
@@ -7057,23 +7110,14 @@ export class Loading extends StateDerivedView {
   }
 
   #noteEffectiveQuality(progress) {
-    this.#noteOfferedHeights(progress?.offeredHeights);
-    this.#followQualityRequest(progress?.requestedHeight);
-    const height = Number(progress?.currentHeight);
-    const effective = Number.isFinite(height) && height > 0 ? Math.round(height) : 0;
-    if (effective === this.#autoEffectiveHeight) {
-      return;
-    }
-    this.#autoEffectiveHeight = effective;
-    if (this.#selectedQualityHeight !== 0) {
-      return;
-    }
-    this.#logEvt(`automatic quality is now ${effective > 0 ? `${effective}p` : "the source's own height"}`);
-    this.#publishQualityOptions();
+    this.#noteServingVerdict(progress?.servingVerdict);
+    const cushion = Number(progress?.minimumBufferSeconds);
+    this.#minimumBufferSeconds = Number.isFinite(cushion) && cushion > 0 ? cushion : null;
+    this.#followQualityRequest(progress?.requestedHeight, progress?.requestedUrgent === true);
   }
 
   /**
-   * Move to the variant the proxy asked for — and only ever in automatic mode.
+   * Move to the variant the proxy asked for.
    *
    * The proxy measures what its own machine and the viewer's link can carry,
    * and it used to act on those measurements by rewriting the SIZE of the
@@ -7085,22 +7129,28 @@ export class Loading extends StateDerivedView {
    * half minutes over macroblock garbage, another errored on the first
    * mismatched fragment and sat at `size=0x0` for four and a half.
    *
-   * So the proxy asks instead, and the move happens the way the manual menu's
-   * move has always happened — the player fetches another variant, which has
-   * its own init. What this side adds is the one rule the proxy cannot enforce:
-   * IF THE VIEWER PICKED A HEIGHT BY HAND, NOTHING MOVES THEM OFF IT. Automatic
-   * quality changes belong to automatic mode.
+   * So the proxy asks instead, and the move happens the way a change of
+   * variant always does — the player fetches another variant, which has its
+   * own init. The quality is always automatic (roadmap item 98), so every
+   * request is followed; one the proxy stops asking for is dropped.
    *
    * @param {unknown} requested
+   * @param {boolean} [urgent] - The viewer's buffer would run dry before
+   *   anything else could arrive, so the switch does not wait for a cushion.
    * @returns {void}
    */
-  #followQualityRequest(requested) {
+  #followQualityRequest(requested, urgent = false) {
     const height = Math.round(Number(requested));
+    // A move being prepared that the proxy no longer asks for is dropped: the
+    // conditions it was asked under have gone back (roadmap item 98). Moving
+    // the pick on is what makes the waiting switch give up.
+    if (this.#autoQualityRequestHeight > 0 && height !== this.#autoQualityRequestHeight) {
+      this.#logEvt(`quality: the proxy no longer asks for ${this.#autoQualityRequestHeight}p; dropping the move`);
+      this.#autoQualityRequestHeight = 0;
+      this.#qualityPickSeq = (this.#qualityPickSeq ?? 0) + 1;
+    }
     if (!Number.isFinite(height) || height <= 0) {
       return; // the proxy is content, or is older than this exchange
-    }
-    if (this.#selectedQualityHeight !== 0) {
-      return; // the viewer's own pick; theirs to change and nobody else's
     }
     const level = this.#hlsPlayer.levels().find((candidate) => candidate.height === height);
     if (!level) {
@@ -7115,8 +7165,8 @@ export class Loading extends StateDerivedView {
       return; // already acting on this one
     }
     this.#autoQualityRequestHeight = height;
-    this.#logEvt(`the proxy asks for ${height}p and the viewer is on automatic — moving`);
-    void this.#switchQualityLevel(level, height, { chosenByViewer: false })
+    this.#logEvt(`the proxy asks for ${height}p${urgent ? " before the buffer runs dry" : ""} — moving`);
+    void this.#switchQualityLevel(level, height, { urgent })
       .finally(() => {
         if (this.#autoQualityRequestHeight === height) {
           this.#autoQualityRequestHeight = 0;
@@ -7124,45 +7174,6 @@ export class Loading extends StateDerivedView {
       });
   }
 
-  /**
-   * Take the rungs the proxy is still willing to serve, which it re-states with
-   * every progress report.
-   *
-   * The list handed over when the file opened was predicted from this host's
-   * startup benchmarks; once an encoder has run on this actual source the proxy
-   * knows what the source really costs and the list can change. A rung that
-   * turns out to be beyond the machine leaves the menu on its own, rather than
-   * being discovered by a viewer switching to it and watching the picture stop.
-   *
-   * Older proxies send nothing here, and nothing is what that must mean: the
-   * list already in hand stays.
-   *
-   * @param {unknown} offered
-   * @returns {void}
-   */
-  #noteOfferedHeights(offered) {
-    if (!Array.isArray(offered)) {
-      return;
-    }
-    const heights = offered
-      .map((value) => Math.round(Number(value)))
-      .filter((value) => Number.isFinite(value) && value > 0);
-    const held = this.#offeredHeights;
-    if (Array.isArray(held) && held.length === heights.length && held.every((value, index) => value === heights[index])) {
-      return;
-    }
-    this.#logEvt(`proxy now offers ${heights.length > 0 ? heights.map((value) => `${value}p`).join(" ") : "nothing to switch to"}`);
-    this.#offeredHeights = heights;
-    // A forced pick that is no longer on offer stops being the pick. It governs
-    // what the next re-open asks for, so leaving it set would ask for the rung
-    // the proxy has just withdrawn — and the menu, which no longer lists it,
-    // would have no way to say so.
-    if (this.#selectedQualityHeight > 0 && heights.length > 0 && !heights.includes(this.#selectedQualityHeight)) {
-      this.#logEvt(`${this.#selectedQualityHeight}p is no longer offered — back to automatic`);
-      this.#selectedQualityHeight = 0;
-    }
-    this.#publishQualityOptions();
-  }
 
   /**
    * Feed the player's audio menu with the active file's tracks, and which one
@@ -7268,130 +7279,6 @@ export class Loading extends StateDerivedView {
     );
   }
 
-  /**
-   * Put the quality menu on screen, saying which rung is playing.
-   *
-   * One place, because the answer comes from two sources now — the player's own
-   * variants where the stream has them, the source's height where it does not —
-   * and three moments publish it.
-   *
-   * @returns {void}
-   */
-  #publishQualityOptions() {
-    const levels = this.#hlsPlayer.levels();
-    const activeLevel = levels.find((level) => level.index === this.#hlsPlayer.currentLevel());
-    document.dispatchEvent(
-      new CustomEvent(PLAYER_EVENTS.SET_QUALITY_OPTIONS, {
-        detail: {
-          options: this.#buildQualityOptions(),
-          // With variants the menu says what is PLAYING, which is the player's
-          // to answer: a pick takes effect a fragment later, and until then the
-          // old rung is still on screen.
-          activeHeight: activeLevel ? activeLevel.height : this.#selectedQualityHeight
-        }
-      })
-    );
-  }
-
-  #buildQualityOptions() {
-    // The variants the player itself reports, when the proxy published a master
-    // playlist for this stream. Built from what the player has, not from a list
-    // assembled separately, so the menu cannot offer a rung that is not there.
-    const named = this.#hlsPlayer.levels()
-      .filter((level) => level.height > 0)
-      .sort((left, right) => right.height - left.height);
-    // More than one rung, and each of them says what it is. A variant whose
-    // height the player could not read is one the menu cannot name, and a menu
-    // of one unnamed entry is worse than the list below it.
-    if (named.length > 1) {
-      // The master playlist is read ONCE, at the start, so the player's list is
-      // the offer as it stood then. The proxy keeps revising it — a rung it has
-      // since found to be beyond the machine is refused at the route, so leaving
-      // it in the menu offers the viewer a switch that ends in a 404 rather than
-      // in a picture. What the proxy still offers wins; a proxy that says
-      // nothing (older than 2.13.0) leaves the player's own list alone.
-      const offeredNow = Array.isArray(this.#offeredHeights) ? this.#offeredHeights : null;
-      const usable = offeredNow === null
-        ? named
-        : named.filter((level) => offeredNow.includes(level.height));
-      if (usable.length > 1) {
-        return usable.map((level) => ({
-          height: level.height,
-          label: level.height === this.#sourceVideoHeight
-            ? `${level.height}p (source)`
-            : `${level.height}p`
-        }));
-      }
-      // One rung left to switch between is no choice at all, and the control
-      // hides itself rather than showing a menu of one. What must never happen
-      // is arriving here through a WRONG refusal — on 2026-08-15 a host had
-      // learned impossible costs, refused every re-encoded rung, and the menu
-      // vanished with them. That is fixed where it belongs, in what the proxy
-      // offers (2.21.1), not by showing a menu with nothing in it.
-      return [];
-    }
-    // Without variants, quality changes by re-opening the session — and the
-    // rungs on offer are the ones the PROXY says it will serve. This list used
-    // to be composed here from the source height and a fixed ladder, which
-    // answers a question about the file where the question is about the host:
-    // on the host measured 2026-08-14 that offered a 240p rung it ran at
-    // 0.388-0.947x, and picking it was what broke playback.
-    //
-    // A proxy that does not answer at all (older than 2.13.0, and the pool is
-    // mixed by design — each owner updates their own addon) is a different case
-    // from one that answers with a single height: the first has not been asked
-    // and keeps the list this browser has always composed, the second has said
-    // there is nothing to switch to and the control stays hidden.
-    const offered = this.#offeredHeights;
-    if (Array.isArray(offered)) {
-      if (offered.length < 2) {
-        return [];
-      }
-      const priced = [{
-        height: 0,
-        label: this.#autoEffectiveHeight > 0 ? `Auto (${this.#autoEffectiveHeight}p)` : "Auto"
-      }];
-      for (const height of offered) {
-        priced.push({
-          height,
-          label: height === this.#sourceVideoHeight ? `${height}p (source)` : `${height}p`
-        });
-      }
-      return priced;
-    }
-    if (!(this.#sourceVideoHeight > 0)) {
-      return [];
-    }
-    // Automatic says what it currently IS. The proxy steps the resolution down
-    // when the host cannot encode in realtime or the viewer's link cannot carry
-    // the stream, and the menu read only "Auto" — so the viewer could see the
-    // picture soften and find no answer anywhere to what they were watching.
-    const options = [{
-      height: 0,
-      label: this.#autoEffectiveHeight > 0 ? `Auto (${this.#autoEffectiveHeight}p)` : "Auto"
-    }];
-    // The source height itself as the top forced rung (labelled), then standard
-    // rungs strictly below it. Never offer above the source (no upscaling).
-    options.push({ height: this.#sourceVideoHeight, label: `${this.#sourceVideoHeight}p (source)` });
-    for (const height of [2160, 1440, 1080, 720, 540, 480, 360, 240]) {
-      if (height < this.#sourceVideoHeight) {
-        options.push({ height, label: `${height}p` });
-      }
-    }
-    return options;
-  }
-
-  /**
-   * @param {number} value
-   * @returns {number}
-   */
-  #toEvenDimension(value) {
-    if (!Number.isFinite(value)) {
-      return 0;
-    }
-    const safe = Math.max(2, Math.floor(value));
-    return safe % 2 === 0 ? safe : safe - 1;
-  }
 
   /**
    * @param {string} codec

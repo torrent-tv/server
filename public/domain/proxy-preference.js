@@ -16,8 +16,23 @@
  * @property {boolean | null} reachable - Verified reachable from the internet.
  * @property {boolean} sameNetwork - Shares a public IP with this viewer.
  * @property {boolean} [holdsThisFilm] - Already downloading the film being opened.
- * @property {{ cpuLoad?: number } | null} [metrics]
+ * @property {{ cpuLoad?: number, encodeSpeedX?: number | null } | null} [metrics]
  */
+
+/**
+ * A proxy has no room for one more encode when what already holds a place on
+ * it leaves every output at or below realtime — the proxy's own reading of its
+ * admission (roadmap item 97, step 14). Not a figure chosen here: one second of
+ * film per second IS keeping up. A proxy that does not report it is not judged
+ * by it.
+ *
+ * @param {Candidate} candidate
+ * @returns {boolean}
+ */
+function hasNoEncodeRoom(candidate) {
+  const speed = candidate?.metrics?.encodeSpeedX;
+  return typeof speed === "number" && Number.isFinite(speed) && speed <= 1;
+}
 
 /**
  * A proxy is saturated when its load average per processor has reached one.
@@ -48,18 +63,25 @@ function isSaturated(candidate) {
  *    or a popular film would send everyone to the one proxy that has it.
  *
  * @param {Candidate[]} candidates - Already sorted, best first.
- * @returns {{ pool: Candidate[], narrowedBy: "" | "reachability" | "content" | "reachability+content" }}
+ * @returns {{ pool: Candidate[], narrowedBy: string }} `narrowedBy` names, joined by "+", what narrowed the field: "reachability", "room", "content".
  */
 export function choosePool(candidates) {
   const all = Array.isArray(candidates) ? candidates : [];
   const reachable = all.filter((one) => one?.reachable === true || one?.sameNetwork === true);
-  const afterReachability = reachable.length > 0 ? reachable : all;
+  const reachableOrAll = reachable.length > 0 ? reachable : all;
+  // A proxy with no room for one more encode is left out while any other has
+  // room: the viewer would be refused there when their output is opened, and
+  // moved on after a round trip. Not a filter either — when every proxy is
+  // full, every one stays, and the refusal at the opening is what decides.
+  const withRoom = reachableOrAll.filter((one) => !hasNoEncodeRoom(one));
+  const afterReachability = withRoom.length > 0 ? withRoom : reachableOrAll;
 
   const holders = afterReachability.filter((one) => one?.holdsThisFilm === true && !isSaturated(one));
   const pool = holders.length > 0 ? holders : afterReachability;
 
   const narrowed = [
     reachable.length > 0 && reachable.length < all.length ? "reachability" : "",
+    withRoom.length > 0 && withRoom.length < reachableOrAll.length ? "room" : "",
     holders.length > 0 && holders.length < afterReachability.length ? "content" : ""
   ].filter((reason) => reason !== "");
 
