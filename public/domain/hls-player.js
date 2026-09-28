@@ -1503,6 +1503,17 @@ export function createHlsPlayer(onLog) {
             const t = new Date().toISOString().slice(11, 23);
             const currentTime = typeof videoElement?.currentTime === "number" ? videoElement.currentTime.toFixed(2) : "?";
             const hole = typeof data?.hole === "number" ? ` hole=${data.hole.toFixed(3)}s` : "";
+            const skippedFragment = data?.frag ?? data?.part?.fragment ?? data?.part;
+            const bufferInfo = data?.bufferInfo;
+            const reportedGap = Number.isFinite(bufferInfo?.end) && Number.isFinite(bufferInfo?.nextStart)
+              ? Math.max(0, bufferInfo.nextStart - bufferInfo.end)
+              : Number.isFinite(data?.hole) ? data.hole : null;
+            const holeContext = details === "bufferSeekOverHole"
+              ? ` gap=${reportedGap === null ? "?" : `${reportedGap.toFixed(3)}s`} ` +
+                `frag=${skippedFragment?.relurl ?? "-"} sn=${skippedFragment?.sn ?? "-"} ` +
+                `start=${Number.isFinite(skippedFragment?.start) ? skippedFragment.start.toFixed(3) : "-"} ` +
+                `track=${skippedFragment?.type ?? "-"} ${describeTrackBuffers(instance, videoElement)}`
+              : "";
             // The player moving itself. Recorded with the position it landed on
             // so that the `seeking` this causes can be recognised and not
             // reported as somebody's decision.
@@ -1546,13 +1557,13 @@ export function createHlsPlayer(onLog) {
               // separates the possible causes, and it was not in the log.
               const cause = data?.error
                 ? ` reason=${data?.reason ?? "-"} buffer=${data?.sourceBufferName ?? "-"} ` +
-                  `frag=${data?.frag?.relurl ?? "-"} sn=${data?.frag?.sn ?? "-"} ` +
+                  `frag=${skippedFragment?.relurl ?? "-"} sn=${skippedFragment?.sn ?? "-"} ` +
                   // What hls.js decided to DO about it, which is what separates
                   // an error it is recovering from one nobody will act on. It
                   // was missing on 2026-08-15, so which of the two killed that
                   // session had to be read out of the library's source.
                   `action=${data?.errorAction?.action ?? "-"} resolved=${data?.errorAction?.resolved ?? "-"} ` +
-                  `error=${data.error.name ?? "-"}: ${data.error.message ?? "-"}`
+                  `error=${data.error.name ?? "-"}: ${data.error.message ?? "-"}${holeContext}`
                 : "";
               const level = data?.error
                 ? console.warn.bind(console)
