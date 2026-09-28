@@ -1,3 +1,7 @@
+## 0.30.3
+
+- **Fix**: Resolve selected torrent files by their original metadata index after sorting the display list, so playback uses the intended video file.
+
 ## 0.30.2
 
 - **Chore**: Update Fastify and its transitive dependencies to releases that clear the current npm advisories.
