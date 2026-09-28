@@ -1,5 +1,6 @@
 ## 0.29.0
 
+- **Chore**: While a seek is unresolved, the browser log records each buffered fragment's track, sequence number and playlist interval beside the current time, ready state and audio/video buffer ranges. This distinguishes a short append from a delayed response (`public/domain/hls-player.js`, `FRAG_BUFFERED`).
 - **New**: A proxy that refuses an output with `no-capacity` is checked against the rest of the pool before video starts. Proxies without reported encoding headroom are left out when another reports room; when every proxy is full, the page retains the candidates and the output opening decides. If another proxy reports that it can serve the file, the page reconnects and prepares the file there before showing video; each refused proxy is excluded for that opening attempt.
 - **New**: `NoCapacityError` preserves the proxy's reason and figures for the log and exposes a retryable machine refusal to the loading flow (`public/domain/proxy-outcome.js`).
 

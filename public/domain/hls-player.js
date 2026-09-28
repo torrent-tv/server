@@ -1302,6 +1302,29 @@ export function createHlsPlayer(onLog) {
             }
           });
 
+          // A network response is not proof that the browser appended the
+          // fragment at the time its playlist entry names. Record the fragment
+          // interval beside the SourceBuffer ranges while a seek is unresolved
+          // so a short append or a gap can be distinguished from a slow load.
+          if (HlsClass.Events.FRAG_BUFFERED) {
+            instance.on(HlsClass.Events.FRAG_BUFFERED, (_event, data) => {
+              const frag = data?.frag;
+              const start = frag?.start;
+              const duration = frag?.duration;
+              if (!Number.isFinite(start) || !Number.isFinite(duration) || !videoElement.seeking) {
+                return;
+              }
+              const at = videoElement instanceof HTMLVideoElement ? videoElement.currentTime : null;
+              const end = start + duration;
+              console.debug(
+                `[evt] frag-buffered track=${frag?.type ?? "-"} sn=${frag?.sn ?? "-"} ` +
+                `frag=${start.toFixed(3)}..${end.toFixed(3)}s ` +
+                `currentTime=${typeof at === "number" ? at.toFixed(3) : "-"} ` +
+                `readyState=${videoElement.readyState} ${describeTrackBuffers(instance, videoElement)}`
+              );
+            });
+          }
+
           // The same fragment asked for a second time is the shape a dead film
           // takes: the bytes arrive, the player finds the range still
           // unbuffered and asks again, for ever. Measured 2026-08-20 on
