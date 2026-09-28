@@ -1,3 +1,7 @@
+## 0.30.4
+
+- **New**: Use explicit resolution and codec hints from the selected filename to prefer proxies that report capacity for that media. The file's probed metadata remains authoritative.
+
 ## 0.30.3
 
 - **Fix**: Resolve selected torrent files by their original metadata index after sorting the display list, so playback uses the intended video file.
