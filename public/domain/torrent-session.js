@@ -742,7 +742,7 @@ export class TorrentSession {
    *
    * @param {number} fileIndex
    * @param {ProxyTransport} transport
-   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string, container: string, durationSeconds: number, videoWidth: number, videoHeight: number, pending: boolean }>}
+   * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string, container: string, durationSeconds: number, videoWidth: number, videoHeight: number, audioTracksPending: boolean, pending: boolean }>}
    */
   async prepareProxyPlaybackPlan(fileIndex, transport) {
     if (!this.current || this.current.type !== "torrent") {
@@ -826,6 +826,7 @@ export class TorrentSession {
       videoHeight,
       // Full track inventory (proxy 2.9.26+; empty on older proxies).
       audioTracks: Array.isArray(payload?.audioTracks) ? payload.audioTracks : [],
+      audioTracksPending: payload?.audioTracksPending === true,
       subtitleTracks: Array.isArray(payload?.subtitleTracks) ? payload.subtitleTracks : [],
       // Sidecar files paired with this video by the proxy; absent on older proxies.
       sidecarSubtitles: Array.isArray(payload?.sidecarSubtitles) ? payload.sidecarSubtitles : [],
@@ -836,6 +837,26 @@ export class TorrentSession {
       // opened rather than from the moment an encoder exists.
       offeredHeights: readOfferedHeights(payload?.offeredHeights),
       pending
+    };
+  }
+
+  async refreshProxyAudioTracks(fileIndex, sourceKey, transport) {
+    if (!transport || typeof sourceKey !== "string" || sourceKey.length === 0) {
+      throw new Error("Proxy audio track refresh requires an active source and transport.");
+    }
+    const response = await transport.fetch("/api/playback-plan/audio-tracks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: this.abortController.signal,
+      body: JSON.stringify({ sourceKey, fileIndex })
+    });
+    if (!response.ok) {
+      throw new Error(`Proxy audio track refresh failed (${response.status})`);
+    }
+    const payload = await response.json();
+    return {
+      audioTracks: Array.isArray(payload?.audioTracks) ? payload.audioTracks : [],
+      pending: payload?.pending === true
     };
   }
 

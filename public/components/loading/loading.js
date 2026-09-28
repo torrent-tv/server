@@ -408,6 +408,8 @@ export class Loading extends StateDerivedView {
   #transportAcquisition = null;
   /** @type {number} Index of the file currently playing (-1 = none). */
   #activeFileIndex = -1;
+  /** @type {number} Invalidates late sidecar metadata responses after a file switch. */
+  #audioMetadataRefreshSeq = 0;
   /**
    * Snapshot taken at the moment the proxy connection was lost, consumed by
    * the Retry action. Captured BEFORE the error flow runs, because the error
@@ -1704,6 +1706,7 @@ export class Loading extends StateDerivedView {
   };
 
   #stopPlayback(options = {}) {
+    this.#audioMetadataRefreshSeq += 1;
     this.#isProcessing = false;
     this.#playbackLive = false;
     this.#clearBuffering();
@@ -3016,6 +3019,7 @@ export class Loading extends StateDerivedView {
     if (!file || file.isVideo !== true) {
       throw new Error(Loading.MESSAGES.selectedFileNotFound);
     }
+    this.#audioMetadataRefreshSeq += 1;
     // Reset the source resolution; it is set again only when the proxy plan
     // provides it below. This gates the quality menu to proxy-served streams
     // (a direct webseed play, which cannot be transcoded, leaves it 0 → no menu).
@@ -3163,6 +3167,15 @@ export class Loading extends StateDerivedView {
     // Track inventory of the active file (drives the audio menu and the
     // embedded-subtitle loading).
     this.#audioTracks = Array.isArray(prepared.audioTracks) ? prepared.audioTracks : [];
+    const audioMetadataRefreshSeq = ++this.#audioMetadataRefreshSeq;
+    if (prepared.audioTracksPending) {
+      void this.#refreshAudioTrackMetadata({
+        fileIndex,
+        sourceKey: prepared.sourceKey,
+        transport,
+        sequence: audioMetadataRefreshSeq
+      });
+    }
     this.#subtitlePlayback.setPlan({
       subtitleTracks: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : [],
       // The files BESIDE this picture that belong to it, paired and read by the
@@ -6014,6 +6027,53 @@ export class Loading extends StateDerivedView {
         detail: { tracks, activeIndex: this.#selectedAudioTrackIndex }
       })
     );
+  }
+
+  async #refreshAudioTrackMetadata({ fileIndex, sourceKey, transport, sequence }) {
+    while (
+      sequence === this.#audioMetadataRefreshSeq &&
+      this.#session.current &&
+      this.#proxy?.isOpen !== false
+    ) {
+      try {
+        const refreshed = await this.#session.refreshProxyAudioTracks(fileIndex, sourceKey, transport);
+        if (sequence !== this.#audioMetadataRefreshSeq) return;
+        const currentByIndex = new Map(this.#audioTracks.map((track) => [track?.index, track]));
+        let changed = false;
+        for (const incoming of refreshed.audioTracks) {
+          const current = currentByIndex.get(incoming?.index);
+          if (
+            !current ||
+            current.fileIndex !== incoming.fileIndex ||
+            current.sourceTrackIndex !== incoming.sourceTrackIndex ||
+            current.kind !== incoming.kind
+          ) {
+            continue;
+          }
+          for (const field of [
+            "codec", "language", "languageBcp47", "title", "isDefault", "declaresDefault",
+            "isOriginal", "isCommentary", "isVisualImpaired", "isEnabled", "channels", "bitrateKbps"
+          ]) {
+            if (current[field] !== incoming[field]) {
+              current[field] = incoming[field];
+              changed = true;
+            }
+          }
+        }
+        if (changed && fileIndex === this.#activeFileIndex) {
+          this.#publishAudioTracks();
+          this.#logEvt("audio track labels updated from the sidecar header");
+        }
+        if (!refreshed.pending) return;
+      } catch (error) {
+        if (this.#isAbortError(error) || sequence !== this.#audioMetadataRefreshSeq) return;
+        // Older proxies do not expose this endpoint. Keep playback and the
+        // filename-derived labels; this metadata is optional.
+        this.#logEvt(`audio track metadata refresh stopped: ${error?.message ?? error}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
   }
 
 

@@ -1,3 +1,7 @@
+## 0.31.1
+
+- **Fix**: Refresh sidecar audio track labels and properties after their container header becomes available, while preserving the active track indices and HLS rendition count.
+
 ## 0.31.0
 
 - **Fix**: Keep playback paused until the measured arrival rate and buffered media can cover the entire remaining video without a stall. Below-realtime streams can start after buffering the projected whole-film deficit; long waits remain waits, and a buffer ceiling that cannot cover the deficit no longer releases playback.
