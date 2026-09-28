@@ -25,22 +25,11 @@ const PREBUFFER_BASE_SECONDS = 12;
  * meanwhile.
  */
 
-/** How long the download-rate trend is worth extrapolating from. */
+/** Rate trend window used for download projection and early readiness. */
 const RATE_TREND_WINDOW_MS = 6_000;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
 const GATE_HEALTHY_FILL_RATE = 1.35;
 const GATE_HEALTHY_AHEAD_SECONDS = 10;
-/**
- * The gate's THIRD exit: it gives up waiting and starts anyway.
- *
- * Must equal the pipeline's `PREBUFFER_TIMEOUT_MS`. The estimate ignored it
- * entirely, which is why the figure never counted down to zero — measured
- * 2026-08-11, the last reading of four separate waits was 25.0 s with 1.5 s to
- * go, 30.5 s with 0.4 s, 21.4 s with 0.1 s and 33.4 s with 2.0 s. The picture
- * started while the estimate still promised half a minute, because it was
- * predicting an event that was not the one about to happen.
- */
-const GATE_TIMEOUT_SECONDS = 45;
 /** The most a rate is allowed to be assumed to grow, so a floor stays a floor. */
 const RATE_TREND_MAX_GROWTH = 4;
 
@@ -51,6 +40,8 @@ const RATE_TREND_MAX_GROWTH = 4;
  * @property {number} [bufferedAhead] - Seconds of media ahead of the playhead,
  *   measured by whoever owns the element. The single most important input: the
  *   picture starts when this reaches the cushion and at no other moment.
+ * @property {number} [fillSpanMs] - Wall time covered by the current buffer
+ *   fill-rate reading, for the sustained-rate readiness condition.
  * @property {object} [downloadStats] - The proxy's answer about the torrent.
  * @property {object} [transcodeProgress] - The proxy's answer about the encode.
  * @property {number} [expectedFirstSegmentSeconds] - What this host usually
@@ -95,6 +86,8 @@ export class WaitingModel {
    * @type {number | null}
    */
   #fillRate = null;
+  /** @type {number} Milliseconds covered by the current fill-rate reading. */
+  #fillSpanMs = 0;
   /**
    * The proxy's measured smallest safe buffer for this file, or null when it
    * has not said — an older proxy, or fewer than two interruptions seen.
@@ -162,8 +155,14 @@ export class WaitingModel {
       this.#bufferedAhead = facts.bufferedAhead;
       this.#waitStart ??= { ahead: facts.bufferedAhead, atMs: Date.now() };
     }
-    if (typeof facts.fillRate === "number" && Number.isFinite(facts.fillRate)) {
-      this.#fillRate = facts.fillRate;
+    if (Object.hasOwn(facts, "fillRate")) {
+      this.#fillRate = typeof facts.fillRate === "number" && Number.isFinite(facts.fillRate)
+        ? facts.fillRate
+        : null;
+      this.#measuredRate = this.#fillRate;
+    }
+    if (typeof facts.fillSpanMs === "number" && Number.isFinite(facts.fillSpanMs)) {
+      this.#fillSpanMs = Math.max(0, facts.fillSpanMs);
     }
     // Kept only while it is a number: the proxy sends null until its reader has
     // seen two interruptions, and null must leave the previous answer standing
@@ -256,6 +255,9 @@ export class WaitingModel {
     // keeping the last one made the first render of the next wait state a
     // cushion that belonged to the wait before it.
     this.#bufferedAhead = null;
+    this.#fillRate = null;
+    this.#fillSpanMs = 0;
+    this.#measuredRate = null;
     // AND WHAT THE PROXY LAST SAID, which belonged to the file that has just
     // been left. Both are kept between polls on purpose — the answer arrives
     // every second or two and the estimate is recomputed on every buffer
@@ -276,11 +278,7 @@ export class WaitingModel {
       producedAt: null,
       fillingAt: null
     };
-    // The wait's own start, which the timeout clamp measures from. Left behind,
-    // it anchored to the FIRST wait of the page: 45 s later the remaining time
-    // to the gate's timeout was permanently zero, so every later wait computed
-    // an estimate of exactly nought. That was hidden only by the formatter
-    // refusing to print a zero, and became visible the moment it stopped.
+    // The wait's own start, used to measure the buffer fill rate over this wait.
     this.#waitStart = null;
     this.#resetEtaFloor();
   }
@@ -628,21 +626,10 @@ export class WaitingModel {
     // playback`, for the whole of a wait in which the buffer never moved. It
     // existed to hide jumps between estimate sources; there is one source now,
     // so a rise means the wait genuinely got longer, and saying so is the point.
-    // The gate has THREE ways out and the estimate must predict the nearest.
-    // The first two are the cushion and the early path, both above. The third
-    // is the timeout: after GATE_TIMEOUT_SECONDS the pipeline starts playback
-    // whatever the buffer says. Ignoring it is why the figure never reached
-    // zero — it was predicting an event that was not the one about to happen.
-    if (etaSeconds !== null && this.#waitStart !== null) {
-      const untilTimeout = Math.max(
-        0,
-        GATE_TIMEOUT_SECONDS - (Date.now() - this.#waitStart.atMs) / 1000
-      );
-      if (untilTimeout < etaSeconds) {
-        etaSeconds = untilTimeout;
-        etaSource = `${etaSource}+timeout=${untilTimeout.toFixed(1)}`;
-      }
-    }
+    // Readiness has no time-based exit: starting with less than the measured
+    // cushion can only transfer the wait into playback as a stall. Keep the
+    // estimate pointed at the buffer condition instead of counting down to a
+    // timeout that must not release the player.
     this.#etaSamples.push({ atMs: Date.now(), predicted: etaSeconds, terms: etaSource });
 
     const result = {
@@ -881,20 +868,24 @@ export class WaitingModel {
    * The cushion that will actually open the gate, which is what an estimate of
    * "time until playback" has to be measured against.
    *
-   * Mirrors the gate's own rule: the full target, or the healthy-early amount
-   * once the measured rate is comfortably above realtime. The thresholds are
-   * the gate's, and they belong in one place — if they drift apart the estimate
-   * silently starts describing a different event again.
+   * Returns the full target until the measured rate has stayed above the
+   * healthy threshold for the gate's trend window. The estimate and gate use
+   * this same target so the countdown cannot reach zero before playback opens.
    *
    * @returns {number}
    */
-  #gateTargetSeconds() {
+  #gateTargetSeconds(fillRate = this.#fillRate, fillSpanMs = this.#fillSpanMs) {
     // The PUBLIC one: the adaptive target the gate itself compares against.
     // The private namesake is the one-segment floor, and using it here made an
     // empty buffer ask for four seconds instead of fifteen.
     const target = this.requiredBufferSeconds();
-    const rate = this.#fillRate;
-    if (typeof rate === "number" && Number.isFinite(rate) && rate >= GATE_HEALTHY_FILL_RATE) {
+    if (
+      typeof fillRate === "number" &&
+      Number.isFinite(fillRate) &&
+      fillRate >= GATE_HEALTHY_FILL_RATE &&
+      typeof fillSpanMs === "number" &&
+      fillSpanMs >= RATE_TREND_WINDOW_MS
+    ) {
       return Math.min(target, GATE_HEALTHY_AHEAD_SECONDS);
     }
     return target;
@@ -917,16 +908,11 @@ export class WaitingModel {
     if (typeof ahead === "number" && ahead >= target) {
       return { ready: true, reason: "target", target };
     }
-    // The early path exists so a link with room to spare does not sit banking
-    // media it plainly does not need. It asks for a rate SUSTAINED over the
-    // whole window rather than a lucky burst.
-    const sustained = typeof fillSpanMs === "number" && fillSpanMs >= RATE_TREND_WINDOW_MS;
-    const healthy =
-      typeof fillRate === "number" &&
-      Number.isFinite(fillRate) &&
-      fillRate >= GATE_HEALTHY_FILL_RATE;
-    if (ahead >= GATE_HEALTHY_AHEAD_SECONDS && healthy && sustained) {
-      return { ready: true, reason: "early", target };
+    // Reuse the estimate's target so the loading screen and readiness decision
+    // cannot disagree about whether the early path has enough evidence.
+    const earlyTarget = this.#gateTargetSeconds(fillRate, fillSpanMs);
+    if (earlyTarget < target && typeof ahead === "number" && ahead >= earlyTarget) {
+      return { ready: true, reason: "early", target: earlyTarget };
     }
     return { ready: false, reason: null, target };
   }
