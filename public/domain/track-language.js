@@ -34,6 +34,7 @@ export function languageName(code) {
   try {
     return LANGUAGE_DISPLAY?.of(code) ?? "";
   } catch {
+    // silent-ok: an invalid language code has no display name to show.
     return "";
   }
 }

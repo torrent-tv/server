@@ -151,7 +151,7 @@ function buildTrackLabel(track, videoName = "") {
   const base = parts.join(" — ");
   return marks.length > 0 ? `${base} · ${marks.join(" · ")}` : base;
 }
-import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
+import { trackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
 
 /**
  * What a soundtrack IS, in the terms a choice of it survives an episode switch
