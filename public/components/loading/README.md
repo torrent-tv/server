@@ -1,6 +1,6 @@
 # Loading Component
 
-This component renders processing progress while playback is being prepared and executes the preparation pipeline.
+This component renders processing progress while playback is being prepared and coordinates the preparation pipeline. `SubtitlePlayback` owns the subtitle runtime for the active file.
 
 ## Responsibilities
 
@@ -21,6 +21,8 @@ This component renders processing progress while playback is being prepared and 
 - Emit:
   - `LOADING:PLAYBACK_READY` when playback is ready,
   - `LOADING:PLAYBACK_FAILED` when preparation fails.
+
+`SubtitlePlayback` owns subtitle track elements, sidecar subtitle loading, embedded cue delivery, reconnect resubscription, and the viewer's remembered subtitle choice. `Loading` supplies the active video element, session access, transport, subtitle plan, and primary audio language. Audio track selection remains in `Loading`.
 
 ## State Machine
 

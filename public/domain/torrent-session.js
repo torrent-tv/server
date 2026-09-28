@@ -821,6 +821,8 @@ export class TorrentSession {
       // Full track inventory (proxy 2.9.26+; empty on older proxies).
       audioTracks: Array.isArray(payload?.audioTracks) ? payload.audioTracks : [],
       subtitleTracks: Array.isArray(payload?.subtitleTracks) ? payload.subtitleTracks : [],
+      // Sidecar files paired with this video by the proxy; absent on older proxies.
+      sidecarSubtitles: Array.isArray(payload?.sidecarSubtitles) ? payload.sidecarSubtitles : [],
       // The heights this proxy could serve this file at, per playback branch
       // (proxy 2.13.0+; null on older proxies, and then the browser keeps its
       // own ladder). Which branch applies is decided here, from the codecs in
