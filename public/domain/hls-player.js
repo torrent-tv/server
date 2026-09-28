@@ -414,7 +414,7 @@ export function createHlsPlayer(onLog) {
    * @param {number} askedCeiling - The ceiling this player set.
    * @returns {void}
    */
-  const startCushionSampler = (instance, media, askedCeiling) => {
+  const startCushionSampler = (instance, media, askedCeiling, attemptId) => {
     stopCushionSampler();
     let lastCeilingSaid = askedCeiling;
     let lastRefusalAt = 0;
@@ -448,7 +448,7 @@ export function createHlsPlayer(onLog) {
       if (ceiling < lastCeilingSaid - 0.5) {
         lastRefusalAt = Date.now();
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER_CEILING, {
-          detail: { ceilingSeconds: ceiling }
+          detail: { attemptId, ceilingSeconds: ceiling }
         }));
         console.debug(
           `[torrent-tv][cushion] the device refused the depth: ceiling lowered ` +
@@ -808,7 +808,7 @@ export function createHlsPlayer(onLog) {
      *
      * @param {HTMLVideoElement} videoElement
      * @param {string} manifestUrl
-     * @param {{ loader?: HlsLoaderClass, startPosition?: number, preferredHeight?: number, nativeManifestUrl?: string, onLevelSwitched?: (height: number) => void }} [options]
+     * @param {{ loader?: HlsLoaderClass, startPosition?: number, preferredHeight?: number, nativeManifestUrl?: string, onLevelSwitched?: (height: number) => void, attemptId?: number }} [options]
      *   Pass `{ loader: createWebRtcHlsLoader(proxy) }` when segments and
      *   manifests must be fetched through a WebRTC data channel.
      *   `preferredHeight` pins the variant to start on when the manifest is a
@@ -856,6 +856,9 @@ export function createHlsPlayer(onLog) {
         // seconds ceiling and the byte budget are sized from this one figure,
         // so they cannot disagree about how deep the cushion is meant to be.
         const forwardBufferCeiling = forwardBufferCeilingSeconds(options.lookaheadSeconds);
+        document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER_CEILING, {
+          detail: { attemptId: options.attemptId, ceilingSeconds: forwardBufferCeiling }
+        }));
         const hlsConfig = {
           ...(options.loader ? { loader: options.loader } : {}),
           ...(fragLoadPolicy ? { fragLoadPolicy } : {}),
@@ -917,7 +920,7 @@ export function createHlsPlayer(onLog) {
         };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
-        startCushionSampler(instance, videoElement, forwardBufferCeiling);
+        startCushionSampler(instance, videoElement, forwardBufferCeiling, options.attemptId);
         // Set once the manifest is parsed, so post-manifest fatal errors (live
         // playback) are recovered in place, while warm-up fatals still reject
         // the play() promise below (startup error path).

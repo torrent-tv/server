@@ -1816,6 +1816,10 @@ export class Loading extends StateDerivedView {
     });
     document.addEventListener(PLAYER_EVENTS.BUFFER_CEILING, (event) => {
       const ceiling = event instanceof CustomEvent ? event.detail?.ceilingSeconds : null;
+      const attemptId = event instanceof CustomEvent ? event.detail?.attemptId : null;
+      if (attemptId !== this.#playbackEpoch) {
+        return;
+      }
       this.#browserBufferLimitSeconds = typeof ceiling === "number" && Number.isFinite(ceiling) && ceiling > 0
         ? ceiling
         : null;
@@ -4880,7 +4884,8 @@ export class Loading extends StateDerivedView {
             // no guard: a fault from an abandoned attempt's player would then be
             // able to kill the live one.
             onUnrecoverable: (details) => this.#onPlayerUnrecoverable(details, playerEpoch),
-            ...playOptions
+            ...playOptions,
+            attemptId: playerEpoch
           }),
         onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
       });
@@ -5033,6 +5038,7 @@ export class Loading extends StateDerivedView {
         fillRate: this.#lastFillRate,
         fillSpanMs,
         remainingSeconds,
+        bufferLimitSeconds: this.#browserBufferLimitSeconds,
         downloadStats: this.#lastDownloadStats,
         transcodeProgress: cachedProgress
       });
@@ -5042,7 +5048,8 @@ export class Loading extends StateDerivedView {
       this.#waitingModel.update({
         fillRate: Number.isFinite(fillRate) ? fillRate : null,
         fillSpanMs,
-        remainingSeconds
+        remainingSeconds,
+        bufferLimitSeconds: this.#browserBufferLimitSeconds
       });
       // THE gate rule lives in the model, in one copy. It was written here as
       // well, with its own thresholds, and two copies of one rule can only be
@@ -5107,7 +5114,8 @@ export class Loading extends StateDerivedView {
           transcodeProgress: cachedProgress,
           fillRate,
           fillSpanMs,
-          remainingSeconds
+          remainingSeconds,
+          bufferLimitSeconds: this.#browserBufferLimitSeconds
         }
       }));
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -5218,6 +5226,7 @@ export class Loading extends StateDerivedView {
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
       fillRate: this.#lastFillRate,
       fillSpanMs: this.#bufferFillSpanMs(),
+      bufferLimitSeconds: this.#browserBufferLimitSeconds,
       remainingSeconds: Number.isFinite(this.#videoElement.duration)
         ? Math.max(0, this.#videoElement.duration - this.#videoElement.currentTime)
         : null,
@@ -5250,6 +5259,7 @@ export class Loading extends StateDerivedView {
         transcodeProgress: progress,
         fillRate: unified.fillRate,
         fillSpanMs: this.#bufferFillSpanMs(),
+        bufferLimitSeconds: this.#browserBufferLimitSeconds,
         remainingSeconds: Number.isFinite(this.#videoElement.duration)
           ? Math.max(0, this.#videoElement.duration - this.#videoElement.currentTime)
           : null

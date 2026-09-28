@@ -1,3 +1,8 @@
+## 0.31.0
+
+- **Fix**: Keep playback paused until the measured arrival rate and buffered media can cover the entire remaining video without a stall. Below-realtime streams can start after buffering the projected whole-film deficit; long waits remain waits, and a buffer ceiling that cannot cover the deficit no longer releases playback.
+- **Fix**: Associate each HLS buffer-ceiling report with its playback attempt, so a late report from an earlier attempt cannot change the active readiness gate.
+
 ## 0.30.9
 
 - **Fix**: Start playback once the browser fills its lower, device-accepted buffer ceiling after refusing a deeper cushion, instead of waiting for a refill rate that cannot be measured while the buffer is full.

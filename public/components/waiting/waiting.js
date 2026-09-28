@@ -53,6 +53,9 @@ export class WaitingOverlay {
   /** @type {number | null} Latest reading from the component that owns the element. */
   #bufferedAhead = null;
 
+  /** @type {number | null} The accepted forward-buffer ceiling for this stream. */
+  #bufferLimitSeconds = null;
+
   /**
    * The step the pipeline named, if it named one. A seek runs no pipeline step,
    * so on a seek this stays empty and the step is worked out from the numbers
@@ -70,6 +73,7 @@ export class WaitingOverlay {
     }
     document.addEventListener(PROXY_EVENTS.MEASURED, this.#onProxyMeasured);
     document.addEventListener(PLAYER_EVENTS.BUFFER, this.#onBuffer);
+    document.addEventListener(PLAYER_EVENTS.BUFFER_CEILING, this.#onBufferCeiling);
     document.addEventListener(WAITING_EVENTS.STEP, this.#onStep);
     document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onStateChanged);
   }
@@ -88,6 +92,12 @@ export class WaitingOverlay {
    */
   #onProxyMeasured = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
+    if (Object.hasOwn(detail ?? {}, "bufferLimitSeconds")) {
+      this.#bufferLimitSeconds = typeof detail.bufferLimitSeconds === "number" &&
+        Number.isFinite(detail.bufferLimitSeconds) && detail.bufferLimitSeconds > 0
+        ? detail.bufferLimitSeconds
+        : null;
+    }
     const downloadStats = detail?.downloadStats ?? null;
     const transcodeProgress = detail?.transcodeProgress ?? null;
     // The two figures only the PROXY can know: what this host takes to create a
@@ -105,6 +115,9 @@ export class WaitingOverlay {
       ...(typeof detail?.fillSpanMs === "number" ? { fillSpanMs: detail.fillSpanMs } : {}),
       ...(typeof detail?.remainingSeconds === "number" || detail?.remainingSeconds === null
         ? { remainingSeconds: detail.remainingSeconds }
+        : {}),
+      ...(typeof detail?.bufferLimitSeconds === "number" || detail?.bufferLimitSeconds === null
+        ? { bufferLimitSeconds: detail.bufferLimitSeconds }
         : {}),
       downloadStats,
       transcodeProgress,
@@ -163,13 +176,21 @@ export class WaitingOverlay {
       ...(typeof fillSpanMs === "number" ? { fillSpanMs } : {}),
       ...(typeof remainingSeconds === "number" || remainingSeconds === null
         ? { remainingSeconds }
-        : {})
+        : {}),
+      bufferLimitSeconds: this.#bufferLimitSeconds
     });
     this.#measurements.cushionPercent = unified.cushionPercent ?? undefined;
     this.#measurements.cushionRemainingSeconds = unified.cushionRemainingSeconds ?? undefined;
     this.#measurements.etaSeconds = unified.etaSeconds ?? undefined;
     this.#applyStep();
     this.#render();
+  };
+
+  #onBufferCeiling = (event) => {
+    const ceiling = event instanceof CustomEvent ? event.detail?.ceilingSeconds : null;
+    this.#bufferLimitSeconds = typeof ceiling === "number" && Number.isFinite(ceiling) && ceiling > 0
+      ? ceiling
+      : null;
   };
 
 
