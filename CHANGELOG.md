@@ -1,3 +1,7 @@
+## 0.30.7
+
+- **Chore**: Record the skipped fragment, gap size, and separate audio/video buffer ranges when HLS jumps over a buffered hole, so the track and boundary behind a visible discontinuity can be identified.
+
 ## 0.30.6
 
 - **Fix**: Preserve LF line endings for shell scripts and Dockerfiles on Windows checkouts, so the Alpine entrypoint starts correctly.
