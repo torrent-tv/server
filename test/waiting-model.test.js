@@ -326,42 +326,85 @@ test("the estimate reaches zero exactly when the gate opens", () => {
   );
 });
 
-test("a sub-realtime rate cannot make a filled cushion look ready", () => {
+test("a sub-realtime rate may start after buffering the whole-film deficit", () => {
   const model = new WaitingModel();
-  // A timer is not evidence that the current supply can keep pace through the
-  // rest of the video. A full local cushion at 0.05x still cannot sustain it.
+  const remainingSeconds = 3_600;
+  const fillRate = 0.05;
   const answer = model.update({
     bufferedAhead: 25,
-    fillRate: 0.05,
+    fillRate,
     fillSpanMs: 30_000,
-    remainingSeconds: 3_600,
+    remainingSeconds,
     transcodeProgress: { state: "ready" }
   });
-  const gate = model.mayStartPlayback({ ahead: 25, fillRate: 0.05, fillSpanMs: 30_000 });
+  const target = (1 - fillRate) * remainingSeconds + model.requiredBufferSeconds();
+  const beforeTarget = model.mayStartPlayback({ ahead: target - 1, fillRate, fillSpanMs: 30_000 });
+  const atTarget = model.mayStartPlayback({ ahead: target, fillRate, fillSpanMs: 30_000 });
 
-  assert.equal(answer.etaSeconds, null, "a countdown must not promise a start that will stall before the end");
-  assert.equal(gate.ready, false, "elapsed time and a full cushion do not replace realtime throughput");
+  assert.ok(answer.etaSeconds > 0, "a long wait may have a long finite forecast");
+  assert.equal(beforeTarget.ready, false, "the current reserve is not enough to cover the film");
+  assert.deepEqual(atTarget, { ready: true, reason: "completion-buffer", target });
 });
 
-test("playback may start when the browser reaches its refused buffer ceiling", () => {
+test("reaching the buffer ceiling does not start when it cannot cover the whole-film deficit", () => {
   const model = new WaitingModel();
-  const beforeLimit = model.mayStartPlayback({
-    ahead: 59.9,
-    fillRate: 0,
-    fillSpanMs: 30_000,
-    remainingSeconds: 3_600,
+  model.update({
+    bufferedAhead: 30,
+    fillRate: 0.95,
+    fillSpanMs: 6_000,
+    remainingSeconds: 18_000,
     bufferLimitSeconds: 60
   });
-  const atLimit = model.mayStartPlayback({
+  const answer = model.update({
+    bufferedAhead: 60,
+    fillRate: 0,
+    fillSpanMs: 30_000,
+    remainingSeconds: 18_000,
+    bufferLimitSeconds: 60,
+    transcodeProgress: { state: "ready" }
+  });
+  const gate = model.mayStartPlayback({
     ahead: 60,
     fillRate: 0,
     fillSpanMs: 30_000,
-    remainingSeconds: 3_600,
+    remainingSeconds: 18_000,
     bufferLimitSeconds: 60
   });
 
-  assert.equal(beforeLimit.ready, false, "the gate waits until the accepted ceiling is actually filled");
-  assert.deepEqual(atLimit, { ready: true, reason: "buffer-limit", target: 60 });
+  assert.equal(answer.etaSeconds, null, "do not forecast readiness beyond the accepted buffer ceiling");
+  assert.equal(gate.ready, false, "a full short buffer does not cover the remaining film");
+  assert.ok(Math.abs(gate.target - 925) < 0.01, "the cached pre-limit rate sets the required reserve");
+});
+
+test("a sub-realtime forecast may take many minutes without becoming an error", () => {
+  const model = new WaitingModel();
+  const answer = model.update({
+    bufferedAhead: 0,
+    fillRate: 0.95,
+    fillSpanMs: 6_000,
+    remainingSeconds: 18_000,
+    transcodeProgress: { state: "ready" }
+  });
+  const gate = model.mayStartPlayback({
+    ahead: 0,
+    fillRate: 0.95,
+    fillSpanMs: 6_000,
+    remainingSeconds: 18_000
+  });
+
+  assert.ok(answer.etaSeconds > 900 && answer.etaSeconds < 1_100, `unexpected wait: ${answer.etaSeconds}s`);
+  assert.equal(gate.ready, false, "the long estimate remains a wait, not an error or early start");
+  assert.ok(Math.abs(gate.target - 925) < 0.01);
+});
+
+test("a sub-realtime rate cannot establish completion readiness without a known remainder", () => {
+  const model = new WaitingModel();
+  model.update({ bufferedAhead: 100, fillRate: 0.5, fillSpanMs: 6_000 });
+  const answer = model.update({ bufferedAhead: 100, fillRate: 0.5, fillSpanMs: 6_000 });
+  const gate = model.mayStartPlayback({ ahead: 100, fillRate: 0.5, fillSpanMs: 6_000 });
+
+  assert.equal(answer.etaSeconds, null);
+  assert.equal(gate.ready, false);
 });
 
 test("playback may start below realtime when the complete remainder is buffered", () => {

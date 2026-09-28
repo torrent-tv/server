@@ -29,6 +29,8 @@ const PREBUFFER_BASE_SECONDS = 12;
 const RATE_TREND_WINDOW_MS = 6_000;
 /** The measured output rate must exceed realtime before ordinary playback. */
 const GATE_MIN_SUSTAINABLE_FILL_RATE = 1;
+/** A configured HLS buffer ceiling may make the live fill rate read as zero. */
+const BUFFER_LIMIT_RATE_MAX_AGE_MS = 20_000;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
 const GATE_HEALTHY_FILL_RATE = 1.35;
 const GATE_HEALTHY_AHEAD_SECONDS = 10;
@@ -45,6 +47,8 @@ const RATE_TREND_MAX_GROWTH = 4;
  *   fill-rate reading, for the sustained-rate readiness condition.
  * @property {number | null} [remainingSeconds] - Media time from the playhead
  *   to the end of the selected video.
+ * @property {number | null} [bufferLimitSeconds] - The browser's accepted
+ *   forward-buffer ceiling for this stream.
  * @property {object} [downloadStats] - The proxy's answer about the torrent.
  * @property {object} [transcodeProgress] - The proxy's answer about the encode.
  * @property {number} [expectedFirstSegmentSeconds] - What this host usually
@@ -93,6 +97,12 @@ export class WaitingModel {
   #fillSpanMs = 0;
   /** @type {number | null} Media seconds left from the current playhead. */
   #remainingSeconds = null;
+  /** @type {number | null} The browser/proxy ceiling on media buffered ahead. */
+  #bufferLimitSeconds = null;
+  /** @type {number | null} Last sustained rate measured before the ceiling. */
+  #preLimitFillRate = null;
+  /** @type {number} When the pre-limit rate was measured. */
+  #preLimitFillRateAtMs = 0;
   /**
    * The proxy's measured smallest safe buffer for this file, or null when it
    * has not said — an older proxy, or fewer than two interruptions seen.
@@ -174,6 +184,21 @@ export class WaitingModel {
         Number.isFinite(facts.remainingSeconds) && facts.remainingSeconds >= 0
         ? facts.remainingSeconds
         : null;
+    }
+    if (Object.hasOwn(facts, "bufferLimitSeconds")) {
+      this.#bufferLimitSeconds = typeof facts.bufferLimitSeconds === "number" &&
+        Number.isFinite(facts.bufferLimitSeconds) && facts.bufferLimitSeconds > 0
+        ? facts.bufferLimitSeconds
+        : null;
+    }
+    if (
+      typeof this.#fillRate === "number" &&
+      this.#fillRate > 0 &&
+      this.#fillSpanMs >= RATE_TREND_WINDOW_MS &&
+      !this.#isAtBufferLimit(this.#bufferedAhead)
+    ) {
+      this.#preLimitFillRate = this.#fillRate;
+      this.#preLimitFillRateAtMs = Date.now();
     }
     // Kept only while it is a number: the proxy sends null until its reader has
     // seen two interruptions, and null must leave the previous answer standing
@@ -269,6 +294,9 @@ export class WaitingModel {
     this.#fillRate = null;
     this.#fillSpanMs = 0;
     this.#remainingSeconds = null;
+    this.#bufferLimitSeconds = null;
+    this.#preLimitFillRate = null;
+    this.#preLimitFillRateAtMs = 0;
     this.#measuredRate = null;
     // AND WHAT THE PROXY LAST SAID, which belonged to the file that has just
     // been left. Both are kept between polls on purpose — the answer arrives
@@ -485,17 +513,32 @@ export class WaitingModel {
     //    (0.5 s, 2.0 s and 20.0 s in three measured cases). Before any such
     //    measurement exists the floor is one segment, because no player starts
     //    on less than one.
-    // What the viewer waits for is PLAYBACK STARTING, and that is not the same
-    // event as the cushion filling. The gate starts early when the buffer holds
-    // a healthy amount AND the rate has sustained a surplus — so on a healthy
-    // link the picture begins at ten seconds, not at the full target.
+    // Playback starts only when the sustained end-to-end rate and buffered
+    // media cover the complete remaining film, plus the safe startup cushion.
     //
-    // Estimating the full target regardless is where the large overestimates
-    // came from: measured 2026-08-10, three waits promised 25.0, 20.2 and 24.8
-    // seconds and ended after 7.1, 1.7 and 0.6. The figure never moved during
-    // any of them either, which is honest arithmetic on an unchanging input and
-    // still the wrong answer — it was answering a question nobody had asked.
-    const requiredBuffer = this.#gateTargetSeconds();
+    // The estimate and gate must use the same completion target. When the
+    // arrival rate is below realtime, that target includes the deficit over
+    // the whole remaining film; this can make the wait long, but must not make
+    // it fail merely because a fixed amount of time passed.
+    const readinessRate = this.#readinessRate();
+    const estimateRate = this.#estimateRate();
+    const startupTarget = this.#gateTargetSeconds(estimateRate, this.#fillSpanMs);
+    const unknownCompletion = readinessRate !== null &&
+      readinessRate < GATE_MIN_SUSTAINABLE_FILL_RATE &&
+      !Number.isFinite(this.#remainingSeconds);
+    if (unknownCompletion) {
+      return {
+        etaSeconds: null,
+        cushionPercent: null,
+        cushionRemainingSeconds: startupTarget,
+        encodeSpeedText: null
+      };
+    }
+    const requiredBuffer = this.#requiredCompletionBuffer(
+      estimateRate,
+      this.#remainingSeconds,
+      startupTarget
+    );
     // Nothing measured is NOT the same as measured and empty, and both used to
     // answer 0%. The difference shows: before the player has produced a single
     // reading, "Buffering — 0%" is a figure nobody took, printed as though it
@@ -518,11 +561,8 @@ export class WaitingModel {
     const remainingBuffered = Number.isFinite(this.#remainingSeconds) &&
       bufferedAhead !== null &&
       bufferedAhead >= this.#remainingSeconds;
-    const sustainedRealtimeRate = typeof fillRate === "number" &&
-      fillRate > GATE_MIN_SUSTAINABLE_FILL_RATE &&
-      this.#fillSpanMs >= RATE_TREND_WINDOW_MS;
     const targetBuffered = bufferedAhead !== null && bufferedAhead >= requiredBuffer;
-    const readinessReached = remainingBuffered || (sustainedRealtimeRate && targetBuffered);
+    const readinessReached = remainingBuffered || (readinessRate !== null && targetBuffered);
 
     if (readinessReached) {
       // The wait is over — the player has what it needs. Whatever was promised
@@ -552,7 +592,10 @@ export class WaitingModel {
       // after. A wait is governed by its worst stretch, not its best, so the
       // honest divisor is the floor of what has actually been observed.
       this.#recordFillRate(this.#fillRate);
-      const measured = this.#conservativeFillRate();
+      const measured = this.#isAtBufferLimit(bufferedAhead)
+        ? readinessRate ?? estimateRate
+        : this.#conservativeFillRate() ??
+          (typeof estimateRate === "number" && estimateRate > 0 ? estimateRate : null);
       const rates = [encodeSpeed, linkRate].filter((rate) => typeof rate === "number" && rate > 0);
       const arrivalRate = measured ?? (rates.length > 0 ? Math.min(...rates) : null);
 
@@ -568,6 +611,11 @@ export class WaitingModel {
         terms.push(`stages-superseded=${total.toFixed(1)}`);
         total = fillSeconds;
         terms.push(`fill=${fillSeconds.toFixed(1)}@${measured.toFixed(2)}x-measured`);
+      } else if (requiredBuffer > startupTarget) {
+        // A whole-film reserve needs an end-to-end rate. Encoder or link speed
+        // alone omits another stage and cannot justify a completion countdown.
+        unknown = true;
+        terms.push("whole-film-rate=unknown");
       } else if (arrivalRate !== null) {
         // Nothing measured end to end yet; the slower of what the encoder
         // reports and what the link carries is the best available, and the
@@ -600,7 +648,9 @@ export class WaitingModel {
         // assumed — the same measurement, used for the quantity it actually
         // describes. Dividing the shortfall by an assumed 1.0 said 4.0 s of a
         // wait that ran 46.8 s.
-        const hostFirstSegment = this.#expectedFirstSegmentSeconds;
+        const hostFirstSegment = requiredBuffer > startupTarget
+          ? null
+          : this.#expectedFirstSegmentSeconds;
         const producedRate = typeof hostFirstSegment === "number" && hostFirstSegment > 0
           ? SEGMENT_DURATION_SECONDS / hostFirstSegment
           : null;
@@ -632,24 +682,28 @@ export class WaitingModel {
     etaSeconds = unknown ? null : total;
     etaSource = terms.length > 0 ? terms.join("+") : "ready";
 
+    const targetBeyondBufferLimit = this.#bufferLimitSeconds !== null &&
+      requiredBuffer > this.#bufferLimitSeconds + 0.5;
     if (remainingBuffered) {
       cushionRemainingSeconds = 0;
       cushionPercent = 100;
       etaSeconds = 0;
       etaSource = "remaining-buffered";
-    } else if (typeof fillRate === "number" && fillRate <= GATE_MIN_SUSTAINABLE_FILL_RATE) {
-      // A full startup cushion cannot offset a production rate that loses
-      // ground over the remaining film. Until that rate recovers, its future
-      // readiness time is unknown; do not count down to a start that would
-      // stall before the end.
+    } else if (targetBeyondBufferLimit) {
       etaSeconds = null;
-      cushionPercent = null;
-      etaSource = "below-realtime";
+      etaSource = "completion-buffer-exceeds-limit";
+    } else if (readinessRate !== null && readinessRate < GATE_MIN_SUSTAINABLE_FILL_RATE) {
+      // A below-realtime stream can still finish without a stall when enough
+      // media is already ahead to cover the deficit over the remaining film.
+      // `requiredBuffer` includes that whole-film reserve.
+      if (typeof readinessRate === "number" && readinessRate > 0) {
+        etaSource = `${etaSource}+whole-film-reserve`;
+      }
     } else if (typeof fillRate === "number" && this.#fillSpanMs < RATE_TREND_WINDOW_MS) {
       const trendSeconds = (RATE_TREND_WINDOW_MS - this.#fillSpanMs) / 1000;
       etaSeconds = etaSeconds === null ? null : etaSeconds + trendSeconds;
       etaSource += `+sustained-rate=${trendSeconds.toFixed(1)}`;
-    } else if (!sustainedRealtimeRate && etaSeconds === 0) {
+    } else if (readinessRate === null && etaSeconds === 0) {
       // A filled cushion with no sustained realtime reading is not readiness.
       etaSeconds = null;
       cushionPercent = null;
@@ -946,16 +1000,16 @@ export class WaitingModel {
    * cushion was met on a wait that then ran 42.6 s.
    *
    * @param {{ ahead: number, fillRate?: number | null, fillSpanMs?: number, remainingSeconds?: number | null, bufferLimitSeconds?: number | null }} reading
-   * @returns {{ ready: boolean, reason: "target" | "early" | "remaining-buffered" | "buffer-limit" | null, target: number }}
+   * @returns {{ ready: boolean, reason: "target" | "early" | "completion-buffer" | "remaining-buffered" | null, target: number }}
    */
   mayStartPlayback({
     ahead,
     fillRate = null,
     fillSpanMs = 0,
     remainingSeconds = this.#remainingSeconds,
-    bufferLimitSeconds = null
+    bufferLimitSeconds = this.#bufferLimitSeconds
   }) {
-    const target = this.requiredBufferSeconds();
+    const startupTarget = this.requiredBufferSeconds();
     if (
       typeof ahead === "number" &&
       Number.isFinite(remainingSeconds) &&
@@ -964,38 +1018,91 @@ export class WaitingModel {
     ) {
       return { ready: true, reason: "remaining-buffered", target: remainingSeconds };
     }
-    // Once hls.js has told us the device refused a deeper buffer, a full buffer
-    // at that accepted ceiling cannot grow enough to measure a new fill rate.
-    // Waiting for one deadlocks cold playback at the device's actual limit.
-    if (
-      typeof bufferLimitSeconds === "number" &&
+    const rate = this.#readinessRate({ ahead, fillRate, fillSpanMs, bufferLimitSeconds });
+    if (rate === null) {
+      return {
+        ready: false,
+        reason: null,
+        target: this.#requiredCompletionBuffer(null, remainingSeconds, startupTarget)
+      };
+    }
+    if (rate < GATE_MIN_SUSTAINABLE_FILL_RATE && !Number.isFinite(remainingSeconds)) {
+      return { ready: false, reason: null, target: startupTarget };
+    }
+    const completionTarget = this.#requiredCompletionBuffer(
+      rate,
+      remainingSeconds,
+      this.#gateTargetSeconds(rate, fillSpanMs)
+    );
+    if (typeof ahead === "number" && ahead >= completionTarget) {
+      return {
+        ready: true,
+        reason: completionTarget > startupTarget
+          ? "completion-buffer"
+          : completionTarget < startupTarget
+            ? "early"
+            : "target",
+        target: completionTarget
+      };
+    }
+    return { ready: false, reason: null, target: completionTarget };
+  }
+
+  #readinessRate({
+    ahead = this.#bufferedAhead,
+    fillRate = this.#fillRate,
+    fillSpanMs = this.#fillSpanMs,
+    bufferLimitSeconds = this.#bufferLimitSeconds
+  } = {}) {
+    if (this.#isAtBufferLimit(ahead, bufferLimitSeconds)) {
+      if (
+        this.#preLimitFillRate !== null &&
+        Date.now() - this.#preLimitFillRateAtMs <= BUFFER_LIMIT_RATE_MAX_AGE_MS
+      ) {
+        return this.#preLimitFillRate;
+      }
+      return null;
+    }
+    return typeof fillRate === "number" &&
+      Number.isFinite(fillRate) &&
+      fillSpanMs >= RATE_TREND_WINDOW_MS
+      ? fillRate
+      : null;
+  }
+
+  #estimateRate() {
+    if (this.#isAtBufferLimit(this.#bufferedAhead)) {
+      if (
+        this.#preLimitFillRate !== null &&
+        Date.now() - this.#preLimitFillRateAtMs <= BUFFER_LIMIT_RATE_MAX_AGE_MS
+      ) {
+        return this.#preLimitFillRate;
+      }
+      return null;
+    }
+    return typeof this.#fillRate === "number" && Number.isFinite(this.#fillRate)
+      ? this.#fillRate
+      : null;
+  }
+
+  #isAtBufferLimit(ahead, bufferLimitSeconds = this.#bufferLimitSeconds) {
+    return typeof bufferLimitSeconds === "number" &&
       Number.isFinite(bufferLimitSeconds) &&
       bufferLimitSeconds > 0 &&
       typeof ahead === "number" &&
       Number.isFinite(ahead) &&
-      ahead >= bufferLimitSeconds
-    ) {
-      return { ready: true, reason: "buffer-limit", target: bufferLimitSeconds };
+      ahead >= bufferLimitSeconds - 0.5;
+  }
+
+  #requiredCompletionBuffer(rate, remainingSeconds, safeCushionSeconds) {
+    if (!Number.isFinite(remainingSeconds) || remainingSeconds < 0) {
+      return safeCushionSeconds;
     }
-    const sustainedRealtimeRate =
-      typeof fillRate === "number" &&
-      Number.isFinite(fillRate) &&
-      fillRate > GATE_MIN_SUSTAINABLE_FILL_RATE &&
-      typeof fillSpanMs === "number" &&
-      fillSpanMs >= RATE_TREND_WINDOW_MS;
-    if (!sustainedRealtimeRate) {
-      return { ready: false, reason: null, target };
+    if (rate === null || !Number.isFinite(rate)) {
+      return remainingSeconds;
     }
-    if (typeof ahead === "number" && ahead >= target) {
-      return { ready: true, reason: "target", target };
-    }
-    // Reuse the estimate's target so the loading screen and readiness decision
-    // cannot disagree about whether the early path has enough evidence.
-    const earlyTarget = this.#gateTargetSeconds(fillRate, fillSpanMs);
-    if (earlyTarget < target && typeof ahead === "number" && ahead >= earlyTarget) {
-      return { ready: true, reason: "early", target: earlyTarget };
-    }
-    return { ready: false, reason: null, target };
+    const playbackDeficit = Math.max(0, (1 - Math.max(0, rate)) * remainingSeconds);
+    return Math.min(remainingSeconds, playbackDeficit + safeCushionSeconds);
   }
 
   /**
