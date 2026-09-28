@@ -276,6 +276,12 @@ export class Player extends StateDerivedView {
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER, {
       detail: {
         bufferedAhead: aheadSeconds,
+        fillSpanMs: this.#bufferSamples.length > 1
+          ? this.#bufferSamples.at(-1).atMs - this.#bufferSamples[0].atMs
+          : 0,
+        remainingSeconds: Number.isFinite(this.#video.duration)
+          ? Math.max(0, this.#video.duration - this.#video.currentTime)
+          : null,
         // Whether the picture is moving decides whether playback consumption
         // counts toward the rate. This element knows; nothing else does.
         fillRate: fillRateFromSamples(this.#bufferSamples)

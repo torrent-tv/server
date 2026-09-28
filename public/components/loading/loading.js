@@ -5015,10 +5015,14 @@ export class Loading extends StateDerivedView {
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
       const fillSpanMs = this.#bufferFillSpanMs();
+      const remainingSeconds = Number.isFinite(videoElement.duration)
+        ? Math.max(0, videoElement.duration - videoElement.currentTime)
+        : null;
       const unified = this.#waitingModel.update({
         bufferedAhead: ahead,
         fillRate: this.#lastFillRate,
         fillSpanMs,
+        remainingSeconds,
         downloadStats: this.#lastDownloadStats,
         transcodeProgress: cachedProgress
       });
@@ -5027,7 +5031,8 @@ export class Loading extends StateDerivedView {
       // counts down to it, so they cannot describe different moments.
       this.#waitingModel.update({
         fillRate: Number.isFinite(fillRate) ? fillRate : null,
-        fillSpanMs
+        fillSpanMs,
+        remainingSeconds
       });
       // THE gate rule lives in the model, in one copy. It was written here as
       // well, with its own thresholds, and two copies of one rule can only be
@@ -5036,7 +5041,8 @@ export class Loading extends StateDerivedView {
       const gate = this.#waitingModel.mayStartPlayback({
         ahead,
         fillRate,
-        fillSpanMs
+        fillSpanMs,
+        remainingSeconds
       });
       const target = gate.target;
 
@@ -5085,7 +5091,13 @@ export class Loading extends StateDerivedView {
       // component that no longer talks to the overlay went on computing text
       // nobody read.
       document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-        detail: { downloadStats: this.#lastDownloadStats, transcodeProgress: cachedProgress }
+        detail: {
+          downloadStats: this.#lastDownloadStats,
+          transcodeProgress: cachedProgress,
+          fillRate,
+          fillSpanMs,
+          remainingSeconds
+        }
       }));
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -5195,6 +5207,9 @@ export class Loading extends StateDerivedView {
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
       fillRate: this.#lastFillRate,
       fillSpanMs: this.#bufferFillSpanMs(),
+      remainingSeconds: Number.isFinite(this.#videoElement.duration)
+        ? Math.max(0, this.#videoElement.duration - this.#videoElement.currentTime)
+        : null,
       // What the proxy measured on this file: the smallest buffer at which no
       // interruption reaches the viewer. It replaces a ceiling of 25 s that
       // nobody had shown to be necessary — on the field torrent the measured
@@ -5219,7 +5234,15 @@ export class Loading extends StateDerivedView {
       this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%`);
     }
     document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-      detail: { downloadStats: this.#lastDownloadStats, transcodeProgress: progress }
+      detail: {
+        downloadStats: this.#lastDownloadStats,
+        transcodeProgress: progress,
+        fillRate: unified.fillRate,
+        fillSpanMs: this.#bufferFillSpanMs(),
+        remainingSeconds: Number.isFinite(this.#videoElement.duration)
+          ? Math.max(0, this.#videoElement.duration - this.#videoElement.currentTime)
+          : null
+      }
     }));
   }
 

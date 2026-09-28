@@ -101,6 +101,11 @@ export class WaitingOverlay {
     const toSeconds = (ms) => (typeof ms === "number" && ms > 0 ? ms / 1000 : undefined);
     const unified = this.#model.update({
       bufferedAhead: this.#bufferedAhead ?? undefined,
+      ...(Object.hasOwn(detail ?? {}, "fillRate") ? { fillRate: detail.fillRate } : {}),
+      ...(typeof detail?.fillSpanMs === "number" ? { fillSpanMs: detail.fillSpanMs } : {}),
+      ...(typeof detail?.remainingSeconds === "number" || detail?.remainingSeconds === null
+        ? { remainingSeconds: detail.remainingSeconds }
+        : {}),
       downloadStats,
       transcodeProgress,
       expectedSessionCreateSeconds: toSeconds(transcodeProgress?.expectedSessionCreateMs),
@@ -140,6 +145,8 @@ export class WaitingOverlay {
   #onBuffer = (event) => {
     const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
     const fillRate = event instanceof CustomEvent ? event.detail?.fillRate : null;
+    const fillSpanMs = event instanceof CustomEvent ? event.detail?.fillSpanMs : null;
+    const remainingSeconds = event instanceof CustomEvent ? event.detail?.remainingSeconds : null;
     if (typeof ahead !== "number") {
       return;
     }
@@ -152,7 +159,11 @@ export class WaitingOverlay {
     // until the first poll after a reading ever arrived.
     const unified = this.#model.update({
       bufferedAhead: ahead,
-      fillRate: typeof fillRate === "number" ? fillRate : undefined
+      fillRate: typeof fillRate === "number" ? fillRate : null,
+      ...(typeof fillSpanMs === "number" ? { fillSpanMs } : {}),
+      ...(typeof remainingSeconds === "number" || remainingSeconds === null
+        ? { remainingSeconds }
+        : {})
     });
     this.#measurements.cushionPercent = unified.cushionPercent ?? undefined;
     this.#measurements.cushionRemainingSeconds = unified.cushionRemainingSeconds ?? undefined;
