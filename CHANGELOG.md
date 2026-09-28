@@ -1,3 +1,7 @@
+## 0.30.6
+
+- **Fix**: Preserve LF line endings for shell scripts and Dockerfiles on Windows checkouts, so the Alpine entrypoint starts correctly.
+
 ## 0.30.5
 
 - **Fix**: Keep the loading screen visible until the measured browser buffer meets the real-time readiness rule. Slow but progressing downloads or encodes no longer start playback after a fixed timeout; the estimate and readiness gate now use the same sustained-rate condition, and unknown estimates are shown as `Estimating…`.
