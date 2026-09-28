@@ -43,6 +43,8 @@ export const PLAYER_EVENTS = {
    * owner per fact.
    */
   BUFFER: "PLAYER:BUFFER",
+  /** `{ ceilingSeconds }` — HLS.js lowered its buffer ceiling after a memory refusal. */
+  BUFFER_CEILING: "PLAYER:BUFFER_CEILING",
   SHOW: "PLAYER:SHOW",
   SET_MEDIA_FILES: "PLAYER:SET_MEDIA_FILES",
   SET_ACTIVE_MEDIA_FILE: "PLAYER:SET_ACTIVE_MEDIA_FILE",

@@ -10,6 +10,7 @@
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
 import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
+import { PLAYER_EVENTS } from "../shared/events.js";
 
 /**
  * How often the cushion is read. Ten seconds is the same cadence the link
@@ -446,6 +447,9 @@ export function createHlsPlayer(onLog) {
       const behind = bufferedBehindSeconds(media);
       if (ceiling < lastCeilingSaid - 0.5) {
         lastRefusalAt = Date.now();
+        document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER_CEILING, {
+          detail: { ceilingSeconds: ceiling }
+        }));
         console.debug(
           `[torrent-tv][cushion] the device refused the depth: ceiling lowered ` +
           `${lastCeilingSaid.toFixed(0)}s → ${ceiling.toFixed(0)}s ` +

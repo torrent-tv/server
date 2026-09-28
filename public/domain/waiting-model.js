@@ -945,10 +945,16 @@ export class WaitingModel {
    * against themselves, and while they were separate the estimate said the
    * cushion was met on a wait that then ran 42.6 s.
    *
-   * @param {{ ahead: number, fillRate?: number | null, fillSpanMs?: number, remainingSeconds?: number | null }} reading
-   * @returns {{ ready: boolean, reason: "target" | "early" | "remaining-buffered" | null, target: number }}
+   * @param {{ ahead: number, fillRate?: number | null, fillSpanMs?: number, remainingSeconds?: number | null, bufferLimitSeconds?: number | null }} reading
+   * @returns {{ ready: boolean, reason: "target" | "early" | "remaining-buffered" | "buffer-limit" | null, target: number }}
    */
-  mayStartPlayback({ ahead, fillRate = null, fillSpanMs = 0, remainingSeconds = this.#remainingSeconds }) {
+  mayStartPlayback({
+    ahead,
+    fillRate = null,
+    fillSpanMs = 0,
+    remainingSeconds = this.#remainingSeconds,
+    bufferLimitSeconds = null
+  }) {
     const target = this.requiredBufferSeconds();
     if (
       typeof ahead === "number" &&
@@ -957,6 +963,19 @@ export class WaitingModel {
       ahead >= remainingSeconds
     ) {
       return { ready: true, reason: "remaining-buffered", target: remainingSeconds };
+    }
+    // Once hls.js has told us the device refused a deeper buffer, a full buffer
+    // at that accepted ceiling cannot grow enough to measure a new fill rate.
+    // Waiting for one deadlocks cold playback at the device's actual limit.
+    if (
+      typeof bufferLimitSeconds === "number" &&
+      Number.isFinite(bufferLimitSeconds) &&
+      bufferLimitSeconds > 0 &&
+      typeof ahead === "number" &&
+      Number.isFinite(ahead) &&
+      ahead >= bufferLimitSeconds
+    ) {
+      return { ready: true, reason: "buffer-limit", target: bufferLimitSeconds };
     }
     const sustainedRealtimeRate =
       typeof fillRate === "number" &&

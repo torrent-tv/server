@@ -1614,6 +1614,9 @@ export class Loading extends StateDerivedView {
    */
   #lastBufferedAhead = null;
 
+  /** @type {number | null} */
+  #browserBufferLimitSeconds = null;
+
   /**
    * Everything the waiting overlay is allowed to say something about, in one
    * object. Two writers used to share that line — the pipeline's stage string
@@ -1811,6 +1814,12 @@ export class Loading extends StateDerivedView {
       const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
       this.#lastBufferedAhead = typeof ahead === "number" && Number.isFinite(ahead) ? ahead : null;
     });
+    document.addEventListener(PLAYER_EVENTS.BUFFER_CEILING, (event) => {
+      const ceiling = event instanceof CustomEvent ? event.detail?.ceilingSeconds : null;
+      this.#browserBufferLimitSeconds = typeof ceiling === "number" && Number.isFinite(ceiling) && ceiling > 0
+        ? ceiling
+        : null;
+    });
     window.addEventListener("pagehide", this.#onPageHide);
     window.addEventListener("beforeunload", this.#onBeforeUnload);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClosed);
@@ -1838,6 +1847,7 @@ export class Loading extends StateDerivedView {
    */
   #beginPlaybackAttempt() {
     this.#playbackEpoch += 1;
+    this.#browserBufferLimitSeconds = null;
     // Per attempt: a new file, or the same one tried again, starts with the
     // ordinary wait rather than the notice left over from the last one.
     this.#longWaitAnnounced = false;
@@ -5042,7 +5052,8 @@ export class Loading extends StateDerivedView {
         ahead,
         fillRate,
         fillSpanMs,
-        remainingSeconds
+        remainingSeconds,
+        bufferLimitSeconds: this.#browserBufferLimitSeconds
       });
       const target = gate.target;
 

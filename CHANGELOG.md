@@ -1,3 +1,7 @@
+## 0.30.9
+
+- **Fix**: Start playback once the browser fills its lower, device-accepted buffer ceiling after refusing a deeper cushion, instead of waiting for a refill rate that cannot be measured while the buffer is full.
+
 ## 0.30.8
 
 - **Fix**: Keep playback waiting until the measured media rate can sustain realtime playback, or the browser already holds the entire remaining video. A long forecast does not trigger a timeout or an early start.
