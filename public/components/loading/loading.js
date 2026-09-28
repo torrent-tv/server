@@ -2999,7 +2999,9 @@ export class Loading extends StateDerivedView {
       throw new Error(Loading.MESSAGES.noVideoFile);
     }
     const current = this.#session.current;
-    const file = Array.isArray(current?.files) ? current.files[fileIndex] : null;
+    const file = Array.isArray(current?.files)
+      ? current.files.find((entry) => entry?.index === fileIndex) ?? null
+      : null;
     if (!file || file.isVideo !== true) {
       throw new Error(Loading.MESSAGES.selectedFileNotFound);
     }

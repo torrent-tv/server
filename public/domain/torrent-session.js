@@ -13,6 +13,12 @@ import { pictureSizeOf } from "./visible-picture.js";
 // be heard before it expires, and each one costs a 44-byte response.
 const SESSION_KEEPALIVE_MS = 30_000;
 
+function fileAtIndex(files, fileIndex) {
+  return Array.isArray(files)
+    ? files.find((file) => file?.index === fileIndex) ?? null
+    : null;
+}
+
 export class TorrentSession {
   /** @type {(() => void) | null} */
   #seekCleanup = null;
@@ -586,7 +592,7 @@ export class TorrentSession {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
     }
 
-    const file = this.current.files[fileIndex];
+    const file = fileAtIndex(this.current.files, fileIndex);
     if (!file) {
       throw new Error("File not found in torrent metadata.");
     }
@@ -647,7 +653,7 @@ export class TorrentSession {
     if (!this.current || this.current.type !== "torrent") {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
     }
-    const file = this.current.files[fileIndex];
+    const file = fileAtIndex(this.current.files, fileIndex);
     if (!file || !file.isVideo) {
       throw new Error("Selected file is not a video.");
     }
@@ -742,7 +748,7 @@ export class TorrentSession {
     if (!this.current || this.current.type !== "torrent") {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
     }
-    const file = this.current.files[fileIndex];
+    const file = fileAtIndex(this.current.files, fileIndex);
     if (!file || !file.isVideo) {
       throw new Error("Selected file is not a video.");
     }
@@ -1134,7 +1140,7 @@ export class TorrentSession {
    * @returns {string}
    */
   #getFileLogName(fileIndex) {
-    const file = Array.isArray(this.current?.files) ? this.current.files[fileIndex] : null;
+    const file = fileAtIndex(this.current?.files, fileIndex);
     if (!file || typeof file !== "object") {
       return "";
     }
