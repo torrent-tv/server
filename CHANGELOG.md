@@ -1,3 +1,7 @@
+## 0.30.1
+
+- **Fix**: Remove stale proxy registry records after their tunnel has stayed closed for 24 hours; brief disconnects retain the record and its reachability result.
+
 ## 0.30.0
 
 - **Fix**: Preserve `sidecarSubtitles` from the proxy playback plan in the browser session. The loading component now receives the proxy's matched subtitle files and can load them beside the selected video; older proxies without the field still produce an empty list.

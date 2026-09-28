@@ -39,6 +39,7 @@ function getRequesterPublicIp(req) {
 }
 
 export async function handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer }) {
+  clientsStore.pruneDisconnected({ isConnected: (id) => tunnelServer.isConnected(id) });
   const requesterIp = getRequesterPublicIp(req);
   const connected = clientsStore
     .listClients()

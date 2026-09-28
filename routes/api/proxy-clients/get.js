@@ -27,6 +27,7 @@ function toClientSummary(client) {
  * @returns {Promise<void>}
  */
 export async function handleApiProxyClientsGet(_req, reply, { clientsStore, tunnelServer }) {
+  clientsStore.pruneDisconnected({ isConnected: (id) => tunnelServer.isConnected(id) });
   const clients = clientsStore
     .listClients()
     .filter((client) => tunnelServer.isConnected(client.id))

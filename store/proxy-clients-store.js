@@ -1,5 +1,7 @@
 import { nowIso } from "../utils/time.js";
 
+export const PROXY_CLIENT_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+
 /**
  * The externally-reachable endpoint a proxy opened via UPnP/NAT-PMP and
  * reported over the tunnel. Verified by the server's dial-back probe.
@@ -33,6 +35,8 @@ import { nowIso } from "../utils/time.js";
  *   if the proxy reported its endpoint before the HTTP registration landed.
  * @property {() => ProxyClientRecord[]} listClients
  *   Return all registered proxy clients.
+ * @property {(options: { isConnected: (id: string) => boolean, now?: number, maxIdleMs?: number }) => number} pruneDisconnected
+ *   Remove records whose tunnel is closed and whose last registration expired.
  */
 
 /**
@@ -111,6 +115,29 @@ export function createProxyClientsStore() {
      */
     listClients() {
       return Array.from(clients.values());
+    },
+
+    /**
+     * Forget old records for installations that have been gone long enough.
+     * A short disconnect keeps the record and its reachability result intact.
+     *
+     * @param {{ isConnected: (id: string) => boolean, now?: number, maxIdleMs?: number }} options
+     * @returns {number} Number of records removed.
+     */
+    pruneDisconnected({ isConnected, now = Date.now(), maxIdleMs = PROXY_CLIENT_IDLE_TTL_MS }) {
+      let removed = 0;
+      for (const [id, client] of clients) {
+        const lastSeenAt = Date.parse(client.lastSeenAt);
+        if (
+          !isConnected(id) &&
+          Number.isFinite(lastSeenAt) &&
+          now - lastSeenAt >= maxIdleMs
+        ) {
+          clients.delete(id);
+          removed += 1;
+        }
+      }
+      return removed;
     }
   };
 }
