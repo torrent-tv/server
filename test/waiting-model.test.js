@@ -113,10 +113,12 @@ test("an audio-only transcode is described as audio, not as video", () => {
 
 test("a reset forgets the previous wait", () => {
   const model = new WaitingModel();
-  model.update({ bufferedAhead: 0, transcodeProgress: progress() });
+  model.update({ bufferedAhead: 0, fillRate: 2, fillSpanMs: 6_000, transcodeProgress: { state: "ready" } });
   model.reset();
   const answer = model.update({});
   assert.equal(answer.cushionPercent, null, "a new wait starts with nothing measured, not with the old figures");
+  const afterBuffer = model.update({ bufferedAhead: 0, transcodeProgress: { state: "ready" } });
+  assert.equal(afterBuffer.etaSeconds, null, "the previous wait's fill rate is not reused");
 });
 
 test("the same facts give the same answer to both consumers", () => {
@@ -229,11 +231,17 @@ test("the cushion the estimate counts down to is the one the gate releases on", 
 
 test("the estimate targets the cushion that actually opens the gate", () => {
   const model = new WaitingModel();
-  // A healthy, sustained rate: the player starts early, at ten seconds, so an
-  // estimate measured against the full target answers a question nobody asked.
-  // Measured 2026-08-10: three waits promised 25.0, 20.2 and 24.8 seconds and
-  // ended after 7.1, 1.7 and 0.6.
-  const healthy = model.update({ bufferedAhead: 0, fillRate: 2.0, transcodeProgress: { state: "ready" } });
+  const beforeSustained = model.update({ bufferedAhead: 0, fillRate: 2.0, fillSpanMs: 3_000 });
+  assert.equal(beforeSustained.cushionRemainingSeconds, 12, "a short rate sample keeps the full adaptive target");
+
+  // After the same trend window used by the gate, both the estimate and gate
+  // can use the early target of ten seconds.
+  const healthy = model.update({
+    bufferedAhead: 0,
+    fillRate: 2.0,
+    fillSpanMs: 6_000,
+    transcodeProgress: { state: "ready" }
+  });
   assert.ok(
     healthy.cushionRemainingSeconds <= 10,
     `a healthy link starts early, so at most ten seconds are needed; got ${healthy.cushionRemainingSeconds}`
@@ -294,7 +302,12 @@ test("the estimate reaches zero exactly when the gate opens", () => {
   // that ran 42.6 s.
   let ahead = 0;
   let elapsed = 0;
-  const predicted = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress }).etaSeconds;
+  const predicted = model.update({
+    bufferedAhead: ahead,
+    fillRate: rate,
+    fillSpanMs: 6_000,
+    transcodeProgress: progress
+  }).etaSeconds;
   assert.ok(predicted !== null && predicted > 0, "a measured rate must predict a wait");
 
   for (let step = 0; step < 200; step += 1) {
@@ -304,7 +317,7 @@ test("the estimate reaches zero exactly when the gate opens", () => {
     }
     ahead += rate * 0.5;
     elapsed += 0.5;
-    model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
+    model.update({ bufferedAhead: ahead, fillRate: rate, fillSpanMs: 6_000, transcodeProgress: progress });
   }
 
   assert.ok(
@@ -313,24 +326,48 @@ test("the estimate reaches zero exactly when the gate opens", () => {
   );
 });
 
-test("the estimate never promises longer than the gate's own timeout", () => {
+test("the estimate keeps predicting readiness after forty-five seconds", () => {
   const model = new WaitingModel();
-  // A rate so slow that filling the cushion would take minutes. The gate does
-  // not wait minutes: after its timeout it starts playback regardless, so a
-  // figure larger than the time left on that timeout is predicting an event
-  // that will not be the one to happen. Measured 2026-08-11 — four waits whose
-  // last reading was 25.0s, 30.5s, 21.4s and 33.4s, each within two seconds of
-  // the picture starting.
+  // A slow measured rate can require more than forty-five seconds to build the
+  // cushion. A timer must not make the estimate reach zero before the readiness
+  // condition is met.
   const answer = model.update({
     bufferedAhead: 0.1,
     fillRate: 0.05,
     transcodeProgress: { state: "ready" }
   });
-  assert.ok(answer.etaSeconds !== null, "a measured rate must produce a figure");
   assert.ok(
-    answer.etaSeconds <= 45,
-    `promised ${answer.etaSeconds}s, but the gate gives up waiting after 45s`
+    answer.etaSeconds > 45,
+    `the estimate must remain pointed at readiness, not a timeout (got ${answer.etaSeconds})`
   );
+});
+
+test("a momentary healthy rate does not make the estimate say playback is ready", () => {
+  const model = new WaitingModel();
+  const answer = model.update({ bufferedAhead: 10, fillRate: 2, fillSpanMs: 3_000 });
+  const gate = model.mayStartPlayback({ ahead: 10, fillRate: 2, fillSpanMs: 3_000 });
+
+  assert.ok(answer.etaSeconds > 0, "the estimate still includes media needed for the full target");
+  assert.equal(gate.ready, false, "the gate waits for its sustained-rate window");
+});
+
+test("the estimated early target is the exact target that opens the gate", () => {
+  const model = new WaitingModel();
+  const answer = model.update({ bufferedAhead: 10, fillRate: 2, fillSpanMs: 6_000 });
+  const gate = model.mayStartPlayback({ ahead: 10, fillRate: 2, fillSpanMs: 6_000 });
+
+  assert.equal(answer.etaSeconds, 0);
+  assert.deepEqual(gate, { ready: true, reason: "early", target: 10 });
+});
+
+test("a missing fill-rate reading clears the previous rate before early readiness", () => {
+  const model = new WaitingModel();
+  model.update({ bufferedAhead: 10, fillRate: 2, fillSpanMs: 6_000 });
+  const answer = model.update({ bufferedAhead: 10, fillRate: null, fillSpanMs: 0 });
+  const gate = model.mayStartPlayback({ ahead: 10, fillRate: null, fillSpanMs: 0 });
+
+  assert.notEqual(answer.etaSeconds, 0, "a stopped buffer does not report that readiness has been reached");
+  assert.equal(gate.ready, false, "a stale healthy rate cannot release playback");
 });
 
 test("a host figure is counted once, not in two terms at the same time", () => {
@@ -358,9 +395,7 @@ test("a second wait is not clamped by the first wait's clock", () => {
   const model = new WaitingModel();
   const progress = { state: "ready" };
   model.update({ bufferedAhead: 2, fillRate: 0.5, transcodeProgress: progress });
-  // The timeout clamp measures from the wait's own start. Left anchored to the
-  // first wait of the page, every later wait read exactly zero once 45s of page
-  // life had passed — the defect the formatter was accidentally hiding.
+  // The fill-rate window must start again for a new wait on the same page.
   model.reset();
   const after = model.update({ bufferedAhead: 0, fillRate: 0.2, transcodeProgress: progress });
   assert.ok(

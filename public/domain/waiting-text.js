@@ -236,22 +236,15 @@ export function formatWaitingText(measurements = {}) {
       lines.push(line);
     }
   }
-  // The time comes last, and it is the answer to the only question actually
-  // being asked. ONE number, always the same number, whatever stage the wait is
-  // in — never "estimating…" and never "starting now". Those two were a
-  // different kind of statement dressed as the same line: one admitted the
-  // formula had nothing, the other announced an event. The viewer asked how
-  // long, so they are told how long; when it is nearly over, that is zero
-  // seconds, which is a duration like any other. Before the first measurement
-  // there is no line at all rather than a word standing in for a number.
-  // ALWAYS, whenever there is a figure — zero included. Suppressing zero left
-  // the line missing during a seek, which is exactly when it is the only thing
-  // on screen the viewer wants: nothing is being fetched, so the supply row is
-  // empty, no pipeline step is running, and the cushion has not been measured
-  // yet. Reported 2026-08-11 as "during a seek the time is not shown at all".
-  // Zero is a duration like any other and says the wait is ending.
+  // The time comes last. When the estimate is measurable, show the duration;
+  // when it is not, say that it is being calculated instead of implying that
+  // playback is ready.
+  // Keep zero visible: it reports that the measured readiness condition has
+  // been met, rather than using a missing line to imply that nothing is known.
   if (isNumber(measurements.etaSeconds)) {
     lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
+  } else {
+    lines.push("Estimating…");
   }
   return lines.join("\n");
 }

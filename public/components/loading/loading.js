@@ -4,7 +4,6 @@ import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { consumeOurPause, noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { measureLink, reportNow } from "../../domain/net-report.js";
-import { lastProxyRefusal } from "../../domain/proxy-refusal.js";
 import { onProxyOutcome, outcomeBelongsTo } from "../../domain/proxy-outcome.js";
 import { VisiblePictureWatch } from "../../domain/visible-picture.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
@@ -263,10 +262,6 @@ export class Loading extends StateDerivedView {
     // answered in 9-43 ms — the one thing known to be in order. The real fault
     // was on the proxy, and this message cost real time on the way to finding
     // it. A message must not name a cause it has not established.
-    // Names only what was observed, and no longer sends the viewer to a log
-    // they cannot read: when the proxy states a reason for refusing, that
-    // reason is appended by `#prebufferFailure` instead.
-    prebufferStalled: "Could not start playback: the proxy accepted the request but sent no video.",
     lanPermissionExplainer:
       "The video source is a device on your own network. Your browser asks for permission before a website may talk to it — press Allow and confirm the browser's question.",
     lanPermissionWaiting: "Waiting for the browser's local network permission...",
@@ -4926,15 +4921,14 @@ export class Loading extends StateDerivedView {
     // doesn't immediately stall. The video stays paused (player hidden) so hls.js
     // fills the buffer without draining it; #waitForPrebuffer is the only status
     // writer here.
-    await this.#waitForPrebuffer(this.#videoElement, PREBUFFER_TIMEOUT_MS);
+    await this.#waitForPrebuffer(this.#videoElement);
   }
 
   /**
-   * Wall-clock span currently covered by the buffer-fill rolling window (see
-   * #trackBufferFillRate) — read-only, pushes no sample. Used by
-   * #waitForPrebuffer to require the FULL window before trusting the rate for
-   * an EARLY start, not just the shorter minimum span that makes the rate
-   * trustworthy at all (see BUFFER_FILL_MIN_SPAN_MS vs BUFFER_FILL_WINDOW_MS).
+   * Wall-clock span covered by current buffer observations (see
+   * #trackBufferFillRate) — read-only, pushes no sample. The readiness model
+   * uses this span with its sustained-rate threshold before allowing an early
+   * start.
    *
    * @returns {number} Milliseconds; 0 if fewer than 2 samples exist yet.
    */
@@ -4958,14 +4952,14 @@ export class Loading extends StateDerivedView {
    * buffer tail, and a later seek, not three independent approximations of the
    * same question.
    *
-   * Falls back to an absolute `timeoutMs` so a slow encoder never blocks
-   * playback forever.
+   * Continues until the shared readiness rule is met. A slow source must keep
+   * the viewer on the loading screen rather than start playback with a buffer
+   * that is known to be insufficient.
    *
    * @param {HTMLVideoElement} videoElement
-   * @param {number} timeoutMs
    * @returns {Promise<void>}
    */
-  async #waitForPrebuffer(videoElement, timeoutMs) {
+  async #waitForPrebuffer(videoElement) {
     if (!(videoElement instanceof HTMLVideoElement)) {
       return;
     }
@@ -4985,30 +4979,13 @@ export class Loading extends StateDerivedView {
       // frame.
       pauseWithoutIntent(videoElement);
     }
-    const startedAt = Date.now();
     let loggedTarget = -1;
     // For the wedge below: what the buffer last read, and when it last grew.
     let lastAhead = -1;
     let lastGrowthAt = Date.now();
     let cachedProgress = null;
     let lastProgressFetchAt = 0;
-    // For the grace period below: the encoder's own best-seen output position,
-    // and when it was last seen to move. Nothing has to have reached the
-    // buffer for this to be true — it is evidence the run is alive, not that
-    // the viewer has anything to watch yet.
-    let bestProcessedSeconds = -1;
-    let lastProcessedGrowthAt = Date.now();
-    // And the bytes reaching that run's input, which is the only thing that can
-    // move while it is still waiting for its first frame.
-    let bestInputBytes = -1;
-    let lastInputGrowthAt = Date.now();
-    const stillMakingProgress = () =>
-      Date.now() - lastProcessedGrowthAt < PREBUFFER_PROGRESS_GRACE_MS ||
-      Date.now() - lastInputGrowthAt < PREBUFFER_PROGRESS_GRACE_MS;
-    while (
-      Date.now() - startedAt < timeoutMs ||
-      (stillMakingProgress() && Date.now() - startedAt < PREBUFFER_ABSOLUTE_TIMEOUT_MS)
-    ) {
+    while (true) {
       this.#throwIfCancelled();
       if (videoElement.error) {
         return;
@@ -5035,36 +5012,23 @@ export class Loading extends StateDerivedView {
           }
         }
       }
-      const processedSeconds = Number(cachedProgress?.processedSeconds);
-      if (Number.isFinite(processedSeconds) && processedSeconds > bestProcessedSeconds) {
-        bestProcessedSeconds = processedSeconds;
-        lastProcessedGrowthAt = Date.now();
-      }
-      // The second sign of life, and on a cold start the only one there can be:
-      // bytes the swarm has delivered to THIS session's own input read. The
-      // encoder's own progress cannot move until it has decoded a frame, so
-      // while the first piece is on its way `processedSeconds` stands still
-      // however healthy the proxy is. Field 2026-09-03: one piece took 46.3 s,
-      // `processedSeconds` never left the start position, and this wait timed
-      // out 0.4 s before that piece landed — on a proxy that was reading from
-      // the swarm the whole time.
-      const inputBytes = Number(cachedProgress?.inputBytes);
-      if (Number.isFinite(inputBytes) && inputBytes > bestInputBytes) {
-        bestInputBytes = inputBytes;
-        lastInputGrowthAt = Date.now();
-      }
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
+      const fillSpanMs = this.#bufferFillSpanMs();
       const unified = this.#waitingModel.update({
         bufferedAhead: ahead,
-        fillRate: this.#lastFillRate ?? undefined,
+        fillRate: this.#lastFillRate,
+        fillSpanMs,
         downloadStats: this.#lastDownloadStats,
         transcodeProgress: cachedProgress
       });
       const fillRate = unified.fillRate;
       // The model owns this figure now: the gate releases on it and the estimate
       // counts down to it, so they cannot describe different moments.
-      this.#waitingModel.update({ fillRate: Number.isFinite(fillRate) ? fillRate : undefined });
+      this.#waitingModel.update({
+        fillRate: Number.isFinite(fillRate) ? fillRate : null,
+        fillSpanMs
+      });
       // THE gate rule lives in the model, in one copy. It was written here as
       // well, with its own thresholds, and two copies of one rule can only be
       // tested against themselves — while they were separate the overlay
@@ -5072,7 +5036,7 @@ export class Loading extends StateDerivedView {
       const gate = this.#waitingModel.mayStartPlayback({
         ahead,
         fillRate,
-        fillSpanMs: this.#bufferFillSpanMs()
+        fillSpanMs
       });
       const target = gate.target;
 
@@ -5125,34 +5089,6 @@ export class Loading extends StateDerivedView {
       }));
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    // Timed out. If NOTHING buffered, the stream never started (dead transport /
-    // segments never arriving — e.g. a WebRTC connection blocked by the Local
-    // Network Access gate). Fail loudly instead of revealing a dead player:
-    // proceeding would fire PLAYBACK_READY over an element that can never play.
-    const finalAhead = bufferedAheadSeconds(videoElement);
-    const totalWaitedMs = Date.now() - startedAt;
-    this.#logEvt(
-      `prebuffer timeout ahead=${finalAhead.toFixed(1)}s waited=${Math.round(totalWaitedMs / 1000)}s ` +
-      `processedSeconds=${bestProcessedSeconds >= 0 ? bestProcessedSeconds.toFixed(1) : "n/a"} ` +
-      `inputBytes=${bestInputBytes >= 0 ? bestInputBytes : "n/a"}`
-    );
-    if (finalAhead < PREBUFFER_MIN_START_SECONDS) {
-      // WHAT THE PROXY SAID, if it said anything. Every refusal states its
-      // reason now; it used to reach only the proxy's own log.
-      const said = lastProxyRefusal();
-      const stalled = new Error(
-        said ? `${Loading.MESSAGES.prebufferStalled} ${said}` : Loading.MESSAGES.prebufferStalled
-      );
-      // Retryable, and it always was: running out of patience while data is on
-      // its way says nothing about whether a second attempt would succeed. Until
-      // now this error carried no such flag, so the error card offered the
-      // viewer no Retry at all — the failure that opened this work ended with a
-      // screen whose only ways on were "new torrent" and "back to episodes".
-      stalled.canRetry = true;
-      throw stalled;
-    }
-    // Proceeding into playback despite the timeout — still a (degraded) start.
-    this.#logColdStart();
   }
 
   /**
@@ -5257,7 +5193,8 @@ export class Loading extends StateDerivedView {
     // showed different information for the same underlying state).
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
-      fillRate: this.#lastFillRate ?? undefined,
+      fillRate: this.#lastFillRate,
+      fillSpanMs: this.#bufferFillSpanMs(),
       // What the proxy measured on this file: the smallest buffer at which no
       // interruption reaches the viewer. It replaces a ceiling of 25 s that
       // nobody had shown to be necessary — on the field torrent the measured
@@ -6248,8 +6185,8 @@ function canAppendCopiedAudio(codec, container) {
   return supported;
 }
 // Pre-buffer cushion accumulated before the player is revealed, so a transient
-// dip right after start does not immediately stall. The timeout starts playback
-// anyway if a slow encoder cannot fill the cushion in time.
+// dip right after start does not immediately stall. Readiness is controlled by
+// the measured buffer and its sustained fill rate, without a time-based release.
 // The target is adaptive (see #waitForPrebuffer): smaller when production has
 // comfortable margin over realtime, larger when it barely keeps up, and
 // smaller still when the proxy has measured what THIS file's own interruptions
@@ -6318,32 +6255,13 @@ const _PREBUFFER_BASE_SECONDS = 12;
 // is the anti-burst protection from the 0.8.45 start-stutter fix: segments
 // land in bursts every ~4-11 s on a slow/warming encoder, so a short window
 // reads a single burst as "3x realtime" and releases with a tiny cushion that
-// then drains. Below this fill rate the deeper adaptive target is kept (thin
-// Allow a full cushion to build on a genuinely slow start before falling back.
-const PREBUFFER_TIMEOUT_MS = 45_000;
-// The proxy's own encode progress (`processedSeconds`) is real evidence the
-// stream is still coming, even while nothing has reached the buffer yet — a
-// slow, bursty swarm can hold a run below realtime for the whole base timeout
-// while the encoder keeps genuinely advancing. Field case 2026-08-22: a copy
-// track stuck at 0 s buffered for 58 s straight, `processedSeconds` climbing
-// the entire time (30.5s -> 48.8s in ten seconds), the base timeout expired at
-// 45 s, and the viewer was shown an unrecoverable "sent no video" while the
-// segment was seconds from arriving — the exact failure roadmap item 12
-// exists to remove. As long as `processedSeconds` has grown within this many
-// ms, the wait continues past the base timeout; past `PREBUFFER_ABSOLUTE_TIMEOUT_MS`
-// it stops regardless, so a run that has genuinely died cannot hold the
-// viewer forever.
-const PREBUFFER_PROGRESS_GRACE_MS = 15_000;
-const PREBUFFER_ABSOLUTE_TIMEOUT_MS = 120_000;
-
+// then drains. At lower rates, playback waits for the full adaptive target or
+// the proxy-measured cushion.
 // How long a motionless buffer is allowed to stand before the loader is pointed
 // at the end of the media. Segments here take a second or two to arrive, so
 // four seconds of no movement at all is not slowness — it is the paused-loader
 // wedge described at `resumeLoadAt`.
 const PREBUFFER_NUDGE_AFTER_MS = 4_000;
-// If, after the timeout, less than this is buffered, treat the stream as never
-// started (dead transport) and fail rather than reveal an unplayable player.
-const PREBUFFER_MIN_START_SECONDS = 0.5;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;

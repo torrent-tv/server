@@ -1,3 +1,7 @@
+## 0.30.5
+
+- **Fix**: Keep the loading screen visible until the measured browser buffer meets the real-time readiness rule. Slow but progressing downloads or encodes no longer start playback after a fixed timeout; the estimate and readiness gate now use the same sustained-rate condition, and unknown estimates are shown as `Estimating…`.
+
 ## 0.30.4
 
 - **New**: Use explicit resolution and codec hints from the selected filename to prefer proxies that report capacity for that media. The file's probed metadata remains authoritative.
