@@ -1,3 +1,7 @@
+## 0.30.0
+
+- **Fix**: Preserve `sidecarSubtitles` from the proxy playback plan in the browser session. The loading component now receives the proxy's matched subtitle files and can load them beside the selected video; older proxies without the field still produce an empty list.
+
 ## 0.29.0
 
 - **Chore**: While a seek is unresolved, the browser log records each buffered fragment's track, sequence number and playlist interval beside the current time, ready state and audio/video buffer ranges. This distinguishes a short append from a delayed response (`public/domain/hls-player.js`, `FRAG_BUFFERED`).

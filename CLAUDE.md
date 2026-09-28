@@ -23,10 +23,15 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
   structurally optimal; every new wrapper element must be justified, and a
   wrapper that exists only to hang styles on means the CSS should be
   restructured instead. Components:
-  - `components/loading/loading.js` — playback pipeline + per-stream codec
-    decision (transcode only what the browser can't play) + console debug.
+  - `components/loading/loading.js` — playback flow, transport orchestration,
+    and per-stream codec decisions.
+  - `components/loading/SubtitlePlayback.js` — subtitle track elements, sidecar
+    loading, embedded cue delivery, reconnect subscription, and remembered
+    subtitle choice.
   - `domain/torrent-session.js` — proxy registration, playback plan, HLS start.
     Seeking is server-side (no client-side session restart).
+    The browser and proxy playback contract is documented in
+    `../proxy/docs/browser-proxy-contract.md`.
   - `domain/hls-player.js` — hls.js wrapper; HLS errors go to console only.
   - `domain/waiting-signal.js` — the rule that decides whether a `waiting` from
     the media element is a stall the viewer must be told about, or some other
@@ -39,10 +44,14 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
 
 ## The state machine — keep it correct, always
 
-`public/components/torrent-tv/torrent-tv.js` is the application state machine:
-four states (IDLE, PROCESSING, PLAYING, ERROR), a declared transition table, and
-a handful of events that drive it. Every flow bug this project has had landed
-here — episode-switch-from-error, mid-loading transport loss.
+`public/domain/app-state.js` defines the application's eight control states
+(IDLE, CHOOSING_FILE, OPENING, ADVANCING, STALLED, SWITCHING, PAUSED, ERROR),
+the transition relation, and the OPEN/LIVE superstates. It is pure and owns the
+flow rules. `public/components/torrent-tv/torrent-tv.js` drives that relation
+and publishes state changes; it does not define a second transition table.
+`public/shared/state-derived-view.js` lets views derive visibility from the
+current state. Flow regressions have included episode-switch-from-error and
+mid-loading transport loss.
 
 **Rule: any change that touches application flow keeps the machine correct in
 the SAME change.** That means all three of:
@@ -55,8 +64,7 @@ the SAME change.** That means all three of:
    it. A graph that has drifted is worse than none.
 3. **Tests, where they are worth writing.** The transition rules are pure and
    belong in an importable module so `node --test` can exercise them without a
-   DOM — follow `public/domain/url-state.js` + `test/url-state.test.js`, which
-   is exactly that shape.
+   DOM — see `public/domain/app-state.js` and `test/app-state.test.js`.
 
 Do not audit the machine once and move on. It is small enough to hold exactly
 right, and it is the cheapest lever on the product working reliably.
