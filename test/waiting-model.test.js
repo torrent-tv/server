@@ -343,6 +343,27 @@ test("a sub-realtime rate cannot make a filled cushion look ready", () => {
   assert.equal(gate.ready, false, "elapsed time and a full cushion do not replace realtime throughput");
 });
 
+test("playback may start when the browser reaches its refused buffer ceiling", () => {
+  const model = new WaitingModel();
+  const beforeLimit = model.mayStartPlayback({
+    ahead: 59.9,
+    fillRate: 0,
+    fillSpanMs: 30_000,
+    remainingSeconds: 3_600,
+    bufferLimitSeconds: 60
+  });
+  const atLimit = model.mayStartPlayback({
+    ahead: 60,
+    fillRate: 0,
+    fillSpanMs: 30_000,
+    remainingSeconds: 3_600,
+    bufferLimitSeconds: 60
+  });
+
+  assert.equal(beforeLimit.ready, false, "the gate waits until the accepted ceiling is actually filled");
+  assert.deepEqual(atLimit, { ready: true, reason: "buffer-limit", target: 60 });
+});
+
 test("playback may start below realtime when the complete remainder is buffered", () => {
   const model = new WaitingModel();
   const answer = model.update({
