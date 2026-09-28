@@ -1,3 +1,8 @@
+## 0.30.2
+
+- **Chore**: Update Fastify and its transitive dependencies to releases that clear the current npm advisories.
+- **Chore**: Remove an unused track identity import and document the expected fallback for invalid language tags.
+
 ## 0.30.1
 
 - **Fix**: Remove stale proxy registry records after their tunnel has stayed closed for 24 hours; brief disconnects retain the record and its reachability result.
