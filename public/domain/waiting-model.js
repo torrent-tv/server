@@ -27,6 +27,8 @@ const PREBUFFER_BASE_SECONDS = 12;
 
 /** Rate trend window used for download projection and early readiness. */
 const RATE_TREND_WINDOW_MS = 6_000;
+/** The measured output rate must exceed realtime before ordinary playback. */
+const GATE_MIN_SUSTAINABLE_FILL_RATE = 1;
 /** The gate's own early-start thresholds. Must stay equal to the player's. */
 const GATE_HEALTHY_FILL_RATE = 1.35;
 const GATE_HEALTHY_AHEAD_SECONDS = 10;
@@ -38,10 +40,11 @@ const RATE_TREND_MAX_GROWTH = 4;
 /**
  * @typedef {object} WaitingFacts
  * @property {number} [bufferedAhead] - Seconds of media ahead of the playhead,
- *   measured by whoever owns the element. The single most important input: the
- *   picture starts when this reaches the cushion and at no other moment.
+ *   measured by whoever owns the element.
  * @property {number} [fillSpanMs] - Wall time covered by the current buffer
  *   fill-rate reading, for the sustained-rate readiness condition.
+ * @property {number | null} [remainingSeconds] - Media time from the playhead
+ *   to the end of the selected video.
  * @property {object} [downloadStats] - The proxy's answer about the torrent.
  * @property {object} [transcodeProgress] - The proxy's answer about the encode.
  * @property {number} [expectedFirstSegmentSeconds] - What this host usually
@@ -88,6 +91,8 @@ export class WaitingModel {
   #fillRate = null;
   /** @type {number} Milliseconds covered by the current fill-rate reading. */
   #fillSpanMs = 0;
+  /** @type {number | null} Media seconds left from the current playhead. */
+  #remainingSeconds = null;
   /**
    * The proxy's measured smallest safe buffer for this file, or null when it
    * has not said — an older proxy, or fewer than two interruptions seen.
@@ -163,6 +168,12 @@ export class WaitingModel {
     }
     if (typeof facts.fillSpanMs === "number" && Number.isFinite(facts.fillSpanMs)) {
       this.#fillSpanMs = Math.max(0, facts.fillSpanMs);
+    }
+    if (Object.hasOwn(facts, "remainingSeconds")) {
+      this.#remainingSeconds = typeof facts.remainingSeconds === "number" &&
+        Number.isFinite(facts.remainingSeconds) && facts.remainingSeconds >= 0
+        ? facts.remainingSeconds
+        : null;
     }
     // Kept only while it is a number: the proxy sends null until its reader has
     // seen two interruptions, and null must leave the previous answer standing
@@ -257,6 +268,7 @@ export class WaitingModel {
     this.#bufferedAhead = null;
     this.#fillRate = null;
     this.#fillSpanMs = 0;
+    this.#remainingSeconds = null;
     this.#measuredRate = null;
     // AND WHAT THE PROXY LAST SAID, which belonged to the file that has just
     // been left. Both are kept between polls on purpose — the answer arrives
@@ -503,7 +515,16 @@ export class WaitingModel {
       // finished while the only figure that ends it had never been taken.
       return { etaSeconds: null, cushionPercent: null, cushionRemainingSeconds, encodeSpeedText: null };
     }
-    if (cushionRemainingSeconds <= 0) {
+    const remainingBuffered = Number.isFinite(this.#remainingSeconds) &&
+      bufferedAhead !== null &&
+      bufferedAhead >= this.#remainingSeconds;
+    const sustainedRealtimeRate = typeof fillRate === "number" &&
+      fillRate > GATE_MIN_SUSTAINABLE_FILL_RATE &&
+      this.#fillSpanMs >= RATE_TREND_WINDOW_MS;
+    const targetBuffered = bufferedAhead !== null && bufferedAhead >= requiredBuffer;
+    const readinessReached = remainingBuffered || (sustainedRealtimeRate && targetBuffered);
+
+    if (readinessReached) {
       // The wait is over — the player has what it needs. Whatever was promised
       // described THIS wait, and the next one is a different question, so the
       // countdown is released here. Without it the promise outlived the wait
@@ -610,6 +631,30 @@ export class WaitingModel {
 
     etaSeconds = unknown ? null : total;
     etaSource = terms.length > 0 ? terms.join("+") : "ready";
+
+    if (remainingBuffered) {
+      cushionRemainingSeconds = 0;
+      cushionPercent = 100;
+      etaSeconds = 0;
+      etaSource = "remaining-buffered";
+    } else if (typeof fillRate === "number" && fillRate <= GATE_MIN_SUSTAINABLE_FILL_RATE) {
+      // A full startup cushion cannot offset a production rate that loses
+      // ground over the remaining film. Until that rate recovers, its future
+      // readiness time is unknown; do not count down to a start that would
+      // stall before the end.
+      etaSeconds = null;
+      cushionPercent = null;
+      etaSource = "below-realtime";
+    } else if (typeof fillRate === "number" && this.#fillSpanMs < RATE_TREND_WINDOW_MS) {
+      const trendSeconds = (RATE_TREND_WINDOW_MS - this.#fillSpanMs) / 1000;
+      etaSeconds = etaSeconds === null ? null : etaSeconds + trendSeconds;
+      etaSource += `+sustained-rate=${trendSeconds.toFixed(1)}`;
+    } else if (!sustainedRealtimeRate && etaSeconds === 0) {
+      // A filled cushion with no sustained realtime reading is not readiness.
+      etaSeconds = null;
+      cushionPercent = null;
+      etaSource = "awaiting-sustained-rate";
+    }
 
     // A countdown that goes UP is worse than no countdown: the viewer reads it
     // as the wait growing. Twice in the measured session it did — 5.5 -> 15.0
@@ -900,11 +945,28 @@ export class WaitingModel {
    * against themselves, and while they were separate the estimate said the
    * cushion was met on a wait that then ran 42.6 s.
    *
-   * @param {{ ahead: number, fillRate?: number | null, fillSpanMs?: number }} reading
-   * @returns {{ ready: boolean, reason: "target" | "early" | null, target: number }}
+   * @param {{ ahead: number, fillRate?: number | null, fillSpanMs?: number, remainingSeconds?: number | null }} reading
+   * @returns {{ ready: boolean, reason: "target" | "early" | "remaining-buffered" | null, target: number }}
    */
-  mayStartPlayback({ ahead, fillRate = null, fillSpanMs = 0 }) {
+  mayStartPlayback({ ahead, fillRate = null, fillSpanMs = 0, remainingSeconds = this.#remainingSeconds }) {
     const target = this.requiredBufferSeconds();
+    if (
+      typeof ahead === "number" &&
+      Number.isFinite(remainingSeconds) &&
+      remainingSeconds >= 0 &&
+      ahead >= remainingSeconds
+    ) {
+      return { ready: true, reason: "remaining-buffered", target: remainingSeconds };
+    }
+    const sustainedRealtimeRate =
+      typeof fillRate === "number" &&
+      Number.isFinite(fillRate) &&
+      fillRate > GATE_MIN_SUSTAINABLE_FILL_RATE &&
+      typeof fillSpanMs === "number" &&
+      fillSpanMs >= RATE_TREND_WINDOW_MS;
+    if (!sustainedRealtimeRate) {
+      return { ready: false, reason: null, target };
+    }
     if (typeof ahead === "number" && ahead >= target) {
       return { ready: true, reason: "target", target };
     }

@@ -1,3 +1,7 @@
+## 0.30.8
+
+- **Fix**: Keep playback waiting until the measured media rate can sustain realtime playback, or the browser already holds the entire remaining video. A long forecast does not trigger a timeout or an early start.
+
 ## 0.30.7
 
 - **Chore**: Record the skipped fragment, gap size, and separate audio/video buffer ranges when HLS jumps over a buffered hole, so the track and boundary behind a visible discontinuity can be identified.

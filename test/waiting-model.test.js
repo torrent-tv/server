@@ -33,13 +33,13 @@ test("nothing measured yet answers with nulls rather than inventing a figure", (
   assert.equal(answer.cushionRemainingSeconds, model.requiredBufferSeconds());
 });
 
-test("a cushion that has reached its target reads 100% with nothing missing", () => {
+test("a filled cushion without a sustainable rate is not reported as ready", () => {
   const model = new WaitingModel();
   const required = model.requiredBufferSeconds();
   const answer = model.update({ bufferedAhead: required, transcodeProgress: progress() });
-  assert.equal(Math.round(answer.cushionPercent), 100);
+  assert.equal(answer.cushionPercent, null, "the buffer target alone does not prove playback can finish");
   assert.equal(answer.cushionRemainingSeconds, 0, "nothing is missing once the target is met");
-  assert.equal(answer.etaSeconds, 0, "and zero seconds is the only honest estimate for it");
+  assert.equal(answer.etaSeconds, null, "without a sustainable rate the readiness time is unknown");
 });
 
 test("an empty buffer needs the whole cushion", () => {
@@ -251,7 +251,7 @@ test("the estimate targets the cushion that actually opens the gate", () => {
 test("a shortfall is divided by the slowest recent rate, not the fastest", () => {
   const model = new WaitingModel();
   model.update({ bufferedAhead: 5, fillRate: 4.0, transcodeProgress: { state: "ready" } });
-  const afterCollapse = model.update({ bufferedAhead: 5, fillRate: 0.5, transcodeProgress: { state: "ready" } });
+  const afterCollapse = model.update({ bufferedAhead: 5, fillRate: 1.1, transcodeProgress: { state: "ready" } });
   const optimistic = new WaitingModel();
   const fastOnly = optimistic.update({ bufferedAhead: 5, fillRate: 4.0, transcodeProgress: { state: "ready" } });
   assert.ok(
@@ -326,20 +326,61 @@ test("the estimate reaches zero exactly when the gate opens", () => {
   );
 });
 
-test("the estimate keeps predicting readiness after forty-five seconds", () => {
+test("a sub-realtime rate cannot make a filled cushion look ready", () => {
   const model = new WaitingModel();
-  // A slow measured rate can require more than forty-five seconds to build the
-  // cushion. A timer must not make the estimate reach zero before the readiness
-  // condition is met.
+  // A timer is not evidence that the current supply can keep pace through the
+  // rest of the video. A full local cushion at 0.05x still cannot sustain it.
   const answer = model.update({
-    bufferedAhead: 0.1,
+    bufferedAhead: 25,
     fillRate: 0.05,
+    fillSpanMs: 30_000,
+    remainingSeconds: 3_600,
     transcodeProgress: { state: "ready" }
   });
-  assert.ok(
-    answer.etaSeconds > 45,
-    `the estimate must remain pointed at readiness, not a timeout (got ${answer.etaSeconds})`
-  );
+  const gate = model.mayStartPlayback({ ahead: 25, fillRate: 0.05, fillSpanMs: 30_000 });
+
+  assert.equal(answer.etaSeconds, null, "a countdown must not promise a start that will stall before the end");
+  assert.equal(gate.ready, false, "elapsed time and a full cushion do not replace realtime throughput");
+});
+
+test("playback may start below realtime when the complete remainder is buffered", () => {
+  const model = new WaitingModel();
+  const answer = model.update({
+    bufferedAhead: 42,
+    fillRate: 0.2,
+    fillSpanMs: 6_000,
+    remainingSeconds: 42
+  });
+  const gate = model.mayStartPlayback({ ahead: 42, fillRate: 0.2, fillSpanMs: 6_000 });
+
+  assert.equal(answer.etaSeconds, 0);
+  assert.deepEqual(gate, { ready: true, reason: "remaining-buffered", target: 42 });
+});
+
+test("a sustained rate above realtime can release the full cushion", () => {
+  const model = new WaitingModel();
+  const target = model.requiredBufferSeconds();
+  const gate = model.mayStartPlayback({ ahead: target, fillRate: 1.01, fillSpanMs: 6_000 });
+
+  assert.deepEqual(gate, { ready: true, reason: "target", target });
+});
+
+test("a measured long download forecast remains valid without a time limit", () => {
+  const model = new WaitingModel();
+  const answer = model.update({
+    bufferedAhead: 0,
+    downloadStats: {
+      resumeNeededBytes: 54_000_000,
+      resumeDownloadedBytes: 0,
+      downloadSpeed: 30_000
+    },
+    expectedFirstSegmentSeconds: 4,
+    transcodeProgress: { state: "ready" }
+  });
+  const gate = model.mayStartPlayback({ ahead: 0, fillRate: null, fillSpanMs: 0 });
+
+  assert.ok(answer.etaSeconds > 1_800, `the 30-minute forecast was shortened to ${answer.etaSeconds}s`);
+  assert.equal(gate.ready, false, "a long forecast keeps waiting and does not release playback early");
 });
 
 test("a momentary healthy rate does not make the estimate say playback is ready", () => {
