@@ -35,6 +35,7 @@ import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
+import { mediaInfoHintFromFilename } from "../../domain/release-hints.js";
 
 /**
  * One attempt to connect a proxy, and everyone waiting on it.
@@ -2290,9 +2291,10 @@ export class Loading extends StateDerivedView {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             fileIndex === null
-              ? {}
+              ? { userAgent: navigator.userAgent }
               : {
                 fileIndex,
+                userAgent: navigator.userAgent,
                 // Where this viewer will start. The proxy fetches the file's
                 // edges because the codec probe reads them; the region under
                 // the viewer's own position was asked for by nobody until the
@@ -3020,6 +3022,11 @@ export class Loading extends StateDerivedView {
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
+    if (!hasWebseed) {
+      await this.#preferProxyFromFilename(fileIndex);
+      this.#throwIfCancelled();
+    }
+
     if (hasWebseed) {
       this.setStatus(Loading.MESSAGES.startingDirectPlayback);
       this.setProgress(70);
@@ -3451,7 +3458,7 @@ export class Loading extends StateDerivedView {
    * @param {object | null | undefined} mediaInfo
    * @returns {Promise<string[]>}
    */
-  async #proxiesThatCanServe(mediaInfo) {
+  async #proxiesThatCanServe(mediaInfo, { includeCurrent = false } = {}) {
     if (!mediaInfo || typeof mediaInfo !== "object") {
       return [];
     }
@@ -3459,7 +3466,7 @@ export class Loading extends StateDerivedView {
       const response = await fetch("/api/proxy-clients/can-serve", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mediaInfo, exclude: this.#proxy?.proxyId ?? "" })
+        body: JSON.stringify({ mediaInfo, exclude: includeCurrent ? "" : (this.#proxy?.proxyId ?? "") })
       });
       if (!response.ok) {
         return [];
@@ -3473,6 +3480,22 @@ export class Loading extends StateDerivedView {
       // help, and the viewer is told that instead.
       return [];
     }
+  }
+
+  async #preferProxyFromFilename(fileIndex) {
+    const file = this.#session.current?.files?.find((entry) => entry?.index === fileIndex);
+    const hint = mediaInfoHintFromFilename(file?.name);
+    if (!hint) {
+      return;
+    }
+    const candidates = await this.#proxiesThatCanServe(hint, { includeCurrent: true });
+    // A filename is not authoritative. Use the hint only when at least one
+    // proxy answers positively; otherwise the actual playback plan decides.
+    if (candidates.length === 0 || candidates.includes(this.#proxy?.proxyId)) {
+      return;
+    }
+    this.#logEvt(`filename hints ${hint.width}x${hint.height}${hint.codec ? ` ${hint.codec}` : ""}; trying a proxy that reports capacity`);
+    this.#restrictProxiesToPool(candidates);
   }
 
   /**
