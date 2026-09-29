@@ -1,569 +1,75 @@
-/**
- * @file The figures the viewer is shown while waiting.
- *
- * This calculation was wrong three times in one day and each time it was
- * invisible: it lived inside a five-thousand-line component that could only be
- * checked by opening a browser and watching. Splitting it out was done so that
- * it could be pinned here — a split that is not tested has bought nothing.
- *
- * Two consumers depend on these answers agreeing: the overlay shows them, and
- * the pre-buffer gate decides when the picture may start from the same numbers.
- */
-
 import test from "node:test";
 import assert from "node:assert/strict";
 import { WaitingModel } from "../public/domain/waiting-model.js";
 
-/**
- * A proxy progress answer of the shape the poll returns.
- *
- * @param {object} [fields]
- * @returns {object}
- */
-function progress(fields = {}) {
-  return { state: "running", processedSeconds: 30, startPositionSeconds: 0, speed: "2.0x", ...fields };
+function readiness(overrides = {}) {
+  return {
+    version: 1,
+    ready: false,
+    delaySeconds: 7.5,
+    bufferedSeconds: 2,
+    reserveSeconds: 10,
+    ...overrides
+  };
 }
 
-test("nothing measured yet answers with nulls rather than inventing a figure", () => {
+test("does not invent an estimate before the proxy reports its forecast", () => {
   const model = new WaitingModel();
   const answer = model.update({});
-  assert.equal(answer.cushionPercent, null, "no buffer reading means no percentage");
-  // Not null: "you still need the whole cushion" is a true statement without a
-  // reading, and it is what the gate needs in order to keep waiting.
-  assert.equal(answer.cushionRemainingSeconds, model.requiredBufferSeconds());
+
+  assert.equal(answer.etaSeconds, null);
+  assert.equal(answer.cushionPercent, null);
+  assert.equal(answer.cushionRemainingSeconds, null);
 });
 
-test("a filled cushion without a sustainable rate is not reported as ready", () => {
-  const model = new WaitingModel();
-  const required = model.requiredBufferSeconds();
-  const answer = model.update({ bufferedAhead: required, transcodeProgress: progress() });
-  assert.equal(answer.cushionPercent, null, "the buffer target alone does not prove playback can finish");
-  assert.equal(answer.cushionRemainingSeconds, 0, "nothing is missing once the target is met");
-  assert.equal(answer.etaSeconds, null, "without a sustainable rate the readiness time is unknown");
-});
-
-test("an empty buffer needs the whole cushion", () => {
-  const model = new WaitingModel();
-  const answer = model.update({ bufferedAhead: 0, transcodeProgress: progress() });
-  assert.equal(answer.cushionPercent, 0);
-  assert.equal(answer.cushionRemainingSeconds, model.requiredBufferSeconds());
-});
-
-test("a half-full cushion reads about half", () => {
-  const model = new WaitingModel();
-  const required = model.requiredBufferSeconds();
-  const answer = model.update({ bufferedAhead: required / 2, transcodeProgress: progress() });
-  assert.ok(
-    Math.abs(answer.cushionPercent - 50) < 1,
-    `expected about 50%, got ${answer.cushionPercent}`
-  );
-});
-
-test("the required cushion is a real number of seconds", () => {
-  const required = new WaitingModel().requiredBufferSeconds();
-  assert.ok(Number.isFinite(required) && required > 0, `required cushion was ${required}`);
-});
-
-test("a buffer past the target does not report more than a full cushion", () => {
+test("shows the proxy's delay and the browser's current buffer", () => {
   const model = new WaitingModel();
   const answer = model.update({
-    bufferedAhead: model.requiredBufferSeconds() * 3,
-    transcodeProgress: progress()
+    playbackReadiness: readiness(),
+    bufferedAhead: 4
   });
-  assert.ok(answer.cushionPercent <= 100, `a cushion cannot be ${answer.cushionPercent}% full`);
+
+  assert.equal(answer.etaSeconds, 7.5);
+  assert.equal(answer.cushionPercent, 40);
+  assert.equal(answer.cushionRemainingSeconds, 6);
+});
+
+test("a full browser buffer does not override a proxy forecast that is not ready", () => {
+  const model = new WaitingModel();
+  const answer = model.update({
+    playbackReadiness: readiness(),
+    bufferedAhead: 10
+  });
+
+  assert.equal(answer.etaSeconds, 7.5);
+  assert.equal(answer.cushionPercent, 100);
   assert.equal(answer.cushionRemainingSeconds, 0);
 });
 
-test("a failed encode is not described as an encoder run", () => {
+test("shows zero only when the proxy reports playback ready", () => {
   const model = new WaitingModel();
-  const answer = model.update({ bufferedAhead: 0, transcodeProgress: progress({ state: "failed" }) });
-  assert.deepEqual(
-    model.describeEncodingRuns(progress({ state: "failed" }), answer),
-    [],
-    "a run that has died is not a run the viewer is waiting on"
-  );
+  const answer = model.update({ playbackReadiness: readiness({ ready: true, delaySeconds: 0 }) });
+
+  assert.equal(answer.etaSeconds, 0);
+  assert.equal(answer.cushionPercent, 100);
 });
 
-test("nothing being re-encoded is no encoder line at all", () => {
+test("retains the proxy forecast when only the client buffer changes", () => {
   const model = new WaitingModel();
-  const answer = model.update({
-    bufferedAhead: 0,
-    encodingTracks: { video: false, audio: false },
-    transcodeProgress: progress()
-  });
-  assert.deepEqual(
-    model.describeEncodingRuns(progress(), answer),
-    [],
-    "copied tracks have no encoder to describe"
-  );
+  model.update({ playbackReadiness: readiness(), bufferedAhead: 2 });
+  const answer = model.update({ bufferedAhead: 5 });
+
+  assert.equal(answer.etaSeconds, 7.5);
+  assert.equal(answer.cushionPercent, 50);
 });
 
-test("an audio-only transcode is described as audio, not as video", () => {
+test("reset forgets the previous proxy forecast and client buffer", () => {
   const model = new WaitingModel();
-  const answer = model.update({
-    bufferedAhead: 0,
-    encodingTracks: { video: false, audio: true },
-    transcodeProgress: progress()
-  });
-  const runs = model.describeEncodingRuns(progress(), answer);
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0].audio, true);
-  assert.notEqual(runs[0].video, true, "audio costs a fraction of a core and video costs whole ones");
-});
-
-test("a reset forgets the previous wait", () => {
-  const model = new WaitingModel();
-  model.update({ bufferedAhead: 0, fillRate: 2, fillSpanMs: 6_000, transcodeProgress: { state: "ready" } });
+  model.update({ playbackReadiness: readiness(), bufferedAhead: 5 });
   model.reset();
   const answer = model.update({});
-  assert.equal(answer.cushionPercent, null, "a new wait starts with nothing measured, not with the old figures");
-  const afterBuffer = model.update({ bufferedAhead: 0, transcodeProgress: { state: "ready" } });
-  assert.equal(afterBuffer.etaSeconds, null, "the previous wait's fill rate is not reused");
-});
-
-test("the same facts give the same answer to both consumers", () => {
-  // The overlay shows these numbers and the pre-buffer gate decides from them.
-  // Two instances stand for the two consumers: fed identically they must agree,
-  // or the picture starts at a moment the screen never announced.
-  const shown = new WaitingModel();
-  const gate = new WaitingModel();
-  const facts = { bufferedAhead: 4, transcodeProgress: progress() };
-  assert.deepEqual(shown.update(facts), gate.update(facts));
-});
-
-test("figures survive a fact arriving without the others", () => {
-  // Readings come from different places at different rates; one of them being
-  // late must not blank the rest.
-  const model = new WaitingModel();
-  model.update({ bufferedAhead: 5, transcodeProgress: progress() });
-  const answer = model.update({ transcodeProgress: progress({ processedSeconds: 40 }) });
-  assert.ok(
-    Number.isFinite(answer.cushionPercent),
-    "the buffer reading from the previous update must still be in force"
-  );
-});
-
-test("an estimate may rise: nothing floors it at a figure promised earlier", () => {
-  const model = new WaitingModel();
-  // A first answer, then a wait in which the buffer does not move at all.
-  const first = model.update({ bufferedAhead: 1, transcodeProgress: { state: "ready" } });
-  assert.ok(first.etaSeconds === null || first.etaSeconds >= 0);
-  const later = model.update({ bufferedAhead: 1, transcodeProgress: { state: "ready" } });
-  assert.notEqual(
-    later.etaSeconds,
-    0,
-    "a cushion that is still 4s short must never read as no wait at all — " +
-    "the floor that produced that was measured on 2026-08-09 saying `fill=4.0@1.00x` and showing zero"
-  );
-});
-
-test("a reading that arrives alone does not blank what the proxy last said", () => {
-  const model = new WaitingModel();
-  model.update({
-    bufferedAhead: 1,
-    downloadStats: { numPeers: 29, downloadSpeed: 13_823_000 },
-    transcodeProgress: { state: "ready", processedSeconds: 4208, startPositionSeconds: 4200, speed: "9.01x" }
-  });
-  // The component that owns the element reads the buffer several times a second
-  // and knows nothing about the proxy. Its call used to reset both answers.
-  const runs = model.describeEncodingRuns(null, model.update({ bufferedAhead: 2 }));
-  assert.ok(Array.isArray(runs), "the model must still know what the proxy said");
-  const after = model.update({ bufferedAhead: 2 });
-  assert.notEqual(after.cushionPercent, null, "the cushion is still measurable from the retained answer");
-});
-
-test("with nothing measured, the estimate rests on the host's median rather than an assumed 1.0x", () => {
-  const model = new WaitingModel();
-  // A cold open on a host that reports it usually takes 30 s to produce a first
-  // segment. Dividing the shortfall by an assumed realtime rate said 4.0s of a
-  // wait that ran 46.8s — measured 2026-08-09, median error 21.8s over 164
-  // samples, and not one figure borne out.
-  const result = model.update({
-    bufferedAhead: 0,
-    expectedFirstSegmentSeconds: 30,
-    transcodeProgress: { state: "ready" }
-  });
-  assert.ok(
-    result.etaSeconds !== null && result.etaSeconds >= 30,
-    `an unmeasured wait must not be estimated below what this host is known to take (got ${result.etaSeconds})`
-  );
-});
-
-test("with nothing measured at all, there is no estimate rather than an invented one", () => {
-  const model = new WaitingModel();
-  // A cold open on a host that has never reported how long it takes. The
-  // shortfall used to be divided by a rate of exactly one and shown as a
-  // confident countdown: measured 2026-08-18 it said 13.6 s of a wait that ran
-  // 202.1 s, and 2026-08-09 it said 4.0 s of one that ran 46.8 s. A quantity
-  // nobody has measured is not a small number.
-  const result = model.update({
-    bufferedAhead: 0,
-    transcodeProgress: { state: "ready" }
-  });
-
-  assert.equal(
-    result.etaSeconds,
-    null,
-    `nothing has been measured, so the viewer is told it is not known yet (got ${result.etaSeconds})`
-  );
-});
-
-test("the cushion the estimate counts down to is the one the gate releases on", () => {
-  const model = new WaitingModel();
-  // Two figures for one decision is what made the estimate useless at the only
-  // moment anyone reads it: the model asked for one segment while the gate held
-  // out for fifteen seconds, so it announced "ready, nothing to wait for" and
-  // the picture stayed still. Measured 2026-08-09: said=0.0s, was=11.9s.
-  assert.equal(
-    model.requiredBufferSeconds(),
-    15,
-    "with no rate measured, both must want the same fallback cushion"
-  );
-  // A cushion that fills fast needs to be smaller, because the surplus above
-  // realtime is what stops it draining.
-  model.update({ bufferedAhead: 0, fillRate: 3 });
-  const fast = model.requiredBufferSeconds();
-  model.update({ bufferedAhead: 0, fillRate: 1.2 });
-  const slow = model.requiredBufferSeconds();
-  assert.ok(fast < slow, `a faster fill must need less banked (${fast} vs ${slow})`);
-  assert.ok(fast >= 6 && slow <= 25, "and both must stay inside the bounds the gate uses");
-});
-
-test("the estimate targets the cushion that actually opens the gate", () => {
-  const model = new WaitingModel();
-  const beforeSustained = model.update({ bufferedAhead: 0, fillRate: 2.0, fillSpanMs: 3_000 });
-  assert.equal(beforeSustained.cushionRemainingSeconds, 12, "a short rate sample keeps the full adaptive target");
-
-  // After the same trend window used by the gate, both the estimate and gate
-  // can use the early target of ten seconds.
-  const healthy = model.update({
-    bufferedAhead: 0,
-    fillRate: 2.0,
-    fillSpanMs: 6_000,
-    transcodeProgress: { state: "ready" }
-  });
-  assert.ok(
-    healthy.cushionRemainingSeconds <= 10,
-    `a healthy link starts early, so at most ten seconds are needed; got ${healthy.cushionRemainingSeconds}`
-  );
-});
-
-test("a shortfall is divided by the slowest recent rate, not the fastest", () => {
-  const model = new WaitingModel();
-  model.update({ bufferedAhead: 5, fillRate: 4.0, transcodeProgress: { state: "ready" } });
-  const afterCollapse = model.update({ bufferedAhead: 5, fillRate: 1.1, transcodeProgress: { state: "ready" } });
-  const optimistic = new WaitingModel();
-  const fastOnly = optimistic.update({ bufferedAhead: 5, fillRate: 4.0, transcodeProgress: { state: "ready" } });
-  assert.ok(
-    afterCollapse.etaSeconds > fastOnly.etaSeconds,
-    "a rate that collapsed must lengthen the estimate, not be forgotten in favour of the earlier fast one"
-  );
-});
-
-
-
-
-test("the countdown falls by exactly the time that passed", () => {
-  const model = new WaitingModel();
-  const progress = { state: "ready" };
-  const rate = 2.0;
-  let ahead = 1;
-  // A buffer filling steadily at `rate`. The expectation is NOT recomputed from
-  // the formula — that would only restate the implementation. It is the figure
-  // the model itself gave a moment ago, less the media that has since arrived.
-  // A countdown that does not do this is not a countdown, and over these days
-  // it has variously climbed, stuck and leapt.
-  const first = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
-  assert.ok(first.etaSeconds !== null, "a measured rate must produce a figure");
-
-  for (const elapsed of [1, 1, 2]) {
-    const before = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
-    ahead += rate * elapsed;
-    const after = model.update({ bufferedAhead: ahead, fillRate: rate, transcodeProgress: progress });
-    if (before.etaSeconds === 0) {
-      break;
-    }
-    assert.ok(
-      Math.abs((before.etaSeconds - after.etaSeconds) - elapsed) < 0.01,
-      `after ${elapsed}s the figure went ${before.etaSeconds} -> ${after.etaSeconds}`
-    );
-  }
-});
-
-
-test("the estimate reaches zero exactly when the gate opens", () => {
-  const model = new WaitingModel();
-  const progress = { state: "ready" };
-  const rate = 2.0;
-  // Two independent things compared: what the model PREDICTS the wait to be,
-  // and when it SAYS playback may start. Writing this was impossible while the
-  // rule existed in two copies — a test could then only check a copy against
-  // itself, which is how the overlay came to announce the cushion met on a wait
-  // that ran 42.6 s.
-  let ahead = 0;
-  let elapsed = 0;
-  const predicted = model.update({
-    bufferedAhead: ahead,
-    fillRate: rate,
-    fillSpanMs: 6_000,
-    transcodeProgress: progress
-  }).etaSeconds;
-  assert.ok(predicted !== null && predicted > 0, "a measured rate must predict a wait");
-
-  for (let step = 0; step < 200; step += 1) {
-    const gate = model.mayStartPlayback({ ahead, fillRate: rate, fillSpanMs: 10_000 });
-    if (gate.ready) {
-      break;
-    }
-    ahead += rate * 0.5;
-    elapsed += 0.5;
-    model.update({ bufferedAhead: ahead, fillRate: rate, fillSpanMs: 6_000, transcodeProgress: progress });
-  }
-
-  assert.ok(
-    Math.abs(elapsed - predicted) <= 0.5,
-    `predicted ${predicted}s, the gate opened after ${elapsed}s`
-  );
-});
-
-test("a sub-realtime rate may start after buffering the whole-film deficit", () => {
-  const model = new WaitingModel();
-  const remainingSeconds = 3_600;
-  const fillRate = 0.05;
-  const answer = model.update({
-    bufferedAhead: 25,
-    fillRate,
-    fillSpanMs: 30_000,
-    remainingSeconds,
-    transcodeProgress: { state: "ready" }
-  });
-  const target = (1 - fillRate) * remainingSeconds + model.requiredBufferSeconds();
-  const beforeTarget = model.mayStartPlayback({ ahead: target - 1, fillRate, fillSpanMs: 30_000 });
-  const atTarget = model.mayStartPlayback({ ahead: target, fillRate, fillSpanMs: 30_000 });
-
-  assert.ok(answer.etaSeconds > 0, "a long wait may have a long finite forecast");
-  assert.equal(beforeTarget.ready, false, "the current reserve is not enough to cover the film");
-  assert.deepEqual(atTarget, { ready: true, reason: "completion-buffer", target });
-});
-
-test("reaching the buffer ceiling does not start when it cannot cover the whole-film deficit", () => {
-  const model = new WaitingModel();
-  model.update({
-    bufferedAhead: 30,
-    fillRate: 0.95,
-    fillSpanMs: 6_000,
-    remainingSeconds: 18_000,
-    bufferLimitSeconds: 60
-  });
-  const answer = model.update({
-    bufferedAhead: 60,
-    fillRate: 0,
-    fillSpanMs: 30_000,
-    remainingSeconds: 18_000,
-    bufferLimitSeconds: 60,
-    transcodeProgress: { state: "ready" }
-  });
-  const gate = model.mayStartPlayback({
-    ahead: 60,
-    fillRate: 0,
-    fillSpanMs: 30_000,
-    remainingSeconds: 18_000,
-    bufferLimitSeconds: 60
-  });
-
-  assert.equal(answer.etaSeconds, null, "do not forecast readiness beyond the accepted buffer ceiling");
-  assert.equal(gate.ready, false, "a full short buffer does not cover the remaining film");
-  assert.ok(Math.abs(gate.target - 925) < 0.01, "the cached pre-limit rate sets the required reserve");
-});
-
-test("a sub-realtime forecast may take many minutes without becoming an error", () => {
-  const model = new WaitingModel();
-  const answer = model.update({
-    bufferedAhead: 0,
-    fillRate: 0.95,
-    fillSpanMs: 6_000,
-    remainingSeconds: 18_000,
-    transcodeProgress: { state: "ready" }
-  });
-  const gate = model.mayStartPlayback({
-    ahead: 0,
-    fillRate: 0.95,
-    fillSpanMs: 6_000,
-    remainingSeconds: 18_000
-  });
-
-  assert.ok(answer.etaSeconds > 900 && answer.etaSeconds < 1_100, `unexpected wait: ${answer.etaSeconds}s`);
-  assert.equal(gate.ready, false, "the long estimate remains a wait, not an error or early start");
-  assert.ok(Math.abs(gate.target - 925) < 0.01);
-});
-
-test("a sub-realtime rate cannot establish completion readiness without a known remainder", () => {
-  const model = new WaitingModel();
-  model.update({ bufferedAhead: 100, fillRate: 0.5, fillSpanMs: 6_000 });
-  const answer = model.update({ bufferedAhead: 100, fillRate: 0.5, fillSpanMs: 6_000 });
-  const gate = model.mayStartPlayback({ ahead: 100, fillRate: 0.5, fillSpanMs: 6_000 });
 
   assert.equal(answer.etaSeconds, null);
-  assert.equal(gate.ready, false);
-});
-
-test("playback may start below realtime when the complete remainder is buffered", () => {
-  const model = new WaitingModel();
-  const answer = model.update({
-    bufferedAhead: 42,
-    fillRate: 0.2,
-    fillSpanMs: 6_000,
-    remainingSeconds: 42
-  });
-  const gate = model.mayStartPlayback({ ahead: 42, fillRate: 0.2, fillSpanMs: 6_000 });
-
-  assert.equal(answer.etaSeconds, 0);
-  assert.deepEqual(gate, { ready: true, reason: "remaining-buffered", target: 42 });
-});
-
-test("a sustained rate above realtime can release the full cushion", () => {
-  const model = new WaitingModel();
-  const target = model.requiredBufferSeconds();
-  const gate = model.mayStartPlayback({ ahead: target, fillRate: 1.01, fillSpanMs: 6_000 });
-
-  assert.deepEqual(gate, { ready: true, reason: "target", target });
-});
-
-test("a measured long download forecast remains valid without a time limit", () => {
-  const model = new WaitingModel();
-  const answer = model.update({
-    bufferedAhead: 0,
-    downloadStats: {
-      resumeNeededBytes: 54_000_000,
-      resumeDownloadedBytes: 0,
-      downloadSpeed: 30_000
-    },
-    expectedFirstSegmentSeconds: 4,
-    transcodeProgress: { state: "ready" }
-  });
-  const gate = model.mayStartPlayback({ ahead: 0, fillRate: null, fillSpanMs: 0 });
-
-  assert.ok(answer.etaSeconds > 1_800, `the 30-minute forecast was shortened to ${answer.etaSeconds}s`);
-  assert.equal(gate.ready, false, "a long forecast keeps waiting and does not release playback early");
-});
-
-test("a momentary healthy rate does not make the estimate say playback is ready", () => {
-  const model = new WaitingModel();
-  const answer = model.update({ bufferedAhead: 10, fillRate: 2, fillSpanMs: 3_000 });
-  const gate = model.mayStartPlayback({ ahead: 10, fillRate: 2, fillSpanMs: 3_000 });
-
-  assert.ok(answer.etaSeconds > 0, "the estimate still includes media needed for the full target");
-  assert.equal(gate.ready, false, "the gate waits for its sustained-rate window");
-});
-
-test("the estimated early target is the exact target that opens the gate", () => {
-  const model = new WaitingModel();
-  const answer = model.update({ bufferedAhead: 10, fillRate: 2, fillSpanMs: 6_000 });
-  const gate = model.mayStartPlayback({ ahead: 10, fillRate: 2, fillSpanMs: 6_000 });
-
-  assert.equal(answer.etaSeconds, 0);
-  assert.deepEqual(gate, { ready: true, reason: "early", target: 10 });
-});
-
-test("a missing fill-rate reading clears the previous rate before early readiness", () => {
-  const model = new WaitingModel();
-  model.update({ bufferedAhead: 10, fillRate: 2, fillSpanMs: 6_000 });
-  const answer = model.update({ bufferedAhead: 10, fillRate: null, fillSpanMs: 0 });
-  const gate = model.mayStartPlayback({ ahead: 10, fillRate: null, fillSpanMs: 0 });
-
-  assert.notEqual(answer.etaSeconds, 0, "a stopped buffer does not report that readiness has been reached");
-  assert.equal(gate.ready, false, "a stale healthy rate cannot release playback");
-});
-
-test("a host figure is counted once, not in two terms at the same time", () => {
-  // Sensitivity, not a threshold: doubling the host's segment time must move
-  // the estimate by ONE such time, never two. It moved by two —
-  // `first=30.0+fill=30.0@host-median` — found in review 2026-08-11.
-  const estimateFor = (hostSeconds) => {
-    const model = new WaitingModel();
-    return model.update({
-      bufferedAhead: 14.5,
-      expectedFirstSegmentSeconds: hostSeconds,
-      transcodeProgress: { state: "ready" }
-    }).etaSeconds;
-  };
-  const small = estimateFor(2);
-  const large = estimateFor(4);
-  assert.ok(small !== null && large !== null, "a host measurement must produce a figure");
-  assert.ok(
-    large - small < 3.5,
-    `two more seconds of host time moved the estimate by ${(large - small).toFixed(1)}s`
-  );
-});
-
-test("a second wait is not clamped by the first wait's clock", () => {
-  const model = new WaitingModel();
-  const progress = { state: "ready" };
-  model.update({ bufferedAhead: 2, fillRate: 0.5, transcodeProgress: progress });
-  // The fill-rate window must start again for a new wait on the same page.
-  model.reset();
-  const after = model.update({ bufferedAhead: 0, fillRate: 0.2, transcodeProgress: progress });
-  assert.ok(
-    after.etaSeconds === null || after.etaSeconds > 0,
-    `a fresh wait with an empty buffer reported ${after.etaSeconds}s`
-  );
-});
-
-test("the proxy's measured buffer replaces the figures chosen by hand", () => {
-  // Roadmap item 4: 25 s was a number somebody picked, and on the field torrent
-  // of 2026-08-17 the measured answer — one segment plus the worst interruption
-  // the reader met — is 7.2 s. Sixteen seconds of spinner that nothing had
-  // shown to be necessary.
-  const model = new WaitingModel();
-  model.update({ bufferedAhead: 0, fillRate: 1.0 });
-  assert.equal(model.requiredBufferSeconds(), 25, "without a measurement the old ceiling stands");
-
-  model.update({ minimumBufferSeconds: 7.2 });
-  assert.equal(model.requiredBufferSeconds(), 7.2, "with one, it is used whatever the fill rate says");
-});
-
-test("a proxy that has not measured leaves the answer alone", () => {
-  // Null until the reader has seen two interruptions: one wait shows no
-  // interval, and an interval invented from one point is what this work removes.
-  const model = new WaitingModel();
-  model.update({ minimumBufferSeconds: 8 });
-  model.update({ minimumBufferSeconds: null });
-  assert.equal(model.requiredBufferSeconds(), 8, "a null must not blank a figure already measured");
-  model.update({ minimumBufferSeconds: 0 });
-  assert.equal(model.requiredBufferSeconds(), 8, "and neither may a zero");
-});
-
-test("a wait in which nothing was ever predicted is summarised, not thrown on", () => {
-  // Since 0.13.11 a moment with nothing measured makes no prediction. Those
-  // moments were still scored against the outcome, and `null.toFixed()` threw —
-  // measured 2026-08-19 on every wait that ended, every seek included.
-  const model = new WaitingModel();
-
-  const answer = model.update({ bufferedAhead: 0, transcodeProgress: { state: "ready" } });
-  assert.equal(answer.etaSeconds, null, "nothing is measured, so nothing is predicted");
-
-  model.reportEtaAccuracy();
-
-  assert.ok(true, "summarising a wait that predicted nothing must not throw");
-});
-
-test("a wait that has ended leaves no figures for the next film", () => {
-  const model = new WaitingModel();
-  // A film being watched: the proxy answers about it, and the estimate is built
-  // from that answer.
-  model.update({
-    transcodeProgress: { processedSeconds: 3194.44, startPositionSeconds: 0, speed: 15 },
-    downloadStats: { downloadSpeed: 4096, downloaded: 1, length: 2 }
-  });
-  model.reset();
-
-  // The viewer picks the next episode. Until the new session answers, there is
-  // nothing to say — and what must NOT be said is the previous film's figures,
-  // which the line carried for four minutes in the field on 2026-09-11.
-  const after = model.update({});
-  assert.equal(after.encodeSpeedText, null, "the previous film's speed was carried into the next wait");
-  assert.ok(
-    after.etaSeconds === null || after.etaSeconds === undefined,
-    "and so was its estimate"
-  );
+  assert.equal(answer.cushionPercent, null);
+  assert.equal(answer.cushionRemainingSeconds, null);
 });

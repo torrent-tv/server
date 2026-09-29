@@ -645,7 +645,8 @@ export class TorrentSession {
    *   transcodeAudio?: boolean,
    *   visiblePicture?: { width: number, height: number } | null,
    *   getVisiblePicture?: () => { width: number, height: number } | null,
-   *   getPlayingHeight?: () => number
+   *   getPlayingHeight?: () => number,
+   *   getBufferLimitSeconds?: () => number | null
    * }} options
    * @returns {Promise<{ mode: "proxy-hls", offeredHeights: number[] | null }>}
    */
@@ -1077,6 +1078,7 @@ export class TorrentSession {
         // act on whichever viewer reported last.
         consumerId: this.consumerId,
         getBufferedAheadSec: bufferedAheadSeconds,
+        getBufferLimitSeconds: options.getBufferLimitSeconds,
         getPositionSeconds: playbackPositionSeconds,
         getPlaying: pictureIsMoving,
         getWaiting: viewerIsWaiting,

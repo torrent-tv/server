@@ -45,6 +45,8 @@
  *   competing for the same cores.
  * @property {number}  [etaSeconds] - The single end-to-end estimate. Zero means
  *   a cushion that genuinely reached its target — never a guess.
+ * @property {boolean} [readinessUnavailable] - The proxy does not return the
+ *   versioned playback forecast required by this page.
  */
 
 /**
@@ -148,34 +150,6 @@ function supplyLine({ peers, downloadBytesPerSecond, remainingBytes, bufferedSec
 }
 
 /**
- * A name for what is being waited for, worked out from the measurements alone.
- *
- * The pipeline names its own steps, but a seek runs none of them: it shows a
- * number of seconds with nothing saying whether the wait is for pieces, for the
- * encoder to be moved to the new position, or for the first segment out of it.
- * Three unrelated waits, one appearance. These are the same distinctions the
- * numbers already carry, so they cost nothing to name.
- *
- * @param {WaitingMeasurements} measurements
- * @returns {string | null} Null when the measurements say nothing yet.
- */
-export function stepForMeasurements({ remainingBytes, cushionPercent, cushionRemainingSeconds }) {
-  if (isNumber(remainingBytes) && remainingBytes > 0) {
-    return "Fetching video data";
-  }
-  if (isNumber(cushionRemainingSeconds) && cushionRemainingSeconds > 0) {
-    // What is being encoded, and how fast, is said by the per-run lines — one
-    // each, so two runs competing for the same cores are two visible lines
-    // rather than one averaged fiction.
-    return `Preparing the last ${Math.ceil(cushionRemainingSeconds)}s of video`;
-  }
-  if (isNumber(cushionPercent)) {
-    return "Starting the picture";
-  }
-  return null;
-}
-
-/**
  * One line describing one encoder run: which tracks of which rendition, how
  * much it still has to make, and how fast it is making it.
  *
@@ -241,7 +215,9 @@ export function formatWaitingText(measurements = {}) {
   // playback is ready.
   // Keep zero visible: it reports that the measured readiness condition has
   // been met, rather than using a missing line to imply that nothing is known.
-  if (isNumber(measurements.etaSeconds)) {
+  if (measurements.readinessUnavailable === true) {
+    lines.push("This proxy needs an update before playback can start");
+  } else if (isNumber(measurements.etaSeconds)) {
     lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
   } else {
     lines.push("Estimating…");

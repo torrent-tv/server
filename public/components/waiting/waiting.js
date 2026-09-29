@@ -1,6 +1,6 @@
 import { APP_EVENTS, PLAYER_EVENTS, PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { APP_STATE, isWaiting } from "../../domain/app-state.js";
-import { formatWaitingText, stepForMeasurements } from "../../domain/waiting-text.js";
+import { formatWaitingText } from "../../domain/waiting-text.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 
 /**
@@ -40,21 +40,12 @@ export class WaitingOverlay {
    */
   #measurements = {};
 
-  /**
-   * Its own. Nobody hands this component a conclusion: it is given what was
-   * measured and works out what that means itself. The pipeline holds a second
-   * instance for its own decision about when the picture may start — same
-   * class, so the two answers cannot drift apart.
-   *
-   * @type {WaitingModel}
-   */
+  /** Presents the proxy's forecast; it does not make a playback decision. @type {WaitingModel} */
   #model = new WaitingModel();
 
   /** @type {number | null} Latest reading from the component that owns the element. */
   #bufferedAhead = null;
 
-  /** @type {number | null} The accepted forward-buffer ceiling for this stream. */
-  #bufferLimitSeconds = null;
 
   /**
    * The step the pipeline named, if it named one. A seek runs no pipeline step,
@@ -73,7 +64,6 @@ export class WaitingOverlay {
     }
     document.addEventListener(PROXY_EVENTS.MEASURED, this.#onProxyMeasured);
     document.addEventListener(PLAYER_EVENTS.BUFFER, this.#onBuffer);
-    document.addEventListener(PLAYER_EVENTS.BUFFER_CEILING, this.#onBufferCeiling);
     document.addEventListener(WAITING_EVENTS.STEP, this.#onStep);
     document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onStateChanged);
   }
@@ -86,43 +76,18 @@ export class WaitingOverlay {
    * @param {CustomEvent} event
    */
   /**
-   * The proxy answered. Raw figures in, this component's own conclusions out.
+   * The proxy answered with its forecast and the current source measurements.
    *
    * @param {CustomEvent} event
    */
   #onProxyMeasured = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
-    if (Object.hasOwn(detail ?? {}, "bufferLimitSeconds")) {
-      this.#bufferLimitSeconds = typeof detail.bufferLimitSeconds === "number" &&
-        Number.isFinite(detail.bufferLimitSeconds) && detail.bufferLimitSeconds > 0
-        ? detail.bufferLimitSeconds
-        : null;
-    }
     const downloadStats = detail?.downloadStats ?? null;
     const transcodeProgress = detail?.transcodeProgress ?? null;
-    // The two figures only the PROXY can know: what this host takes to create a
-    // session and to produce a first segment. They ride on every progress
-    // response, and this component was not reading them — so the model held
-    // null for both and its estimate simply omitted the terms. That is why a
-    // cold open whose session creation took 19.8 s counted none of it, and why
-    // the first-segment term fell back to an assumed rate instead of the host's
-    // own measurement. The same defect was fixed once on the proxy side (item 2)
-    // and reintroduced here when the model moved into this component.
-    const toSeconds = (ms) => (typeof ms === "number" && ms > 0 ? ms / 1000 : undefined);
+    const readiness = detail?.playbackReadiness;
     const unified = this.#model.update({
-      bufferedAhead: this.#bufferedAhead ?? undefined,
-      ...(Object.hasOwn(detail ?? {}, "fillRate") ? { fillRate: detail.fillRate } : {}),
-      ...(typeof detail?.fillSpanMs === "number" ? { fillSpanMs: detail.fillSpanMs } : {}),
-      ...(typeof detail?.remainingSeconds === "number" || detail?.remainingSeconds === null
-        ? { remainingSeconds: detail.remainingSeconds }
-        : {}),
-      ...(typeof detail?.bufferLimitSeconds === "number" || detail?.bufferLimitSeconds === null
-        ? { bufferLimitSeconds: detail.bufferLimitSeconds }
-        : {}),
-      downloadStats,
-      transcodeProgress,
-      expectedSessionCreateSeconds: toSeconds(transcodeProgress?.expectedSessionCreateMs),
-      expectedFirstSegmentSeconds: toSeconds(transcodeProgress?.expectedFirstSegmentMs)
+      playbackReadiness: readiness,
+      bufferedAhead: this.#bufferedAhead ?? undefined
     });
     const needed = downloadStats?.resumeNeededBytes;
     const got = downloadStats?.resumeDownloadedBytes;
@@ -143,8 +108,8 @@ export class WaitingOverlay {
         : undefined,
       cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
       cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
-      encodingRuns: usable ? this.#model.describeEncodingRuns(transcodeProgress, unified) : [],
-      etaSeconds: unified.etaSeconds ?? undefined
+      etaSeconds: unified.etaSeconds ?? undefined,
+      readinessUnavailable: usable && readiness?.version !== 1
     });
     this.#applyStep();
     this.#render();
@@ -157,42 +122,18 @@ export class WaitingOverlay {
    */
   #onBuffer = (event) => {
     const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
-    const fillRate = event instanceof CustomEvent ? event.detail?.fillRate : null;
-    const fillSpanMs = event instanceof CustomEvent ? event.detail?.fillSpanMs : null;
-    const remainingSeconds = event instanceof CustomEvent ? event.detail?.remainingSeconds : null;
     if (typeof ahead !== "number") {
       return;
     }
     this.#bufferedAhead = ahead;
     this.#measurements.bufferedSeconds = ahead;
-    // Recomputed here too, not only when the proxy answers. The cushion and the
-    // estimate are measured AT THE BUFFER, so a new reading is exactly the
-    // moment they change; waiting for the next poll left the one figure the
-    // viewer wants a second and a half stale, and left it missing altogether
-    // until the first poll after a reading ever arrived.
-    const unified = this.#model.update({
-      bufferedAhead: ahead,
-      fillRate: typeof fillRate === "number" ? fillRate : null,
-      ...(typeof fillSpanMs === "number" ? { fillSpanMs } : {}),
-      ...(typeof remainingSeconds === "number" || remainingSeconds === null
-        ? { remainingSeconds }
-        : {}),
-      bufferLimitSeconds: this.#bufferLimitSeconds
-    });
+    const unified = this.#model.update({ bufferedAhead: ahead });
     this.#measurements.cushionPercent = unified.cushionPercent ?? undefined;
     this.#measurements.cushionRemainingSeconds = unified.cushionRemainingSeconds ?? undefined;
     this.#measurements.etaSeconds = unified.etaSeconds ?? undefined;
     this.#applyStep();
     this.#render();
   };
-
-  #onBufferCeiling = (event) => {
-    const ceiling = event instanceof CustomEvent ? event.detail?.ceilingSeconds : null;
-    this.#bufferLimitSeconds = typeof ceiling === "number" && Number.isFinite(ceiling) && ceiling > 0
-      ? ceiling
-      : null;
-  };
-
 
   /**
    * The pipeline moved to a named step.
@@ -218,14 +159,6 @@ export class WaitingOverlay {
     if (typeof state !== "string" || isWaiting(state) || state === APP_STATE.PAUSED) {
       return;
     }
-    // Score what was promised against what happened, before the evidence is
-    // dropped. This model is the one that estimates for the screen — it
-    // recomputes on every buffer reading — so it is the one holding enough
-    // samples to score. The report used to be asked of the pipeline's model,
-    // which computes twice in a whole wait and therefore printed nothing at
-    // all, leaving the one question that matters — were the figures true —
-    // without an answer.
-    this.#model.reportEtaAccuracy();
     this.#model.reset();
     this.#measurements = {};
     this.#pipelineStep = "";
@@ -233,15 +166,18 @@ export class WaitingOverlay {
   };
 
   /**
-   * What the pipeline said if it said anything, and what the numbers say
-   * otherwise. A named step always wins: it knows things no measurement does.
+   * The pipeline step, or the proxy readiness model's state.
    *
    * @returns {void}
    */
   #applyStep() {
     const step = this.#pipelineStep.length > 0
       ? this.#pipelineStep
-      : stepForMeasurements(this.#measurements);
+      : this.#measurements.readinessUnavailable === true
+        ? undefined
+        : this.#measurements.etaSeconds === undefined
+        ? "Waiting for proxy playback forecast"
+        : undefined;
     if (typeof step === "string" && step.length > 0) {
       this.#measurements.stage = step;
     } else {
