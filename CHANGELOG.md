@@ -1,3 +1,7 @@
+## 0.31.4
+
+- **Fix**: Forward the browser's buffer ceiling into viewer reports so the proxy readiness model receives its required client-capacity input and can produce a start estimate.
+
 ## 0.31.3
 
 - **Fix**: Report the same playable-buffer depth used by the browser's startup wait, including small initial timestamp offsets, so the proxy readiness model receives the actual client cushion.

@@ -701,7 +701,10 @@ export class TorrentSession {
             : 0,
         segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
         getPlayingHeight: typeof options.getPlayingHeight === "function" ? options.getPlayingHeight : undefined,
-        getVisiblePicture: typeof options.getVisiblePicture === "function" ? options.getVisiblePicture : undefined
+        getVisiblePicture: typeof options.getVisiblePicture === "function" ? options.getVisiblePicture : undefined,
+        getBufferLimitSeconds: typeof options.getBufferLimitSeconds === "function"
+          ? options.getBufferLimitSeconds
+          : undefined
       }
     );
     if (!playlistUrl) {
@@ -891,7 +894,7 @@ export class TorrentSession {
    * @param {number} fileIndex
    * @param {((progress: object) => void) | null} onTranscodeProgress
    * @param {boolean} transcodeVideo
-   * @param {{ transcodeAudio?: boolean, visiblePicture?: { width: number, height: number } | null, startPositionSeconds?: number }} options
+   * @param {{ transcodeAudio?: boolean, visiblePicture?: { width: number, height: number } | null, startPositionSeconds?: number, getBufferLimitSeconds?: () => number | null }} options
    * @returns {Promise<{ playlistUrl: string, variantHeight: number, offeredHeights: number[] | null, lookaheadSeconds: number, mediaPlaylistUrl: string }>}
    *   The manifest to load — a master playlist when the session offers quality
    *   variants, its media playlist otherwise — the height of the variant the
