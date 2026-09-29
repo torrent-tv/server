@@ -308,23 +308,7 @@ export class Loading extends StateDerivedView {
   // it again once more of it has arrived.
   static AUDIO_TRACK_WAIT_MS = 120_000;
 
-  // How far back the download-rate trend is measured. Long enough to see the
-  // climb (the swarm takes 6-8 s to reach its plateau), short enough that a
-  // rate which has since levelled off stops being projected upward.
-  static RATE_TREND_WINDOW_MS = 6_000;
-  // The projection may not claim an average faster than this multiple of the
-  // rate being achieved right now, however steep the samples look.
-  static RATE_TREND_MAX_GROWTH = 4;
-
-  /**
-   * Recent download-speed samples, for projecting a rate that is still rising.
-   * See #projectDownloadEta.
-   *
-   * @type {Array<{ at: number, speed: number }>}
-   */
-  #downloadRateSamples = [];
   /** The last figure shown, and when — so the countdown can only go down. */
-  #etaPromise = null;
   /**
    * Whether this file has ever actually played. Distinguishes the first open —
    * where OUR prebuffer gate decides when the player is revealed — from a
@@ -334,23 +318,6 @@ export class Loading extends StateDerivedView {
    * resume path and showed a 2 s target where 15 s was going to be enforced.
    */
   #hasPlayedOnce = false;
-  #etaPromiseAt = 0;
-  /**
-   * What the chosen proxy takes to produce a session's first segment, from the
-   * playback plan. Seconds, or null before it has told us.
-   */
-  #expectedFirstSegmentSeconds = null;
-  /** What the chosen proxy takes to create a session, in seconds, or null. */
-  #expectedSessionCreateSeconds = null;
-  /**
-   * How much buffer this player actually had when it started, the last few
-   * times. Measured at every `playing` event, because how much is enough is a
-   * property of the player and the device, not something we may pick: it was
-   * 0.5 s after one seek, 2.0 s after another and 20.0 s on a cold open.
-   *
-   * @type {number[]}
-   */
-  #playbackStartBuffers = [];
   /** When the address bar last received the playback position. */
   #urlPositionWrittenAt = 0;
   /** A rebuild after the proxy lost the session is in flight. */
@@ -541,14 +508,6 @@ export class Loading extends StateDerivedView {
   #bufferingShown = false;
   /** @type {ReturnType<typeof setInterval> | null} Periodic stats poll while buffering (peers/speed/amount-left). */
   #bufferingPollTimer = null;
-  /**
-   * Trailing samples of `{ at, ahead }` used to measure how fast the browser's
-   * buffer is actually filling — the basis of the playback ETA. See
-   * #trackBufferFillRate.
-   *
-   * @type {{ at: number, ahead: number }[]}
-   */
-  #bufferFillSamples = [];
   /**
    * Most recent torrent stats (peers / speed / bytes still needed), kept so
    * every surface that answers "how long until I can watch" can show the
@@ -809,7 +768,6 @@ export class Loading extends StateDerivedView {
     document.addEventListener(SESSION_EVENTS.GONE, () => { void this.#rebuildGoneSession(); });
     document.addEventListener(SESSION_EVENTS.PROGRESS, (event) => {
       const detail = event instanceof CustomEvent ? event.detail : null;
-      this.#noteHostTimings(detail);
       this.#noteEffectiveQuality(detail);
     });
     // Leaving for the picker has to reach the address bar too. Nothing else
@@ -986,17 +944,6 @@ export class Loading extends StateDerivedView {
         );
         this.#resumeAskedFor = null;
       }
-      // What this player needed before it moved. The estimate's last term
-      // counts toward this, so it is observed rather than chosen.
-      const aheadAtStart = this.#videoElement instanceof HTMLVideoElement
-        ? bufferedAheadSeconds(this.#videoElement)
-        : null;
-      if (typeof aheadAtStart === "number" && aheadAtStart > 0) {
-        this.#playbackStartBuffers.push(aheadAtStart);
-        if (this.#playbackStartBuffers.length > PLAYBACK_START_SAMPLES) {
-          this.#playbackStartBuffers.shift();
-        }
-      }
       // From here on the player gates its own resumes; our prebuffer cushion
       // applies only to the first reveal. Cleared with the rest of the
       // per-attempt state in #beginPlaybackAttempt.
@@ -1168,65 +1115,6 @@ export class Loading extends StateDerivedView {
    */
 
 
-
-
-
-
-  /**
-   * Measured rate at which the browser's buffer is filling, in seconds of media
-   * gained per second of wall clock. This is the end-to-end rate of the entire
-   * pipeline, so it accounts for every bottleneck at once — including ones the
-   * individual stages cannot see (e.g. segments arriving but being rejected).
-   *
-   * Averaged over a short trailing window rather than taken between two
-   * consecutive polls: media arrives in whole segments, so a per-poll delta
-   * alternates between a spike and zero and would make the ETA jump around.
-   * Returns null until the window covers enough wall time to be meaningful, and
-   * while the buffer is not growing — the caller then reports "unknown" instead
-   * of inventing a number.
-   *
-   * @param {number} bufferedAhead - Current seconds buffered ahead.
-   * @returns {number | null}
-   */
-  #trackBufferFillRate(bufferedAhead) {
-    const now = Date.now();
-    const samples = this.#bufferFillSamples;
-    samples.push({ at: now, ahead: bufferedAhead });
-    while (samples.length > 0 && now - samples[0].at > BUFFER_FILL_WINDOW_MS) {
-      samples.shift();
-    }
-    if (samples.length < 2) {
-      return null;
-    }
-    const oldest = samples[0];
-    const spanMs = now - oldest.at;
-    if (spanMs < BUFFER_FILL_MIN_SPAN_MS) {
-      return null;
-    }
-    const gained = bufferedAhead - oldest.ahead;
-    if (gained <= 0) {
-      return null; // not filling — the honest answer is "unknown", not zero
-    }
-    // Measured up to the last sample that actually grew, not up to now. The
-    // buffer does not fill smoothly: a segment is ~10 s of media and lands at
-    // once, so between two arrivals the buffer sits still. Dividing by the time
-    // since the oldest sample therefore reports a rate that decays purely
-    // because nothing has arrived YET — measured 2026-08-05: a buffer parked at
-    // 10.37 s took its rate from 1.235 down to 1.070 over 1.3 s of waiting, and
-    // the estimate built on it climbed from 11.9 s to 13.7 s while the real
-    // remaining time fell from 1.6 s to 0.25 s. The gap before the next arrival
-    // is real, but it is not a slowdown, and the countdown rule
-    // (#applyMonotonicEta) is what keeps it from being read as one.
-    let lastGrowthAt = now;
-    for (let index = samples.length - 1; index > 0; index -= 1) {
-      if (samples[index].ahead > samples[index - 1].ahead) {
-        lastGrowthAt = samples[index].at;
-        break;
-      }
-    }
-    const growthSpanMs = Math.max(BUFFER_FILL_MIN_SPAN_MS, lastGrowthAt - oldest.at);
-    return gained / (growthSpanMs / 1000);
-  }
 
 
 
@@ -1427,29 +1315,6 @@ export class Loading extends StateDerivedView {
       this.#playbackLive = true;
       this.#applyPendingResume();
     }
-    // The picture has actually started. Score every estimate shown during the
-    // wait that just ended against what really happened — the only moment at
-    // which that comparison is possible.
-    //
-    // LAST, and inside a guard, because this is a measurement about a wait that
-    // is already over and nothing on screen depends on it. It used to run
-    // FIRST, and on 2026-08-19 it threw — `null.toFixed()` on an estimate that
-    // was deliberately absent — which meant the state below was never applied:
-    // `playbackLive` stayed false for the whole session, and the check that
-    // shows the viewer a wait begins by returning when that flag is false. One
-    // exception in a diagnostic left every seek of that session showing a
-    // frozen frame with nothing on it. A measurement must not be able to do
-    // that, whatever is wrong with the measurement.
-    if (state === APP_STATE.ADVANCING) {
-      try {
-        this.#waitingModel.reportEtaAccuracy();
-      } catch (error) {
-        console.warn("[torrent-tv] scoring the wait that just ended failed", error);
-      }
-    }
-    // A wait that is over stops being measured. LAST, so the scoring above —
-    // which is about the wait that just ended — still has its samples.
-    //
     // Nothing used to end this: the polls are stopped by whoever started them,
     // and a failure leaves by another door. Field 2026-09-03, after the app had
     // already declared the session unrecoverable and released it, this component
@@ -1591,21 +1456,6 @@ export class Loading extends StateDerivedView {
   #waitingModel = new WaitingModel();
 
   /**
-   * The buffer's fill rate, as measured by the component that owns the element.
-   *
-   * There are two models — this one decides when the picture may start, the
-   * overlay's decides what to show — and only the overlay's was being given
-   * this reading. The diagnostic is printed by THIS one, which is why every
-   * line of it read `fillRate=n/a` while the buffer was visibly filling to 27
-   * seconds. The rate is the one figure that prices the whole chain at once, so
-   * the model that gates playback is precisely the one that must not be without
-   * it.
-   *
-   * @type {number | null}
-   */
-  #lastFillRate = null;
-
-  /**
    * The buffer reading published by the component that owns the element.
    *
    * One reading, so the gate and the overlay cannot answer the same question
@@ -1639,30 +1489,6 @@ export class Loading extends StateDerivedView {
    * @type {{ video: boolean, audio: boolean }}
    */
   #encodingTracks = { video: false, audio: false };
-
-  /**
-   * Every estimate shown during the current wait, with the moment it was shown.
-   *
-   * The figure on screen is a prediction, and nothing has ever checked it
-   * against what happened. Once the picture starts, each of these can be scored
-   * exactly: an estimate made N seconds before playback began should have said
-   * N. Kept per wait and reported once, so the log carries the shape of the
-   * error — which term is optimistic, and when — rather than a single anecdote.
-   *
-   * @type {Array<{ atMs: number, predicted: number, terms: string }>}
-   */
-  #etaSamples = [];
-
-  /**
-   * Whether the step now shown was named by the PIPELINE rather than worked out
-   * from the measurements. Without it a derived step froze at its first value:
-   * it is stored in the same field, so the next poll saw a step already present
-   * and left it alone, and "Fetching video data" stayed on screen through the
-   * encoding that followed.
-   *
-   * @type {boolean}
-   */
-  #stageFromPipeline = false;
 
   /**
    * The stages of the wait in progress. Every step the viewer is shown opens
@@ -1805,15 +1631,6 @@ export class Loading extends StateDerivedView {
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     document.addEventListener(PLAYER_EVENTS.BUFFER, (event) => {
-      const rate = event instanceof CustomEvent ? event.detail?.fillRate : null;
-      this.#lastFillRate = typeof rate === "number" && Number.isFinite(rate) ? rate : null;
-      // The SAME reading the overlay's model is given. The gate used to measure
-      // the element itself, so one rule ran on two different numbers taken at
-      // two different moments — and they disagreed exactly where it shows: the
-      // overlay announced the cushion 100% met and zero seconds left while the
-      // gate held playback, which is the `[ready] said=0.0 was=42.6` case in the
-      // accuracy report and what the viewer sees as "0 seconds" over a picture
-      // that never starts.
       const ahead = event instanceof CustomEvent ? event.detail?.bufferedAhead : null;
       this.#lastBufferedAhead = typeof ahead === "number" && Number.isFinite(ahead) ? ahead : null;
     });
@@ -1859,8 +1676,6 @@ export class Loading extends StateDerivedView {
     // ordinary wait rather than the notice left over from the last one.
     this.#longWaitAnnounced = false;
     this.#hasPlayedOnce = false;
-    // The previous attempt's rate history says nothing about this one.
-    this.#downloadRateSamples = [];
     this.#waitingModel.reset();
     this.#refusedProxiesForThisOpen.clear();
     return this.#playbackEpoch;
@@ -2396,7 +2211,6 @@ export class Loading extends StateDerivedView {
       this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
 
       const transport = await this.#acquireTransport();
-      this.#waitingModel.markStage("transport");
       this.#throwIfCancelled();
       if (!transport) {
         throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
@@ -3191,17 +3005,6 @@ export class Loading extends StateDerivedView {
     // Source coded resolution — drives the manual quality menu.
     this.#sourceVideoWidth = Number.isFinite(prepared.videoWidth) ? prepared.videoWidth : 0;
     this.#sourceVideoHeight = Number.isFinite(prepared.videoHeight) ? prepared.videoHeight : 0;
-    // What this proxy measured itself taking to produce a first segment. Used
-    // for the gap between the file being downloaded and a segment existing,
-    // where nothing else has a rate yet.
-    this.#expectedFirstSegmentSeconds =
-      Number.isFinite(prepared.expectedFirstSegmentMs) && prepared.expectedFirstSegmentMs > 0
-        ? prepared.expectedFirstSegmentMs / 1000
-        : null;
-    this.#expectedSessionCreateSeconds =
-      Number.isFinite(prepared.expectedSessionCreateMs) && prepared.expectedSessionCreateMs > 0
-        ? prepared.expectedSessionCreateMs / 1000
-        : null;
     if (this.#selectedAudioTrackIndex >= this.#audioTracks.length) {
       this.#selectedAudioTrackIndex = 0;
     }
@@ -3273,7 +3076,6 @@ export class Loading extends StateDerivedView {
     // The plan is what the torrent and the probe together produced: from here
     // the pre-roll is our own session work, and the stage line separates the
     // two rather than reporting one span nobody can act on.
-    this.#waitingModel.markStage("plan");
     this.#debug("playback decision", {
       fileIndex,
       container: prepared.container,
@@ -4884,6 +4686,7 @@ export class Loading extends StateDerivedView {
         // Which rung is playing, so the proxy does not have to infer it from
         // which segments are requested.
         getPlayingHeight: () => this.#playingHeight,
+        getBufferLimitSeconds: () => this.#browserBufferLimitSeconds,
         playHls: (videoElement, manifestUrl, playOptions = {}) =>
           this.#hlsPlayer.play(videoElement, manifestUrl, {
             ...(hlsLoader ? { loader: hlsLoader } : {}),
@@ -4953,36 +4756,8 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * Wall-clock span covered by current buffer observations (see
-   * #trackBufferFillRate) — read-only, pushes no sample. The readiness model
-   * uses this span with its sustained-rate threshold before allowing an early
-   * start.
-   *
-   * @returns {number} Milliseconds; 0 if fewer than 2 samples exist yet.
-   */
-  #bufferFillSpanMs() {
-    const samples = this.#bufferFillSamples;
-    return samples.length < 2 ? 0 : Date.now() - samples[0].at;
-  }
-
-  /**
-   * Wait until enough video is buffered ahead before revealing the player.
-   *
-   * The cushion target and the fill-rate measurement are the SAME ones
-   * #computeUnifiedEta uses for the displayed percent/ETA (#adaptiveCushionTarget,
-   * #trackBufferFillRate) — this function calls #computeUnifiedEta itself each
-   * tick rather than recomputing them, so the reveal gate and the number shown
-   * to the viewer can never disagree about what "ready" means. Also fetches the
-   * SAME live transcode progress the mid-playback buffering pill polls
-   * (#session.fetchActiveTranscodeProgress), at the same ~1.5s cadence, and
-   * renders it through the SAME formatter (#formatBufferingText) — so the text
-   * is identical in format and in data source across first-open, this pre-
-   * buffer tail, and a later seek, not three independent approximations of the
-   * same question.
-   *
-   * Continues until the shared readiness rule is met. A slow source must keep
-   * the viewer on the loading screen rather than start playback with a buffer
-   * that is known to be insufficient.
+   * Wait until the proxy's trajectory forecast says playback can reach the end
+   * without exhausting the measured client buffer.
    *
    * @param {HTMLVideoElement} videoElement
    * @returns {Promise<void>}
@@ -5007,7 +4782,7 @@ export class Loading extends StateDerivedView {
       // frame.
       pauseWithoutIntent(videoElement);
     }
-    let loggedTarget = -1;
+    let loggedReason = "";
     // For the wedge below: what the buffer last read, and when it last grew.
     let lastAhead = -1;
     let lastGrowthAt = Date.now();
@@ -5042,55 +4817,29 @@ export class Loading extends StateDerivedView {
       }
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
-      const fillSpanMs = this.#bufferFillSpanMs();
-      const remainingSeconds = Number.isFinite(videoElement.duration)
-        ? Math.max(0, videoElement.duration - videoElement.currentTime)
-        : null;
       const unified = this.#waitingModel.update({
-        bufferedAhead: ahead,
-        fillRate: this.#lastFillRate,
-        fillSpanMs,
-        remainingSeconds,
-        bufferLimitSeconds: this.#browserBufferLimitSeconds,
-        downloadStats: this.#lastDownloadStats,
-        transcodeProgress: cachedProgress
+        playbackReadiness: cachedProgress?.playbackReadiness,
+        bufferedAhead: ahead
       });
-      const fillRate = unified.fillRate;
-      // The model owns this figure now: the gate releases on it and the estimate
-      // counts down to it, so they cannot describe different moments.
-      this.#waitingModel.update({
-        fillRate: Number.isFinite(fillRate) ? fillRate : null,
-        fillSpanMs,
-        remainingSeconds,
-        bufferLimitSeconds: this.#browserBufferLimitSeconds
-      });
-      // THE gate rule lives in the model, in one copy. It was written here as
-      // well, with its own thresholds, and two copies of one rule can only be
-      // tested against themselves — while they were separate the overlay
-      // announced the cushion met on a wait that then ran 42.6 s.
-      const gate = this.#waitingModel.mayStartPlayback({
-        ahead,
-        fillRate,
-        fillSpanMs,
-        remainingSeconds,
-        bufferLimitSeconds: this.#browserBufferLimitSeconds
-      });
-      const target = gate.target;
-
-      if (gate.ready) {
+      const readiness = cachedProgress?.playbackReadiness;
+      if (readiness?.version === 1 && readiness.ready === true) {
         this.#logEvt(
-          `prebuffer ready start=${gate.reason} ` +
-            `ahead=${ahead.toFixed(1)}s target=${target.toFixed(1)}s ` +
-            `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
+          `prebuffer ready delay=${Number(readiness.delaySeconds).toFixed(2)}s ` +
+            `ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s ` +
+            `prepared=${readiness.preparedSegments} reason=${readiness.reason}`
         );
         this.#logColdStart();
         return;
       }
-      if (Math.round(target) !== loggedTarget) {
-        loggedTarget = Math.round(target);
+      const reason = readiness?.version === 1
+        ? String(readiness.reason ?? "forecast-unavailable")
+        : "proxy-forecast-unavailable";
+      if (reason !== loggedReason) {
+        loggedReason = reason;
         this.#logEvt(
-          `prebuffer target=${loggedTarget}s ahead=${ahead.toFixed(1)}s ` +
-            `fillRate=${Number.isFinite(fillRate) ? fillRate.toFixed(2) : "n/a"}`
+          `prebuffer waiting ahead=${ahead.toFixed(1)}s ` +
+            `delay=${Number.isFinite(readiness?.delaySeconds) ? `${readiness.delaySeconds.toFixed(2)}s` : "unknown"} ` +
+            `reason=${reason}`
         );
       }
       // The loader stops at a segment join while the element is paused, which
@@ -5111,7 +4860,7 @@ export class Loading extends StateDerivedView {
         lastAhead = ahead;
         lastGrowthAt = Date.now();
       }
-      this.#setPhaseProgress(2, unified.cushionPercent ?? 0); // phase 2 (buffering) fills the final third
+      this.#setPhaseProgress(2, unified.cushionPercent ?? 0);
       // Renders on its own — its return value must NOT be fed back through
       // setStatus. Doing that stored the finished text as the STEP, and the
       // next render appended the supply, readiness and time rows to it: exactly
@@ -5125,9 +4874,7 @@ export class Loading extends StateDerivedView {
         detail: {
           downloadStats: this.#lastDownloadStats,
           transcodeProgress: cachedProgress,
-          fillRate,
-          fillSpanMs,
-          remainingSeconds,
+          playbackReadiness: readiness ?? null,
           bufferLimitSeconds: this.#browserBufferLimitSeconds
         }
       }));
@@ -5209,16 +4956,8 @@ export class Loading extends StateDerivedView {
   }
 
   /**
-   * Render loading status for the transcode stage — the only thing the player
-   * waits for before playback starts. Shows transcoder warmup while ffmpeg
-   * spins up, then the SAME cushion percent / cushion-remaining-seconds /
-   * unified "time to playback" estimate the mid-playback buffering pill shows
-   * (#computeUnifiedEta) — not a separate,
-   * narrower "just the first 4s segment" calculation, which used to disagree
-   * with what the buffering pill shows for the exact same session (field-
-   * reported: this screen was never migrated when the pill moved off the
-   * whole-file percent onto the cushion figures). Used both by the warmup
-   * polling inside the transcode session and by #startTranscodeProgressPoll.
+   * Render the proxy's playback forecast and measured buffer while transcode
+   * progress is polled.
    *
    * @param {object | null} progress
    * @returns {void}
@@ -5230,27 +4969,9 @@ export class Loading extends StateDerivedView {
     const warmupPercent =
       typeof progress.warmupPercent === "number" ? progress.warmupPercent : NaN;
 
-    // The live download stats captured by the stats poll, so this screen feeds
-    // #formatBufferingText the SAME two-stage input a mid-playback seek does —
-    // the supply line must not vanish here just because a transcode session
-    // now exists (field-reported: the first-open screen and the seek overlay
-    // showed different information for the same underlying state).
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
-      fillRate: this.#lastFillRate,
-      fillSpanMs: this.#bufferFillSpanMs(),
-      bufferLimitSeconds: this.#browserBufferLimitSeconds,
-      remainingSeconds: Number.isFinite(this.#videoElement.duration)
-        ? Math.max(0, this.#videoElement.duration - this.#videoElement.currentTime)
-        : null,
-      // What the proxy measured on this file: the smallest buffer at which no
-      // interruption reaches the viewer. It replaces a ceiling of 25 s that
-      // nobody had shown to be necessary — on the field torrent the measured
-      // answer is 7-9 s, which is sixteen fewer seconds of spinner before the
-      // picture starts.
-      minimumBufferSeconds: progress?.minimumBufferSeconds ?? undefined,
-      downloadStats: this.#lastDownloadStats,
-      transcodeProgress: progress
+      playbackReadiness: progress.playbackReadiness
     });
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
     this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
@@ -5263,19 +4984,13 @@ export class Loading extends StateDerivedView {
     // that fault, so the render now returns nothing and there cannot be a
     // fourth.
     if (Number.isFinite(warmupPercent) && (unified.cushionPercent ?? 0) <= 0) {
-      this.#stageFromPipeline = true;
       this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%`);
     }
     document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
       detail: {
         downloadStats: this.#lastDownloadStats,
         transcodeProgress: progress,
-        fillRate: unified.fillRate,
-        fillSpanMs: this.#bufferFillSpanMs(),
-        bufferLimitSeconds: this.#browserBufferLimitSeconds,
-        remainingSeconds: Number.isFinite(this.#videoElement.duration)
-          ? Math.max(0, this.#videoElement.duration - this.#videoElement.currentTime)
-          : null
+        playbackReadiness: progress.playbackReadiness
       }
     }));
   }
@@ -5688,28 +5403,6 @@ export class Loading extends StateDerivedView {
         : null)
     });
     this.#visiblePictureWatch.start();
-  }
-
-  /**
-   * Take the host's own timings from a progress report.
-   *
-   * They also arrive on the playback plan, but that is read once per file — so
-   * on a proxy that had just restarted, when neither figure existed yet, the
-   * browser kept the nulls for the whole session and every later seek estimated
-   * the wait with one term of four. This response is polled about every 1.5 s.
-   *
-   * @param {{ expectedSessionCreateMs?: number, expectedFirstSegmentMs?: number } | null} progress
-   * @returns {void}
-   */
-  #noteHostTimings(progress) {
-    const create = Number(progress?.expectedSessionCreateMs);
-    if (Number.isFinite(create) && create > 0) {
-      this.#expectedSessionCreateSeconds = create / 1000;
-    }
-    const first = Number(progress?.expectedFirstSegmentMs);
-    if (Number.isFinite(first) && first > 0) {
-      this.#expectedFirstSegmentSeconds = first / 1000;
-    }
   }
 
   /**
@@ -6288,50 +5981,8 @@ function canAppendCopiedAudio(codec, container) {
   console.debug(`[evt] codec-support audio ${codec}/${container} asked "${mime}" -> ${supported}`);
   return supported;
 }
-// Pre-buffer cushion accumulated before the player is revealed, so a transient
-// dip right after start does not immediately stall. Readiness is controlled by
-// the measured buffer and its sustained fill rate, without a time-based release.
-// The target is adaptive (see #waitForPrebuffer): smaller when production has
-// comfortable margin over realtime, larger when it barely keeps up, and
-// smaller still when the proxy has measured what THIS file's own interruptions
-// demand. PREBUFFER_TARGET_SECONDS is the fallback before the fill rate is
-// measurable.
-// These figures used to be capped by "the proxy look-ahead window (~32 s)",
-// which was `MAX_LOOKAHEAD_SEGMENTS × 4 s` — eight segments ahead of the ENCODE
-// HEAD, and nothing to do with how much the player may hold ahead of the
-// VIEWER. Buffering deeper does not trigger a seek-restart: hls.js keeps one
-// fragment outstanding per track, so depth changes how many segments are asked
-// for and never how far ahead of the encode head the outstanding request sits
-// (roadmap item 4).
 // A scrub emits `seeking` on every pointer move; only where it settles counts.
-// Long enough to collapse a drag into one report, short enough that the encoder
-// starts on the real target promptly.
 const SEEK_REPORT_DEBOUNCE_MS = 300;
-const _PREBUFFER_TARGET_SECONDS = 15;
-// ffmpeg's `speed` is a CUMULATIVE average over the whole run, so the first
-// samples after a (re)start are dominated by process start-up and input open —
-// not by encoding. Field-observed on a seek-restart: `0.00757x` a second in,
-// settling to `1.4x` shortly after. Feeding that first sample into an ETA gave
-// "32m 56s to playback" for a 15 s cushion (14.958 / 0.00757), and printing it
-// verbatim gave "0.00757x realtime". Ignore the multiplier — for both the ETA
-// and the display — until the run has actually produced this many seconds of
-// content, by which point the cumulative average is meaningful.
-// Trailing window over which the buffer's fill rate is averaged. Media lands in
-// whole segments (~4 s each, in bursts), so a rate taken between two adjacent
-// polls alternates between a spike and zero; the window smooths that into the
-// sustained rate the ETA needs. The minimum span stops a rate being reported
-// from a window too short to have seen a segment arrive at all.
-const BUFFER_FILL_WINDOW_MS = 12_000;
-const BUFFER_FILL_MIN_SPAN_MS = 3_000;
-const _PREBUFFER_MIN_SECONDS = 6;
-// What the player needs before it resumes ITSELF after a seek. Nothing of ours
-// gates that moment — hls.js and iOS native both start as soon as the new
-// position is covered, measured 2026-08-05 at 0.5 s buffered. Kept a little
-// above what was measured so the figure does not reach zero before the picture
-// moves, but nowhere near the first-open cushion: counting a seek toward 15 s
-// described a moment that never came, and the number still read 4.9 s when
-// playback had already resumed.
-const _RESUME_TARGET_SECONDS = 2;
 // How often the playback position may be written to the address bar, so a
 // bookmark taken at any moment is at most this far behind the picture.
 // `timeupdate` fires about four times a second, which is far too often to
@@ -6340,31 +5991,8 @@ const _RESUME_TARGET_SECONDS = 2;
 // refusing. These writes REPLACE, so however long the film, the history does
 // not grow by a single entry.
 const URL_POSITION_INTERVAL_MS = 1_000;
-// How fast the pipeline is assumed to fill the buffer before it has shown a
-// rate of its own. Measured around 10x realtime on the two sessions of
-// 2026-08-05; a fifth of that is used, so the estimate errs long rather than
-// promising a speed nothing has yet demonstrated.
-// How many recent playback starts are kept to learn how much buffer this
-// player needs before it moves.
-const PLAYBACK_START_SAMPLES = 5;
-// The proxy's nominal segment length. Used only as the floor for "how much
-// media is enough": no player starts on less than one segment, so this is a
-// property of the playlist we serve, not a value chosen to make an estimate
-// come out right.
-const _PREBUFFER_MAX_SECONDS = 25;
-const _PREBUFFER_BASE_SECONDS = 12;
-// Start early when the fill rate has sustained a healthy surplus over the FULL
-// buffer-fill window (BUFFER_FILL_WINDOW_MS above — not merely the shorter
-// span that makes the rate trustworthy at all). The full-window requirement
-// is the anti-burst protection from the 0.8.45 start-stutter fix: segments
-// land in bursts every ~4-11 s on a slow/warming encoder, so a short window
-// reads a single burst as "3x realtime" and releases with a tiny cushion that
-// then drains. At lower rates, playback waits for the full adaptive target or
-// the proxy-measured cushion.
-// How long a motionless buffer is allowed to stand before the loader is pointed
-// at the end of the media. Segments here take a second or two to arrive, so
-// four seconds of no movement at all is not slowness — it is the paused-loader
-// wedge described at `resumeLoadAt`.
+// The HLS loader can stop at a segment join while the element is paused. If the
+// measured browser buffer stays unchanged, request again from its actual end.
 const PREBUFFER_NUDGE_AFTER_MS = 4_000;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;

@@ -3,22 +3,24 @@
  *
  * The HLS loader records how fast each media segment actually crossed the
  * data channel; this module keeps a short rolling window of those samples
- * and, while a transcode session is active, posts the MEDIAN link throughput
- * plus the player's buffered seconds to the proxy every ~10 s
+ * and, while a transcode session is active, posts the newest raw transfer
+ * measurement and its sample time alongside the existing link estimate and
+ * the player's buffer state every 1.5 s
  * (`POST /api/transcode-sessions/:id/net-report`). The proxy's realtime
  * budget uses the report as its viewer-link downshift trigger.
  *
  * Best-effort telemetry: send failures are ignored, sending stops with the
- * session. Median (not mean) so a single stalled fetch cannot crater the
- * estimate. Module-level singleton — one playback at a time.
+ * session. The smoothed estimate remains for the quality budget; the playback
+ * forecast uses the timestamped transfer samples. Module-level singleton —
+ * one playback at a time.
  */
 
 import { FIRST_PROBE_BYTES, nextProbeBytes } from "./transport/link-probe.js";
 
 const SAMPLE_WINDOW_MS = 30_000;
-const REPORT_INTERVAL_MS = 10_000;
-// Ignore sub-50ms transfers: tiny/cached responses measure timer noise, not
-// the link.
+const REPORT_INTERVAL_MS = 1_500;
+// Keep the existing smoothed estimate for the quality budget. The playback
+// forecast receives every positive-duration transfer sample separately.
 const MIN_SAMPLE_MS = 50;
 const MIN_SAMPLES = 2;
 
@@ -26,18 +28,15 @@ const MIN_SAMPLES = 2;
 let samples = [];
 /** @type {{ timer: ReturnType<typeof setInterval> } | null} */
 let active = null;
+/** Last smoothed estimate retained for the existing quality report. @type {number | null} */
+let lastLinkMbps = null;
 
 /**
- * The last link speed this connection ever showed.
- *
- * A viewer who has stopped the picture stops measuring, and a report skipped
- * for want of a fresh figure would lose the very fact it is being sent to
- * carry. The last figure is what is known about the link, and it is truer than
- * sending nothing.
- *
- * @type {number | null}
+ * Newest raw transfer sample. Repeated reports keep its timestamp so the proxy
+ * can distinguish a repeated value from a new measurement.
  */
-let lastLinkMbps = null;
+/** @type {{ mbps: number, at: number } | null} Newest measured transfer. */
+let lastLinkReading = null;
 
 /**
  * Record one completed segment transfer (called by the HLS loader).
@@ -51,11 +50,18 @@ let lastLinkMbps = null;
  * @returns {void}
  */
 export function recordNetSample(bytes, ms) {
-  if (!Number.isFinite(bytes) || bytes <= 0 || !Number.isFinite(ms) || ms < MIN_SAMPLE_MS) {
+  if (!Number.isFinite(bytes) || bytes <= 0 || !Number.isFinite(ms) || ms <= 0) {
     return;
   }
   const now = Date.now();
-  samples.push({ mbps: (bytes * 8) / (ms / 1000) / 1e6, at: now });
+  const sample = {
+    mbps: (bytes * 8) / (ms / 1000) / 1e6,
+    at: performance.timeOrigin + performance.now()
+  };
+  lastLinkReading = sample;
+  if (ms >= MIN_SAMPLE_MS) {
+    samples.push(sample);
+  }
   if (samples.length > 64) {
     prune(now);
   }
@@ -90,19 +96,31 @@ export function getEstimatedLinkMbps() {
  * @returns {number | null}
  */
 function medianLinkMbps() {
+  return medianLinkReading()?.mbps ?? null;
+}
+
+/**
+ * Current link estimate and the timestamp of its newest contributing sample.
+ *
+ * @returns {{ mbps: number, at: number } | null}
+ */
+function medianLinkReading() {
   prune(Date.now());
   if (samples.length < MIN_SAMPLES) {
     return null;
   }
-  const sorted = samples.map((s) => s.mbps).sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+  const sorted = samples.map((sample) => sample.mbps).sort((a, b) => a - b);
+  return {
+    mbps: sorted[Math.floor(sorted.length / 2)],
+    at: Math.max(...samples.map((sample) => sample.at))
+  };
 }
 
 /**
  * Start reporting for a transcode session. Stops any previous reporter (one
  * playback at a time) and resets the sample window.
  *
- * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getPositionSeconds?: () => number | null, getPlaying?: () => boolean, getWaiting?: () => boolean, getPlayingHeight?: () => number, getVisiblePicture?: () => { width: number, height: number } | null }} params
+ * @param {{ transport: { fetch: (path: string, options?: object) => Promise<unknown> }, sessionId: string, consumerId?: string, getBufferedAheadSec: () => number, getBufferLimitSeconds?: () => number | null, getPositionSeconds?: () => number | null, getPlaying?: () => boolean, getWaiting?: () => boolean, getPlayingHeight?: () => number, getVisiblePicture?: () => { width: number, height: number } | null }} params
  * @returns {void}
  */
 export function startNetReporter({
@@ -110,6 +128,7 @@ export function startNetReporter({
   sessionId,
   consumerId = "",
   getBufferedAheadSec,
+  getBufferLimitSeconds,
   getPositionSeconds,
   getPlaying,
   getWaiting,
@@ -128,6 +147,9 @@ export function startNetReporter({
     if (measured !== null) {
       lastLinkMbps = measured;
     }
+    const linkMbps = lastLinkMbps;
+    const linkSampleMbps = lastLinkReading?.mbps ?? null;
+    const linkSampleAt = lastLinkReading?.at ?? null;
     // THE LINK FIGURE IS ONE FIELD OF THIS REPORT, NOT ITS TICKET. Everything
     // else in it is a fact about the VIEWER — where they are, how much they
     // hold, whether the picture is moving, whether they are blocked on us,
@@ -143,7 +165,6 @@ export function startNetReporter({
     // hidden — returned on this line. The proxy filled the silence by assuming
     // the film was running and placed a viewer who had not seen a frame 146
     // seconds into it.
-    const linkMbps = lastLinkMbps;
     let bufferedAheadSec = 0;
     try {
       const value = getBufferedAheadSec();
@@ -152,6 +173,13 @@ export function startNetReporter({
       // silent-ok: the buffered figure is one field of a report whose point is
       // the link speed beside it, and zero is a truthful reading of a buffer
       // that cannot be read. The report still goes.
+    }
+    let bufferLimitSeconds = null;
+    try {
+      const value = typeof getBufferLimitSeconds === "function" ? getBufferLimitSeconds() : null;
+      bufferLimitSeconds = Number.isFinite(value) && value > 0 ? value : null;
+    } catch {
+      // A missing capacity does not invalidate the other viewer measurements.
     }
     // Where the picture is. A session is shared by every viewer of a copied
     // stream, and the proxy used to work this out by subtracting the buffer
@@ -255,6 +283,7 @@ export function startNetReporter({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bufferedAheadSec,
+          ...(bufferLimitSeconds === null ? {} : { bufferLimitSeconds }),
           playing,
           waiting,
           onScreen,
@@ -264,6 +293,8 @@ export function startNetReporter({
           ...(visiblePicture ? { visiblePicture } : {}),
           ...(consumerId ? { consumerId } : {}),
           ...(linkMbps === null ? {} : { linkMbps }),
+          ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
+          ...(linkSampleAt === null ? {} : { linkSampleAt }),
           ...(positionSeconds === null ? {} : { positionSeconds })
         })
       })
@@ -271,6 +302,7 @@ export function startNetReporter({
   };
   const timer = setInterval(send, REPORT_INTERVAL_MS);
   active = { timer, send };
+  send();
 }
 
 /**

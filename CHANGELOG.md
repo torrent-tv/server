@@ -1,3 +1,8 @@
+## 0.31.2
+
+- **Fix**: Use the proxy's versioned playback forecast as the sole startup release rule and remove the duplicate client-side readiness calculation.
+- **Fix**: Show the proxy's remaining-wait estimate and explain when a proxy does not yet return the required forecast.
+
 ## 0.31.1
 
 - **Fix**: Refresh sidecar audio track labels and properties after their container header becomes available, while preserving the active track indices and HLS rendition count.
