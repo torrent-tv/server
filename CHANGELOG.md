@@ -1,3 +1,7 @@
+## 0.31.3
+
+- **Fix**: Report the same playable-buffer depth used by the browser's startup wait, including small initial timestamp offsets, so the proxy readiness model receives the actual client cushion.
+
 ## 0.31.2
 
 - **Fix**: Use the proxy's versioned playback forecast as the sole startup release rule and remove the duplicate client-side readiness calculation.

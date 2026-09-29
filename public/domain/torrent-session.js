@@ -4,6 +4,7 @@ import { PLAYER_EVENTS } from "../shared/events.js";
 import { viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
+import { bufferedAheadSeconds as measureBufferedAheadSeconds } from "./buffer-metrics.js";
 import { startNetReporter, stopNetReporter } from "./net-report.js";
 import { NoCapacityError, OutputUnavailableError } from "./proxy-outcome.js";
 import { pictureSizeOf } from "./visible-picture.js";
@@ -1077,7 +1078,7 @@ export class TorrentSession {
         // shared by everyone watching it, so without these the proxy can only
         // act on whichever viewer reported last.
         consumerId: this.consumerId,
-        getBufferedAheadSec: bufferedAheadSeconds,
+        getBufferedAheadSec: bufferedAheadSecondsForReporter,
         getBufferLimitSeconds: options.getBufferLimitSeconds,
         getPositionSeconds: playbackPositionSeconds,
         getPlaying: pictureIsMoving,
@@ -1436,31 +1437,24 @@ function buildConsumerId() {
 }
 
 /**
- * Seconds of media buffered ahead of the playhead, for the viewer net
- * reporter. Looks the player element up lazily by its stable id (the app has
- * exactly one video element) — this method runs from the session layer,
- * which has no element reference at session-create time.
+ * Seconds of playable media buffered ahead of the playhead, for the viewer
+ * report. The calculation comes from `buffer-metrics.js`, shared with the
+ * startup wait and player, while this session-layer function supplies the
+ * media element lazily by its stable id.
  *
  * @returns {number}
  */
-function bufferedAheadSeconds() {
+function bufferedAheadSecondsForReporter() {
   const video = document.querySelector("#player__video");
   if (!(video instanceof HTMLVideoElement)) {
     return 0;
   }
-  const t = video.currentTime;
-  const ranges = video.buffered;
-  for (let i = 0; i < ranges.length; i++) {
-    if (ranges.start(i) <= t && t <= ranges.end(i)) {
-      return Math.max(0, ranges.end(i) - t);
-    }
-  }
-  return 0;
+  return measureBufferedAheadSeconds(video);
 }
 
 /**
  * Where the picture is, for the viewer net reporter. Looked up the same way
- * and for the same reason as `bufferedAheadSeconds` above.
+ * and for the same reason as `bufferedAheadSecondsForReporter` above.
  *
  * Null rather than zero when there is no element to read, because the proxy
  * places an audio run at the earliest position it is told and zero is a
