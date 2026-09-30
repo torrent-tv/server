@@ -157,3 +157,35 @@ export function decideByEpisodeTitles({ checked, titles, uncheckedRemain }) {
 export function resultYearAgrees(year, statedYears) {
   return statedYears.length > 0 && yearAgrees(year, statedYears);
 }
+
+/**
+ * A work identified by one of its ALTERNATIVE titles when no main or original
+ * title matched.
+ *
+ * The provider keeps the spellings a work was released or transliterated
+ * under beside its main title: "Hard to Be a God" lists `Trudno byt' bogom`,
+ * "Howl's Moving Castle" lists `Hauru no Ugoku Shiro`. A release named in one
+ * of those spellings matches nothing by title and is found by this stage. The
+ * comparison is the same exact equality after {@link normalizeTitle}. One work
+ * whose alternative titles contain a searched spelling is the work; two are
+ * `ambiguous`; none, with results left unchecked, is `undetermined`.
+ *
+ * @param {object} params
+ * @param {Array<{ candidate: Candidate, titles: string[] }>} params.checked
+ * @param {string[]} params.queries - Every spelling searched, normalized.
+ * @param {boolean} params.uncheckedRemain
+ * @returns {Identity}
+ */
+export function decideByAlternativeTitles({ checked, queries, uncheckedRemain }) {
+  const wanted = new Set(queries);
+  const qualifiers = checked
+    .filter(({ titles }) => titles.some((title) => wanted.has(normalizeTitle(title))))
+    .map(({ candidate }) => candidate);
+  if (qualifiers.length >= 2) {
+    return { status: "ambiguous", candidates: qualifiers.slice(0, 5) };
+  }
+  if (qualifiers.length === 1) {
+    return { status: "identified", candidates: qualifiers };
+  }
+  return { status: uncheckedRemain ? "undetermined" : "not-found", candidates: [] };
+}

@@ -176,6 +176,22 @@ export class TmdbSource {
   }
 
   /**
+   * Every alternative title the provider holds for one work — the spellings it
+   * was released or transliterated under (`Trudno byt' bogom`, `Hauru no Ugoku
+   * Shiro`). The same for every language, so the answer is not keyed by one.
+   *
+   * @param {"tv" | "movie"} kind
+   * @param {number} id
+   * @param {{ deadlineAt: number }} options
+   * @returns {Promise<string[]>}
+   */
+  async alternativeTitles(kind, id, options) {
+    const body = await this.#get(`/${kind}/${id}/alternative_titles`, {}, MAX_WORK_BYTES, options);
+    const entries = Array.isArray(kind === "tv" ? body?.results : body?.titles) ? (kind === "tv" ? body.results : body.titles) : [];
+    return entries.map((entry) => String(entry?.title ?? "")).filter((title) => title.length > 0);
+  }
+
+  /**
    * One season of a series, reduced to its episodes.
    *
    * @param {number} id

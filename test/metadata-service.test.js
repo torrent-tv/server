@@ -20,9 +20,9 @@ import { ImageFetcher } from "../services/metadata/ImageFetcher.js";
  * A provider that answers searches from a table and counts what it is asked.
  *
  * @param {Record<string, Array<{ id: number, name: string, year: number | null }>>} table - `kind|query` → results.
- * @param {{ fail?: Set<string>, totalPages?: number, seasons?: Record<string, string[]> }} [options]
+ * @param {{ fail?: Set<string>, totalPages?: number, seasons?: Record<string, string[]>, alternative?: Record<string, string[]> }} [options]
  */
-function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {} } = {}) {
+function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {}, alternative = {} } = {}) {
   const asked = [];
   return {
     asked,
@@ -37,6 +37,10 @@ function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {} } = 
     async work(kind, id) {
       asked.push(`work|${kind}|${id}`);
       return { kind, tmdbId: id, title: "T", originalTitle: "T", year: 2000, overview: "", poster: null, backdrop: null, seasons: [] };
+    },
+    async alternativeTitles(kind, id) {
+      asked.push(`alternative|${kind}|${id}`);
+      return alternative[`${kind}|${id}`] ?? [];
     },
     async season(id, number) {
       asked.push(`season|${id}|${number}`);
@@ -99,6 +103,26 @@ test("a search is cached per language, and a repeated question asks nothing", as
   assert.equal(source.asked.length, afterFirst);
   await metadata.identify({ names: ["Title.2020"], kindHint: "movie", language: "de-DE" });
   assert.ok(source.asked.length > afterFirst);
+});
+
+test("a transliterated title is identified by the provider's alternative titles", async () => {
+  const source = fakeSource(
+    { "movie|Trudno byt Bogom": [{ id: 110402, name: "Hard to Be a God", year: 2014 }] },
+    { alternative: { "movie|110402": ["It's hard to be a God", "Trudno byt' bogom"] } }
+  );
+  const answer = await service(source).identify({ names: ["Trudno.byt.Bogom.2013.RUS.BDRip.XviD.AC3.-HQCLU"], kindHint: null, language: "en-US" });
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 110402);
+});
+
+test("without a stated year the alternative titles are not consulted", async () => {
+  const source = fakeSource(
+    { "movie|Trudno byt Bogom": [{ id: 110402, name: "Hard to Be a God", year: 2014 }] },
+    { alternative: { "movie|110402": ["Trudno byt' bogom"] } }
+  );
+  const answer = await service(source).identify({ names: ["Trudno.byt.Bogom"], kindHint: "movie", language: "en-US" });
+  assert.equal(answer.status, "not-found");
+  assert.ok(!source.asked.some((line) => line.startsWith("alternative|")));
 });
 
 test("a shortened series title is identified by the episode names of its files", async () => {
