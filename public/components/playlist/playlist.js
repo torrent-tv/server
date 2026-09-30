@@ -1,6 +1,7 @@
 
 import { playlistRows } from "../../domain/playlist-groups.js";
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { playlistNaming } from "../../domain/media-info.js";
+import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
 /**
  * Playlist overlay view.
@@ -28,6 +29,10 @@ export class Playlist {
   #currentFileIndex = -1;
   /** Where the application's state machine is; see APP_EVENTS.STATE_CHANGED. */
   #appState = "";
+  /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
+  #media = null;
+  /** Each group's summary, by folder, so a name can change without a rebuild. @type {Map<string, HTMLElement>} */
+  #summaries = new Map();
 
 
   #onAppReset = () => {
@@ -43,6 +48,18 @@ export class Playlist {
     this.#videoFiles = Array.isArray(payload?.video) ? payload.video : [];
     this.#currentFileIndex = -1;
     this.#renderList();
+  };
+
+  /**
+   * Names from the metadata service arrived or changed. Applied to the rows
+   * already on screen rather than by rebuilding them, so a group the viewer
+   * opened stays open.
+   *
+   * @param {CustomEvent} event
+   */
+  #onMediaInfo = (event) => {
+    this.#media = event instanceof CustomEvent ? event.detail : null;
+    this.#applyNames();
   };
 
   /** @param {CustomEvent} event */
@@ -69,6 +86,7 @@ export class Playlist {
     document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onAppStateChanged);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onSetActiveMediaFile);
+    document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfo);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
@@ -147,24 +165,74 @@ export class Playlist {
 
   #renderList() {
     this.#root.textContent = "";
-    for (const row of playlistRows(this.#videoFiles)) {
+    this.#summaries = new Map();
+    /** Rows a viewer sees without opening anything. @type {number[]} */
+    const inView = [];
+    for (const row of playlistRows(this.#videoFiles, playlistNaming(this.#media))) {
       if (row.kind === "file") {
         this.#root.append(this.#fileItem(row.file, row.label));
+        inView.push(Number(row.file?.index));
         continue;
       }
       const item = document.createElement("li");
       const group = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = row.label;
+      this.#summaries.set(row.folder, summary);
       const files = document.createElement("ul");
       for (const member of row.files) {
         files.append(this.#fileItem(member.file, member.label));
       }
+      // The episode names of a folder are wanted when it is opened, whether by
+      // the viewer or because it holds what is playing.
+      const memberIndexes = row.files.map((member) => Number(member.file?.index));
+      group.addEventListener("toggle", () => {
+        if (group.open) {
+          this.#wantNames(memberIndexes);
+        }
+      });
       group.append(summary, files);
       item.append(group);
       this.#root.append(item);
     }
+    this.#wantNames(inView);
     this.#updateActiveHighlight();
+  }
+
+  /**
+   * Put the current names on the rows already built.
+   */
+  #applyNames() {
+    const labels = new Map();
+    for (const row of playlistRows(this.#videoFiles, playlistNaming(this.#media))) {
+      if (row.kind === "file") {
+        labels.set(Number(row.file?.index), row.label);
+        continue;
+      }
+      const summary = this.#summaries.get(row.folder);
+      if (summary) {
+        summary.textContent = row.label;
+      }
+      for (const member of row.files) {
+        labels.set(Number(member.file?.index), member.label);
+      }
+    }
+    for (const button of this.#root.querySelectorAll(Playlist.SELECTOR.fileButton)) {
+      const label = labels.get(Number(button.dataset.fileIndex));
+      if (typeof label === "string") {
+        button.textContent = label;
+      }
+    }
+  }
+
+  /**
+   * @param {number[]} fileIndexes
+   */
+  #wantNames(fileIndexes) {
+    const wanted = fileIndexes.filter(Number.isInteger);
+    if (wanted.length > 0) {
+      document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.WANT_FILES, { detail: { fileIndexes: wanted } }));
+    }
   }
 
   /**

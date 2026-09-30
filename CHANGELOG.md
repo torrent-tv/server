@@ -1,3 +1,7 @@
+## 0.34.0
+
+- **New**: The page asks the metadata service what a release is as soon as it is chosen, and shows the answer when the proxy has said what is in it: numbered episode titles in the playlist ("2. Murder in the Mews", season names on season folders), the episode's still or the work's image in the player while a file loads, and the title in the system media controls. Only exact matches are shown; anything else keeps the release's own names. An answer for a replaced choice of release is dropped, and nothing on the playback path waits for any of it. TMDB is credited on the picker.
+
 ## 0.33.1
 
 - **Fix**: An episode number the provider's season does not have now stops matching by number for the whole season, as a title pointing elsewhere already did. Measured on Firefly: the release numbers fourteen episodes in production order, TMDB lists eleven in broadcast order, and numbers 1-11 were named with the wrong episodes; those files now keep their own names.

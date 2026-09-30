@@ -1,4 +1,5 @@
-import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { artFor } from "../../domain/media-info.js";
 import {
   APP_VIEW,
   MEDIA_INTENT,
@@ -498,6 +499,39 @@ export class Player extends StateDerivedView {
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
   };
 
+  /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
+  #media = null;
+
+  /** The file being played or loaded, for its picture. */
+  #activeFileIndex = -1;
+
+  /** @param {CustomEvent} event */
+  #onMediaInfo = (event) => {
+    this.#media = event instanceof CustomEvent ? event.detail : null;
+    this.#applyPoster();
+  };
+
+  /** @param {CustomEvent} event */
+  #onActiveFileForPoster = (event) => {
+    const fileIndex = Number(event instanceof CustomEvent ? event.detail?.fileIndex : NaN);
+    this.#activeFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
+    this.#applyPoster();
+  };
+
+  /**
+   * The picture the element shows until its first frame: the episode's own
+   * still, else the work's image. Removed when there is none, so one release's
+   * picture is never left over the next one's loading.
+   */
+  #applyPoster() {
+    const url = artFor(this.#media, this.#activeFileIndex);
+    if (url) {
+      this.#video.poster = url;
+    } else {
+      this.#video.removeAttribute("poster");
+    }
+  }
+
   /** @param {CustomEvent} event */
   #onSetMediaFiles = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
@@ -558,6 +592,9 @@ export class Player extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_SHARE_LINK, this.#onSetShareLink);
+    document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfo);
+    document.addEventListener(LOADING_EVENTS.FILE_CHOSEN, this.#onActiveFileForPoster);
+    document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onActiveFileForPoster);
     this.#share.addEventListener("click", this.#onShareClick);
     this.#shareMenu.addEventListener("click", this.#onShareMenuClick);
 

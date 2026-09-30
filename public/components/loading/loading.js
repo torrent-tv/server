@@ -14,7 +14,7 @@ import { ProxySelector } from "../proxy-selector/proxy-selector.js";
 import { ProxyTransport } from "../../domain/proxy-transport.js";
 import { createWebRtcHlsLoader } from "../../domain/webrtc-hls-loader.js";
 import { queryLocalNetworkPermission, probeLocalNetwork } from "../../domain/local-network-permission.js";
-import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, SESSION_EVENTS, signalApp } from "../../shared/events.js";
+import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, SESSION_EVENTS, signalApp } from "../../shared/events.js";
 import {
   buildUrlSearch,
   decideHistoryWrite,
@@ -328,6 +328,12 @@ export class Loading extends StateDerivedView {
   #torndownPositionReported = false;
   /** The loading screen stepped aside for the playlist drawer. */
   #playlistOpenedFromLoading = false;
+
+  /**
+   * Which choice of release this is, for the metadata component: its answers
+   * are dropped when they arrive for a choice that has been replaced.
+   */
+  #mediaSelection = 0;
   /** The "nobody is sharing this" notice has been shown for this attempt. */
   #longWaitAnnounced = false;
   #actionButton;
@@ -1882,6 +1888,7 @@ export class Loading extends StateDerivedView {
         torrentBytes,
         meta
       });
+      const mediaSelection = this.#announceMediaSelection([file.name, parsed.name]);
 
       this.visible = true;
       this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
@@ -1921,6 +1928,7 @@ export class Loading extends StateDerivedView {
         parsed.files = files;
         parsed.isMultiFile = files.length > 1;
       }
+      this.#announceMediaContents(mediaSelection, contents, parsed.files);
       window.__ttvClientLogger?.setFilm?.({
         name: typeof parsed.name === "string" ? parsed.name : "",
         infoHash: typeof parsed.infoHashHex === "string" ? parsed.infoHashHex : ""
@@ -2043,6 +2051,40 @@ export class Loading extends StateDerivedView {
       fromUrl,
       position: fromField != null && fromField > 0 ? fromField : (fromUrl > 0 ? fromUrl : null)
     };
+  }
+
+  /**
+   * A release was chosen: tell the metadata component what is known of it, so
+   * its search runs while the proxy is being asked what is inside. Nothing here
+   * waits for the answer.
+   *
+   * @param {string[]} names - The `.torrent` file's name and the torrent's own,
+   *   or a magnet's `dn`.
+   * @returns {number} This choice's number, for the contents that follow.
+   */
+  #announceMediaSelection(names) {
+    this.#mediaSelection += 1;
+    document.dispatchEvent(
+      new CustomEvent(MEDIA_INFO_EVENTS.SELECTED, {
+        detail: { selection: this.#mediaSelection, names }
+      })
+    );
+    return this.#mediaSelection;
+  }
+
+  /**
+   * The proxy said what is in the release: pass it on for identification.
+   *
+   * @param {number} selection
+   * @param {object} contents - The proxy's answer.
+   * @param {object[]} files - The same list as the rest of this page reads it.
+   */
+  #announceMediaContents(selection, contents, files) {
+    document.dispatchEvent(
+      new CustomEvent(MEDIA_INFO_EVENTS.CONTENTS, {
+        detail: { selection, contents, files }
+      })
+    );
   }
 
   /**
@@ -2209,6 +2251,7 @@ export class Loading extends StateDerivedView {
       this.setFileName(displayName);
       this.setProgress(0);
       this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
+      const mediaSelection = this.#announceMediaSelection(displayName === "Magnet link" ? [] : [displayName]);
 
       const transport = await this.#acquireTransport();
       this.#throwIfCancelled();
@@ -2233,6 +2276,7 @@ export class Loading extends StateDerivedView {
       current.files = files;
       current.isMultiFile = files.length > 1;
       this.setFileName(name);
+      this.#announceMediaContents(mediaSelection, contents, files);
 
       const mediaFiles = mediaFilesFrom(files, contents?.items);
       this.#subtitlePlayback.setTorrentSubtitleFiles(mediaFiles.subtitles);
@@ -2846,6 +2890,9 @@ export class Loading extends StateDerivedView {
     this.#stallStartedAt = null;
     this.#stallTotalMs = 0;
     this.#stallCount = 0;
+    // Which file is being LOADED, before anything is ready — so what the page
+    // shows while waiting (the episode's picture) is this file's, not the last.
+    document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOSEN, { detail: { fileIndex } }));
 
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
 
