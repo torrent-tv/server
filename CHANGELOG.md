@@ -1,3 +1,7 @@
+## 0.33.1
+
+- **Fix**: An episode number the provider's season does not have now stops matching by number for the whole season, as a title pointing elsewhere already did. Measured on Firefly: the release numbers fourteen episodes in production order, TMDB lists eleven in broadcast order, and numbers 1-11 were named with the wrong episodes; those files now keep their own names.
+
 ## 0.33.0
 
 - **New**: Film metadata through this server, from TMDB: `POST /api/metadata/identify` (which work a release is, from its names), `POST /api/metadata/episodes` (which episode of one season each file is) and `GET /api/metadata/image/:size/:file` (TMDB images with TMDB's own caching headers). A work is reported only when every search completed and exactly one title matched exactly; ties, incomplete searches and too many result pages are reported as such. Load on TMDB is bounded by one gate (4 at once, 10 per second, 32 waiting), requests by a 4 s deadline, answers by byte limits while they are read; searches, works and seasons are cached in memory under an 8 MB serialized budget for at most 24 hours, and refusals are never cached. The token is read from the file named by `TMDB_READ_TOKEN_FILE`; without it every answer is `unavailable`. Names and file lists are neither stored nor logged.

@@ -18,7 +18,13 @@
  *     file of the season is matched by number alone;
  *  3. otherwise a file with no usable title is the episode with its number — a
  *     title that matches nothing (a tag, a translation) is no evidence either
- *     way and does not stop this;
+ *     way and does not stop this. A file whose number the season does NOT have
+ *     is evidence, the same as rule 2: measured on Firefly, where one release
+ *     numbers fourteen episodes in production order and the provider lists
+ *     eleven in broadcast order, numbers 1-11 would all have named the wrong
+ *     episode. So such a number also stops matching by number in the season;
+ *     if the provider merely lags behind a running show, the cost is file
+ *     names instead of episode names, which is the safe direction;
  *  4. a file that says it is a PART of an episode is matched only by title: its
  *     number is a count of parts, not of episodes, and it also shows the
  *     numbering differs;
@@ -93,13 +99,11 @@ export function matchSeason(files, season) {
 
     if (numbers.length > 1) {
       const episodes = numbers.map((number) => byNumber.get(number));
-      if (titleEpisode && !episodes.includes(titleEpisode)) {
+      if ((titleEpisode && !episodes.includes(titleEpisode)) || !episodes.every(Boolean)) {
         renumbered = true;
         return { file, status: "unmatched", episodes: [] };
       }
-      return episodes.every(Boolean)
-        ? { file, status: "provisional", episodes }
-        : { file, status: "unmatched", episodes: [] };
+      return { file, status: "provisional", episodes };
     }
 
     const numbered = numbers.length === 1 ? (byNumber.get(numbers[0]) ?? null) : null;
@@ -109,9 +113,11 @@ export function matchSeason(files, season) {
       }
       return { file, status: "strong", episodes: [titleEpisode] };
     }
-    return numbered
-      ? { file, status: "provisional", episodes: [numbered] }
-      : { file, status: "unmatched", episodes: [] };
+    if (!numbered) {
+      renumbered = true;
+      return { file, status: "unmatched", episodes: [] };
+    }
+    return { file, status: "provisional", episodes: [numbered] };
   });
 
   // Rule 2: once the numbering is shown to differ, a number alone names nothing.
