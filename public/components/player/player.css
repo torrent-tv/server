@@ -12,10 +12,22 @@
   display: flex;
   flex-wrap: nowrap;
   block-size: 100dvh;
+  --playlist-shift: max(-80vw, -48rem);
+
+  @media (min-width: 64rem) {
+    --playlist-shift: max(-50vw, -48rem);
+  }
+  @media (min-width: 90rem) {
+    --playlist-shift: max(-33vw, -52rem);
+  }
 
   &.player--animated {
     will-change: translate;
     transition: translate 1.25s;
+
+    #player__close {
+      transition: translate 1.25s;
+    }
   }
 
   inline-size: calc(100dvw + min(80dvw, 48rem));
@@ -27,15 +39,19 @@
   }
 
   &:is(.player--playlist) {
-    translate: max(-80vw, -48rem) 0;
+    translate: var(--playlist-shift) 0;
 
-    @media (min-width: 64rem) {
-      translate: max(-50vw, -48rem) 0;
+    /* Stay in the controller's top slot so auto-hide remains shared. */
+    #player__close {
+      translate: calc(-1 * var(--playlist-shift)) 0;
     }
+  }
 
-    @media (min-width: 90rem) {
-      translate: max(-33vw, -52rem) 0;
-    }
+  #player__audio-button svg {
+    inline-size: 1.5rem;
+    block-size: 1.5rem;
+    /* Override media-chrome's filled-icon default for this outline icon. */
+    fill: none;
   }
 
   #player__controller {
