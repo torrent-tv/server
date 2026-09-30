@@ -117,6 +117,15 @@ test("a file carrying episodes the season does not have is not matched", () => {
   assert.equal(matchSeason([{ key: "a", episodes: [1, 2] }], season)[0].status, "unmatched");
 });
 
+test("a number the season does not have stops matching by number in the whole season", () => {
+  // Firefly as TMDB lists it (eleven episodes, broadcast order) against a
+  // release of fourteen in production order, titles carrying only tags.
+  const names = ["The Train Job", "Bushwhacked", "Our Mrs. Reynolds", "Jaynestown", "Out of Gas", "Shindig", "Safe", "Ariel", "War Stories", "Objects in Space", "Serenity"];
+  const season = { number: 1, name: "Season 1", episodes: names.map((name, index) => episode(index + 1, name)) };
+  const files = Array.from({ length: 14 }, (_, index) => ({ key: String(index + 1), episodes: [index + 1], titleHint: "1080p.rus.LostFilm.TV" }));
+  assert.ok(matchSeason(files, season).every((match) => match.status === "unmatched"));
+});
+
 test("a special is matched by its title and never by its number", () => {
   const season = { number: 0, name: "Specials", episodes: [episode(1, "Christmas Special"), episode(2, "Other")] };
   const [titled, numbered] = matchSeason(
