@@ -2,7 +2,8 @@
  * Which work a release is, from its names.
  *
  * POST /api/metadata/identify
- * body: { names: string[], kindHint: "tv" | "movie" | null, requireYear?: boolean, language: string }
+ * body: { names: string[], kindHint: "tv" | "movie" | null, requireYear?: boolean,
+ *         episodeEvidence?: { season: number, titles: string[] }, language: string }
  *
  * Answers `{ status, work?, candidates? }`. Only `identified` carries a work;
  * every other status tells the page to keep showing the release's own names.
@@ -18,11 +19,17 @@ export const MAX_NAMES = 24;
 /** Longest name, in characters. */
 export const MAX_NAME_LENGTH = 300;
 
+/** Most episode titles sent as evidence. */
+export const MAX_EVIDENCE_TITLES = 50;
+
+/** Longest episode title sent as evidence; the proxy sends at most this many characters. */
+export const MAX_EVIDENCE_TITLE_LENGTH = 160;
+
 /**
- * Largest body, in bytes: 24 names of 300 characters, each up to four bytes of
- * UTF-8, with room for the JSON around them.
+ * Largest body, in bytes: 24 names of 300 characters and 50 titles of 160, each
+ * character up to four bytes of UTF-8, with room for the JSON around them.
  */
-export const IDENTIFY_BODY_LIMIT = 32 * 1024;
+export const IDENTIFY_BODY_LIMIT = 64 * 1024;
 
 /**
  * @param {import("fastify").FastifyRequest} req
@@ -46,6 +53,20 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
   if (body.requireYear !== undefined && typeof body.requireYear !== "boolean") {
     return reply.code(400).send({ error: "requireYear must be a boolean." });
   }
+  const evidence = body.episodeEvidence ?? null;
+  if (
+    evidence !== null &&
+    !(
+      Number.isInteger(evidence?.season) &&
+      evidence.season >= 0 &&
+      evidence.season <= 999 &&
+      Array.isArray(evidence.titles) &&
+      evidence.titles.length <= MAX_EVIDENCE_TITLES &&
+      evidence.titles.every((title) => typeof title === "string" && title.length <= MAX_EVIDENCE_TITLE_LENGTH)
+    )
+  ) {
+    return reply.code(400).send({ error: `episodeEvidence must be { season, titles } with at most ${MAX_EVIDENCE_TITLES} titles.` });
+  }
   if (typeof body.language !== "string" || !LANGUAGE.test(body.language)) {
     return reply.code(400).send({ error: "language must be a tag such as en-US." });
   }
@@ -54,6 +75,7 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
     requireYear: body.requireYear === true,
+    episodeEvidence: evidence,
     language: body.language,
     signal: signalOfRequest(reply)
   });

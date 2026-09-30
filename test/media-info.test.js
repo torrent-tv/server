@@ -11,6 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   artFor,
+  episodeEvidenceOf,
   episodeLabel,
   pictureIdentification,
   playlistNaming,
@@ -50,6 +51,18 @@ test("a series is identified from every name known, with the show names the file
     "Avatar. The Last Airbender 1 - LostFilm.TV [1080p]",
     "Avatar.The.Last.Airbender"
   ]);
+});
+
+test("the episode titles sent as evidence are the best-titled season's, without parts or specials", () => {
+  const evidence = episodeEvidenceOf([
+    { episode: marker(1, [1], { titleHint: "A" }) },
+    { episode: marker(2, [1], { titleHint: "B" }) },
+    { episode: marker(2, [2], { titleHint: "C" }) },
+    { episode: marker(2, [3], { titleHint: "D", part: 1 }) },
+    { episode: marker(0, [1], { titleHint: "E", special: true }) }
+  ]);
+  assert.deepEqual(evidence, { season: 2, titles: ["B", "C"] });
+  assert.equal(episodeEvidenceOf([{ episode: marker(1, [1]) }]), null);
 });
 
 test("pictures not known to be one work get no identification of the whole release", () => {

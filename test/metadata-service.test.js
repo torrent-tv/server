@@ -20,9 +20,9 @@ import { ImageFetcher } from "../services/metadata/ImageFetcher.js";
  * A provider that answers searches from a table and counts what it is asked.
  *
  * @param {Record<string, Array<{ id: number, name: string, year: number | null }>>} table - `kind|query` → results.
- * @param {{ fail?: Set<string>, totalPages?: number }} [options]
+ * @param {{ fail?: Set<string>, totalPages?: number, seasons?: Record<string, string[]> }} [options]
  */
-function fakeSource(table, { fail = new Set(), totalPages = 1 } = {}) {
+function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {} } = {}) {
   const asked = [];
   return {
     asked,
@@ -40,7 +40,8 @@ function fakeSource(table, { fail = new Set(), totalPages = 1 } = {}) {
     },
     async season(id, number) {
       asked.push(`season|${id}|${number}`);
-      return { number, name: `Season ${number}`, episodes: [{ number: 1, name: "One", still: null }] };
+      const names = seasons[`${id}|${number}`] ?? ["One"];
+      return { number, name: `Season ${number}`, episodes: names.map((name, index) => ({ number: index + 1, name, still: null })) };
     }
   };
 }
@@ -98,6 +99,35 @@ test("a search is cached per language, and a repeated question asks nothing", as
   assert.equal(source.asked.length, afterFirst);
   await metadata.identify({ names: ["Title.2020"], kindHint: "movie", language: "de-DE" });
   assert.ok(source.asked.length > afterFirst);
+});
+
+test("a shortened series title is identified by the episode names of its files", async () => {
+  const source = fakeSource(
+    { "tv|Poirot": [{ id: 790, name: "Agatha Christie's Poirot", year: 1989 }, { id: 9, name: "Loriot", year: 1976 }] },
+    { seasons: { "790|1": ["The Adventure of the Clapham Cook", "Murder in the Mews", "The Dream"] } }
+  );
+  const answer = await service(source).identify({
+    names: ["Poirot.1989-2013.hdrip_[teko]"],
+    kindHint: "tv",
+    episodeEvidence: { season: 1, titles: ["The.Adventure.of.the.Clapham.Cook", "Murder.in.the.Mews"] },
+    language: "en-US"
+  });
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 790);
+  // Only the result the stated year admits was checked.
+  assert.ok(!source.asked.includes("season|9|1"));
+});
+
+test("without a stated year the episode names are not consulted", async () => {
+  const source = fakeSource({ "tv|Poirot": [{ id: 790, name: "Agatha Christie's Poirot", year: 1989 }] });
+  const answer = await service(source).identify({
+    names: ["Poirot"],
+    kindHint: "tv",
+    episodeEvidence: { season: 1, titles: ["A", "B"] },
+    language: "en-US"
+  });
+  assert.equal(answer.status, "not-found");
+  assert.ok(!source.asked.some((line) => line.startsWith("season|")));
 });
 
 test("a picture that must state a year and does not is not searched for", async () => {
