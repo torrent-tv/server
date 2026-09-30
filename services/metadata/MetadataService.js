@@ -1,0 +1,243 @@
+/**
+ * @file What the page asks about a release: which work it is, and which
+ * episode of that work each file of one season is.
+ *
+ * Owns the order of questions and nothing else. Searches, works and seasons are
+ * cached and shared between browsers; the identification itself is not cached,
+ * because it is recomputed from cached searches in microseconds and a cache of
+ * it would be a second copy of the same answer keyed differently.
+ *
+ * **Cache keys hold every parameter that changes the answer.** A search is
+ * keyed by kind, language and the exact query sent — the query is sent without
+ * a year, so the year cannot change what the provider returns, and is applied
+ * afterwards by {@link decideIdentity}. A work by kind, id and language; a
+ * season by id, number and language.
+ *
+ * **What the server does not keep.** Names and file lists arrive in a request
+ * and leave with its answer. They are not stored and not logged: the log line
+ * carries counts and outcomes only.
+ */
+
+import { decideIdentity } from "./identification.js";
+import { matchSeason } from "./episode-match.js";
+import { parseReleaseName } from "./release-name.js";
+import { MetadataUnavailableError } from "./RequestGate.js";
+import { normalizeTitle } from "./title.js";
+
+/** How long one browser request may take, including its waits. A stated limit. */
+const REQUEST_BUDGET_MS = 4_000;
+
+/** How long one shared fetch may run; longer than a request, so its answer can reach the cache. */
+const FETCH_BUDGET_MS = 8_000;
+
+/** Pages of one search read. Beyond this a single match is `undetermined`. A stated limit. */
+const MAX_SEARCH_PAGES = 3;
+
+/** Distinct spellings searched per identification. A stated limit. */
+const MAX_QUERIES = 12;
+
+/** How long a found work, season or non-empty search is kept. */
+const FOUND_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** How long a search that found nothing is kept — short, because the provider grows. */
+const NOTHING_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * @typedef {object} IdentifyRequest
+ * @property {string[]} names
+ * @property {"tv" | "movie" | null} kindHint
+ * @property {string} language
+ * @property {AbortSignal} [signal]
+ */
+
+export class MetadataService {
+  /** @type {import("./TmdbSource.js").TmdbSource | null} */
+  #source;
+
+  /** @type {import("./MetadataCache.js").MetadataCache} */
+  #cache;
+
+  /** @type {import("./SharedFetches.js").SharedFetches} */
+  #fetches;
+
+  /** @type {() => number} */
+  #now;
+
+  /**
+   * @param {object} params
+   * @param {import("./TmdbSource.js").TmdbSource | null} params.source - `null` when no token is configured.
+   * @param {import("./MetadataCache.js").MetadataCache} params.cache
+   * @param {import("./SharedFetches.js").SharedFetches} params.fetches
+   * @param {() => number} [params.now]
+   */
+  constructor({ source, cache, fetches, now = Date.now }) {
+    this.#source = source;
+    this.#cache = cache;
+    this.#fetches = fetches;
+    this.#now = now;
+  }
+
+  /**
+   * Which work these names identify.
+   *
+   * @param {IdentifyRequest} request
+   * @returns {Promise<{ status: string, work?: import("./TmdbSource.js").Work, candidates?: object[] }>}
+   */
+  async identify({ names, kindHint, language, signal }) {
+    if (!this.#source) {
+      return { status: "unavailable" };
+    }
+    const deadlineAt = this.#now() + REQUEST_BUDGET_MS;
+    const readings = names.map(parseReleaseName);
+    const seriesEvidence = readings.some((reading) => reading.seriesEvidence);
+    const kinds = kindHint ? [kindHint] : seriesEvidence ? ["tv"] : ["tv", "movie"];
+    const statedYears = [...new Set(readings.map((reading) => reading.years?.from).filter(Number.isInteger))];
+
+    // What is SENT is the spelling as written, apostrophes made plain: a
+    // provider's own search may not find `christies` for `Christie's`. What is
+    // COMPARED is the normalized form. One spelling per normalized form, so two
+    // spellings of one title do not cost two searches.
+    const queries = [];
+    const seen = new Set();
+    const addQuery = (text) => {
+      const sent = String(text).replace(/[`´ʼ’‘]/g, "'").replace(/\s+/g, " ").trim();
+      const normalized = normalizeTitle(sent);
+      if (normalized.length >= 2 && !seen.has(normalized) && queries.length < MAX_QUERIES) {
+        seen.add(normalized);
+        queries.push({ sent, normalized });
+      }
+    };
+    for (const reading of readings) {
+      for (const title of reading.titles) {
+        addQuery(title);
+        // `Firefly 1 - LostFilm.TV` numbers the season after the title. Only
+        // when a series is being looked for: for a film the number is part of
+        // the title (`Moana 2`).
+        if (kinds.includes("tv") && /\s\d{1,2}$/.test(title.trim())) {
+          addQuery(title.trim().replace(/\s\d{1,2}$/, ""));
+        }
+      }
+    }
+    if (queries.length === 0) {
+      return { status: "not-found" };
+    }
+
+    const searches = await Promise.all(
+      queries.flatMap(({ sent, normalized }) =>
+        kinds.map(async (kind) => {
+          try {
+            const found = await this.#search(kind, sent, language, { deadlineAt, signal });
+            return { kind, query: normalized, status: found.capped ? "capped" : "complete", results: found.results };
+          } catch (error) {
+            if (error instanceof MetadataUnavailableError) {
+              return { kind, query: normalized, status: "failed", results: [] };
+            }
+            throw error;
+          }
+        })
+      )
+    );
+
+    const identity = decideIdentity({ searches, statedYears });
+    if (identity.status !== "identified") {
+      return { status: identity.status, candidates: identity.status === "ambiguous" ? identity.candidates : undefined };
+    }
+    const [chosen] = identity.candidates;
+    try {
+      const work = await this.#cached(`work|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS, (fetchDeadline) =>
+        this.#source.work(chosen.kind, chosen.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+      return { status: "identified", work };
+    } catch (error) {
+      if (error instanceof MetadataUnavailableError) {
+        return { status: "unavailable" };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Which episode of one season each file is.
+   *
+   * @param {object} request
+   * @param {number} request.tmdbId
+   * @param {number} request.season
+   * @param {string} request.language
+   * @param {import("./episode-match.js").ReleaseFile[]} request.files - Every file of the season.
+   * @param {AbortSignal} [request.signal]
+   * @returns {Promise<{ status: string, season?: { number: number, name: string }, files?: import("./episode-match.js").FileMatch[] }>}
+   */
+  async episodes({ tmdbId, season, language, files, signal }) {
+    if (!this.#source) {
+      return { status: "unavailable" };
+    }
+    const deadlineAt = this.#now() + REQUEST_BUDGET_MS;
+    let seasonData;
+    try {
+      seasonData = await this.#cached(`season|${tmdbId}|${season}|${language}`, () => FOUND_TTL_MS, (fetchDeadline) =>
+        this.#source.season(tmdbId, season, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+    } catch (error) {
+      if (error instanceof MetadataUnavailableError) {
+        return { status: "unavailable" };
+      }
+      throw error;
+    }
+    return {
+      status: "matched-season",
+      season: { number: seasonData.number, name: seasonData.name },
+      files: matchSeason(files, seasonData)
+    };
+  }
+
+  /**
+   * One search, every page up to the limit, as one cached answer.
+   *
+   * @param {"tv" | "movie"} kind
+   * @param {string} query
+   * @param {string} language
+   * @param {{ deadlineAt: number, signal?: AbortSignal }} wait
+   * @returns {Promise<{ results: import("./TmdbSource.js").SearchResult[], capped: boolean }>}
+   */
+  #search(kind, query, language, wait) {
+    return this.#cached(
+      `search|${kind}|${language}|${query}`,
+      (found) => (found.results.length > 0 ? FOUND_TTL_MS : NOTHING_TTL_MS),
+      async (fetchDeadline) => {
+        const first = await this.#source.search(kind, query, language, 1, { deadlineAt: fetchDeadline });
+        const results = [...first.results];
+        const lastPage = Math.min(first.totalPages, MAX_SEARCH_PAGES);
+        for (let page = 2; page <= lastPage; page += 1) {
+          const next = await this.#source.search(kind, query, language, page, { deadlineAt: fetchDeadline });
+          results.push(...next.results);
+        }
+        return { results, capped: first.totalPages > MAX_SEARCH_PAGES };
+      },
+      wait
+    );
+  }
+
+  /**
+   * The cached answer to `key`, or one shared fetch of it.
+   *
+   * @template T
+   * @param {string} key
+   * @param {(value: T) => number} ttlFor
+   * @param {(fetchDeadlineAt: number) => Promise<T>} fetch
+   * @param {{ deadlineAt: number, signal?: AbortSignal }} wait
+   * @returns {Promise<T>}
+   */
+  async #cached(key, ttlFor, fetch, wait) {
+    const held = this.#cache.get(key);
+    if (held !== undefined) {
+      return /** @type {T} */ (held);
+    }
+    return this.#fetches.join(
+      key,
+      async () => {
+        const value = await fetch(this.#now() + FETCH_BUDGET_MS);
+        this.#cache.set(key, value, ttlFor(value));
+        return value;
+      },
+      { ...wait, now: this.#now }
+    );
+  }
+}

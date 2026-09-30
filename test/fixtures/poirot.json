@@ -1,0 +1,1164 @@
+{
+ "source": "TMDB tv/790 season pages (themoviedb.org, en-US), read 2026-09-30; release Poirot.1989-2013.hdrip_[teko]",
+ "tmdbSeasons": {
+  "1": [
+   {
+    "number": 1,
+    "name": "The Adventure of the Clapham Cook",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Murder in the Mews",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "The Adventure of Johnnie Waverly",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "Four and Twenty Blackbirds",
+    "still": null
+   },
+   {
+    "number": 5,
+    "name": "The Third Floor Flat",
+    "still": null
+   },
+   {
+    "number": 6,
+    "name": "Triangle at Rhodes",
+    "still": null
+   },
+   {
+    "number": 7,
+    "name": "Problem at Sea",
+    "still": null
+   },
+   {
+    "number": 8,
+    "name": "The Incredible Theft",
+    "still": null
+   },
+   {
+    "number": 9,
+    "name": "The King of Clubs",
+    "still": null
+   },
+   {
+    "number": 10,
+    "name": "The Dream",
+    "still": null
+   }
+  ],
+  "2": [
+   {
+    "number": 1,
+    "name": "Peril at End House",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "The Veiled Lady",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "The Lost Mine",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "The Cornish Mystery",
+    "still": null
+   },
+   {
+    "number": 5,
+    "name": "The Disappearance of Mr. Davenheim",
+    "still": null
+   },
+   {
+    "number": 6,
+    "name": "Double Sin",
+    "still": null
+   },
+   {
+    "number": 7,
+    "name": "The Adventure of the Cheap Flat",
+    "still": null
+   },
+   {
+    "number": 8,
+    "name": "The Kidnapped Prime Minister",
+    "still": null
+   },
+   {
+    "number": 9,
+    "name": "The Adventure of the Western Star",
+    "still": null
+   }
+  ],
+  "3": [
+   {
+    "number": 1,
+    "name": "The Mysterious Affair at Styles",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "How Does Your Garden Grow?",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "The Million Dollar Bond Robbery",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "The Plymouth Express",
+    "still": null
+   },
+   {
+    "number": 5,
+    "name": "Wasps' Nest",
+    "still": null
+   },
+   {
+    "number": 6,
+    "name": "The Tragedy at Marsdon Manor",
+    "still": null
+   },
+   {
+    "number": 7,
+    "name": "The Double Clue",
+    "still": null
+   },
+   {
+    "number": 8,
+    "name": "The Mystery of the Spanish Chest",
+    "still": null
+   },
+   {
+    "number": 9,
+    "name": "The Theft of the Royal Ruby",
+    "still": null
+   },
+   {
+    "number": 10,
+    "name": "The Affair at the Victory Ball",
+    "still": null
+   },
+   {
+    "number": 11,
+    "name": "The Mystery of Hunter's Lodge",
+    "still": null
+   }
+  ],
+  "4": [
+   {
+    "number": 1,
+    "name": "The ABC Murders",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Death in the Clouds",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "One, Two, Buckle My Shoe",
+    "still": null
+   }
+  ],
+  "5": [
+   {
+    "number": 1,
+    "name": "The Adventure of the Egyptian Tomb",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "The Underdog",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "The Yellow Iris",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "The Case of the Missing Will",
+    "still": null
+   },
+   {
+    "number": 5,
+    "name": "The Adventure of the Italian Nobleman",
+    "still": null
+   },
+   {
+    "number": 6,
+    "name": "The Chocolate Box",
+    "still": null
+   },
+   {
+    "number": 7,
+    "name": "Dead Man's Mirror",
+    "still": null
+   },
+   {
+    "number": 8,
+    "name": "Jewel Robbery at the Grand Metropolitan",
+    "still": null
+   }
+  ],
+  "6": [
+   {
+    "number": 1,
+    "name": "Hercule Poirot's Christmas",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Hickory Dickory Dock",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "Murder on the Links",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "Dumb Witness",
+    "still": null
+   }
+  ],
+  "7": [
+   {
+    "number": 1,
+    "name": "The Murder of Roger Ackroyd",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Lord Edgware Dies",
+    "still": null
+   }
+  ],
+  "8": [
+   {
+    "number": 1,
+    "name": "Evil Under the Sun",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Murder in Mesopotamia",
+    "still": null
+   }
+  ],
+  "9": [
+   {
+    "number": 1,
+    "name": "Five Little Pigs",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Sad Cypress",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "Death on the Nile",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "The Hollow",
+    "still": null
+   }
+  ],
+  "10": [
+   {
+    "number": 1,
+    "name": "The Mystery of the Blue Train",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Cards on the Table",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "After the Funeral",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "Taken at the Flood",
+    "still": null
+   }
+  ],
+  "11": [
+   {
+    "number": 1,
+    "name": "Mrs. McGinty's Dead",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Cat Among the Pigeons",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "Third Girl",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "Appointment with Death",
+    "still": null
+   }
+  ],
+  "12": [
+   {
+    "number": 1,
+    "name": "Three Act Tragedy",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "Hallowe'en Party",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "Murder on the Orient Express",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "The Clocks",
+    "still": null
+   }
+  ],
+  "13": [
+   {
+    "number": 1,
+    "name": "Elephants Can Remember",
+    "still": null
+   },
+   {
+    "number": 2,
+    "name": "The Big Four",
+    "still": null
+   },
+   {
+    "number": 3,
+    "name": "Dead Man's Folly",
+    "still": null
+   },
+   {
+    "number": 4,
+    "name": "The Labours of Hercules",
+    "still": null
+   },
+   {
+    "number": 5,
+    "name": "Curtain: Poirot's Last Case",
+    "still": null
+   }
+  ]
+ },
+ "release": [
+  {
+   "file": "Season_01/s01e01_The.Adventure.of.the.Clapham.Cook.avi",
+   "season": 1,
+   "key": "20",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Adventure.of.the.Clapham.Cook"
+  },
+  {
+   "file": "Season_01/s01e02_Murder.in.the.Mews.avi",
+   "season": 1,
+   "key": "1",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Murder.in.the.Mews"
+  },
+  {
+   "file": "Season_01/s01e03_The.Adventure.of.Johnnie.Waverly.avi",
+   "season": 1,
+   "key": "2",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Adventure.of.Johnnie.Waverly"
+  },
+  {
+   "file": "Season_01/s01e04_Four.and.Twenty.Blackbirds.avi",
+   "season": 1,
+   "key": "3",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Four.and.Twenty.Blackbirds"
+  },
+  {
+   "file": "Season_01/s01e05_The.Third.Floor.Flat.avi",
+   "season": 1,
+   "key": "4",
+   "episodes": [
+    5
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Third.Floor.Flat"
+  },
+  {
+   "file": "Season_01/s01e06_Triangle.at.Rhodes.avi",
+   "season": 1,
+   "key": "5",
+   "episodes": [
+    6
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Triangle.at.Rhodes"
+  },
+  {
+   "file": "Season_01/s01e07_Problem.at.Sea.avi",
+   "season": 1,
+   "key": "6",
+   "episodes": [
+    7
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Problem.at.Sea"
+  },
+  {
+   "file": "Season_01/s01e08_The.Incredible.Theft.avi",
+   "season": 1,
+   "key": "7",
+   "episodes": [
+    8
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Incredible.Theft"
+  },
+  {
+   "file": "Season_01/s01e09_The.King.of.Clubs.avi",
+   "season": 1,
+   "key": "8",
+   "episodes": [
+    9
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.King.of.Clubs"
+  },
+  {
+   "file": "Season_01/s01e10_The.Dream.avi",
+   "season": 1,
+   "key": "9",
+   "episodes": [
+    10
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Dream"
+  },
+  {
+   "file": "Season_02/s02e01_Peril.at.End.House_Part.1.avi",
+   "season": 2,
+   "key": "10",
+   "episodes": [
+    1
+   ],
+   "part": 1,
+   "special": false,
+   "titleHint": "Peril.at.End.House"
+  },
+  {
+   "file": "Season_02/s02e02_Peril.at.End.House_Part.2.avi",
+   "season": 2,
+   "key": "11",
+   "episodes": [
+    2
+   ],
+   "part": 2,
+   "special": false,
+   "titleHint": "Peril.at.End.House"
+  },
+  {
+   "file": "Season_02/s02e03_The.Veiled.Lady.avi",
+   "season": 2,
+   "key": "12",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Veiled.Lady"
+  },
+  {
+   "file": "Season_02/s02e04_The.Lost.Mine.avi",
+   "season": 2,
+   "key": "13",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Lost.Mine"
+  },
+  {
+   "file": "Season_02/s02e05_The.Cornish.Mystery.avi",
+   "season": 2,
+   "key": "14",
+   "episodes": [
+    5
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Cornish.Mystery"
+  },
+  {
+   "file": "Season_02/s02e06_The.Disappearance.of.Mr.Davenheim.avi",
+   "season": 2,
+   "key": "15",
+   "episodes": [
+    6
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Disappearance.of.Mr.Davenheim"
+  },
+  {
+   "file": "Season_02/s02e07_Double.Sin.avi",
+   "season": 2,
+   "key": "16",
+   "episodes": [
+    7
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Double.Sin"
+  },
+  {
+   "file": "Season_02/s02e08_The.Adventure.of.the.Cheap.Flat.avi",
+   "season": 2,
+   "key": "17",
+   "episodes": [
+    8
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Adventure.of.the.Cheap.Flat"
+  },
+  {
+   "file": "Season_02/s02e09_The.Kidnapped.Prime.Minister.avi",
+   "season": 2,
+   "key": "18",
+   "episodes": [
+    9
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Kidnapped.Prime.Minister"
+  },
+  {
+   "file": "Season_02/s02e10_The.Adventure.of.the.Western.Star.avi",
+   "season": 2,
+   "key": "19",
+   "episodes": [
+    10
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Adventure.of.the.Western.Star"
+  },
+  {
+   "file": "Season_03/s03.e01_The.Mysterious.Affair.at.Styles.avi",
+   "season": 3,
+   "key": "0",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Mysterious.Affair.at.Styles"
+  },
+  {
+   "file": "Season_03/s03.e02_How.Does.Your.Garden.Grow.avi",
+   "season": 3,
+   "key": "21",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "How.Does.Your.Garden.Grow"
+  },
+  {
+   "file": "Season_03/s03.e03_The.Million.Dollar.Bond.Robbery.avi",
+   "season": 3,
+   "key": "22",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Million.Dollar.Bond.Robbery"
+  },
+  {
+   "file": "Season_03/s03.e04_The.Plymouth.Express.avi",
+   "season": 3,
+   "key": "23",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Plymouth.Express"
+  },
+  {
+   "file": "Season_03/s03.e05_Wasps'.Nest.avi",
+   "season": 3,
+   "key": "24",
+   "episodes": [
+    5
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Wasps'.Nest"
+  },
+  {
+   "file": "Season_03/s03.e06_The.Tragedy.at.Marsdon.Manor.avi",
+   "season": 3,
+   "key": "25",
+   "episodes": [
+    6
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Tragedy.at.Marsdon.Manor"
+  },
+  {
+   "file": "Season_03/s03.e07_The.Double.Clue.avi",
+   "season": 3,
+   "key": "26",
+   "episodes": [
+    7
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Double.Clue"
+  },
+  {
+   "file": "Season_03/s03.e08_The.Mystery.of.the.Spanish.Chest.avi",
+   "season": 3,
+   "key": "27",
+   "episodes": [
+    8
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Mystery.of.the.Spanish.Chest"
+  },
+  {
+   "file": "Season_03/s03.e09_The.Theft.of.the.Royal.Ruby.avi",
+   "season": 3,
+   "key": "28",
+   "episodes": [
+    9
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Theft.of.the.Royal.Ruby"
+  },
+  {
+   "file": "Season_03/s03.e10_The.Affair.at.the.Victory.Ball.avi",
+   "season": 3,
+   "key": "29",
+   "episodes": [
+    10
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Affair.at.the.Victory.Ball"
+  },
+  {
+   "file": "Season_03/s03.e11_The.Mystery.of.Hunter's.Lodge.avi",
+   "season": 3,
+   "key": "30",
+   "episodes": [
+    11
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Mystery.of.Hunter's.Lodge"
+  },
+  {
+   "file": "Season_04/s04e01_The.ABC.Murders.avi",
+   "season": 4,
+   "key": "31",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.ABC.Murders"
+  },
+  {
+   "file": "Season_04/s04e02_Death.in.the.Clouds.avi",
+   "season": 4,
+   "key": "32",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Death.in.the.Clouds"
+  },
+  {
+   "file": "Season_04/s04e03_One,Two,Buckle.My.Shoe.avi",
+   "season": 4,
+   "key": "33",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "One,Two,Buckle.My.Shoe"
+  },
+  {
+   "file": "Season_05/s05e01_The.Adventure.of.the.Egyptian.Tomb.avi",
+   "season": 5,
+   "key": "34",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Adventure.of.the.Egyptian.Tomb"
+  },
+  {
+   "file": "Season_05/s05e02_The.Underdog.avi",
+   "season": 5,
+   "key": "35",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Underdog"
+  },
+  {
+   "file": "Season_05/s05e03_The.Yellow.Iris.avi",
+   "season": 5,
+   "key": "36",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Yellow.Iris"
+  },
+  {
+   "file": "Season_05/s05e04_The.Case.of.the.Missing.Will.avi",
+   "season": 5,
+   "key": "37",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Case.of.the.Missing.Will"
+  },
+  {
+   "file": "Season_05/s05e05_The.Adventure.of.the.Italian.Nobleman.avi",
+   "season": 5,
+   "key": "38",
+   "episodes": [
+    5
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Adventure.of.the.Italian.Nobleman"
+  },
+  {
+   "file": "Season_05/s05e06_The.Chocolate.Box.avi",
+   "season": 5,
+   "key": "39",
+   "episodes": [
+    6
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Chocolate.Box"
+  },
+  {
+   "file": "Season_05/s05e07_Dead.Man's.Mirror.avi",
+   "season": 5,
+   "key": "40",
+   "episodes": [
+    7
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Dead.Man's.Mirror"
+  },
+  {
+   "file": "Season_05/s05e08_Jewel.Robbery.at.the.Grand.Metropolitan.avi",
+   "season": 5,
+   "key": "41",
+   "episodes": [
+    8
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Jewel.Robbery.at.the.Grand.Metropolitan"
+  },
+  {
+   "file": "Season_06/s06e01_Hercule.Poirot's.Christmas.avi",
+   "season": 6,
+   "key": "42",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Hercule.Poirot's.Christmas"
+  },
+  {
+   "file": "Season_06/s06e02_Hickory.Dickory.Dock.avi",
+   "season": 6,
+   "key": "43",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Hickory.Dickory.Dock"
+  },
+  {
+   "file": "Season_06/s06e03_Murder.on.the.Links.avi",
+   "season": 6,
+   "key": "44",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Murder.on.the.Links"
+  },
+  {
+   "file": "Season_06/s06e04_Dumb.Witness.avi",
+   "season": 6,
+   "key": "45",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Dumb.Witness"
+  },
+  {
+   "file": "Season_07/s07e01_The.Murder.of.Roger.Ackroyd.avi",
+   "season": 7,
+   "key": "46",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Murder.of.Roger.Ackroyd"
+  },
+  {
+   "file": "Season_07/s07e02_Lord.Edgware.Dies.avi",
+   "season": 7,
+   "key": "47",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Lord.Edgware.Dies"
+  },
+  {
+   "file": "Season_08/s08e01_Evil.Under.the.Sun.avi",
+   "season": 8,
+   "key": "48",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Evil.Under.the.Sun"
+  },
+  {
+   "file": "Season_08/s08e02_Murder.in.Mesopotamia.avi",
+   "season": 8,
+   "key": "49",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Murder.in.Mesopotamia"
+  },
+  {
+   "file": "Season_09/s09e01_Five.Little.Pigs.avi",
+   "season": 9,
+   "key": "50",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Five.Little.Pigs"
+  },
+  {
+   "file": "Season_09/s09e02_Sad.Cypress.avi",
+   "season": 9,
+   "key": "51",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Sad.Cypress"
+  },
+  {
+   "file": "Season_09/s09e03_Death.on.the.Nile.avi",
+   "season": 9,
+   "key": "52",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Death.on.the.Nile"
+  },
+  {
+   "file": "Season_09/s09e04_The.Hollow.avi",
+   "season": 9,
+   "key": "53",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Hollow"
+  },
+  {
+   "file": "Season_10/s10e01_The.Mystery.of.the.Blue.Train.avi",
+   "season": 10,
+   "key": "54",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Mystery.of.the.Blue.Train"
+  },
+  {
+   "file": "Season_10/s10e02_Cards.on.the.Table.avi",
+   "season": 10,
+   "key": "55",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Cards.on.the.Table"
+  },
+  {
+   "file": "Season_10/s10e03_After.the.Funeral.avi",
+   "season": 10,
+   "key": "56",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "After.the.Funeral"
+  },
+  {
+   "file": "Season_10/s10e04_Taken.at.the.Flood.avi",
+   "season": 10,
+   "key": "57",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Taken.at.the.Flood"
+  },
+  {
+   "file": "Season_11/s11e01_Mrs.McGinty's.Dead.avi",
+   "season": 11,
+   "key": "58",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Mrs.McGinty's.Dead"
+  },
+  {
+   "file": "Season_11/s11e02_Cat.Among.the.Pigeons.avi",
+   "season": 11,
+   "key": "59",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Cat.Among.the.Pigeons"
+  },
+  {
+   "file": "Season_11/s11e03_Third.Girl.avi",
+   "season": 11,
+   "key": "60",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Third.Girl"
+  },
+  {
+   "file": "Season_11/s11e04_Appointment.with.Death.avi",
+   "season": 11,
+   "key": "61",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Appointment.with.Death"
+  },
+  {
+   "file": "Season_12/s12e01_The.Clocks.avi",
+   "season": 12,
+   "key": "62",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Clocks"
+  },
+  {
+   "file": "Season_12/s12e02_Three.Act.Tragedy.avi",
+   "season": 12,
+   "key": "63",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Three.Act.Tragedy"
+  },
+  {
+   "file": "Season_12/s12e03_Hallowe'en.Party.avi",
+   "season": 12,
+   "key": "64",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Hallowe'en.Party"
+  },
+  {
+   "file": "Season_12/s12e04_Murder.on.the.Orient.Express.avi",
+   "season": 12,
+   "key": "65",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Murder.on.the.Orient.Express"
+  },
+  {
+   "file": "Season_13/s13e01_Elephants.Can.Remember.avi",
+   "season": 13,
+   "key": "66",
+   "episodes": [
+    1
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Elephants.Can.Remember"
+  },
+  {
+   "file": "Season_13/s13e02_The.Big.Four.avi",
+   "season": 13,
+   "key": "67",
+   "episodes": [
+    2
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Big.Four"
+  },
+  {
+   "file": "Season_13/s13e03_Dead.Man's.Folly.avi",
+   "season": 13,
+   "key": "68",
+   "episodes": [
+    3
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Dead.Man's.Folly"
+  },
+  {
+   "file": "Season_13/s13e04_The.Labours.of.Hercules.avi",
+   "season": 13,
+   "key": "69",
+   "episodes": [
+    4
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "The.Labours.of.Hercules"
+  },
+  {
+   "file": "Season_13/s13e05_Curtain.Poirot's.Last.Case.avi",
+   "season": 13,
+   "key": "70",
+   "episodes": [
+    5
+   ],
+   "part": null,
+   "special": false,
+   "titleHint": "Curtain.Poirot's.Last.Case"
+  }
+ ]
+}
