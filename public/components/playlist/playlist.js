@@ -1,4 +1,5 @@
 
+import { playlistRows } from "../../domain/playlist-groups.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
 /**
@@ -8,7 +9,10 @@ export class Playlist {
 
   static SELECTOR = {
     root: "#playlist",
-    firstButton: "button:first-of-type",
+    // The first thing a viewer can reach: a row, or a folder's summary when the
+    // list is grouped (the rows inside a closed group cannot take focus).
+    firstFocusable: ":is(summary, button)",
+    fileButton: "button[data-file-index]",
   };
 
   static CLASSES = {
@@ -79,8 +83,8 @@ export class Playlist {
     this.#root.removeAttribute('inert');
     this.#root.setAttribute('data-open', true);
     
-    const button = this.#root.querySelector(Playlist.SELECTOR.firstButton);
-    if (button !== null) button.focus({ preventScroll: true });
+    const first = this.#root.querySelector(Playlist.SELECTOR.firstFocusable);
+    if (first instanceof HTMLElement) first.focus({ preventScroll: true });
   };
 
   #onPlaylistClose = () => {
@@ -113,7 +117,7 @@ export class Playlist {
     if (!(target instanceof Element)) {
       return;
     }
-    const button = target.closest("button[data-file-index]");
+    const button = target.closest(Playlist.SELECTOR.fileButton);
     if (!(button instanceof HTMLButtonElement)) {
       return;
     }
@@ -143,23 +147,43 @@ export class Playlist {
 
   #renderList() {
     this.#root.textContent = "";
-    for (const file of this.#videoFiles) {
+    for (const row of playlistRows(this.#videoFiles)) {
+      if (row.kind === "file") {
+        this.#root.append(this.#fileItem(row.file, row.label));
+        continue;
+      }
       const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.dataset.fileIndex = String(file?.index ?? -1);
-      // The name with the release's own repeated furniture taken off, when the
-      // list gave enough to work that out — see `withDisplayNames`.
-      button.textContent =
-        typeof file?.displayName === "string" && file.displayName.length > 0
-          ? file.displayName
-          : typeof file?.relativePath === "string" && file.relativePath.length > 0
-            ? file.relativePath
-            : String(file?.name ?? "Video");
-      item.append(button);
+      const group = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = row.label;
+      const files = document.createElement("ul");
+      for (const member of row.files) {
+        files.append(this.#fileItem(member.file, member.label));
+      }
+      group.append(summary, files);
+      item.append(group);
       this.#root.append(item);
     }
     this.#updateActiveHighlight();
+  }
+
+  /**
+   * One row of the list.
+   *
+   * @param {{ index?: number }} file
+   * @param {string} label - What `playlistRows` decided the row is called: the
+   *   release's own repeated furniture taken off, and the folder left out inside
+   *   a group.
+   * @returns {HTMLLIElement}
+   */
+  #fileItem(file, label) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.fileIndex = String(file?.index ?? -1);
+    button.textContent = label;
+    item.append(button);
+    return item;
   }
 
   /**
@@ -167,11 +191,15 @@ export class Playlist {
    * visually and semantically distinguishable in the playlist.
    */
   #updateActiveHighlight() {
-    const buttons = this.#root.querySelectorAll("button[data-file-index]");
+    const buttons = this.#root.querySelectorAll(Playlist.SELECTOR.fileButton);
     for (const button of buttons) {
       const fileIndex = Number(button.dataset.fileIndex);
       if (Number.isInteger(fileIndex) && fileIndex === this.#currentFileIndex) {
         button.setAttribute("aria-current", "true");
+        // The folder holding what plays is opened, so the highlight is in view
+        // the next time the list is. Folders the viewer opened stay open.
+        const group = button.closest("details");
+        if (group !== null) group.open = true;
       } else {
         button.removeAttribute("aria-current");
       }

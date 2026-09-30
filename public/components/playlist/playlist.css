@@ -54,4 +54,89 @@
       color: #fff;
     }
   }
+
+  /* A folder of the release (a season, usually), collapsed to one line. */
+  details {
+    border-block-start: 0.0625rem solid rgb(255 255 255 / 0.08);
+  }
+
+  li:first-child > details {
+    border-block-start: none;
+  }
+
+  summary {
+    /* Stays at the top of the drawer while its own folder scrolls past, so a
+       long season never loses its name. The limit is the <details>, so the
+       next folder's summary takes over where this one ends. */
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    /* Block rather than flex, so a long folder name ends in an ellipsis. It
+       also drops the browser's own marker, replaced by the chevron below. */
+    display: block;
+    padding: 0.75rem 1rem;
+    background: #141416;
+    color: color-mix(in srgb, #f2f2f2 70%, #141416 30%);
+    font-size: 0.875rem;
+    line-height: 1.44;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    /* The chevron: two borders of a square, turned to point right when closed
+       and down when open. */
+    &::before {
+      content: "";
+      display: inline-block;
+      margin-inline-end: 0.75rem;
+      vertical-align: 0.125em;
+      inline-size: 0.4375rem;
+      block-size: 0.4375rem;
+      border-inline-end: 0.125rem solid currentColor;
+      border-block-end: 0.125rem solid currentColor;
+      rotate: -45deg;
+      transition: rotate 0.15s ease-out;
+    }
+
+    &:hover {
+      color: #fff;
+    }
+
+    &:focus-visible {
+      outline: 0.125rem solid #c00;
+      outline-offset: -0.125rem;
+    }
+  }
+
+  details[open] > summary {
+    color: #f2f2f2;
+
+    &::before {
+      rotate: 45deg;
+    }
+  }
+
+  /* The folder's own rows sit under its name, past the chevron. */
+  details button {
+    padding-inline-start: 2.25rem;
+  }
+
+  details > ul {
+    padding-block-end: 0.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    summary::before {
+      transition: none;
+    }
+  }
 }

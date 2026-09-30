@@ -3,6 +3,11 @@
   padding: 0;
   overflow: clip;
   background: #000;
+  /* Nothing above this element names a family, so without it every text of
+     ours in the player — the waiting overlay, the share menu, the peer count —
+     fell back to the browser's default, which is a serif face. media-chrome's
+     own controls live in its shadow DOM and carry their own sans-serif stack. */
+  font-family: system-ui, sans-serif;
   box-sizing: border-box;
   display: flex;
   flex-wrap: nowrap;
