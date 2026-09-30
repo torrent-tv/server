@@ -1,3 +1,7 @@
+## 0.31.8
+
+- **Fix**: Report each HLS track's applied timestamp origin so the integral forecast compares prepared media with the actual browser timeline.
+
 ## 0.31.7
 
 - **Fix**: Use the existing complete session-creation deadline for its transport request, so a bounded keyframe wait can return before the browser cancels it.
