@@ -1,3 +1,7 @@
+## 0.35.0
+
+- **New**: A series whose release name shortens its title (`Poirot.1989-2013` for "Agatha Christie's Poirot") is identified by its episodes when no title matches: among the first five results a stated year admits, the one whose season carries at least two, and at least half, of the files' episode titles exactly. The page sends those titles with its identification of a series.
+
 ## 0.34.1
 
 - **Fix**: Render the audio-track button as an outline icon and give its hover tooltip a label.
