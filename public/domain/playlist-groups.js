@@ -30,6 +30,10 @@ const MIN_GROUP_SIZE = 2;
  * @typedef {{ index?: number, relativePath?: string, path?: string, name?: string, displayName?: string }} PlaylistFile
  * @typedef {{ kind: "file", file: PlaylistFile, label: string }} PlaylistFileRow
  * @typedef {{ kind: "group", folder: string, label: string, files: Array<{ file: PlaylistFile, label: string }> }} PlaylistGroupRow
+ * @typedef {object} PlaylistNaming - Names that come from outside the torrent
+ *   (a metadata provider), used instead of the file's own where they exist.
+ * @property {(file: PlaylistFile, where: { grouped: boolean }) => string | null} [fileLabel]
+ * @property {(folder: string, files: PlaylistFile[]) => string | null} [groupLabel]
  */
 
 /**
@@ -42,9 +46,11 @@ const MIN_GROUP_SIZE = 2;
  * the group around it.
  *
  * @param {PlaylistFile[]} files - The pictures, as `PLAYER:SET_MEDIA_FILES` carries them.
+ * @param {PlaylistNaming} [naming] - Names to show instead of the file's own;
+ *   a `null` answer keeps the file's own. Grouping does not depend on it.
  * @returns {Array<PlaylistFileRow | PlaylistGroupRow>}
  */
-export function playlistRows(files) {
+export function playlistRows(files, naming = {}) {
   const list = Array.isArray(files) ? files : [];
   /** @type {Map<string, PlaylistFile[]>} */
   const byFolder = new Map();
@@ -65,18 +71,22 @@ export function playlistRows(files) {
   for (const file of list) {
     const folder = folderOf(file);
     if (!isGroup(folder)) {
-      rows.push({ kind: "file", file, label: labelOf(file) });
+      rows.push({ kind: "file", file, label: naming.fileLabel?.(file, { grouped: false }) ?? labelOf(file) });
       continue;
     }
     if (placed.has(folder)) {
       continue;
     }
     placed.add(folder);
+    const members = byFolder.get(folder);
     rows.push({
       kind: "group",
       folder,
-      label: folder,
-      files: byFolder.get(folder).map((member) => ({ file: member, label: labelInside(member, folder) }))
+      label: naming.groupLabel?.(folder, members) ?? folder,
+      files: members.map((member) => ({
+        file: member,
+        label: naming.fileLabel?.(member, { grouped: true }) ?? labelInside(member, folder)
+      }))
     });
   }
   return rows;

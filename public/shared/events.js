@@ -27,7 +27,25 @@ export const LOADING_EVENTS = {
   PROCESS_PLAYBACK: "LOADING:PROCESS_PLAYBACK",
   PROCESS_MAGNET: "LOADING:PROCESS_MAGNET",
   PLAYBACK_READY: "LOADING:PLAYBACK_READY",
+  /** `{ fileIndex }` — this picture is being loaded; nothing about it is ready yet. */
+  FILE_CHOSEN: "LOADING:FILE_CHOSEN",
   PLAYBACK_FAILED: "LOADING:PLAYBACK_FAILED"
+};
+
+/**
+ * What a release is — work, poster, episode names — as the metadata service
+ * answered it. Never on the playback path: every one of these may come late or
+ * not at all, and nothing that plays waits for them.
+ */
+export const MEDIA_INFO_EVENTS = {
+  /** `{ selection, names }` — a release was chosen; `names` is what is known of it yet. */
+  SELECTED: "MEDIA_INFO:SELECTED",
+  /** `{ selection, contents, files }` — the proxy said what is in the release. */
+  CONTENTS: "MEDIA_INFO:CONTENTS",
+  /** `{ fileIndexes }` — these pictures are on screen, so their names are wanted. */
+  WANT_FILES: "MEDIA_INFO:WANT_FILES",
+  /** A snapshot of everything known, or `null` when nothing is. See `MediaInfoState`. */
+  CHANGED: "MEDIA_INFO:CHANGED"
 };
 
 /** Error view events. */

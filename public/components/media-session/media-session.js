@@ -1,4 +1,5 @@
-import { APP_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { IMAGE_SIZE, episodeLabel, imageUrl, workFor, workLine } from "../../domain/media-info.js";
 
 /**
  * MediaSession integration.
@@ -23,6 +24,8 @@ export class MediaSessionBridge {
   /** @type {Array<{ index?: number, name?: string, relativePath?: string }>} */
   #videoFiles = [];
   #currentFileIndex = -1;
+  /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
+  #media = null;
 
   constructor() {
     if (typeof navigator !== "object" || !("mediaSession" in navigator)) {
@@ -40,7 +43,14 @@ export class MediaSessionBridge {
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onSetActiveMediaFile);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onReset);
+    document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfo);
   }
+
+  /** @param {Event} event */
+  #onMediaInfo = (event) => {
+    this.#media = event instanceof CustomEvent ? event.detail : null;
+    this.#updateMetadata();
+  };
 
   /** @param {Event} event */
   #onPlayerReady = (event) => {
@@ -162,14 +172,21 @@ export class MediaSessionBridge {
 
   #updateMetadata() {
     const file = this.#videoFiles.find((entry) => Number(entry?.index) === this.#currentFileIndex);
-    const title =
+    const fileName =
       (typeof file?.relativePath === "string" && file.relativePath.length > 0 && file.relativePath) ||
       (typeof file?.name === "string" && file.name.length > 0 && file.name) ||
       MediaSessionBridge.APP_NAME;
+    // The episode's name when it was matched, the work's when only that is
+    // known, the file's own name otherwise.
+    const work = workFor(this.#media, this.#currentFileIndex);
+    const match = this.#media?.episodes?.[String(this.#currentFileIndex)] ?? null;
+    const title = match ? episodeLabel(match, { withSeason: match.season }) : (workLine(work) ?? fileName);
+    const poster = imageUrl(IMAGE_SIZE.artwork, work?.poster);
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title,
-        artist: MediaSessionBridge.APP_NAME
+        artist: match ? (workLine(work) ?? MediaSessionBridge.APP_NAME) : MediaSessionBridge.APP_NAME,
+        artwork: poster ? [{ src: poster, sizes: "185x278", type: poster.endsWith(".png") ? "image/png" : "image/jpeg" }] : []
       });
     } catch {
       // silent-ok: as above — the title shown by the operating system's media
