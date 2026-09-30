@@ -1,3 +1,7 @@
+## 0.31.5
+
+- **Fix**: Refresh stale link measurements during startup waiting, report their actual age, and cancel startup probes when the viewing session closes.
+
 ## 0.31.4
 
 - **Fix**: Forward the browser's buffer ceiling into viewer reports so the proxy readiness model receives its required client-capacity input and can produce a start estimate.

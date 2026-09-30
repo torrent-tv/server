@@ -26,7 +26,7 @@ const MIN_SAMPLES = 2;
 
 /** @type {Array<{ mbps: number, at: number }>} */
 let samples = [];
-/** @type {{ timer: ReturnType<typeof setInterval> } | null} */
+/** @type {{ timer: ReturnType<typeof setInterval>, send: () => void, abortController: AbortController } | null} */
 let active = null;
 /** Last smoothed estimate retained for the existing quality report. @type {number | null} */
 let lastLinkMbps = null;
@@ -137,6 +137,9 @@ export function startNetReporter({
 }) {
   stopNetReporter();
   samples = [];
+  const abortController = new AbortController();
+  let probing = false;
+  let lastProbeAt = 0;
   const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/net-report`;
   const send = () => {
     // The last figure stands when nothing has been measured recently. A viewer
@@ -277,6 +280,20 @@ export function startNetReporter({
         (onScreen ? "" : " off-screen") +
         (inPictureInPicture ? " in-pip" : "")
     );
+    // A paused loader can stop delivering at a segment join. Keep measuring
+    // the existing channel while startup waits, rather than extrapolating an
+    // old transfer indefinitely. One probe at a time, at the existing sample
+    // window cadence, and stop it with this report's session.
+    const now = Date.now();
+    const sampleAgeMs = Math.max(0, now - (linkSampleAt ?? 0));
+    if (waiting && !playing && sampleAgeMs >= SAMPLE_WINDOW_MS &&
+      now - lastProbeAt >= SAMPLE_WINDOW_MS && !probing) {
+      probing = true;
+      lastProbeAt = now;
+      void measureLink(transport, { signal: abortController.signal }).finally(() => {
+        probing = false;
+      });
+    }
     void transport
       .fetch(path, {
         method: "POST",
@@ -295,13 +312,14 @@ export function startNetReporter({
           ...(linkMbps === null ? {} : { linkMbps }),
           ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
           ...(linkSampleAt === null ? {} : { linkSampleAt }),
+          ...(linkSampleAt === null ? {} : { linkSampleAgeMs: sampleAgeMs }),
           ...(positionSeconds === null ? {} : { positionSeconds })
         })
       })
       .catch(() => undefined); // best-effort — next tick simply tries again
   };
   const timer = setInterval(send, REPORT_INTERVAL_MS);
-  active = { timer, send };
+  active = { timer, send, abortController };
   send();
 }
 
@@ -326,6 +344,7 @@ export function reportNow() {
 export function stopNetReporter() {
   if (active) {
     clearInterval(active.timer);
+    active.abortController.abort();
     active = null;
   }
 }
@@ -348,9 +367,10 @@ export function stopNetReporter() {
  * this makes in tens of milliseconds.
  *
  * @param {{ fetch: (path: string, options?: object) => Promise<{ arrayBuffer?: () => Promise<ArrayBuffer>, ok?: boolean } | unknown> }} transport
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<void>}
  */
-export async function measureLink(transport) {
+export async function measureLink(transport, { signal } = {}) {
   let bytes = FIRST_PROBE_BYTES;
   let measurable = 0;
   for (let ask = 0; ask < 8 && bytes !== null; ask += 1) {
@@ -358,7 +378,10 @@ export async function measureLink(transport) {
     let received = 0;
     let ms = 0;
     try {
-      const response = await transport.fetch(`/api/link-probe?bytes=${bytes}`);
+      if (signal?.aborted) {
+        return;
+      }
+      const response = await transport.fetch(`/api/link-probe?bytes=${bytes}`, { signal });
       if (response?.ok === false) {
         return; // a proxy one release behind has no such route
       }
@@ -377,7 +400,7 @@ export async function measureLink(transport) {
       // figure — and the estimate fills from segments as it always did.
       return;
     }
-    if (received <= 0) {
+    if (received <= 0 || signal?.aborted) {
       return;
     }
     recordNetSample(received, ms);
