@@ -923,6 +923,7 @@ export class TorrentSession {
     while (Date.now() < createDeadlineMs) {
       response = await transport.fetch("/api/transcode-sessions", {
         method: "POST",
+        timeoutMs: Math.max(1, createDeadlineMs - Date.now()),
         headers: {
           "Content-Type": "application/json"
         },

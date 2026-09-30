@@ -1,3 +1,7 @@
+## 0.31.7
+
+- **Fix**: Use the existing complete session-creation deadline for its transport request, so a bounded keyframe wait can return before the browser cancels it.
+
 ## 0.31.6
 
 - **Fix**: Send the initial browser link measurement and buffer ceiling with a transcode-session request so the proxy can forecast readiness before regular reporting starts.
