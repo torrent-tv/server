@@ -100,8 +100,15 @@ test("a search is cached per language, and a repeated question asks nothing", as
   assert.ok(source.asked.length > afterFirst);
 });
 
+test("a picture that must state a year and does not is not searched for", async () => {
+  const source = fakeSource({ "movie|27 nights": [{ id: 1, name: "27 Nights", year: 2025 }] });
+  const answer = await service(source).identify({ names: ["27_nights"], kindHint: null, requireYear: true, language: "en-US" });
+  assert.equal(answer.status, "undetermined");
+  assert.deepEqual(source.asked, []);
+});
+
 test("more pages than are read make a single match undetermined", async () => {
-  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: null }] }, { totalPages: 9 });
+  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2020 }] }, { totalPages: 9 });
   const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", language: "en-US" });
   assert.equal(answer.status, "undetermined");
   assert.equal(source.asked.filter((line) => line.startsWith("search|movie|Title|")).length, 3);

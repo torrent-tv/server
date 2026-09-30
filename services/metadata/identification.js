@@ -4,9 +4,9 @@
  *
  * **What counts as a candidate.** A search result whose title, in the
  * requested language or in the work's own, is EQUAL to a searched spelling
- * after {@link normalizeTitle}; whose year is within one of a year the names
- * state, when they state one; and whose kind agrees with the kind being
- * searched. The first result of a search is never taken for being first.
+ * after {@link normalizeTitle}; that has a date; whose year is within one of a
+ * year the names state, when they state one; and whose kind agrees with the
+ * kind being searched. The first result of a search is never taken for being first.
  *
  * **The outcomes, and why each one is only reached when it is established.**
  *
@@ -51,22 +51,24 @@ import { normalizeTitle } from "./title.js";
 /**
  * Whether a result's year agrees with the years the names state.
  *
- * A result with no date cannot be checked, so it does not pass a stated year.
- * One year either way covers a work premiering in one country the year before
- * another, which is how the provider's date and a release's year differ.
+ * A result with no date is never a candidate, whether or not the names state a
+ * year: it cannot be checked, and on the provider such entries are placeholders
+ * and obscure records. Measured 2026-09-30: `The Continental 1 - LostFilm.TV`
+ * matched a dateless `The Continental` rather than the series it is (which the
+ * provider titles "The Continental: From the World of John Wick"), and none of
+ * its episodes existed there. One year either way covers a work premiering in
+ * one country the year before another, which is how the provider's date and a
+ * release's year differ.
  *
  * @param {number | null} year
  * @param {number[]} statedYears
  * @returns {boolean}
  */
 function yearAgrees(year, statedYears) {
-  if (statedYears.length === 0) {
-    return true;
-  }
   if (year === null) {
     return false;
   }
-  return statedYears.some((stated) => Math.abs(stated - year) <= 1);
+  return statedYears.length === 0 || statedYears.some((stated) => Math.abs(stated - year) <= 1);
 }
 
 /**

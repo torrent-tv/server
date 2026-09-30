@@ -46,6 +46,9 @@ const NOTHING_TTL_MS = 60 * 60 * 1000;
  * @typedef {object} IdentifyRequest
  * @property {string[]} names
  * @property {"tv" | "movie" | null} kindHint
+ * @property {boolean} [requireYear] - Identify only when a name states a year:
+ *   for one picture of a release not known to be one work, where a bare title
+ *   (a performer's folder, a file called `01`) says too little.
  * @property {string} language
  * @property {AbortSignal} [signal]
  */
@@ -83,7 +86,7 @@ export class MetadataService {
    * @param {IdentifyRequest} request
    * @returns {Promise<{ status: string, work?: import("./TmdbSource.js").Work, candidates?: object[] }>}
    */
-  async identify({ names, kindHint, language, signal }) {
+  async identify({ names, kindHint, requireYear = false, language, signal }) {
     if (!this.#source) {
       return { status: "unavailable" };
     }
@@ -92,6 +95,12 @@ export class MetadataService {
     const seriesEvidence = readings.some((reading) => reading.seriesEvidence);
     const kinds = kindHint ? [kindHint] : seriesEvidence ? ["tv"] : ["tv", "movie"];
     const statedYears = [...new Set(readings.map((reading) => reading.years?.from).filter(Number.isInteger))];
+    // Measured 2026-09-30: one picture of an adult pack, under a folder named
+    // after a performer, matched a film of that name. Without a stated year a
+    // bare title is not enough when nothing says the picture is a film at all.
+    if (requireYear && statedYears.length === 0) {
+      return { status: "undetermined" };
+    }
 
     // What is SENT is the spelling as written, apostrophes made plain: a
     // provider's own search may not find `christies` for `Christie's`. What is

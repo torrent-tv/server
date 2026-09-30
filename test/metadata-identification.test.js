@@ -91,6 +91,11 @@ test("a remake with no year stated is ambiguous, and the year separates it", () 
   assert.equal(dated.candidates[0].tmdbId, 2);
 });
 
+test("a result with no date is never a candidate", () => {
+  const identity = decideIdentity({ searches: [search("tv", "The Continental", [[19069, "The Continental", null]])], statedYears: [] });
+  assert.equal(identity.status, "not-found");
+});
+
 test("a year one away agrees; two away does not", () => {
   const results = [[1, "Title", 2016]];
   assert.equal(decideIdentity({ searches: [search("movie", "Title", results)], statedYears: [2017] }).status, "identified");
