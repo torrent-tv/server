@@ -107,3 +107,53 @@ export function decideIdentity({ searches, statedYears }) {
     ? { status: "identified", candidates: reported }
     : { status: "not-found", candidates: [] };
 }
+
+/**
+ * A series identified by its EPISODES when no title matched.
+ *
+ * A release name often shortens the title - `Poirot.1989-2013` for a series the
+ * provider calls "Agatha Christie's Poirot" - and title equality then finds
+ * nothing. The episode names in the files are stronger evidence than any title:
+ * a show whose season carries the same episode names is that show. Equality is
+ * still exact after {@link normalizeTitle}; a candidate qualifies when the
+ * files' titles name at least two different episodes of its season, and at
+ * least half of the titles sent name one of them. One qualifier is the work;
+ * two are `ambiguous`; none, with results left unchecked, is `undetermined`.
+ *
+ * @param {object} params
+ * @param {Array<{ candidate: Candidate, episodeNames: string[] }>} params.checked -
+ *   Every candidate checked, with the episode names of the evidence season.
+ * @param {string[]} params.titles - The files' titles for that season.
+ * @param {boolean} params.uncheckedRemain - Results with an agreeing year were left unchecked.
+ * @returns {Identity}
+ */
+export function decideByEpisodeTitles({ checked, titles, uncheckedRemain }) {
+  const wanted = [...new Set(titles.map(normalizeTitle).filter((title) => title.length > 0))];
+  const qualifiers = [];
+  for (const { candidate, episodeNames } of checked) {
+    const names = new Set(episodeNames.map(normalizeTitle).filter((name) => name.length > 0));
+    const matched = wanted.filter((title) => names.has(title));
+    if (matched.length >= 2 && matched.length * 2 >= wanted.length) {
+      qualifiers.push(candidate);
+    }
+  }
+  if (qualifiers.length >= 2) {
+    return { status: "ambiguous", candidates: qualifiers.slice(0, 5) };
+  }
+  if (qualifiers.length === 1) {
+    return { status: "identified", candidates: qualifiers };
+  }
+  return { status: uncheckedRemain ? "undetermined" : "not-found", candidates: [] };
+}
+
+/**
+ * Whether a result's year agrees with years the names DO state; the episode
+ * stage checks only results a stated year admits.
+ *
+ * @param {number | null} year
+ * @param {number[]} statedYears
+ * @returns {boolean}
+ */
+export function resultYearAgrees(year, statedYears) {
+  return statedYears.length > 0 && yearAgrees(year, statedYears);
+}
