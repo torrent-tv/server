@@ -16,6 +16,7 @@ import {
   playlistNaming,
   releaseIdentification,
   seasonFiles,
+  seasonsAgree,
   shapeOf
 } from "../public/domain/media-info.js";
 import { playlistRows } from "../public/domain/playlist-groups.js";
@@ -70,11 +71,20 @@ test("a proxy that states no shape is believed only for a single picture", () =>
 test("one picture of an undetermined release is asked about by its own name and folder", () => {
   assert.deepEqual(pictureIdentification({ relativePath: "Trilogy/Despicable.Me.2.2013.mkv" }, {}), {
     names: ["Despicable.Me.2.2013", "Trilogy"],
-    kindHint: null
+    kindHint: null,
+    requireYear: true
   });
   assert.deepEqual(pictureIdentification({ relativePath: "Season_01/s01e01_Pilot.avi" }, { episode: marker(1, [1]) }).names, [
     "s01e01_Pilot"
   ]);
+});
+
+test("a series lacking a season the files name is not this release", () => {
+  const items = [{ episode: marker(1, [1]) }, { episode: marker(0, [1], { special: true }) }];
+  assert.equal(seasonsAgree(items, { seasons: [{ number: 0 }, { number: 1 }] }), true);
+  assert.equal(seasonsAgree(items, { seasons: [{ number: 1 }] }), false);
+  assert.equal(seasonsAgree([{ episode: marker(null, [3]) }], { seasons: [{ number: 0 }] }), false);
+  assert.equal(seasonsAgree([{ episode: null }], { seasons: [] }), true);
 });
 
 test("a season request carries every file of that season and nothing of another", () => {
