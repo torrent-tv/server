@@ -128,10 +128,12 @@ export function releaseIdentification({ selectionNames, contents, filesByIndex }
 /**
  * The identification of ONE picture of a release whose pictures are not known
  * to be one work: its own name and the folder it sits in, nothing of the rest.
+ * A year must be stated: in such a release a bare title — a performer's folder,
+ * a file called `01` — matched unrelated films in the survey collection.
  *
  * @param {{ relativePath?: string } | undefined} file
  * @param {{ episode?: object | null } | undefined} item
- * @returns {{ names: string[], kindHint: "tv" | null }}
+ * @returns {{ names: string[], kindHint: "tv" | null, requireYear: true }}
  */
 export function pictureIdentification(file, item) {
   const parts = String(file?.relativePath ?? "").split("/");
@@ -139,8 +141,42 @@ export function pictureIdentification(file, item) {
   const seasonFolder = /^(?:season|сезон|s)[ ._-]*\d{1,3}$/iu.test(folder.trim());
   return {
     names: boundedNames([stemOf(file?.relativePath ?? ""), seasonFolder ? "" : folder]),
-    kindHint: item?.episode ? "tv" : null
+    kindHint: item?.episode ? "tv" : null,
+    requireYear: true
   };
+}
+
+/**
+ * Whether a series the service identified has every season the release's
+ * files name. A work without them is not this release: measured on
+ * `The Continental 1 - LostFilm.TV`, whose files are season 1 of a series the
+ * provider found under another record with no episodes of it.
+ *
+ * @param {Array<{ episode?: { season?: number | null, special?: boolean } | null }>} items
+ * @param {{ seasons?: Array<{ number: number }> }} work
+ * @returns {boolean}
+ */
+export function seasonsAgree(items, work) {
+  const known = new Set((work?.seasons ?? []).map((season) => season.number));
+  const regular = [...known].filter((number) => number > 0);
+  for (const item of items) {
+    const episode = item.episode;
+    if (!episode) {
+      continue;
+    }
+    if (episode.special) {
+      if (!known.has(0)) {
+        return false;
+      }
+    } else if (Number.isInteger(episode.season)) {
+      if (!known.has(episode.season)) {
+        return false;
+      }
+    } else if (regular.length === 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   releaseIdentification,
   seasonFiles,
   seasonOf,
+  seasonsAgree,
   shapeOf
 } from "../../domain/media-info.js";
 
@@ -172,6 +173,10 @@ export class MediaInfoController {
     // A series that the service identifies as a film is a contradiction, not
     // an answer: the proxy has already stated the pictures are episodes.
     if (shapeOf(this.#contents) === "series" && answer.work?.kind !== "tv") {
+      return;
+    }
+    // Nor is a series that lacks the seasons the files name.
+    if (answer.work?.kind === "tv" && !seasonsAgree([...this.#itemsByIndex.values()], answer.work)) {
       return;
     }
     this.#work = answer.work;
