@@ -120,10 +120,12 @@ test("episodes of one season are fetched once and matched", async () => {
 
 test("the cache drops the oldest entries past its budget and refuses an oversized one", () => {
   const cache = new MetadataCache({ budgetBytes: 200, maxEntryBytes: 120 });
-  cache.set("a", "x".repeat(60), 1000);
-  cache.set("b", "y".repeat(60), 1000);
-  cache.set("c", "z".repeat(60), 1000);
+  // 80 characters are 82 bytes of JSON plus a one-byte key: two fit, three do not.
+  cache.set("a", "x".repeat(80), 1000);
+  cache.set("b", "y".repeat(80), 1000);
+  cache.set("c", "z".repeat(80), 1000);
   assert.equal(cache.get("a"), undefined);
+  assert.equal(cache.get("c"), "z".repeat(80));
   assert.ok(cache.stats().bytes <= 200);
   assert.equal(cache.set("big", "w".repeat(200), 1000), false);
 });
