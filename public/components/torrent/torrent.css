@@ -142,20 +142,6 @@
     }
   }
 
-  /* The attribution TMDB's terms require wherever its data is used: its own
-     line after the demo button, quieter than anything a viewer acts on. */
-  #torrent__credit {
-    order: 3;
-    flex-basis: 100%;
-    font-size: clamp(0.75rem, 1.75vmin, 1rem);
-    line-height: 1.44;
-    color: var(--view-text-muted);
-
-    a {
-      color: inherit;
-    }
-  }
-
   #torrent__input {
     position: fixed;
     top: -100vh;
