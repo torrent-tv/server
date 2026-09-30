@@ -21,6 +21,16 @@ import { createSignalHub } from "./services/signal-hub.js";
 import { handleHealthGet } from "./routes/health/get.js";
 import { handleHealthzGet } from "./routes/healthz/get.js";
 import { handleEnvGet } from "./routes/env/get.js";
+import { createMetadata } from "./services/metadata/create-metadata.js";
+import {
+  IDENTIFY_BODY_LIMIT,
+  handleApiMetadataIdentifyPost
+} from "./routes/api/metadata/identify/post.js";
+import {
+  EPISODES_BODY_LIMIT,
+  handleApiMetadataEpisodesPost
+} from "./routes/api/metadata/episodes/post.js";
+import { handleApiMetadataImageGet } from "./routes/api/metadata/image/get.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +54,9 @@ const shutdownState = {
 const clientsStore = createProxyClientsStore();
 const tunnelServer = createProxyTunnelServer();
 const signalHub = createSignalHub();
+const { service: metadata, images: metadataImages } = createMetadata({
+  tokenFile: process.env.TMDB_READ_TOKEN_FILE
+});
 
 // Wire up signal routing: proxy → tunnelServer → signalHub → browser
 tunnelServer.setSignalHandler((sessionId, signal) => {
@@ -110,6 +123,19 @@ app.post("/api/proxy-clients/can-serve", async (req, reply) =>
 // Browser console-log forwarder (debugging aid; writes client logs to the
 // server container log so iPhone/eruda logs need not be copy-pasted).
 app.post("/api/client-logs", async (req, reply) => handleApiClientLogsPost(req, reply));
+
+// What a release is — poster, title, episode names — from TMDB, through this
+// server so that the browser never talks to a third party and the token stays
+// here. Never on the playback path: every answer may be late, absent or refused.
+app.post("/api/metadata/identify", { bodyLimit: IDENTIFY_BODY_LIMIT }, async (req, reply) =>
+  handleApiMetadataIdentifyPost(req, reply, { metadata })
+);
+app.post("/api/metadata/episodes", { bodyLimit: EPISODES_BODY_LIMIT }, async (req, reply) =>
+  handleApiMetadataEpisodesPost(req, reply, { metadata })
+);
+app.get("/api/metadata/image/:size/:file", async (req, reply) =>
+  handleApiMetadataImageGet(req, reply, { images: metadataImages })
+);
 
 app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
 app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
