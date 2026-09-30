@@ -1,3 +1,7 @@
+## 0.32.1
+
+- **Fix**: Preserve an unavailable proxy playback delay as unknown instead of displaying zero seconds until playback.
+
 ## 0.32.0
 
 - **New**: Group a torrent's episodes by folder in the playlist, each season in a collapsible `<details>` section; the section holding the playing episode opens by itself.
