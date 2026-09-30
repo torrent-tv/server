@@ -18,6 +18,10 @@ test("refreshes a stale startup link and reports the measurement age", async (t)
     } },
     sessionId: "waiting",
     getBufferedAheadSec: () => 19.187,
+    getBufferedRanges: () => ({
+      video: [{ start: 0, end: 3 }, { start: 10, end: 19.187 }],
+      audio: [{ start: 0, end: 29.356 }]
+    }),
     getPlaying: () => false,
     getWaiting: () => true
   });
@@ -28,6 +32,10 @@ test("refreshes a stale startup link and reports the measurement age", async (t)
   assert.ok(reports.at(-1).linkSampleAgeMs >= 30_000);
   reportNow();
   assert.equal(reports.at(-1).linkSampleMbps, 5.24288);
+  assert.deepEqual(reports.at(-1).bufferedRanges, {
+    video: [{ start: 0, end: 3 }, { start: 10, end: 19.187 }],
+    audio: [{ start: 0, end: 29.356 }]
+  });
   t.mock.timers.tick(1_500);
   await new Promise(setImmediate);
   assert.equal(probes, 2);

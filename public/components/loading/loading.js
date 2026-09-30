@@ -4687,6 +4687,7 @@ export class Loading extends StateDerivedView {
         // which segments are requested.
         getPlayingHeight: () => this.#playingHeight,
         getBufferLimitSeconds: () => this.#browserBufferLimitSeconds,
+        getBufferedRanges: () => this.#hlsPlayer.getBufferedRanges(this.#videoElement),
         playHls: (videoElement, manifestUrl, playOptions = {}) =>
           this.#hlsPlayer.play(videoElement, manifestUrl, {
             ...(hlsLoader ? { loader: hlsLoader } : {}),

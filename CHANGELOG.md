@@ -1,3 +1,9 @@
+## 0.31.6
+
+- **Fix**: Send the initial browser link measurement and buffer ceiling with a transcode-session request so the proxy can forecast readiness before regular reporting starts.
+- **Fix**: Report separate video and audio buffer intervals, including future ranges after a hole, to the proxy's integral playback forecast.
+- **Fix**: Do not describe a temporarily missing forecast as an incompatible proxy protocol.
+
 ## 0.31.5
 
 - **Fix**: Refresh stale link measurements during startup waiting, report their actual age, and cancel startup probes when the viewing session closes.
