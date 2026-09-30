@@ -5,7 +5,7 @@ import { viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
 import { bufferedAheadSeconds as measureBufferedAheadSeconds } from "./buffer-metrics.js";
-import { startNetReporter, stopNetReporter } from "./net-report.js";
+import { getEstimatedLinkMbps, getLatestLinkReading, startNetReporter, stopNetReporter } from "./net-report.js";
 import { NoCapacityError, OutputUnavailableError } from "./proxy-outcome.js";
 import { pictureSizeOf } from "./visible-picture.js";
 
@@ -704,7 +704,8 @@ export class TorrentSession {
         getVisiblePicture: typeof options.getVisiblePicture === "function" ? options.getVisiblePicture : undefined,
         getBufferLimitSeconds: typeof options.getBufferLimitSeconds === "function"
           ? options.getBufferLimitSeconds
-          : undefined
+          : undefined,
+        getBufferedRanges: options.getBufferedRanges
       }
     );
     if (!playlistUrl) {
@@ -913,6 +914,9 @@ export class TorrentSession {
       Number.isFinite(options.startPositionSeconds) && options.startPositionSeconds > 0
         ? options.startPositionSeconds
         : 0;
+    const initialLinkReading = getLatestLinkReading();
+    const initialLinkMbps = getEstimatedLinkMbps() ?? initialLinkReading?.mbps ?? null;
+    const initialBufferLimit = Number(options.getBufferLimitSeconds?.());
     const createDeadlineMs = Date.now() + 90_000;
     let attempt = 0;
     let response = null;
@@ -942,6 +946,20 @@ export class TorrentSession {
           consumerId: this.consumerId,
           fileName: this.#getFileLogName(fileIndex),
           startPositionSeconds: startPositionSeconds > 0 ? startPositionSeconds : undefined,
+          bufferedAheadSec: 0,
+          ...(Number.isFinite(initialLinkMbps) && initialLinkMbps > 0
+            ? { viewerLinkMbps: initialLinkMbps }
+            : {}),
+          ...(initialLinkReading
+            ? {
+                linkSampleMbps: initialLinkReading.mbps,
+                linkSampleAt: initialLinkReading.at,
+                linkSampleAgeMs: Math.max(0, Date.now() - initialLinkReading.at)
+              }
+            : {}),
+          ...(Number.isFinite(initialBufferLimit) && initialBufferLimit > 0
+            ? { bufferLimitSeconds: initialBufferLimit }
+            : {}),
           audioTrackIndex:
             Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0
               ? options.audioTrackIndex
@@ -1083,6 +1101,7 @@ export class TorrentSession {
         consumerId: this.consumerId,
         getBufferedAheadSec: bufferedAheadSecondsForReporter,
         getBufferLimitSeconds: options.getBufferLimitSeconds,
+        getBufferedRanges: options.getBufferedRanges,
         getPositionSeconds: playbackPositionSeconds,
         getPlaying: pictureIsMoving,
         getWaiting: viewerIsWaiting,

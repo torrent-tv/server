@@ -90,6 +90,16 @@ export function getEstimatedLinkMbps() {
 }
 
 /**
+ * Newest measured delivery sample, including its age source timestamp, for the
+ * proxy's first playback forecast before session reporting can begin.
+ *
+ * @returns {{ mbps: number, at: number } | null}
+ */
+export function getLatestLinkReading() {
+  return lastLinkReading ? { ...lastLinkReading } : null;
+}
+
+/**
  * Median link throughput over the sample window, or null when there is not
  * enough recent material to estimate.
  *
@@ -129,6 +139,7 @@ export function startNetReporter({
   consumerId = "",
   getBufferedAheadSec,
   getBufferLimitSeconds,
+  getBufferedRanges,
   getPositionSeconds,
   getPlaying,
   getWaiting,
@@ -300,6 +311,7 @@ export function startNetReporter({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bufferedAheadSec,
+          ...(getBufferedRanges ? { bufferedRanges: getBufferedRanges() } : {}),
           ...(bufferLimitSeconds === null ? {} : { bufferLimitSeconds }),
           playing,
           waiting,

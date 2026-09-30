@@ -526,6 +526,23 @@ export function createHlsPlayer(onLog) {
   let ownJump = null;
 
   return {
+    getBufferedRanges(videoElement) {
+      const read = (source) => {
+        try {
+          const ranges = source?.buffered;
+          return ranges ? Array.from({ length: ranges.length }, (_, index) => ({
+            start: ranges.start(index), end: ranges.end(index)
+          })) : [];
+        } catch {
+          return [];
+        }
+      };
+      const result = { media: read(videoElement) };
+      for (const [name, source] of hlsInstance?.bufferController?.sourceBuffers ?? []) {
+        if (name === "video" || name === "audio") result[name] = read(source);
+      }
+      return result;
+    },
     /**
      * The quality variants this stream offers, in the player's own order.
      *

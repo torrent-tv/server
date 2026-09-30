@@ -109,7 +109,8 @@ export class WaitingOverlay {
       cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
       cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
       etaSeconds: unified.etaSeconds ?? undefined,
-      readinessUnavailable: usable && readiness?.version !== 1
+      readinessUnavailable: usable && readiness !== undefined && readiness !== null &&
+        readiness.version !== 1
     });
     this.#applyStep();
     this.#render();
