@@ -152,3 +152,25 @@ test("a series whose episodes carry the files' titles is identified by them", as
     "ambiguous"
   );
 });
+
+test("a work whose alternative titles hold the searched spelling is identified by them", async () => {
+  const { decideByAlternativeTitles } = await import("../services/metadata/identification.js");
+  const candidate = (tmdbId) => ({ kind: "movie", tmdbId, title: "", year: 2014 });
+  const queries = [normalizeTitle("Trudno byt Bogom")];
+  const found = decideByAlternativeTitles({
+    checked: [
+      { candidate: candidate(110402), titles: ["It's hard to be a God", "Trudno byt' bogom"] },
+      { candidate: candidate(2), titles: ["Something else"] }
+    ],
+    queries,
+    uncheckedRemain: false
+  });
+  assert.equal(found.status, "identified");
+  assert.equal(found.candidates[0].tmdbId, 110402);
+  assert.equal(
+    decideByAlternativeTitles({ checked: [{ candidate: candidate(3), titles: ["Trudno byt bogom"] }, { candidate: candidate(4), titles: ["Trudno byt Bogom"] }], queries, uncheckedRemain: false }).status,
+    "ambiguous"
+  );
+  assert.equal(decideByAlternativeTitles({ checked: [], queries, uncheckedRemain: true }).status, "undetermined");
+  assert.equal(decideByAlternativeTitles({ checked: [{ candidate: candidate(5), titles: ["Other"] }], queries, uncheckedRemain: false }).status, "not-found");
+});

@@ -18,7 +18,7 @@
  * carries counts and outcomes only.
  */
 
-import { decideByEpisodeTitles, decideIdentity, resultYearAgrees } from "./identification.js";
+import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, resultYearAgrees } from "./identification.js";
 import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
@@ -38,6 +38,30 @@ const MAX_QUERIES = 12;
 
 /** Results checked by their episode names when no title matched. A stated limit. */
 const MAX_EPISODE_CHECKS = 5;
+
+/** Results checked by their alternative titles when no title matched. A stated limit. */
+const MAX_ALTERNATIVE_CHECKS = 5;
+
+/**
+ * The answer of the alternative-title stage joined with the episode stage's.
+ * Episodes settle what the alternative titles left open: when those named two
+ * works, a series identified by its episodes is taken only if it is one of
+ * them, and a different one leaves the answer ambiguous. An episode stage that
+ * found nothing keeps the earlier answer, so results left unchecked there stay
+ * undetermined.
+ *
+ * @param {import("./identification.js").Identity} byAlternative
+ * @param {import("./identification.js").Identity} byEpisodes
+ * @returns {import("./identification.js").Identity}
+ */
+function combineStages(byAlternative, byEpisodes) {
+  if (byAlternative.status === "ambiguous") {
+    const [found] = byEpisodes.status === "identified" ? byEpisodes.candidates : [];
+    const among = found && byAlternative.candidates.some((candidate) => candidate.kind === found.kind && candidate.tmdbId === found.tmdbId);
+    return among ? byEpisodes : byAlternative;
+  }
+  return byEpisodes.status === "not-found" ? byAlternative : byEpisodes;
+}
 
 /** How long a found work, season or non-empty search is kept. */
 const FOUND_TTL_MS = 24 * 60 * 60 * 1000;
@@ -154,12 +178,25 @@ export class MetadataService {
     );
 
     let identity = decideIdentity({ searches, statedYears });
-    // No title matched anything. A series can still be told by its episodes,
-    // but only among results a stated year admits: without one the set is
-    // every show of that name, and a remake shares the episode titles.
-    if (identity.status === "not-found" && kinds.includes("tv") && episodeEvidence && statedYears.length > 0) {
+    // No main or original title matched. Two further stages, each only among
+    // results a stated year admits — without one the set is every work of that
+    // name, and a remake shares its alternative titles and its episode titles:
+    // the provider's alternative titles (a transliterated or romanized name),
+    // and, for a series, its episodes.
+    if (identity.status === "not-found" && statedYears.length > 0) {
       try {
-        identity = await this.#identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal });
+        const byAlternative = await this.#identifyByAlternativeTitles({
+          searches,
+          statedYears,
+          queries: queries.map((query) => query.normalized),
+          deadlineAt,
+          signal
+        });
+        identity = byAlternative;
+        if (byAlternative.status !== "identified" && kinds.includes("tv") && episodeEvidence) {
+          const byEpisodes = await this.#identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal });
+          identity = combineStages(byAlternative, byEpisodes);
+        }
       } catch (error) {
         if (error instanceof MetadataUnavailableError) {
           return { status: "unavailable" };
@@ -181,6 +218,41 @@ export class MetadataService {
       }
       throw error;
     }
+  }
+
+  /**
+   * The alternative-title stage of {@link identify}: the first results a
+   * stated year admits, of every kind searched, each checked for a searched
+   * spelling among its alternative titles.
+   *
+   * @param {object} params
+   * @returns {Promise<import("./identification.js").Identity>}
+   */
+  async #identifyByAlternativeTitles({ searches, statedYears, queries, deadlineAt, signal }) {
+    const admitted = [];
+    const seen = new Set();
+    for (const search of searches) {
+      for (const result of search.results) {
+        const key = `${search.kind}:${result.id}`;
+        if (!seen.has(key) && resultYearAgrees(result.year, statedYears)) {
+          seen.add(key);
+          admitted.push({ kind: search.kind, result });
+        }
+      }
+    }
+    const toCheck = admitted.slice(0, MAX_ALTERNATIVE_CHECKS);
+    const checked = await Promise.all(
+      toCheck.map(async ({ kind, result }) => ({
+        candidate: { kind, tmdbId: result.id, title: result.name, year: result.year },
+        titles: await this.#cached(
+          `alternative|${kind}|${result.id}`,
+          () => FOUND_TTL_MS,
+          (fetchDeadline) => this.#source.alternativeTitles(kind, result.id, { deadlineAt: fetchDeadline }),
+          { deadlineAt, signal }
+        )
+      }))
+    );
+    return decideByAlternativeTitles({ checked, queries, uncheckedRemain: admitted.length > toCheck.length });
   }
 
   /**

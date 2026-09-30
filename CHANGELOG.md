@@ -1,3 +1,7 @@
+## 0.36.0
+
+- **New**: When no main or original title matches and the names state a year, a release is also compared with TMDB's alternative titles of the first five results the year admits, which hold the transliterated and romanized spellings: `Trudno byt' bogom` for "Hard to Be a God", `Hauru no Ugoku Shiro` for "Howl's Moving Castle". The comparison is exact equality, and two works matching are ambiguous. A series still unidentified then goes on to its episode names, which can also choose between two works the alternative titles both matched.
+
 ## 0.35.0
 
 - **New**: A series whose release name shortens its title (`Poirot.1989-2013` for "Agatha Christie's Poirot") is identified by its episodes when no title matches: among the first five results a stated year admits, the one whose season carries at least two, and at least half, of the files' episode titles exactly. The page sends those titles with its identification of a series.
