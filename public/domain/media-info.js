@@ -118,11 +118,43 @@ export function releaseIdentification({ selectionNames, contents, filesByIndex }
         names.push(item.episode.showHint);
       }
     }
-    return { names: boundedNames(names), kindHint: "tv" };
+    return { names: boundedNames(names), kindHint: "tv", episodeEvidence: episodeEvidenceOf(items) };
   }
   const [only] = items;
   names.push(stemOf(filesByIndex.get(only?.fileIndex)?.relativePath ?? ""));
   return { names: boundedNames(names), kindHint: only?.episode ? "tv" : null };
+}
+
+/**
+ * The episode titles one season of a release carries, for the service to tell
+ * the series by its episodes when no title matches (`Poirot.1989-2013` for a
+ * show called "Agatha Christie's Poirot"). The season chosen is the one with
+ * the most titled files; parts and specials are left out, since their titles
+ * name an episode differently or not at all.
+ *
+ * @param {Array<{ episode?: object | null }>} items
+ * @returns {{ season: number, titles: string[] } | null}
+ */
+export function episodeEvidenceOf(items) {
+  const bySeason = new Map();
+  for (const item of items) {
+    const episode = item.episode;
+    if (!episode || episode.special || episode.part != null || !Number.isInteger(episode.season)) {
+      continue;
+    }
+    const title = String(episode.titleHint ?? "").trim();
+    if (title.length === 0) {
+      continue;
+    }
+    bySeason.set(episode.season, [...(bySeason.get(episode.season) ?? []), title.slice(0, 160)]);
+  }
+  let best = null;
+  for (const [season, titles] of [...bySeason].sort((left, right) => left[0] - right[0])) {
+    if (!best || titles.length > best.titles.length) {
+      best = { season, titles };
+    }
+  }
+  return best ? { season: best.season, titles: best.titles.slice(0, 50) } : null;
 }
 
 /**

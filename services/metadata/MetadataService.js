@@ -18,7 +18,7 @@
  * carries counts and outcomes only.
  */
 
-import { decideIdentity } from "./identification.js";
+import { decideByEpisodeTitles, decideIdentity, resultYearAgrees } from "./identification.js";
 import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
@@ -36,6 +36,9 @@ const MAX_SEARCH_PAGES = 3;
 /** Distinct spellings searched per identification. A stated limit. */
 const MAX_QUERIES = 12;
 
+/** Results checked by their episode names when no title matched. A stated limit. */
+const MAX_EPISODE_CHECKS = 5;
+
 /** How long a found work, season or non-empty search is kept. */
 const FOUND_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -49,6 +52,9 @@ const NOTHING_TTL_MS = 60 * 60 * 1000;
  * @property {boolean} [requireYear] - Identify only when a name states a year:
  *   for one picture of a release not known to be one work, where a bare title
  *   (a performer's folder, a file called `01`) says too little.
+ * @property {{ season: number, titles: string[] } | null} [episodeEvidence] - The
+ *   titles one season of the release's files carry, used only when no title
+ *   matched; see {@link decideByEpisodeTitles}.
  * @property {string} language
  * @property {AbortSignal} [signal]
  */
@@ -86,7 +92,7 @@ export class MetadataService {
    * @param {IdentifyRequest} request
    * @returns {Promise<{ status: string, work?: import("./TmdbSource.js").Work, candidates?: object[] }>}
    */
-  async identify({ names, kindHint, requireYear = false, language, signal }) {
+  async identify({ names, kindHint, requireYear = false, episodeEvidence = null, language, signal }) {
     if (!this.#source) {
       return { status: "unavailable" };
     }
@@ -147,7 +153,20 @@ export class MetadataService {
       )
     );
 
-    const identity = decideIdentity({ searches, statedYears });
+    let identity = decideIdentity({ searches, statedYears });
+    // No title matched anything. A series can still be told by its episodes,
+    // but only among results a stated year admits: without one the set is
+    // every show of that name, and a remake shares the episode titles.
+    if (identity.status === "not-found" && kinds.includes("tv") && episodeEvidence && statedYears.length > 0) {
+      try {
+        identity = await this.#identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal });
+      } catch (error) {
+        if (error instanceof MetadataUnavailableError) {
+          return { status: "unavailable" };
+        }
+        throw error;
+      }
+    }
     if (identity.status !== "identified") {
       return { status: identity.status, candidates: identity.status === "ambiguous" ? identity.candidates : undefined };
     }
@@ -162,6 +181,55 @@ export class MetadataService {
       }
       throw error;
     }
+  }
+
+  /**
+   * The episode stage of {@link identify}: the first results a stated year
+   * admits, each checked against the files' titles for one season.
+   *
+   * @param {object} params
+   * @returns {Promise<import("./identification.js").Identity>}
+   */
+  async #identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal }) {
+    const admitted = [];
+    const seen = new Set();
+    for (const search of searches) {
+      if (search.kind !== "tv") {
+        continue;
+      }
+      for (const result of search.results) {
+        if (!seen.has(result.id) && resultYearAgrees(result.year, statedYears)) {
+          seen.add(result.id);
+          admitted.push(result);
+        }
+      }
+    }
+    const toCheck = admitted.slice(0, MAX_EPISODE_CHECKS);
+    const checked = await Promise.all(
+      toCheck.map(async (result) => {
+        const season = await this.#cached(
+          `season|${result.id}|${episodeEvidence.season}|${language}`,
+          () => FOUND_TTL_MS,
+          (fetchDeadline) => this.#source.season(result.id, episodeEvidence.season, language, { deadlineAt: fetchDeadline }),
+          { deadlineAt, signal }
+        ).catch((error) => {
+          // A season the show does not have is an answer, not a refusal.
+          if (error instanceof MetadataUnavailableError && / 404$/.test(error.reason)) {
+            return { number: episodeEvidence.season, name: "", episodes: [] };
+          }
+          throw error;
+        });
+        return {
+          candidate: { kind: "tv", tmdbId: result.id, title: result.name, year: result.year },
+          episodeNames: season.episodes.map((episode) => episode.name)
+        };
+      })
+    );
+    return decideByEpisodeTitles({
+      checked,
+      titles: episodeEvidence.titles,
+      uncheckedRemain: admitted.length > toCheck.length
+    });
   }
 
   /**

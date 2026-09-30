@@ -130,3 +130,25 @@ test("two names pointing at two works are ambiguous even if one search failed", 
   });
   assert.equal(identity.status, "ambiguous");
 });
+
+test("a series whose episodes carry the files' titles is identified by them", async () => {
+  const { decideByEpisodeTitles } = await import("../services/metadata/identification.js");
+  const candidate = (tmdbId) => ({ kind: "tv", tmdbId, title: "", year: 1989 });
+  const titles = ["The.Adventure.of.the.Clapham.Cook", "Murder.in.the.Mews", "The.Dream"];
+  const poirot = ["The Adventure of the Clapham Cook", "Murder in the Mews", "The Adventure of Johnnie Waverly", "The Dream"];
+  assert.equal(
+    decideByEpisodeTitles({ checked: [{ candidate: candidate(790), episodeNames: poirot }, { candidate: candidate(2), episodeNames: ["Pilot"] }], titles, uncheckedRemain: false }).candidates[0].tmdbId,
+    790
+  );
+  // One shared title is not enough, and neither is a minority of the titles.
+  assert.equal(decideByEpisodeTitles({ checked: [{ candidate: candidate(3), episodeNames: ["The Dream"] }], titles, uncheckedRemain: false }).status, "not-found");
+  assert.equal(
+    decideByEpisodeTitles({ checked: [{ candidate: candidate(4), episodeNames: ["Murder in the Mews", "The Dream"] }], titles: [...titles, "A", "B", "C"], uncheckedRemain: false }).status,
+    "not-found"
+  );
+  assert.equal(decideByEpisodeTitles({ checked: [], titles, uncheckedRemain: true }).status, "undetermined");
+  assert.equal(
+    decideByEpisodeTitles({ checked: [{ candidate: candidate(5), episodeNames: poirot }, { candidate: candidate(6), episodeNames: poirot }], titles, uncheckedRemain: false }).status,
+    "ambiguous"
+  );
+});
