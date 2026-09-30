@@ -1,3 +1,8 @@
+## 0.32.0
+
+- **New**: Group a torrent's episodes by folder in the playlist, each season in a collapsible `<details>` section; the section holding the playing episode opens by itself.
+- **Fix**: Show text in the player in a sans-serif face; it fell back to the browser's default serif font.
+
 ## 0.31.8
 
 - **Fix**: Report each HLS track's applied timestamp origin so the integral forecast compares prepared media with the actual browser timeline.

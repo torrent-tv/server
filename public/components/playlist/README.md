@@ -5,6 +5,10 @@ This component owns playlist list rendering and playlist user interactions.
 ## Responsibilities
 
 - Render the list of available video files from `PLAYER:SET_MEDIA_FILES`.
+- Fold the files of one folder (a season, usually) into a `<details>` group, as
+  laid out by `domain/playlist-groups.js`: a folder becomes a group when it holds
+  at least two pictures and not all of them. The order stays the proxy's.
+- Open the group holding the active file; groups the viewer opened stay open.
 - Track currently active file from `PLAYER:SET_ACTIVE_MEDIA_FILE`.
 - React to `PLAYER:OPEN_PLAYLIST` / `PLAYER:CLOSE_PLAYLIST` for playlist panel visibility state.
 - Emit `PLAYER:SELECT_MEDIA_FILE` when user clicks a different file in the playlist.
