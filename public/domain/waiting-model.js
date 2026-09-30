@@ -26,7 +26,7 @@ export class WaitingModel {
     const proxyBuffer = Number(readiness?.bufferedSeconds);
     const ahead = this.#bufferedAhead ?? (Number.isFinite(proxyBuffer) ? proxyBuffer : null);
     const ready = readiness?.ready === true;
-    const delay = Number(readiness?.delaySeconds);
+    const delay = readiness?.delaySeconds;
     const etaSeconds = ready
       ? 0
       : Number.isFinite(delay) && delay >= 0
