@@ -2,7 +2,7 @@
  * Which work a release is, from its names.
  *
  * POST /api/metadata/identify
- * body: { names: string[], kindHint: "tv" | "movie" | null, language: string }
+ * body: { names: string[], kindHint: "tv" | "movie" | null, requireYear?: boolean, language: string }
  *
  * Answers `{ status, work?, candidates? }`. Only `identified` carries a work;
  * every other status tells the page to keep showing the release's own names.
@@ -43,6 +43,9 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
   if (kindHint !== null && kindHint !== "tv" && kindHint !== "movie") {
     return reply.code(400).send({ error: "kindHint must be tv, movie or null." });
   }
+  if (body.requireYear !== undefined && typeof body.requireYear !== "boolean") {
+    return reply.code(400).send({ error: "requireYear must be a boolean." });
+  }
   if (typeof body.language !== "string" || !LANGUAGE.test(body.language)) {
     return reply.code(400).send({ error: "language must be a tag such as en-US." });
   }
@@ -50,6 +53,7 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
   const answer = await metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
+    requireYear: body.requireYear === true,
     language: body.language,
     signal: signalOfRequest(reply)
   });

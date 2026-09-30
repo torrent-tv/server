@@ -1,6 +1,8 @@
 ## 0.33.1
 
 - **Fix**: An episode number the provider's season does not have now stops matching by number for the whole season, as a title pointing elsewhere already did. Measured on Firefly: the release numbers fourteen episodes in production order, TMDB lists eleven in broadcast order, and numbers 1-11 were named with the wrong episodes; those files now keep their own names.
+- **Fix**: A search result without a date is never taken as the work. `The Continental 1 - LostFilm.TV` had matched a dateless `The Continental` instead of the series it is, none of whose episodes existed there.
+- **New**: `requireYear` on `POST /api/metadata/identify`: identify only when a name states a year. Used for one picture of a release not known to be one work, where a performer's folder name had matched a film of the same name.
 
 ## 0.33.0
 
