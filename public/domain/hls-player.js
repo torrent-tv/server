@@ -385,6 +385,7 @@ export function describeTrackBuffers(instance, videoElement) {
  */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
+  let timestampOffsets = {};
   /**
    * The periodic reading of the cushion: what was asked for, what is held, and
    * whether the device has refused the depth. Stopped with the instance.
@@ -538,6 +539,7 @@ export function createHlsPlayer(onLog) {
         }
       };
       const result = { media: read(videoElement) };
+      if (Object.keys(timestampOffsets).length) result.timestampOffsets = { ...timestampOffsets };
       for (const [name, source] of hlsInstance?.bufferController?.sourceBuffers ?? []) {
         if (name === "video" || name === "audio") result[name] = read(source);
       }
@@ -715,6 +717,7 @@ export function createHlsPlayer(onLog) {
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
+        timestampOffsets = {};
       }
       desiredLevel = -1;
       pinRestores = 0;
@@ -937,6 +940,13 @@ export function createHlsPlayer(onLog) {
         };
         const instance = new HlsClass(hlsConfig);
         hlsInstance = instance;
+        timestampOffsets = {};
+        instance.on(HlsClass.Events.INIT_PTS_FOUND, (_event, { id, initPTS, timescale }) => {
+          if (!(timescale > 0) || !Number.isFinite(initPTS)) return;
+          const offset = -initPTS / timescale;
+          if (id === "main") timestampOffsets = { video: offset, audio: offset };
+          else if (id === "audio") timestampOffsets.audio = offset;
+        });
         startCushionSampler(instance, videoElement, forwardBufferCeiling, options.attemptId);
         // Set once the manifest is parsed, so post-manifest fatal errors (live
         // playback) are recovered in place, while warm-up fatals still reject
