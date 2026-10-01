@@ -1,4 +1,5 @@
 import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS } from "../../shared/events.js";
+import { subtitleEvidenceOf } from "../../domain/subtitle-evidence.js";
 import {
   METADATA_LANGUAGE,
   boundedNames,
@@ -33,6 +34,10 @@ import {
  *    the proxy's statement, which does not exist before then.
  */
 export class MediaInfoController {
+  #releaseRequest = null;
+  #releaseStatus = null;
+  #subtitleEvidence = null;
+  #subtitleRetried = false;
   #selection = 0;
 
   /** @type {AbortController | null} */
@@ -72,6 +77,7 @@ export class MediaInfoController {
   #wanted = new Set();
 
   constructor() {
+    document.addEventListener(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, this.#onSubtitleEvidence);
     document.addEventListener(MEDIA_INFO_EVENTS.SELECTED, this.#onSelected);
     document.addEventListener(MEDIA_INFO_EVENTS.CONTENTS, this.#onContents);
     document.addEventListener(MEDIA_INFO_EVENTS.WANT_FILES, this.#onWantFiles);
@@ -92,6 +98,25 @@ export class MediaInfoController {
   };
 
   /** @param {Event} event */
+  #onSubtitleEvidence = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (!this.#releaseRequest || !this.#filesByIndex.has(detail?.fileIndex) || this.#work || this.#subtitleRetried) return;
+    const evidence = subtitleEvidenceOf(detail?.vtt, this.#releaseRequest.kindHint);
+    if (!evidence) return;
+    const previous = this.#subtitleEvidence ?? { titles: [], years: [] };
+    this.#subtitleEvidence = {
+      titles: [...new Set([...previous.titles, ...evidence.titles])].slice(0, 4),
+      years: [...new Set([...previous.years, ...evidence.years])].slice(0, 4)
+    };
+    this.#retryWithSubtitles();
+  };
+
+  #retryWithSubtitles() {
+    if (this.#releaseStatus !== "not-found" || !this.#subtitleEvidence || this.#subtitleRetried) return;
+    this.#subtitleRetried = true;
+    void this.#identifyRelease(this.#selection, { ...this.#releaseRequest, subtitleEvidence: this.#subtitleEvidence });
+  }
+
   #onContents = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (Number(detail?.selection) !== this.#selection) {
@@ -109,6 +134,7 @@ export class MediaInfoController {
     });
     this.#publish();
     if (request) {
+      this.#releaseRequest = request;
       void this.#identifyRelease(this.#selection, request);
     }
   };
@@ -149,6 +175,10 @@ export class MediaInfoController {
     this.#abort = new AbortController();
     this.#selection = Number.isInteger(selection) ? selection : this.#selection + 1;
     this.#selectionNames = [];
+    this.#releaseRequest = null;
+    this.#releaseStatus = null;
+    this.#subtitleEvidence = null;
+    this.#subtitleRetried = false;
     this.#contents = null;
     this.#filesByIndex = new Map();
     this.#itemsByIndex = new Map();
@@ -168,7 +198,10 @@ export class MediaInfoController {
    */
   async #identifyRelease(selection, request) {
     const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE });
-    if (selection !== this.#selection || answer?.status !== "identified") {
+    if (selection !== this.#selection) return;
+    this.#releaseStatus = answer?.status ?? null;
+    if (answer?.status !== "identified") {
+      this.#retryWithSubtitles();
       return;
     }
     // A series that the service identifies as a film is a contradiction, not

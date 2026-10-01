@@ -63,3 +63,9 @@ Reading `.torrent` names and file lists does not start a torrent.
 The checks combine the new AniList adapter with the deployed TMDB service.
 New TMDB image dimensions and keywords are verified using controlled provider
 answers; they require the updated server before being available in production.
+
+## Russian transliteration fallback
+
+Only after ordinary TMDB and AniList identification returns `not-found`, search at most three distinct Latin title words (five or more letters), using the existing cache and provider gate. Require exactly one stated year and a matching kind. Check at most five candidates against complete Russian catalog titles using bounded transliteration variants. Capped searches, unavailable checks, and multiple identities cannot select a work. This is not fuzzy title matching.
+
+`subtitleEvidence?: { titles: string[], years: number[] }` accepts at most four bounded titles and years. Evidence comes from explicit ASS/SSA header fields preserved by the proxy in `NOTE TORRENT-TV-METADATA`. Already-loaded sidecars may trigger one retry after `not-found`; generic `Title` is usable only for a film. Dialogue, subtitle language, and author/update dates do not identify a work. No extra subtitle download is requested. Missing header metadata adds no evidence.

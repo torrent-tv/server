@@ -1,3 +1,8 @@
+## 0.36.2
+
+- **New**: After TMDB and AniList return no identity, discover bounded title-word candidates and verify the entire release title against Russian catalog transliteration with an exact year. Reject ambiguous, incomplete, and conflicting evidence.
+- **New**: Retry an unidentified release once with explicit metadata from subtitles already loaded for playback; ignore generic series subtitle titles and dialogue.
+
 ## 0.36.1
 
 - **New**: Add About with provider credits, release titles in the playlist and page title, and English episode labels when only release numbers are known.

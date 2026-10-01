@@ -35,7 +35,14 @@ export class AnimeMetadata {
   episodes(request) { return this.#tmdb.episodes(request); }
 
   async identify(request) {
-    const result = await this.#identify(request);
+    let result = await this.#identify(request);
+    if (result.status === "not-found" && this.#tmdb.identifyTransliterated) {
+      result = await this.#tmdb.identifyTransliterated(request);
+      if (result.status === "identified" && (hasAnimeHints(request.names) || result.work?.anime)) {
+        const enriched = await this.#identify({ ...request, names: [`${result.work.title} ${result.work.year}`], kindHint: result.work.kind });
+        if (enriched.status === "identified" && enriched.work?.tmdbId === result.work.tmdbId) result = enriched;
+      }
+    }
     if (result.status !== "identified") return result;
     const tmdb = result.work?.source === "anilist" ? null : result.work;
     return { status: "identified", work: normalizeWork(tmdb, result.anilist ?? null) };

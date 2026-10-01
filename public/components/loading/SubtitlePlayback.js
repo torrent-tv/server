@@ -7,6 +7,8 @@ import {
 import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 
+import { MEDIA_INFO_EVENTS } from "../../shared/events.js";
+
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 const SUBTITLE_POLL_INTERVAL_MS = 5_000;
 const TRACK_READY_STATE_LOADED = 2;
@@ -374,6 +376,7 @@ export class SubtitlePlayback {
           continue;
         }
 
+        document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, { detail: { fileIndex, vtt: vtt.slice(0, 16384) } }));
         const blob = new Blob([vtt], { type: "text/vtt" });
         const blobUrl = URL.createObjectURL(blob);
         this.#subtitleBlobUrls.push(blobUrl);
