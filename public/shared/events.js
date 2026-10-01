@@ -45,6 +45,7 @@ export const MEDIA_INFO_EVENTS = {
   /** `{ fileIndexes }` — these pictures are on screen, so their names are wanted. */
   WANT_FILES: "MEDIA_INFO:WANT_FILES",
   /** A snapshot of everything known, or `null` when nothing is. See `MediaInfoState`. */
+  SUBTITLE_EVIDENCE: "MEDIA_INFO:SUBTITLE_EVIDENCE",
   CHANGED: "MEDIA_INFO:CHANGED"
 };
 

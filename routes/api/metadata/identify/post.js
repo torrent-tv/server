@@ -70,12 +70,20 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
   if (typeof body.language !== "string" || !LANGUAGE.test(body.language)) {
     return reply.code(400).send({ error: "language must be a tag such as en-US." });
   }
+  const subtitleEvidence = body.subtitleEvidence ?? null;
+  if (subtitleEvidence !== null && !(Array.isArray(subtitleEvidence.titles) && subtitleEvidence.titles.length <= 4 &&
+      subtitleEvidence.titles.every(title => typeof title === "string" && title.length <= 160) &&
+      Array.isArray(subtitleEvidence.years) && subtitleEvidence.years.length <= 4 &&
+      subtitleEvidence.years.every(year => Number.isInteger(year) && year >= 1888 && year <= 2100))) {
+    return reply.code(400).send({ error: "subtitleEvidence must contain at most four titles and years." });
+  }
   const started = Date.now();
   const answer = await metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
     requireYear: body.requireYear === true,
     episodeEvidence: evidence,
+    subtitleEvidence,
     language: body.language,
     signal: signalOfRequest(reply)
   });

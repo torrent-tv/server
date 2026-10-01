@@ -198,3 +198,30 @@ test("an answer for a replaced choice of release changes nothing on screen", asy
   assert.ok(published.every((state) => state === null || state.work?.title !== "First"));
   assert.equal(published.at(-1), null);
 });
+
+
+test("subtitle metadata retries only after not-found and only once", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Princessa.Mononoke.mkv"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Princessa.Mononoke.mkv", shape: "single", items: [{ fileIndex: 0, episode: null }] }, files: [{ index: 0, relativePath: "Princessa.Mononoke.mkv" }] });
+  const vtt = `WEBVTT\n\nNOTE TORRENT-TV-METADATA\n${JSON.stringify({ titles: ["Princess Mononoke"], years: [1997] })}\n\n`;
+  send(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, { fileIndex: 0, vtt });
+  assert.equal(pending.length, 2, "subtitle arrival does not race the first identification");
+  pending[1].resolve(Response.json({ status: "not-found" }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.length, 3);
+  assert.deepEqual(pending[2].body.subtitleEvidence, { titles: ["Princess Mononoke"], years: [1997] });
+  send(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, { fileIndex: 0, vtt });
+  assert.equal(pending.length, 3);
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 2, names: ["Another.2000.mkv"] });
+  pending[2].resolve(Response.json({ status: "not-found" }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.length, 4, "a late answer cannot retry a new selection with old evidence");
+});
