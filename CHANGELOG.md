@@ -1,7 +1,12 @@
-## 0.36.9
+## 0.36.10
 
 - **Fix**: Record the selected episode and its requested position before playback preparation. Preserve that intent during old media events and refresh; playlist selections start at zero and shared links do not apply a second late seek.
 - **Fix**: Show the waiting step, current download/track-processing facts and total time until playback in three rows. Preserve concurrent download facts, count down the proxy forecast in local elapsed time and report missing measurements or stalled service without an estimating placeholder.
+
+## 0.36.9
+
+- **Fix**: A refusal names the part of the video that has no figure — its picture, its soundtrack or both — and offers another soundtrack only when the file has one; no refusal suggests a lower quality, which the page does not offer, and only a load too large suggests a faster connection.
+- **Fix**: Preparing a switch of soundtrack states whether this browser plays THAT track (`transcode=0|1`), so the proxy decides how the new track is produced instead of reusing the previous track's mode, and the log says when the proxy sends a soundtrack re-encoded that the page asked to copy.
 
 ## 0.36.8
 
