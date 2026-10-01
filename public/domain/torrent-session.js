@@ -250,6 +250,7 @@ export class TorrentSession {
       const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/seek`;
       const init = {
         method: "POST",
+        signal: this.abortController.signal,
         headers: { "Content-Type": "application/json" },
         // Who moved. A session can serve several viewers, and the seeking
         // viewer's own position has to move with them or the proxy judges
@@ -257,11 +258,10 @@ export class TorrentSession {
         body: JSON.stringify({ positionSeconds, consumerId: this.consumerId, generation })
       };
       try {
-        if (!transport.isHttp) {
-          await transport.fetch(path, init);
-        } else {
-          await fetch(new URL(path.slice(1), ensureTrailingSlash(transport.baseUrl)), init);
-        }
+        const response = !transport.isHttp
+          ? await transport.fetch(path, init)
+          : await fetch(new URL(path.slice(1), ensureTrailingSlash(transport.baseUrl)), init);
+        if (!response.ok) throw new Error(`Seek request failed (${response.status}): ${await response.text()}`);
       } catch (error) {
         // Best-effort in the sense that nothing is retried — but not silent.
         // This is the ONE message that repositions the encoder (every other
@@ -278,6 +278,7 @@ export class TorrentSession {
           `(session ${sessionId.slice(0, 8)}${onScreen ? ", on screen" : ", not on screen"}): ` +
           `${error instanceof Error ? error.message : String(error)}`
         );
+        if (onScreen) throw error;
       }
     }
   }
@@ -682,6 +683,7 @@ export class TorrentSession {
       typeof options.sourceKey === "string" && options.sourceKey.length > 0
         ? options.sourceKey
         : await this.registerSourceOnProxy(transport);
+    const allocationPosition = options.getStartPositionSeconds?.() ?? options.startPositionSeconds ?? 0;
     const { playlistUrl, variantHeight, offeredHeights, lookaheadSeconds, mediaPlaylistUrl } = await this.tryCreateTranscodeSession(
       transport,
       sourceKey,
@@ -695,10 +697,8 @@ export class TorrentSession {
         // Where the proxy must start encoding. Without it a resume told only
         // hls.js, which then asked for a segment the encoder had never been
         // told to make.
-        startPositionSeconds:
-          Number.isFinite(options.startPositionSeconds) && options.startPositionSeconds > 0
-            ? options.startPositionSeconds
-            : 0,
+        startPositionSeconds: allocationPosition,
+        getStartPositionSeconds: options.getStartPositionSeconds,
         segmentFormat: typeof options.segmentFormat === "string" ? options.segmentFormat : "",
         getPlayingHeight: typeof options.getPlayingHeight === "function" ? options.getPlayingHeight : undefined,
         getVisiblePicture: typeof options.getVisiblePicture === "function" ? options.getVisiblePicture : undefined,
@@ -712,6 +712,15 @@ export class TorrentSession {
       throw new Error("Proxy audio transcode is unavailable.");
     }
 
+    // A control can choose a new position while allocation is in flight.
+    // Reconcile that choice before any manifest or segment is loaded.
+    let startPosition = options.getStartPositionSeconds?.() ?? options.startPositionSeconds ?? 0;
+    let acknowledgedPosition = allocationPosition;
+    while (startPosition !== acknowledgedPosition) {
+      await this.reportSeek(startPosition);
+      acknowledgedPosition = startPosition;
+      startPosition = options.getStartPositionSeconds?.() ?? options.startPositionSeconds ?? 0;
+    }
     this.onLog(`Streaming via HLS audio transcode from proxy: ${new URL(transport.baseUrl).origin}`);
     console.debug("[torrent-tv] HLS transcode playback", {
       fileIndex,
@@ -728,7 +737,8 @@ export class TorrentSession {
       // What the proxy holds ahead of the viewer. The player takes its forward
       // buffer ceiling from it rather than from a figure of its own.
       lookaheadSeconds,
-      nativeManifestUrl: mediaPlaylistUrl
+      nativeManifestUrl: mediaPlaylistUrl,
+      startPosition
     });
 
     // Seeking is handled entirely server-side: the proxy serves a complete VOD
@@ -1103,7 +1113,12 @@ export class TorrentSession {
         getBufferedAheadSec: bufferedAheadSecondsForReporter,
         getBufferLimitSeconds: options.getBufferLimitSeconds,
         getBufferedRanges: options.getBufferedRanges,
-        getPositionSeconds: playbackPositionSeconds,
+        getPositionSeconds: () => {
+          const video = document.querySelector("#player__video");
+          return video?.readyState === 0
+            ? (options.getStartPositionSeconds?.() ?? startPositionSeconds)
+            : playbackPositionSeconds();
+        },
         getPlaying: pictureIsMoving,
         getWaiting: viewerIsWaiting,
         getPlayingHeight: options.getPlayingHeight,

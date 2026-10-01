@@ -1,4 +1,5 @@
 import { createHlsPlayer } from "../../domain/hls-player.js";
+import { SeekPosition } from "../../domain/seek-position.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
@@ -589,6 +590,39 @@ export class Loading extends StateDerivedView {
    * @type {number | null}
    */
   #pendingCurrentTime = null;
+  #seekPosition = new SeekPosition();
+  #seekEventPosition = null;
+
+  #onMediaSeekRequest = (event) => {
+    const controller = document.getElementById("player__controller");
+    if (!event.composedPath().includes(controller) || !Number.isFinite(event.detail)) return;
+    void this.#moveToPosition(event.detail);
+  };
+
+  async #moveToPosition(position) {
+    if (!Number.isFinite(position) || position < 0) return;
+    if (this.#seekReportTimer !== null) clearTimeout(this.#seekReportTimer);
+    this.#seekReportTimer = null;
+    this.#pendingCurrentTime = this.#isProcessing && !this.#hlsPlayer.isActive() ? position : null;
+    this.#seekEventPosition = position;
+    this.#writeHistory("replace", { ...readUrlState(location.search), currentTime: position });
+    this.#waitingModel.reset();
+    this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
+    const epoch = this.#playbackEpoch;
+    try {
+      await this.#seekPosition.move(position, {
+      stopLoad: () => this.#hlsPlayer.stopLoad(),
+      reportSeek: (target) => this.#session.reportSeek(target),
+      startLoad: (target) => this.#hlsPlayer.seekTo(target, this.#videoElement)
+      });
+    } catch (error) {
+      if (epoch !== this.#playbackEpoch) return;
+      const description = error instanceof Error ? error.message : String(error);
+      const canRetry = this.#activeFileIndex >= 0;
+      if (canRetry) this.#armRetryableStall(this.#activeFileIndex, description);
+      this.#failPlayback(epoch, { description, canRetry });
+    }
+  }
   /**
    * The position a resume asked for, held until playback actually begins so the
    * two can be compared. Null when this start is not a resume.
@@ -861,7 +895,12 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #reportSeekIntent(name, videoElement) {
+    if (name === "seeked" || name === "playing") this.#seekEventPosition = null;
     if (name !== "seeking") {
+      return;
+    }
+    if (videoElement.currentTime === this.#seekEventPosition) {
+      this.#seekEventPosition = null;
       return;
     }
     if (this.#seekReportTimer !== null) {
@@ -889,11 +928,9 @@ export class Loading extends StateDerivedView {
         this.#logEvt(`jumped its own hole to ${position.toFixed(1)}s — not reported as a seek`);
         return;
       }
-      this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
-      // A new destination is a new wait: the countdown for the old one no
-      // longer describes anything, so it may start over from a larger number.
-      this.#waitingModel.reset();
-      void this.#session.reportSeek(position);
+      // The control's explicit request already owns this position. Native
+      // controls and media-session seeks still enter through this fallback.
+      void this.#moveToPosition(position);
     }, SEEK_REPORT_DEBOUNCE_MS);
   }
 
@@ -1538,6 +1575,10 @@ export class Loading extends StateDerivedView {
   };
 
   #stopPlayback(options = {}) {
+    this.#cancelRequested = true;
+    this.#playbackEpoch += 1;
+    this.#seekPosition.reset();
+    this.#seekEventPosition = null;
     this.#audioMetadataRefreshSeq += 1;
     this.#isProcessing = false;
     this.#playbackLive = false;
@@ -1634,6 +1675,7 @@ export class Loading extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
+    document.addEventListener("mediaseekrequest", this.#onMediaSeekRequest, true);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
     document.addEventListener(PLAYER_EVENTS.BUFFER, (event) => {
@@ -1659,8 +1701,8 @@ export class Loading extends StateDerivedView {
    * Throw a silent AbortError when the user cancelled the in-flight flow.
    * Called at the await boundaries of the loading pipeline.
    */
-  #throwIfCancelled() {
-    if (!this.#cancelRequested) {
+  #throwIfCancelled(epoch = this.#playbackEpoch) {
+    if (!this.#cancelRequested && epoch === this.#playbackEpoch) {
       return;
     }
     const error = new Error("Loading cancelled by the user.");
@@ -4686,6 +4728,7 @@ export class Loading extends StateDerivedView {
     // survives a reload, and it is the state by design, so it is consulted
     // whenever the field is empty.
     const { fromField, fromUrl, position: resumeStartPosition } = this.#resumePositionFor(fileIndex);
+    this.#seekPosition.reset(resumeStartPosition ?? 0);
     this.#pendingCurrentTime = null;
     // The address bar's position belongs to the file it was written for, and at
     // this moment it still describes the PREVIOUS one: the address is rewritten
@@ -4725,6 +4768,7 @@ export class Loading extends StateDerivedView {
         audioTrackIndex: this.#selectedAudioTrackIndex,
         startPositionSeconds:
           typeof resumeStartPosition === "number" && resumeStartPosition > 0 ? resumeStartPosition : 0,
+        getStartPositionSeconds: () => this.#seekPosition.value,
         // The picture as the viewer sees it, which bounds the height of a
         // re-encoded output (roadmap item 98). Sent with the request that opens
         // the output, and restated in every report the moment it changes.
@@ -4738,9 +4782,8 @@ export class Loading extends StateDerivedView {
         playHls: (videoElement, manifestUrl, playOptions = {}) =>
           this.#hlsPlayer.play(videoElement, manifestUrl, {
             ...(hlsLoader ? { loader: hlsLoader } : {}),
-            ...(typeof resumeStartPosition === "number" && resumeStartPosition > 0
-              ? { startPosition: resumeStartPosition }
-              : {}),
+            startPosition: this.#seekPosition.value ?? 0,
+            getStartPositionSeconds: () => this.#seekPosition.value,
             onLevelSwitched: (height) => this.#onHlsLevelSwitched(height),
             onFragmentFar: (report) => this.#reportFragmentFar(report),
             // The epoch this player belongs to, captured now. Read at report time
@@ -4800,7 +4843,7 @@ export class Loading extends StateDerivedView {
     // doesn't immediately stall. The video stays paused (player hidden) so hls.js
     // fills the buffer without draining it; #waitForPrebuffer is the only status
     // writer here.
-    await this.#waitForPrebuffer(this.#videoElement);
+    await this.#waitForPrebuffer(this.#videoElement, playerEpoch);
   }
 
   /**
@@ -4810,7 +4853,7 @@ export class Loading extends StateDerivedView {
    * @param {HTMLVideoElement} videoElement
    * @returns {Promise<void>}
    */
-  async #waitForPrebuffer(videoElement) {
+  async #waitForPrebuffer(videoElement, epoch = this.#playbackEpoch) {
     if (!(videoElement instanceof HTMLVideoElement)) {
       return;
     }
@@ -4837,7 +4880,7 @@ export class Loading extends StateDerivedView {
     let cachedProgress = null;
     let lastProgressFetchAt = 0;
     while (true) {
-      this.#throwIfCancelled();
+      this.#throwIfCancelled(epoch);
       if (videoElement.error) {
         return;
       }
@@ -4863,6 +4906,7 @@ export class Loading extends StateDerivedView {
           }
         }
       }
+      this.#throwIfCancelled(epoch);
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
       const unified = this.#waitingModel.update({
