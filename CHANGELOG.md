@@ -1,3 +1,8 @@
+## 0.36.8
+
+- **New**: Resolve release properties through a configurable rule registry with explicit dependencies, unchanged parser outputs, candidate provenance, rejection reasons and unresolved alternatives.
+- **Fix**: Preserve uncertainty when a possible episode overlaps conflicting year evidence; accept explicitly marked episodes and large anime episode numbers without an arbitrary upper bound.
+
 ## 0.36.7
 
 - **Fix**: Try complete reverse-transliterated Russian title spellings before broad word discovery, preserving missing soft signs and identifying an unambiguous yearless title without unrelated word results exhausting the candidate budget.

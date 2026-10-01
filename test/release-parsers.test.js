@@ -25,6 +25,9 @@ test("technical episode tails carry evidence rather than a title", () => {
 test("numeric movie titles and explicit year spans stay intact", () => {
   assert.deepEqual(parseReleaseName("2012.2009.1080p.mkv").titles, ["2012"]);
   assert.deepEqual(parseReleaseName("Poirot.1989-2013.hdrip_[teko]").years, { from: 1989, to: 2013 });
+  const span = parseReleaseName("Poirot.1989-2013.hdrip_[teko]").release;
+  assert.equal(span.normalized.year, 1989);
+  assert.ok(span.resolutions.year.steps.some(step => step.rule === "series-start-year"));
 });
 
 test("anime parsers preserve episode and codec evidence", () => {
