@@ -1,4 +1,5 @@
-import { appendCues, parseVttCues } from "../../domain/vtt-cues.js";
+import { appendCues, parseVttCues, removeCues } from "../../domain/vtt-cues.js";
+import { subtitleMenuItems, subtitleToggleKey } from "../../domain/subtitle-menu.js";
 import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.js";
 import {
   buildSubtitleLabel,
@@ -7,7 +8,7 @@ import {
 import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 
-import { MEDIA_INFO_EVENTS } from "../../shared/events.js";
+import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
 const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 const SUBTITLE_POLL_INTERVAL_MS = 5_000;
@@ -47,7 +48,23 @@ export class SubtitlePlayback {
   #logEvent;
   #subtitleFiles = [];
   #planTracks = { subtitles: [], sidecarSubtitles: [] };
-  #primaryAudioLanguage = null;
+  /**
+   * Every track the subtitle menu offers, by the key its item carries — for
+   * the life of the track, whatever its label becomes. `planIndex` is its index
+   * among the plan's subtitle tracks, null for a subtitle FILE.
+   *
+   * @type {Map<string, { textTrack: TextTrack, planIndex: number | null }>}
+   */
+  #menuEntries = new Map();
+  /** @type {string | null} The key the viewer chose last in this file. */
+  #lastChosenKey = null;
+  /**
+   * The cues each track holds, by the found-order number the proxy gave them,
+   * so a cue it takes back can be removed while the track is disabled.
+   *
+   * @type {Map<TextTrack, Map<string, VTTCue>>}
+   */
+  #cuesById = new Map();
   /** @type {string[]} Blob URLs created for active subtitle tracks; revoked on cleanup. */
   #subtitleBlobUrls = [];
   /**
@@ -224,6 +241,9 @@ export class SubtitlePlayback {
     // to the `<video>` element, which survives a file switch, and it reads the
     // current file from `#subtitleContext` rather than from a closure.
     this.#subtitleEpoch += 1;
+    this.#menuEntries.clear();
+    this.#lastChosenKey = null;
+    this.#cuesById.clear();
     this.#embeddedTextTracks.clear();
     this.#embeddedTrackElements.clear();
     this.#namedSubtitleTracks.clear();
@@ -247,6 +267,103 @@ export class SubtitlePlayback {
         track.remove();
       }
     }
+    this.#publishMenu();
+  }
+
+  /**
+   * Turn on the track a menu item names, and every other one off; "" turns
+   * them all off.
+   *
+   * The `change` this causes is read by `#rememberSubtitleChoice` as the
+   * viewer's own choice, which it is.
+   *
+   * @param {string} key
+   * @returns {void}
+   */
+  select(key) {
+    const chosen = typeof key === "string" && this.#menuEntries.has(key) ? key : "";
+    if (chosen) {
+      this.#lastChosenKey = chosen;
+    }
+    for (const [entryKey, entry] of this.#menuEntries) {
+      const wanted = entryKey === chosen ? "showing" : "disabled";
+      if (entry.textTrack.mode !== wanted) {
+        entry.textTrack.mode = wanted;
+      }
+    }
+    this.#logEvent(chosen ? `subtitles: the viewer chose ${chosen}` : "subtitles: the viewer turned them off");
+    this.#publishMenu();
+    this.#reportSubtitleCoverage("menu choice");
+  }
+
+  /**
+   * The subtitles key: off if anything is showing, otherwise on — the track
+   * chosen last in this file, else the one this file would open with, else the
+   * first.
+   *
+   * @returns {void}
+   */
+  toggle() {
+    let preferredKey = null;
+    for (const [key, entry] of this.#menuEntries) {
+      if (this.#subtitleShouldShow(entry.textTrack, entry.planIndex)) {
+        preferredKey = key;
+        break;
+      }
+    }
+    this.select(subtitleToggleKey({
+      entries: this.#menuEntriesNow(),
+      lastChosenKey: this.#lastChosenKey,
+      preferredKey
+    }));
+  }
+
+  /**
+   * Offer one more track in the menu.
+   *
+   * @param {string} key
+   * @param {TextTrack} textTrack
+   * @param {number | null} planIndex
+   * @returns {void}
+   */
+  #addMenuEntry(key, textTrack, planIndex) {
+    this.#menuEntries.set(key, { textTrack, planIndex });
+    this.#publishMenu();
+  }
+
+  /** @returns {Array<{ key: string, label: string, showing: boolean }>} */
+  #menuEntriesNow() {
+    return [...this.#menuEntries].map(([key, entry]) => ({
+      key,
+      label: entry.textTrack.label,
+      showing: entry.textTrack.mode === "showing"
+    }));
+  }
+
+  /**
+   * Tell the player what the menu holds now. Said whenever a track is added
+   * or removed, a label changes, or a mode does — the menu is drawn from this
+   * and from nothing else.
+   *
+   * @returns {void}
+   */
+  #publishMenu() {
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, {
+      detail: { items: subtitleMenuItems(this.#menuEntriesNow()) }
+    }));
+  }
+
+  /**
+   * @param {TextTrack} track
+   * @returns {Map<string, VTTCue>}
+   */
+  #cueIdsOf(track) {
+    let ids = this.#cuesById.get(track);
+    if (!ids) {
+      ids = new Map();
+      this.#cuesById.set(track, ids);
+    }
+    return ids;
   }
 
   /**
@@ -265,7 +382,7 @@ export class SubtitlePlayback {
    * @param {number} fileIndex
    * @returns {Promise<void>}
    */
-  async loadForVideo(fileIndex, { primaryAudioLanguage = null } = {}) {
+  async loadForVideo(fileIndex) {
     this.clear();
 
     const transport = this.#getTransport();
@@ -284,7 +401,6 @@ export class SubtitlePlayback {
       return;
     }
 
-    this.#primaryAudioLanguage = primaryAudioLanguage;
     await this.#loadExternalSubtitles(fileIndex, transport, sourceKey);
     this.#loadEmbeddedSubtitles(fileIndex, transport, sourceKey);
   }
@@ -382,7 +498,11 @@ export class SubtitlePlayback {
         this.#subtitleBlobUrls.push(blobUrl);
 
         // Language priority: explicit code in the filename (author intent) →
-        // proxy content detection (franc) → the film's audio language → und.
+        // proxy content detection (franc) → und. The film's audio language is
+        // NOT a source: subtitles are usually a translation of the sound, so
+        // its language is the least likely one for them, and a label taken
+        // from it was a guess shown as a fact ("Japanese" on an English track,
+        // field 2026-10-01).
         //
         // The first of the three is read by the proxy now, by the same grammar
         // that decided this file belongs to this picture. Nothing is re-read
@@ -396,7 +516,7 @@ export class SubtitlePlayback {
           isHearingImpaired: sub.naming?.isHearingImpaired === true
         };
         if (info.code === "und") {
-          const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage;
+          const detected = this.#languageFromHeader(response);
           if (detected) {
             info.code = detected.code;
             info.name = detected.name;
@@ -418,6 +538,7 @@ export class SubtitlePlayback {
         this.#getVideoElement().appendChild(track);
         // What this track IS, for carrying a choice of it to the next episode.
         this.#subtitleIdentities.set(track.track, trackIdentity({ code: info.code, releaser: info.group }));
+        this.#addMenuEntry(`${epoch}:sidecar:${sub.fileIndex}`, track.track, null);
         // A subtitle FILE is never the container's choice, so `null` — and the
         // mode reading is registered here too, because a video with only
         // external files never reaches the embedded loader at all.
@@ -488,6 +609,7 @@ export class SubtitlePlayback {
       this.#getVideoElement().appendChild(el);
       this.#embeddedTextTracks.set(track.index, el.track);
       this.#embeddedTrackElements.set(track.index, el);
+      this.#addMenuEntry(`${epoch}:embedded:${track.index}`, el.track, track.index);
       // What this track IS, for carrying a choice of it to the next episode.
       // Corrected in `#refineSubtitleLabel` if the container said nothing and
       // the cues answer later.
@@ -599,7 +721,7 @@ export class SubtitlePlayback {
     this.#pendingCues.delete(planIndex);
     let added = 0;
     for (const cues of waiting) {
-      added += appendCues(textTrack, cues, this.#cueKeysOf(textTrack)).added;
+      added += appendCues(textTrack, cues, this.#cueKeysOf(textTrack), this.#cueIdsOf(textTrack)).added;
     }
     console.debug(
       `[torrent-tv][subtitles] track ${planIndex}: +${added} cue(s) held while the track was being armed`
@@ -637,7 +759,7 @@ export class SubtitlePlayback {
       this.#pendingCues.set(planIndex, waiting);
       return { added: 0, held: true };
     }
-    return { ...appendCues(textTrack, cues, this.#cueKeysOf(textTrack)), held: false };
+    return { ...appendCues(textTrack, cues, this.#cueKeysOf(textTrack), this.#cueIdsOf(textTrack)), held: false };
   }
 
   /**
@@ -715,11 +837,11 @@ export class SubtitlePlayback {
         return;
       }
 
-      // Refine the label if the container said nothing and detection found a
-      // language the container-declared fallback did not have.
+      // Refine the label if the container said nothing and the text was read
+      // as a language. Nothing else is a source: see `#loadExternalSubtitles`.
       const fallbackLang = trackLanguageCode(trackLanguageTag(track));
       if (!fallbackLang || fallbackLang === "und") {
-        const detected = this.#languageFromHeader(response) ?? this.#primaryAudioLanguage;
+        const detected = this.#languageFromHeader(response);
         if (detected?.code && detected.code !== "und") {
           el.label = buildSubtitleLabel({
             code: detected.code,
@@ -729,6 +851,7 @@ export class SubtitlePlayback {
             isHearingImpaired: track.isHearingImpaired === true
           });
           el.srclang = detected.code;
+          this.#publishMenu();
         }
       }
 
@@ -799,6 +922,9 @@ export class SubtitlePlayback {
     );
     element.label = label;
     element.srclang = detected.code;
+    // The menu names this track by its key, so its item keeps working; only
+    // the words on it change.
+    this.#publishMenu();
     // The identity follows the label. A track that opened as Unknown and is now
     // known to be Russian must be findable as Russian in the next episode —
     // otherwise a viewer who chose it while it was still Unknown carries a
@@ -831,6 +957,15 @@ export class SubtitlePlayback {
       return; // a push for a file that is no longer the one open
     }
     this.#refineSubtitleLabel(event.trackIndex, event.detectedLanguage);
+    // Cues the proxy has taken back: read from a stretch that turned out not to
+    // be a cluster. Named by the found-order number each cue was sent with.
+    if (Array.isArray(event.withdrawn) && event.withdrawn.length > 0) {
+      const withdrawnFrom = this.#embeddedTextTracks.get(event.trackIndex);
+      if (withdrawnFrom) {
+        const removed = removeCues(withdrawnFrom, event.withdrawn, this.#cueKeysOf(withdrawnFrom), this.#cueIdsOf(withdrawnFrom));
+        console.debug(`[torrent-tv][subtitles] track ${event.trackIndex}: ${removed} cue(s) taken back by the proxy`);
+      }
+    }
     // Before anything else: a batch whose cues all fell away as empty still
     // moves the proxy's count forward, and a cursor left behind would have this
     // page ask for those same seqs again after every reconnect.
@@ -1239,6 +1374,7 @@ export class SubtitlePlayback {
         described.push(`"${track.label || track.language || "?"}"=${track.mode}`);
       }
       console.debug(`[torrent-tv][subtitles] modes ${described.join(" ")}`);
+      this.#publishMenu();
       // A change this component did not make is the viewer's, and it is what
       // the next episode opens with.
       this.#rememberSubtitleChoice(tracks);

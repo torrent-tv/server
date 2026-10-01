@@ -62,7 +62,7 @@
            `width: 100% !important` by the browser, and this one's width is what
            holds the playlist drawer inside its box. Measured, and written down
            at `#sendTheWholePageFullscreen`. -->
-      <media-controller id="player__controller" autohide="2">
+      <media-controller id="player__controller" autohide="2" hotkeys="noc">
         <img id="player__poster" slot="poster" alt="" hidden>
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
@@ -99,7 +99,11 @@
           </button>
         </media-control-bar>
 
-        <media-captions-menu hidden anchor="auto"></media-captions-menu>
+        <!-- The subtitle menu. A plain media-chrome menu, like the soundtrack
+             menu below: its items name tracks by a key this page keeps, because
+             media-chrome's captions menu found a track again by its label and
+             a label changes once the text has been read (field 2026-10-01). -->
+        <media-chrome-menu id="player__subtitle-menu" hidden anchor="player__subtitle-button"></media-chrome-menu>
         <!-- The soundtrack menu, opened by the button beside the captions
              button. A plain media-chrome menu: the tracks are the proxy's, not
              the element's own `audioTracks`, which Chrome does not implement.
@@ -112,7 +116,16 @@
           <media-volume-range></media-volume-range>
           <media-time-display showduration></media-time-display>
           <media-time-range></media-time-range>
-          <media-captions-menu-button></media-captions-menu-button>
+          <media-chrome-menu-button
+            id="player__subtitle-button"
+            invoketarget="player__subtitle-menu"
+            hidden
+            aria-label="Subtitles">
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="5" width="18" height="14" rx="2"/>
+              <path d="M10.5 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/>
+            </svg>
+          </media-chrome-menu-button>
           <media-chrome-menu-button
             id="player__audio-button"
             invoketarget="player__audio-menu"

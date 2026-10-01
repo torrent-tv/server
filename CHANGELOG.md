@@ -1,3 +1,10 @@
+## 0.36.12
+
+- **Fix**: The subtitle menu identifies each track by a key this page keeps, not by its label and language. media-chrome's captions menu found a track again by both; once a track's label changed — "Unknown" becoming a language — its item matched no track, and choosing it turned nothing on. Two tracks with one label each matched the other's item, and choosing one showed both. The menu is now drawn by the player from keyed items, a label change redraws the item without losing the choice, identical labels get an ordinal, and "Off" is an item of its own.
+- **Fix**: The subtitles key `c` uses this page's own choice — the track chosen last, or the one the file opens with — instead of media-chrome's language preference. It is ignored while typing and while the player refuses its keys.
+- **Fix**: The film's audio language is no longer used as a subtitle language. Subtitles usually translate the sound, so that language was the least likely one, and an English track was labelled "Japanese".
+- **New**: Cues carry the number the proxy gave them; a cue the proxy takes back is removed from its track, even while the track is disabled.
+
 ## 0.36.11
 
 - **Fix**: Restore shared-link episodes by their file identity when the proxy returns a reordered file list.

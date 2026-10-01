@@ -75,6 +75,12 @@ export const PLAYER_EVENTS = {
   FOCUS_PLAYLIST_TOGGLE: "PLAYER:FOCUS_PLAYLIST_TOGGLE",
   SET_AUDIO_TRACKS: "PLAYER:SET_AUDIO_TRACKS",
   SELECT_AUDIO_TRACK: "PLAYER:SELECT_AUDIO_TRACK",
+  /** `{ items: SubtitleMenuItem[] }` — the subtitle menu, keyed by track. */
+  SET_SUBTITLE_TRACKS: "PLAYER:SET_SUBTITLE_TRACKS",
+  /** `{ key }` — the viewer chose a subtitle track; "" turns them off. */
+  SELECT_SUBTITLE_TRACK: "PLAYER:SELECT_SUBTITLE_TRACK",
+  /** The subtitles key: off if on, otherwise on. */
+  TOGGLE_SUBTITLES: "PLAYER:TOGGLE_SUBTITLES",
   SET_BUFFERING: "PLAYER:SET_BUFFERING",
   SET_SHARE_LINK: "PLAYER:SET_SHARE_LINK",
 };
