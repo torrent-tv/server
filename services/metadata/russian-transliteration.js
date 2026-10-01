@@ -41,3 +41,15 @@ export function russianSearchSpellings(word) {
   }
   return candidates;
 }
+
+/** Whole-title discovery includes a trailing soft sign lost in Latin spelling. */
+export function russianTitleSpellings(title) {
+  let candidates = [""];
+  for (const word of title.split(" ")) {
+    const spellings = russianSearchSpellings(word).flatMap(spelling => /[бвгджзклмнпрстфхцчшщ]$/u.test(spelling)
+      ? [spelling, `${spelling}ь`] : [spelling]);
+    candidates = candidates.flatMap(prefix => spellings.map(spelling => `${prefix} ${spelling}`.trim()));
+    if (candidates.length > 12) return [];
+  }
+  return candidates;
+}
