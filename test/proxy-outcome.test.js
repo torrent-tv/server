@@ -99,6 +99,37 @@ test("an output with no bound is described as such, not as a number it never had
   assert.match(text, /can't be confirmed to fit/);
 });
 
+test("a soundtrack with no figure is named, and another one is offered only when the file has one", () => {
+  const figures = { verdict: "no safe bound", linkMbps: 80.6, videoClass: "estimated", audioClass: "unknown", totalMbps: null };
+
+  const withOthers = describeUnavailable({ figures: { ...figures, soundtracks: 2 } });
+  assert.match(withOthers, /how much this soundtrack would send/);
+  assert.match(withOthers, /Choose another soundtrack/);
+
+  const alone = describeUnavailable({ figures: { ...figures, soundtracks: 1 } });
+  assert.doesNotMatch(alone, /another soundtrack/, "no advice the viewer cannot follow");
+});
+
+test("a picture with no figure is named, and both are named when neither has one", () => {
+  const picture = describeUnavailable({ figures: { verdict: "no safe bound", videoClass: "unknown", audioClass: "known" } });
+  assert.match(picture, /how much its picture would send/);
+  const both = describeUnavailable({ figures: { verdict: "no safe bound", videoClass: "unknown", audioClass: "unknown", soundtracks: 3 } });
+  assert.match(both, /its picture or its soundtrack/);
+});
+
+test("no refusal suggests a lower quality, which the page does not offer, and only a load too large suggests a faster link", () => {
+  const texts = [
+    describeUnavailable({ figures: { verdict: "does not fit", linkMbps: 3, linkSafety: 0.8, totalMbps: 3.768 } }),
+    describeUnavailable({ figures: { verdict: "no safe bound", audioClass: "unknown" } }),
+    describeUnavailable({ figures: null })
+  ];
+  for (const text of texts) {
+    assert.doesNotMatch(text, /lower quality/);
+  }
+  assert.match(texts[0], /faster connection/);
+  assert.doesNotMatch(texts[1], /faster connection/, "a faster link cannot measure what nothing states");
+});
+
 test("the error the loading flow shows already speaks to the viewer, and offers Retry", () => {
   const error = new OutputUnavailableError({ reason: "proxy wording", figures: { verdict: "does not fit", linkMbps: 3, linkSafety: 0.8, totalMbps: 3.768 } });
   assert.doesNotMatch(error.message, /proxy wording/, "the proxy's own words stay in the log");
