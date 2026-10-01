@@ -45,6 +45,7 @@ export class WaitingOverlay {
 
   /** @type {number | null} Latest reading from the component that owns the element. */
   #bufferedAhead = null;
+  #timer = null;
 
 
   /**
@@ -86,22 +87,20 @@ export class WaitingOverlay {
     const transcodeProgress = detail?.transcodeProgress ?? null;
     const readiness = detail?.playbackReadiness;
     const unified = this.#model.update({
-      playbackReadiness: readiness,
+      ...(detail && Object.hasOwn(detail, "playbackReadiness") ? { playbackReadiness: readiness } : {}),
       bufferedAhead: this.#bufferedAhead ?? undefined
     });
     const needed = downloadStats?.resumeNeededBytes;
     const got = downloadStats?.resumeDownloadedBytes;
     const usable = transcodeProgress && transcodeProgress.state !== "failed";
-    // The download stage is over once an encoder exists for this file, and its
-    // figures go with it. They were being assigned unconditionally, so peers,
-    // speed and bytes-still-needed stayed on screen through the encode — and
-    // stayed STILL, because they describe a stage that had finished. A number
-    // that cannot change is worse than no number: it reads as a stall in
-    // whatever the viewer is actually waiting for. Withdrawn by setting them
-    // undefined, which is how this component forgets a measurement.
-    const downloading = !usable;
+    // Download and processing can be active concurrently.
+    const downloading = typeof needed === "number" && typeof got === "number" ? got < needed : !usable;
     Object.assign(this.#measurements, {
       peers: downloading ? downloadStats?.numPeers : undefined,
+      seeders: downloading ? downloadStats?.trackerSeeders : undefined,
+      neededBytes: downloading ? needed : undefined,
+      downloadedBytes: downloading ? got : undefined,
+      operations: detail && Object.hasOwn(detail, "playbackReadiness") ? readiness?.operations : this.#measurements.operations,
       downloadBytesPerSecond: downloading ? downloadStats?.downloadSpeed : undefined,
       remainingBytes: downloading && typeof needed === "number" && typeof got === "number"
         ? Math.max(0, needed - got)
@@ -109,6 +108,7 @@ export class WaitingOverlay {
       cushionPercent: usable ? unified.cushionPercent ?? undefined : undefined,
       cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
       etaSeconds: unified.etaSeconds ?? undefined,
+      readinessReason: unified.reason,
       readinessUnavailable: usable && readiness !== undefined && readiness !== null &&
         readiness.version !== 1
     });
@@ -132,6 +132,7 @@ export class WaitingOverlay {
     this.#measurements.cushionPercent = unified.cushionPercent ?? undefined;
     this.#measurements.cushionRemainingSeconds = unified.cushionRemainingSeconds ?? undefined;
     this.#measurements.etaSeconds = unified.etaSeconds ?? undefined;
+    this.#measurements.readinessReason = unified.reason;
     this.#applyStep();
     this.#render();
   };
@@ -157,10 +158,21 @@ export class WaitingOverlay {
    */
   #onStateChanged = (event) => {
     const state = event instanceof CustomEvent ? event.detail?.state : "";
+    if (isWaiting(state) && this.#timer === null) {
+      // Refresh at the displayed time unit; this is not a forecasting window.
+      this.#timer = setInterval(() => {
+        this.#measurements.etaSeconds = this.#model.update({}).etaSeconds ?? undefined;
+        this.#render();
+      }, 1000);
+    } else if (!isWaiting(state) && this.#timer !== null) {
+      clearInterval(this.#timer);
+      this.#timer = null;
+    }
     if (typeof state !== "string" || isWaiting(state) || state === APP_STATE.PAUSED) {
       return;
     }
     this.#model.reset();
+    this.#bufferedAhead = null;
     this.#measurements = {};
     this.#pipelineStep = "";
     this.#render();
@@ -174,11 +186,7 @@ export class WaitingOverlay {
   #applyStep() {
     const step = this.#pipelineStep.length > 0
       ? this.#pipelineStep
-      : this.#measurements.readinessUnavailable === true
-        ? undefined
-        : this.#measurements.etaSeconds === undefined
-        ? "Waiting for proxy playback forecast"
-        : undefined;
+      : undefined;
     if (typeof step === "string" && step.length > 0) {
       this.#measurements.stage = step;
     } else {

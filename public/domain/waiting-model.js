@@ -6,6 +6,12 @@
 export class WaitingModel {
   #readiness = null;
   #bufferedAhead = null;
+  #deadline = null;
+  #clock;
+
+  constructor({ clock = () => performance.now() } = {}) {
+    this.#clock = clock;
+  }
 
   /**
    * @param {object} facts
@@ -13,10 +19,16 @@ export class WaitingModel {
    *   cushionRemainingSeconds: number | null, encodeSpeedText: null }}
    */
   update(facts = {}) {
+    const now = this.#clock();
     if (Object.hasOwn(facts, "playbackReadiness")) {
-      this.#readiness = facts.playbackReadiness && typeof facts.playbackReadiness === "object"
+      const next = facts.playbackReadiness && typeof facts.playbackReadiness === "object"
         ? facts.playbackReadiness
         : null;
+      if (next !== this.#readiness) {
+        const delay = next?.delaySeconds;
+        this.#deadline = Number.isFinite(delay) && delay >= 0 ? now + delay * 1000 : null;
+      }
+      this.#readiness = next;
     }
     if (typeof facts.bufferedAhead === "number" && Number.isFinite(facts.bufferedAhead) && facts.bufferedAhead >= 0) {
       this.#bufferedAhead = facts.bufferedAhead;
@@ -30,7 +42,7 @@ export class WaitingModel {
     const etaSeconds = ready
       ? 0
       : Number.isFinite(delay) && delay >= 0
-        ? delay
+        ? Math.max(0, (this.#deadline - now) / 1000)
         : null;
     const cushionRemainingSeconds = Number.isFinite(reserve) && reserve > 0 && ahead !== null
       ? Math.max(0, reserve - ahead)
@@ -43,6 +55,7 @@ export class WaitingModel {
 
     return {
       etaSeconds,
+      reason: readiness?.reason ?? "forecast-not-received",
       cushionPercent,
       cushionRemainingSeconds,
       encodeSpeedText: null
@@ -53,5 +66,6 @@ export class WaitingModel {
   reset() {
     this.#readiness = null;
     this.#bufferedAhead = null;
+    this.#deadline = null;
   }
 }

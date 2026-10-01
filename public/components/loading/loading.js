@@ -21,7 +21,8 @@ import {
   decideHistoryWrite,
   decideNavigation,
   isAdvanceToNext,
-  positionToRecord,
+  fileOpenState,
+  playbackStateToRecord,
   readUrlState,
   resumePositionFor
 } from "../../domain/url-state.js";
@@ -590,6 +591,7 @@ export class Loading extends StateDerivedView {
    * @type {number | null}
    */
   #pendingCurrentTime = null;
+  #openingFileIndex = null;
   #seekPosition = new SeekPosition();
   #seekEventPosition = null;
 
@@ -1385,13 +1387,16 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #applyPendingResume() {
+    if (this.#isProcessing || this.#openingFileIndex !== null) return;
     const currentTime = this.#pendingCurrentTime;
     if (currentTime == null || !(this.#videoElement instanceof HTMLVideoElement)) {
       return;
     }
     this.#pendingCurrentTime = null;
     const video = this.#videoElement;
+    const epoch = this.#playbackEpoch;
     const seek = () => {
+      if (epoch !== this.#playbackEpoch) return;
       if (Number.isFinite(video.duration) && video.duration > 0) {
         try {
           video.currentTime = Math.min(currentTime, video.duration - 1);
@@ -1428,6 +1433,7 @@ export class Loading extends StateDerivedView {
     if (this.#isProcessing) {
       return;
     }
+    this.#pendingCurrentTime = 0;
     // A different file has its own tracks and resolution — reset audio + quality.
     this.#selectedAudioTrackIndex = 0;
     this.#playingHeight = 0;
@@ -1583,6 +1589,7 @@ export class Loading extends StateDerivedView {
     this.#seekEventPosition = null;
     this.#audioMetadataRefreshSeq += 1;
     this.#isProcessing = false;
+    this.#openingFileIndex = null;
     this.#playbackLive = false;
     this.#clearBuffering();
     // Cleared with it: otherwise the next stream's first stall compares against
@@ -1721,6 +1728,7 @@ export class Loading extends StateDerivedView {
    */
   #beginPlaybackAttempt() {
     this.#playbackEpoch += 1;
+    this.#openingFileIndex = null;
     this.#browserBufferLimitSeconds = null;
     // Per attempt: a new file, or the same one tried again, starts with the
     // ordinary wait rather than the notice left over from the last one.
@@ -1932,6 +1940,7 @@ export class Loading extends StateDerivedView {
         torrentBytes,
         meta
       });
+      this.#recordSourceIntent();
       const mediaSelection = this.#announceMediaSelection([file.name, parsed.name]);
 
       this.visible = true;
@@ -2057,6 +2066,7 @@ export class Loading extends StateDerivedView {
         }));
     } finally {
       this.#isProcessing = false;
+      if (this.#playbackLive) this.#applyPendingResume();
     }
   }
 
@@ -2093,7 +2103,7 @@ export class Loading extends StateDerivedView {
     return {
       fromField,
       fromUrl,
-      position: fromField != null && fromField > 0 ? fromField : (fromUrl > 0 ? fromUrl : null)
+      position: fromField != null && fromField >= 0 ? fromField : (fromUrl > 0 ? fromUrl : null)
     };
   }
 
@@ -2278,6 +2288,7 @@ export class Loading extends StateDerivedView {
       this.#subtitlePlayback.clear();
       this.#session.clear();
       const current = this.#session.openMagnetDetails({ magnetUri });
+      this.#recordSourceIntent();
 
       // Display name from the magnet's dn parameter until metadata arrives.
       let displayName = "Magnet link";
@@ -2379,6 +2390,7 @@ export class Loading extends StateDerivedView {
         }));
     } finally {
       this.#isProcessing = false;
+      if (this.#playbackLive) this.#applyPendingResume();
     }
   }
 
@@ -2573,9 +2585,12 @@ export class Loading extends StateDerivedView {
     // removes the parameter altogether — the viewer's refresh then starts the
     // film from the beginning. `positionToRecord` decides what the element's
     // reading is worth.
-    const position = video instanceof HTMLVideoElement
-      ? positionToRecord(video, current.currentTime)
-      : current.currentTime;
+    const next = playbackStateToRecord(current, {
+      magnet,
+      fileIndex: this.#activeFileIndex >= 0 ? this.#activeFileIndex : -1,
+      opening: this.#isProcessing || this.#openingFileIndex !== null,
+      element: video instanceof HTMLVideoElement ? video : null
+    });
     if (
       video instanceof HTMLVideoElement &&
       video.readyState === 0 &&
@@ -2588,11 +2603,10 @@ export class Loading extends StateDerivedView {
         "rather than the zero it reports"
       );
     }
-    const next = {
-      magnet,
-      fileIndex: this.#activeFileIndex >= 0 ? this.#activeFileIndex : -1,
-      currentTime: position
-    };
+    this.#writePlaybackState(current, next);
+  }
+
+  #writePlaybackState(current, next) {
     const how = decideHistoryWrite(current, next);
     // Moving on to the next episode means this one is finished, so the entry
     // being left loses its position and Back opens it from the start. Reading
@@ -2607,6 +2621,15 @@ export class Loading extends StateDerivedView {
       this.#writeHistory("replace", { ...current, currentTime: 0 });
     }
     this.#writeHistory(how, next);
+  }
+
+  #recordSourceIntent() {
+    if (this.#navigatingHistory) return;
+    this.#writePlaybackState(readUrlState(location.search), {
+      magnet: this.#currentMagnetUri(),
+      fileIndex: this.#pendingFileIndex ?? -1,
+      currentTime: this.#pendingCurrentTime ?? 0
+    });
   }
 
   /**
@@ -2882,7 +2905,7 @@ export class Loading extends StateDerivedView {
       // forty minutes in. Only when nothing has asked for a position: a resume
       // from the address, from Retry or from Back sets one before getting here,
       // and that is exactly the case this must not overwrite.
-      if (this.#pendingCurrentTime === null && this.#videoElement.currentTime > 0) {
+      if (!(this.#pendingCurrentTime > 0) && this.#videoElement.currentTime > 0) {
         this.#videoElement.currentTime = 0;
       }
       // Release the previous file's transcode session so the proxy stops its
@@ -2903,6 +2926,7 @@ export class Loading extends StateDerivedView {
         }));
     } finally {
       this.#isProcessing = false;
+      if (this.#playbackLive) this.#applyPendingResume();
     }
   }
 
@@ -2921,6 +2945,10 @@ export class Loading extends StateDerivedView {
     if (!file || file.isVideo !== true) {
       throw new Error(Loading.MESSAGES.selectedFileNotFound);
     }
+    this.#openingFileIndex = fileIndex;
+    const address = readUrlState(location.search);
+    const intent = fileOpenState(address, this.#currentMagnetUri(), fileIndex, this.#pendingCurrentTime);
+    if (!this.#navigatingHistory) this.#writePlaybackState(address, intent);
     this.#audioMetadataRefreshSeq += 1;
     // Reset the source resolution; it is set again only when the proxy plan
     // provides it below. This gates the quality menu to proxy-served streams
@@ -4012,6 +4040,7 @@ export class Loading extends StateDerivedView {
    */
   #setActiveMediaFile(fileIndex) {
     this.#activeFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
+    this.#openingFileIndex = null;
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, {
         detail: { fileIndex }
@@ -4916,6 +4945,9 @@ export class Loading extends StateDerivedView {
         bufferedAhead: ahead
       });
       const readiness = cachedProgress?.playbackReadiness;
+      if (readiness?.reason === "media-continuity-unavailable") {
+        throw new Error("Prepared media contains a timestamp gap; playback cannot start.");
+      }
       if (readiness?.version === 1 && readiness.ready === true) {
         this.#logEvt(
           `prebuffer ready delay=${Number(readiness.delaySeconds).toFixed(2)}s ` +

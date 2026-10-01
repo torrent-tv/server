@@ -123,7 +123,7 @@ function formatDuration(seconds) {
  * @param {WaitingMeasurements} measurements
  * @returns {string} Empty when nothing about supply is known yet.
  */
-function supplyLine({ peers, downloadBytesPerSecond, remainingBytes, bufferedSeconds }) {
+function supplyLine({ peers, seeders, downloadBytesPerSecond, remainingBytes, bufferedSeconds, neededBytes, downloadedBytes }) {
   // Only while something still has to come off the swarm. With nothing left to
   // fetch, peers and a download rate answer a question the viewer is no longer
   // asking — and the row stayed up through a whole seek reading "0 B left",
@@ -135,10 +135,13 @@ function supplyLine({ peers, downloadBytesPerSecond, remainingBytes, bufferedSec
   if (isNumber(peers)) {
     parts.push(`peers: ${peers}`);
   }
+  if (isNumber(seeders)) parts.push(`tracker seeders: ${seeders}`);
   if (isNumber(downloadBytesPerSecond) && downloadBytesPerSecond > 0) {
     parts.push(`${formatBytes(downloadBytesPerSecond)}/s`);
   }
-  if (isNumber(remainingBytes)) {
+  if (isNumber(neededBytes) && isNumber(downloadedBytes)) {
+    parts.push(`${formatBytes(downloadedBytes)} of ${formatBytes(neededBytes)} needed`);
+  } else if (isNumber(remainingBytes)) {
     parts.push(`${formatBytes(Math.max(0, remainingBytes))} left`);
   } else if (isNumber(bufferedSeconds) && bufferedSeconds > 0) {
     // The proxy did not report its read window — an older proxy, or a read
@@ -191,14 +194,21 @@ function describeEncodingRun(run) {
  * @returns {string}
  */
 export function formatWaitingText(measurements = {}) {
-  const lines = [];
-  if (typeof measurements.stage === "string" && measurements.stage.length > 0) {
-    lines.push(measurements.stage);
-  }
+  const operations = Array.isArray(measurements.operations) ? measurements.operations : [];
+  const processing = operations.map((operation) => {
+    const action = operation.operation === "copy" ? "Copying" : "Encoding";
+    const codec = operation.inputCodec ? ` ${operation.inputCodec}` : "";
+    const target = operation.outputCodec ? ` to ${operation.outputCodec}` : "";
+    const speed = isNumber(operation.speed) && operation.speed >= 0 ? `, ${operation.speed.toFixed(1)}x realtime` : "";
+    return `${action} ${operation.track}${codec}${target}${speed}`;
+  });
+  const stage = measurements.stage || (operations.some(({ operation }) => operation === "encode") ? "Encoding" :
+    operations.length > 0 ? "Copying media" : isNumber(measurements.remainingBytes) && measurements.remainingBytes > 0 ?
+      "Downloading torrent" : "Preparing playback");
+  const details = [];
   const supply = supplyLine(measurements);
-  if (supply.length > 0) {
-    lines.push(supply);
-  }
+  if (supply.length > 0) details.push(supply);
+  details.push(...processing);
   // One line per encoder still running. With a single run — every session today
   // — this is the one line it always was. With several, which is what quality
   // switching without an interruption will bring, each says what it is making
@@ -207,7 +217,7 @@ export function formatWaitingText(measurements = {}) {
   for (const run of Array.isArray(measurements.encodingRuns) ? measurements.encodingRuns : []) {
     const line = describeEncodingRun(run);
     if (line.length > 0) {
-      lines.push(line);
+      if (operations.length === 0) details.push(line);
     }
   }
   // The time comes last. When the estimate is measurable, show the duration;
@@ -215,12 +225,21 @@ export function formatWaitingText(measurements = {}) {
   // playback is ready.
   // Keep zero visible: it reports that the measured readiness condition has
   // been met, rather than using a missing line to imply that nothing is known.
-  if (measurements.readinessUnavailable === true) {
-    lines.push("This proxy needs an update before playback can start");
-  } else if (isNumber(measurements.etaSeconds)) {
-    lines.push(`${formatDuration(measurements.etaSeconds)} until playback`);
-  } else {
-    lines.push("Estimating…");
-  }
-  return lines.join("\n");
+  const unavailable = new Map([
+    ["forecast-not-received", "Playback measurements have not arrived"],
+    ["incomplete-state", "Media duration or required tracks are not available"],
+    ["separate-audio-not-observed", "The selected audio track is not available"],
+    ["timeline-unavailable", "Media segment times are not available"],
+    ["link-rate-unavailable", "The client connection has not been measured"],
+    ["segment-size-unavailable", "Output segment sizes are not available"],
+    ["encode-rate-unavailable", "This processing configuration has not been measured"],
+    ["download-rate-unavailable", "The source download has not been measured"],
+    ["source-measurement-unavailable", "Source measurements are not available"],
+    ["media-continuity-unavailable", "A gap in the required media timeline prevents playback"],
+    ["service-not-advancing", "A required data service is not progressing"]
+  ]);
+  const timing = measurements.readinessUnavailable === true ? "This proxy needs an update before playback can start" :
+    isNumber(measurements.etaSeconds) ? `${formatDuration(measurements.etaSeconds)} until playback` :
+      unavailable.get(measurements.readinessReason ?? "forecast-not-received") ?? "Required playback measurements are unavailable";
+  return [stage, details.join(" • ") || "Waiting for media measurements", timing].join("\n");
 }
