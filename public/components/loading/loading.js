@@ -2729,7 +2729,7 @@ export class Loading extends StateDerivedView {
     if (fileIndex == null) {
       return null;
     }
-    const file = this.#session.current?.files?.[fileIndex];
+    const file = this.#session.current?.files?.find((entry) => entry.index === fileIndex);
     return file?.isVideo === true ? fileIndex : null;
   }
 

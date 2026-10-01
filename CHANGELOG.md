@@ -1,3 +1,7 @@
+## 0.36.11
+
+- **Fix**: Restore shared-link episodes by their file identity when the proxy returns a reordered file list.
+
 ## 0.36.10
 
 - **Fix**: Record the selected episode and its requested position before playback preparation. Preserve that intent during old media events and refresh; playlist selections start at zero and shared links do not apply a second late seek.
