@@ -233,3 +233,26 @@ export function positionToRecord(element, recorded) {
   // the viewer is at the beginning; anything else keeps what the address knows.
   return element.readyState > 0 ? 0 : known;
 }
+
+/** Opening intent is recorded before any media work or element events. */
+export function fileOpenState(current, magnet, fileIndex, requestedPosition = null) {
+  return {
+    magnet,
+    fileIndex,
+    currentTime: Number.isFinite(requestedPosition) && requestedPosition >= 0
+      ? requestedPosition
+      : current.magnet === magnet ? resumePositionFor(current, fileIndex) : 0
+  };
+}
+
+/** Element events during an open describe the previous or incomplete media. */
+export function playbackStateToRecord(current, { magnet, fileIndex, opening, element }) {
+  if (opening) return current;
+  return {
+    magnet,
+    fileIndex,
+    currentTime: current.magnet === magnet && current.fileIndex === fileIndex
+      ? positionToRecord(element, current.currentTime)
+      : 0
+  };
+}

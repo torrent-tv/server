@@ -43,7 +43,8 @@ test("keeps an unavailable proxy delay unknown in the waiting text", () => {
   });
 
   assert.equal(answer.etaSeconds, null);
-  assert.equal(formatWaitingText({ etaSeconds: answer.etaSeconds }), "Estimating…");
+  assert.match(formatWaitingText({ etaSeconds: answer.etaSeconds, readinessReason: answer.reason }),
+    /Output segment sizes are not available/);
   assert.equal(model.update({ bufferedAhead: 4 }).etaSeconds, null);
 });
 
@@ -76,12 +77,23 @@ test("shows zero only when the proxy reports playback ready", () => {
 });
 
 test("retains the proxy forecast when only the client buffer changes", () => {
-  const model = new WaitingModel();
+  const model = new WaitingModel({ clock: () => 0 });
   model.update({ playbackReadiness: readiness(), bufferedAhead: 2 });
   const answer = model.update({ bufferedAhead: 5 });
 
   assert.equal(answer.etaSeconds, 7.5);
   assert.equal(answer.cushionPercent, 50);
+});
+
+test("counts down in the local monotonic clock without depending on proxy clock alignment", () => {
+  let now = 100;
+  const model = new WaitingModel({ clock: () => now });
+  assert.equal(model.update({ playbackReadiness: readiness({ measuredAt: -9000 }) }).etaSeconds, 7.5);
+  now += 2500;
+  assert.equal(model.update({}).etaSeconds, 5);
+  now += 9000;
+  assert.equal(model.update({}).etaSeconds, 0);
+  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 3 }) }).etaSeconds, 3);
 });
 
 test("reset forgets the previous proxy forecast and client buffer", () => {
@@ -93,4 +105,13 @@ test("reset forgets the previous proxy forecast and client buffer", () => {
   assert.equal(answer.etaSeconds, null);
   assert.equal(answer.cushionPercent, null);
   assert.equal(answer.cushionRemainingSeconds, null);
+});
+
+test("rendering the same cached observation does not postpone its deadline", () => {
+  let now = 0;
+  const model = new WaitingModel({ clock: () => now });
+  const observation = readiness({ delaySeconds: 4 });
+  model.update({ playbackReadiness: observation });
+  now = 1500;
+  assert.equal(model.update({ playbackReadiness: observation }).etaSeconds, 2.5);
 });

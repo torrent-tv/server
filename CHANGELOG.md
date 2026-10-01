@@ -1,3 +1,8 @@
+## 0.36.9
+
+- **Fix**: Record the selected episode and its requested position before playback preparation. Preserve that intent during old media events and refresh; playlist selections start at zero and shared links do not apply a second late seek.
+- **Fix**: Show the waiting step, current download/track-processing facts and total time until playback in three rows. Preserve concurrent download facts, count down the proxy forecast in local elapsed time and report missing measurements or stalled service without an estimating placeholder.
+
 ## 0.36.8
 
 - **New**: Resolve release properties through a configurable rule registry with explicit dependencies, unchanged parser outputs, candidate provenance, rejection reasons and unresolved alternatives.

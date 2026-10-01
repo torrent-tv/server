@@ -14,6 +14,8 @@ import {
   decideHistoryWrite,
   decideNavigation,
   isAdvanceToNext,
+  fileOpenState,
+  playbackStateToRecord,
   positionToRecord,
   readUrlState,
   resumePositionFor
@@ -23,6 +25,35 @@ const MAGNET_A = "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MAGNET_B = "magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 const state = (magnet = "", fileIndex = -1, currentTime = 0) => ({ magnet, fileIndex, currentTime });
+
+test("file intent survives reload and previous element events during opening", () => {
+  const previous = state(MAGNET_A, 24, 410);
+  const intent = fileOpenState(previous, MAGNET_A, 25, 0);
+  assert.deepEqual(readUrlState(buildUrlSearch(intent)), state(MAGNET_A, 25, 0));
+  for (const element of [{ readyState: 4, currentTime: 410 }, { readyState: 0, currentTime: 0 }]) {
+    assert.deepEqual(playbackStateToRecord(intent, {
+      magnet: MAGNET_A, fileIndex: 24, opening: true, element
+    }), intent);
+  }
+  assert.equal(decideHistoryWrite(previous, intent), "push");
+});
+
+test("resume and history targets keep their position before media becomes active", () => {
+  const address = state(MAGNET_A, 25, 410);
+  assert.deepEqual(fileOpenState(address, MAGNET_A, 25), address);
+  assert.deepEqual(fileOpenState(address, MAGNET_A, 25, 0), state(MAGNET_A, 25, 0));
+  assert.deepEqual(fileOpenState(address, MAGNET_B, 25), state(MAGNET_B, 25, 0));
+  assert.deepEqual(fileOpenState(address, MAGNET_A, 24, 120), state(MAGNET_A, 24, 120));
+});
+
+test("settled playback updates only the active file's position", () => {
+  assert.deepEqual(playbackStateToRecord(state(MAGNET_A, 24, 410), {
+    magnet: MAGNET_A, fileIndex: 25, opening: false, element: { readyState: 4, currentTime: 410 }
+  }), state(MAGNET_A, 25, 0));
+  assert.equal(playbackStateToRecord(state(MAGNET_A, 25, 0), {
+    magnet: MAGNET_A, fileIndex: 25, opening: false, element: { readyState: 4, currentTime: 2 }
+  }).currentTime, 2);
+});
 
 test("a query string reads back as the state it names", () => {
   assert.deepEqual(readUrlState(""), state());
