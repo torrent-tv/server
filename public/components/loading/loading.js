@@ -2555,8 +2555,12 @@ export class Loading extends StateDerivedView {
         return;
       }
       // open-file: the torrent is already loaded, so only the file changes.
-      this.#pendingCurrentTime = currentTime > 0 ? currentTime : null;
-      await this.#playVideoFile(fileIndex);
+      this.#pendingCurrentTime = currentTime;
+      document.dispatchEvent(new CustomEvent(LOADING_EVENTS.SHOW, {
+        detail: { status: Loading.MESSAGES.switchingToSelectedFile, progress: 0 }
+      }));
+      this.#beginPlaybackAttempt();
+      await this.#switchToVideoFile(fileIndex);
     } catch (error) {
       this.#logEvt(`history navigation failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
