@@ -47,8 +47,25 @@ test("explicit subtitle evidence must agree", async () => {
 });
 test("a subtitle year can supply missing release evidence", async () => {
   const withoutYear = { ...request, names: ["Princessa.Mononoke.mkv"] };
-  assert.equal((await fixture().service.identifyTransliterated(withoutYear)).status, "not-found");
+  assert.equal((await fixture().service.identifyTransliterated(withoutYear)).status, "identified");
   assert.equal((await fixture().service.identifyTransliterated({ ...withoutYear, subtitleEvidence: { titles: [RU], years: [1997] } })).status, "identified");
+});
+
+test("a missing year still preserves ambiguity", async () => {
+  const withoutYear = { ...request, names: ["Princessa.Mononoke.mkv"] };
+  assert.equal((await fixture({ count: 2 }).service.identifyTransliterated(withoutYear)).status, "ambiguous");
+});
+
+test("Russian word discovery finds a series absent from Latin searches", async () => {
+  const source = {
+    search: async (_kind, query) => ({ totalPages: 1, results: query === "трудно" ? [{ id: 249720, name: "Hard to Be a God", originalName: "Трудно быть богом", year: 2026 }] : [] }),
+    work: async (kind, id) => ({ kind, tmdbId: id, title: "Трудно быть богом", year: 2026 }),
+    alternativeTitles: async () => []
+  };
+  const russian = new MetadataService({ source, cache: new MetadataCache({ budgetBytes: 1048576, maxEntryBytes: 65536 }), fetches: new SharedFetches({ waiterLimit: 64 }) });
+  for (const name of ["Trudno.byt.bogom.S01.2026.WEB-DL.1080p.ExKinoRay", "Trudno.byt.bogom.S01"]) {
+    assert.equal((await russian.identifyTransliterated({ names: [name], kindHint: "tv", language: "en-US" })).work.tmdbId, 249720);
+  }
 });
 test("subtitle evidence excludes dialogue, invalid values and generic series titles", () => {
   const vtt = `WEBVTT\n\nNOTE TORRENT-TV-METADATA\n${JSON.stringify({ genericTitles: [RU], years: [1997, "2000"] })}\n\n00:00:00.000 --> 00:00:01.000\nAnother movie`;

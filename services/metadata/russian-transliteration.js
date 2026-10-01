@@ -19,3 +19,25 @@ export function matchesRussianTransliteration(latin, russian) {
   }).join("").replace(/ +/g, " ").trim();
   return new RegExp(`^${pattern}$`, "u").test(normalizeTitle(latin));
 }
+
+/** Discovery spellings only; the complete catalog title must still round-trip. */
+export function russianSearchSpellings(word) {
+  const choices = {
+    shch: ["щ"], sch: ["щ"], zh: ["ж"], kh: ["х"], ts: ["ц"], ch: ["ч"], sh: ["ш"],
+    yo: ["ё"], jo: ["ё"], yu: ["ю"], ju: ["ю"], ya: ["я"], ja: ["я"],
+    a: ["а"], b: ["б"], v: ["в"], g: ["г"], d: ["д"], e: ["е", "э", "ё"],
+    z: ["з"], i: ["и", "й", "ы"], j: ["й", "ж"], k: ["к"], l: ["л"], m: ["м"],
+    n: ["н"], o: ["о"], p: ["п"], r: ["р"], s: ["с"], t: ["т"], u: ["у"],
+    f: ["ф"], h: ["х"], c: ["ц"], y: ["ы", "й"]
+  };
+  let candidates = [""];
+  for (let at = 0; at < word.length;) {
+    const token = Object.keys(choices).find(key => word.startsWith(key, at));
+    if (!token) return [];
+    candidates = candidates.flatMap(prefix => choices[token].map(letter => prefix + letter));
+    // This is a query budget, never a confidence score or a truncated answer.
+    if (candidates.length > 12) return [];
+    at += token.length;
+  }
+  return candidates;
+}

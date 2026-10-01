@@ -21,6 +21,8 @@
  */
 
 import { normalizeTitle } from "./title.js";
+import { guessit } from "guessit-js";
+import { parse as parseAnime } from "anitomy";
 
 /**
  * Words that end a title in a release name: resolutions, sources, codecs,
@@ -184,6 +186,8 @@ function splitByScript(words) {
  * @returns {ReleaseName}
  */
 export function parseReleaseName(raw) {
+  const release = guessit(String(raw ?? ""), { name_only: true });
+  const anime = parseAnime(String(raw ?? ""));
   const text = String(raw ?? "")
     .replace(/\.torrent$/i, "")
     .replace(/\.(?:mkv|mp4|avi|m4v|mov|wmv|ts|m2ts|vob|webm)$/i, "");
@@ -243,5 +247,37 @@ export function parseReleaseName(raw) {
     }
   }
 
-  return { titles, years, seriesEvidence };
+  // Title boundaries do not end the collection of technical release evidence.
+  // Keep our explicit year spans and multilingual title splitting.
+  if (!years && Number.isInteger(release.year) && titles.some(title => title !== String(release.year))) {
+    years = { from: release.year, to: release.year };
+  }
+  if (titles.length === 1 && titles[0] === String(release.year) && (release.source || release.screen_size)) {
+    years ??= { from: release.year, to: release.year };
+    titles.length = 0;
+  }
+  const values = {
+    year: [release.year, anime.year],
+    season: [release.season, anime.season == null ? null : Number(anime.season)],
+    episode: [release.episode, anime.episode?.number === release.year ? null : anime.episode?.number],
+    resolution: [release.screen_size, anime.video?.resolution],
+    videoCodec: [release.video_codec, anime.video?.term],
+    audioCodec: [release.audio_codec, anime.audio?.term],
+    releaseGroup: [release.release_group, anime.release?.group]
+  };
+  const normalized = {};
+  const conflicts = {};
+  for (const [key, supplied] of Object.entries(values)) {
+    const distinct = [...new Set(supplied.filter(value => value != null))];
+    normalized[key] = distinct.length === 1 ? distinct[0] : null;
+    if (distinct.length > 1) conflicts[key] = distinct;
+  }
+  // Source vocabularies differ: preserve both original labels.
+  normalized.source = release.source ?? anime.source ?? null;
+  seriesEvidence ||= Number.isInteger(normalized.season);
+  if (Number.isInteger(release.episode) && release.title && anime.title &&
+      normalizeTitle(release.title) === normalizeTitle(anime.title) && !seen.has(normalizeTitle(release.title))) {
+    titles.push(release.title);
+  }
+  return { titles, years, seriesEvidence, release: { sources: { guessit: release, anitomy: anime }, normalized, conflicts } };
 }
