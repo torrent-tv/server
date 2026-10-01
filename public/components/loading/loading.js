@@ -899,7 +899,9 @@ export class Loading extends StateDerivedView {
     if (name !== "seeking") {
       return;
     }
-    if (videoElement.currentTime === this.#seekEventPosition) {
+    // The control assignment generates this native event. Browsers may round
+    // currentTime, so event ownership must not depend on numeric equality.
+    if (this.#seekEventPosition !== null) {
       this.#seekEventPosition = null;
       return;
     }
