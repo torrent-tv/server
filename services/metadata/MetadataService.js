@@ -23,7 +23,7 @@ import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
 import { normalizeTitle } from "./title.js";
-import { matchesRussianTransliteration } from "./russian-transliteration.js";
+import { matchesRussianTransliteration, russianSearchSpellings } from "./russian-transliteration.js";
 
 /** How long one browser request may take, including its waits. A stated limit. */
 const REQUEST_BUDGET_MS = 4_000;
@@ -122,22 +122,24 @@ export class MetadataService {
     if (!this.#source) return { status: "unavailable" };
     const readings = names.map(parseReleaseName);
     const years = [...new Set([...readings.map(reading => reading.years?.from), ...(subtitleEvidence?.years ?? [])].filter(Number.isInteger))];
-    if (years.length !== 1) return { status: "not-found" };
+    if (years.length > 1) return { status: "not-found" };
     const titles = [...new Set(readings.flatMap(reading => reading.titles).map(normalizeTitle))];
     const latin = titles.filter(title => /^[a-z0-9 ]+$/u.test(title));
     const words = [...new Set(latin.flatMap(title => title.split(" ")).filter(word => /^[a-z]{5,}$/u.test(word)))];
     if (!words.length) return { status: "not-found" };
     if (words.length > 3) return { status: "undetermined" };
+    const expanded = [...new Set(words.flatMap(word => [word, ...russianSearchSpellings(word)]))];
+    const discovery = expanded.length <= MAX_QUERIES ? expanded : words;
     const kinds = kindHint ? [kindHint] : readings.some(reading => reading.seriesEvidence) ? ["tv"] : ["tv", "movie"];
     const wait = { deadlineAt: this.#now() + REQUEST_BUDGET_MS, signal };
     try {
       const candidates = new Map();
       for (const kind of kinds) {
-        for (const word of words) {
+        for (const word of discovery) {
           const found = await this.#search(kind, word, language, wait);
           if (found.capped) return { status: "undetermined" };
           for (const candidate of found.results) {
-            if (candidate.year === years[0]) candidates.set(`${kind}|${candidate.id}`, { ...candidate, kind });
+            if (!years.length || candidate.year === years[0]) candidates.set(`${kind}|${candidate.id}`, { ...candidate, kind });
           }
         }
       }
@@ -146,7 +148,7 @@ export class MetadataService {
       for (const candidate of candidates.values()) {
         const russian = await this.#cached(`work|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
           deadlineAt => this.#source.work(candidate.kind, candidate.id, "ru-RU", { deadlineAt }), wait);
-        if (russian.year !== years[0]) continue;
+        if (years.length && russian.year !== years[0]) continue;
         const aliases = await this.#cached(`alternative|${candidate.kind}|${candidate.id}`, () => FOUND_TTL_MS,
           deadlineAt => this.#source.alternativeTitles(candidate.kind, candidate.id, { deadlineAt }), wait);
         const catalogTitles = [candidate.name, candidate.originalName, russian.title, russian.originalTitle, ...aliases].filter(Boolean);
@@ -167,6 +169,10 @@ export class MetadataService {
   }
 
   async identify({ names, kindHint, requireYear = false, episodeEvidence = null, language, signal }) {
+    if (episodeEvidence) {
+      episodeEvidence = { ...episodeEvidence, titles: episodeEvidence.titles.filter(title => parseReleaseName(title).titles.length > 0) };
+      if (!episodeEvidence.titles.length) episodeEvidence = null;
+    }
     if (!this.#source) {
       return { status: "unavailable" };
     }

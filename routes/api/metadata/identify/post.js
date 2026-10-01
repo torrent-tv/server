@@ -12,6 +12,7 @@
  */
 
 import { LANGUAGE, signalOfRequest } from "../request-signal.js";
+import { parseReleaseName } from "../../../../services/metadata/release-name.js";
 
 /** Most names one request may carry. */
 export const MAX_NAMES = 24;
@@ -89,5 +90,5 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
   });
   // Counts and the outcome only: the names themselves are not logged.
   console.log(`[metadata] identify ${answer.status} names=${names.length} in ${Date.now() - started}ms`);
-  return reply.send(answer);
+  return reply.send({ ...answer, releaseEvidence: names.map(name => parseReleaseName(name)) });
 }
