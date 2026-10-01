@@ -190,9 +190,11 @@ export class TorrentSession {
    *
    * @param {number} trackIndex
    * @param {number} positionSeconds
+   * @param {boolean | null} [browserNeedsTranscode] - Whether this browser
+   *   cannot play THAT track's codec as it stands; null leaves it unsaid.
    * @returns {Promise<"ready" | "not-ready" | "unsupported">} Whether the track reported itself ready.
    */
-  async prepareAudioTrack(trackIndex, positionSeconds) {
+  async prepareAudioTrack(trackIndex, positionSeconds, browserNeedsTranscode = null) {
     const current = this.currentTranscodeSession;
     if (!current || !this.activeTranscodeSessions.has(current.sessionId) || !Number.isFinite(positionSeconds)) {
       return false;
@@ -200,7 +202,10 @@ export class TorrentSession {
     const { sessionId, transport } = current;
     const path =
       `/transcode/${encodeURIComponent(sessionId)}/a/${trackIndex}/warm` +
-      `?position=${positionSeconds.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}`;
+      `?position=${positionSeconds.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}` +
+      // What this browser needs for THAT track — the one it is moving to, not
+      // the one it is on. The proxy decides how the track is produced from it.
+      (browserNeedsTranscode === null ? "" : `&transcode=${browserNeedsTranscode ? 1 : 0}`);
     try {
       const response = await transport.fetch(path);
       if (response.status === 204) {
@@ -1087,6 +1092,19 @@ export class TorrentSession {
     if (declaredTracks) {
       document.dispatchEvent(
         new CustomEvent(PLAYER_EVENTS.DECLARED_TRACKS, { detail: declaredTracks })
+      );
+    }
+    // How the proxy decided to send the soundtrack, which can differ from what
+    // was asked: a track nothing states a rate for is re-encoded even where
+    // this browser would play it as it is. Logged, so a field session says
+    // which of the two happened.
+    if (payload?.soundtrack && typeof payload.soundtrack === "object") {
+      console.debug(
+        `[torrent-tv] soundtrack ${payload.soundtrack.trackIndex} is sent ` +
+          `${payload.soundtrack.transcode === true ? "re-encoded to AAC" : "as it is"}` +
+          (payload.soundtrack.transcode === true && options.transcodeAudio === false
+            ? " — the proxy chose this, the page asked for a copy"
+            : "")
       );
     }
 

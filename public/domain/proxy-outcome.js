@@ -205,6 +205,11 @@ export class NoCapacityError extends Error {
  * What the viewer is told, in terms of their connection and the film — not in
  * terms of the proxy's parts. The figures travel beside it for the log.
  *
+ * Only advice the viewer can follow is given. There is no quality to choose on
+ * the page, so none is suggested; a faster connection helps only a load that is
+ * too large, never one nothing can measure; and another soundtrack is offered
+ * only when the file has one.
+ *
  * @param {{ figures?: object | null }} outcome
  * @param {number} [height] - The quality they asked for, when there was one.
  * @returns {string}
@@ -217,12 +222,20 @@ export function describeUnavailable(outcome, height = 0) {
   const needed = Number(figures?.totalMbps);
   const what = height > 0 ? `${height}p` : "This video";
   if (figures?.verdict === "no safe bound") {
-    return `${what} can't be confirmed to fit your connection: the proxy can't bound how much it would send. ` +
-      "Choose a lower quality, or try again on a faster connection.";
+    const picture = figures?.videoClass === "unknown";
+    const sound = figures?.audioClass === "unknown";
+    const parts = picture && sound
+      ? "its picture or its soundtrack"
+      : picture ? "its picture" : sound ? "this soundtrack" : "it";
+    const otherTrack = sound && Number(figures?.soundtracks) > 1
+      ? " Choose another soundtrack, or try again later."
+      : " Try again later.";
+    return `${what} can't be confirmed to fit your connection: the proxy can't tell how much ${parts} would send.` +
+      otherTrack;
   }
   if (Number.isFinite(link) && Number.isFinite(needed)) {
     return `${what} needs about ${needed.toFixed(1)} Mbit/s and your connection carries about ` +
-      `${link.toFixed(1)} Mbit/s. Choose a lower quality, or try again on a faster connection.`;
+      `${link.toFixed(1)} Mbit/s. Try again on a faster connection.`;
   }
-  return `${what} doesn't fit your connection right now. Choose a lower quality, or try again later.`;
+  return `${what} doesn't fit your connection right now. Try again later.`;
 }

@@ -1,3 +1,8 @@
+## 0.36.9
+
+- **Fix**: A refusal names the part of the video that has no figure — its picture, its soundtrack or both — and offers another soundtrack only when the file has one; no refusal suggests a lower quality, which the page does not offer, and only a load too large suggests a faster connection.
+- **Fix**: Preparing a switch of soundtrack states whether this browser plays THAT track (`transcode=0|1`), so the proxy decides how the new track is produced instead of reusing the previous track's mode, and the log says when the proxy sends a soundtrack re-encoded that the page asked to copy.
+
 ## 0.36.8
 
 - **New**: Resolve release properties through a configurable rule registry with explicit dependencies, unchanged parser outputs, candidate provenance, rejection reasons and unresolved alternatives.

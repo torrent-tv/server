@@ -4245,6 +4245,11 @@ export class Loading extends StateDerivedView {
         const video = this.#videoElement instanceof HTMLVideoElement ? this.#videoElement : null;
         const playhead = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
         this.#holdForAudio(pick);
+        // What this browser needs for the track it is moving TO. The proxy
+        // decides from it how the track is produced, by the rule it uses when a
+        // file is opened, so a track the browser cannot play is re-encoded and
+        // a track it can play is copied unless nothing states its rate.
+        const needsTranscode = await this.#trackNeedsTranscode(trackIndex);
         const readyAt = Date.now();
         let answer = "not-ready";
         // Asked again rather than given up on. The proxy builds the track's
@@ -4254,7 +4259,7 @@ export class Loading extends StateDerivedView {
         // One refusal was treated as final, so the viewer was told the track was
         // not ready when it was about to be.
         while (Date.now() - readyAt < Loading.AUDIO_TRACK_WAIT_MS) {
-          answer = await this.#session.prepareAudioTrack(trackIndex, playhead);
+          answer = await this.#session.prepareAudioTrack(trackIndex, playhead, needsTranscode);
           if (this.#audioPickSeq !== pick) {
             this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
             return;
@@ -5863,6 +5868,25 @@ export class Loading extends StateDerivedView {
     }
   }
 
+
+  /**
+   * Whether this browser needs one soundtrack re-encoded, decided as it is for
+   * the track a file is opened on: a codec it cannot decode, or one HLS cannot
+   * carry to it as it stands.
+   *
+   * @param {number} trackIndex
+   * @returns {Promise<boolean | null>} Null when the plan names no codec for
+   *   the track, which leaves the proxy to assume what it needed before.
+   */
+  async #trackNeedsTranscode(trackIndex) {
+    const track = this.#audioTracks.find((one) => one?.index === trackIndex);
+    const codec = typeof track?.codec === "string" ? track.codec.trim().toLowerCase() : "";
+    if (!codec) {
+      return null;
+    }
+    const supported = await this.#isAudioCodecLikelySupported(codec);
+    return !supported || !this.#canCopyAudioCodecForHls(codec);
+  }
 
   /**
    * @param {string} codec
