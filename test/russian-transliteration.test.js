@@ -67,6 +67,23 @@ test("Russian word discovery finds a series absent from Latin searches", async (
     assert.equal((await russian.identifyTransliterated({ names: [name], kindHint: "tv", language: "en-US" })).work.tmdbId, 249720);
   }
 });
+
+test("whole Russian spelling avoids a broad word search without a year", async () => {
+  const calls = [];
+  const source = {
+    search: async (_kind, query) => {
+      calls.push(query);
+      return { totalPages: query.includes(" ") ? 1 : 4, results: query === "трудно быть богом"
+        ? [{ id: 249720, name: "Hard to Be a God", originalName: "Трудно быть богом", year: 2026 }] : [] };
+    },
+    work: async (kind, id) => ({ kind, tmdbId: id, title: "Трудно быть богом", year: 2026 }),
+    alternativeTitles: async () => []
+  };
+  const service = new MetadataService({ source, cache: new MetadataCache({ budgetBytes: 1048576, maxEntryBytes: 65536 }), fetches: new SharedFetches({ waiterLimit: 64 }) });
+  const answer = await service.identifyTransliterated({ names: ["Trudno.byt.bogom.S01"], kindHint: "tv", language: "en-US" });
+  assert.equal(answer.work.tmdbId, 249720);
+  assert.ok(calls.every(query => query.includes(" ")));
+});
 test("subtitle evidence excludes dialogue, invalid values and generic series titles", () => {
   const vtt = `WEBVTT\n\nNOTE TORRENT-TV-METADATA\n${JSON.stringify({ genericTitles: [RU], years: [1997, "2000"] })}\n\n00:00:00.000 --> 00:00:01.000\nAnother movie`;
   assert.deepEqual(subtitleEvidenceOf(vtt, "movie"), { titles: [RU], years: [1997] });

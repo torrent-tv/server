@@ -1,3 +1,7 @@
+## 0.36.7
+
+- **Fix**: Try complete reverse-transliterated Russian title spellings before broad word discovery, preserving missing soft signs and identifying an unambiguous yearless title without unrelated word results exhausting the candidate budget.
+
 ## 0.36.6
 
 - **Fix**: Retain release years after season markers and identify Russian transliterated titles through bounded Cyrillic discovery with full catalog-title verification; missing years no longer disable this fallback, while known years and ambiguous matches remain checked.

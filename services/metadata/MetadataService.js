@@ -23,7 +23,7 @@ import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
 import { normalizeTitle } from "./title.js";
-import { matchesRussianTransliteration, russianSearchSpellings } from "./russian-transliteration.js";
+import { matchesRussianTransliteration, russianSearchSpellings, russianTitleSpellings } from "./russian-transliteration.js";
 
 /** How long one browser request may take, including its waits. A stated limit. */
 const REQUEST_BUDGET_MS = 4_000;
@@ -129,10 +129,14 @@ export class MetadataService {
     if (!words.length) return { status: "not-found" };
     if (words.length > 3) return { status: "undetermined" };
     const expanded = [...new Set(words.flatMap(word => [word, ...russianSearchSpellings(word)]))];
-    const discovery = expanded.length <= MAX_QUERIES ? expanded : words;
+    const wordDiscovery = expanded.length <= MAX_QUERIES ? expanded : words;
+    const wholeDiscovery = [...new Set(latin.flatMap(russianTitleSpellings))];
+    const stages = [wholeDiscovery.length <= MAX_QUERIES ? wholeDiscovery : [], wordDiscovery];
     const kinds = kindHint ? [kindHint] : readings.some(reading => reading.seriesEvidence) ? ["tv"] : ["tv", "movie"];
     const wait = { deadlineAt: this.#now() + REQUEST_BUDGET_MS, signal };
     try {
+      for (const discovery of stages) {
+        if (!discovery.length) continue;
       const candidates = new Map();
       for (const kind of kinds) {
         for (const word of discovery) {
@@ -157,11 +161,14 @@ export class MetadataService {
         if (subtitleEvidence?.titles?.some(title => !agrees(title))) continue;
         matches.push(candidate);
       }
-      if (matches.length !== 1) return { status: matches.length ? "ambiguous" : "not-found" };
+      if (!matches.length) continue;
+      if (matches.length !== 1) return { status: "ambiguous" };
       const [chosen] = matches;
       const work = await this.#cached(`work|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
         deadlineAt => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
       return { status: "identified", work };
+      }
+      return { status: "not-found" };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
       throw error;
