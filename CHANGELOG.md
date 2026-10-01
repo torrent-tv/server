@@ -1,3 +1,7 @@
+## 0.36.3
+
+- **Fix**: Hide the playlist button and prevent opening the playlist when fewer than two video files are available; close an open playlist when switching to a single-video release.
+
 ## 0.36.2
 
 - **New**: After TMDB and AniList return no identity, discover bounded title-word candidates and verify the entire release title against Russian catalog transliteration with an exact year. Reject ambiguous, incomplete, and conflicting evidence.

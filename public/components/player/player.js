@@ -549,10 +549,10 @@ export class Player extends StateDerivedView {
   #onSetMediaFiles = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     // The playlist only switches between VIDEO files, so its button depends on
-    // the video count alone. A single picture still has a playlist showing
-    // its work title; audio and subtitle files never become picture rows.
+    // the video count alone; audio and subtitles do not provide another choice.
     const videoCount = Array.isArray(detail?.video) ? detail.video.length : 0;
-    this.#playlistToggle.hidden = videoCount < 1;
+    this.#playlistToggle.hidden = videoCount < 2;
+    if (videoCount < 2) this.#closePlaylist();
   };
 
   constructor() {
@@ -765,6 +765,7 @@ export class Player extends StateDerivedView {
   };
 
   #onPlaylistOpen = () => {
+    if (this.#playlistToggle.hidden) return;
     this.#root.classList.toggle(Player.CLASSES.isPlaylistOpen, true);
     this.#playlistToggle.setAttribute("aria-expanded", "true");
     // Suppress the tap-to-pause gesture so a click that closes the drawer does
@@ -779,7 +780,7 @@ export class Player extends StateDerivedView {
   };
 
   #onFocusPlaylistToggle = () => {
-    this.#playlistToggle.focus({ preventScroll: true });
+    if (!this.#playlistToggle.hidden) this.#playlistToggle.focus({ preventScroll: true });
   };
 
   #closePlaylist = () => {

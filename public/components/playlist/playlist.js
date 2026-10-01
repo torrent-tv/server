@@ -101,6 +101,7 @@ export class Playlist {
   }
 
   #onPlaylistOpen = () => {
+    if (this.#videoFiles.length < 2) return;
     this.#root.removeAttribute('inert');
     this.#root.setAttribute('data-open', true);
     
