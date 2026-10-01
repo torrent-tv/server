@@ -1,5 +1,5 @@
 import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
-import { artFor } from "../../domain/media-info.js";
+import { playerArt } from "../../domain/media-info.js";
 import {
   APP_VIEW,
   MEDIA_INTENT,
@@ -519,27 +519,40 @@ export class Player extends StateDerivedView {
   };
 
   /**
-   * The picture the element shows until its first frame: the episode's own
-   * still, else the work's image. Removed when there is none, so one release's
+   * The picture shown until the first frame: work artwork in the player's
+   * orientation, then the episode's still. Removed when absent so one release's
    * picture is never left over the next one's loading.
    */
   #applyPoster() {
-    const url = artFor(this.#media, this.#activeFileIndex);
-    if (url) {
-      this.#video.poster = url;
-    } else {
-      this.#video.removeAttribute("poster");
-    }
+    const poster = document.querySelector("#player__poster");
+    const rect = this.#video.getBoundingClientRect();
+    const art = playerArt(this.#media, this.#activeFileIndex, rect.width, rect.height, window.devicePixelRatio);
+    if (!art?.url) { poster.hidden = true; poster.removeAttribute("src"); return; }
+    const fit = () => {
+      if (poster.getAttribute("src") !== art.url) return;
+      const dpr = window.devicePixelRatio || 1;
+      const box = this.#video.getBoundingClientRect();
+      const enough = poster.naturalWidth >= box.width * dpr && poster.naturalHeight >= box.height * dpr;
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      poster.style.inlineSize = enough ? "100%" : poster.naturalWidth / dpr / rem + "rem";
+      poster.style.blockSize = enough ? "100%" : poster.naturalHeight / dpr / rem + "rem";
+      poster.style.objectFit = enough ? "cover" : "contain";
+      poster.hidden = this.#video.readyState >= 2;
+    };
+    poster.onload = fit;
+    poster.onerror = () => { poster.hidden = true; };
+    if (poster.getAttribute("src") !== art.url) { poster.hidden = true; poster.src = art.url; }
+    else if (poster.complete) fit();
   }
 
   /** @param {CustomEvent} event */
   #onSetMediaFiles = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     // The playlist only switches between VIDEO files, so its button depends on
-    // the video count alone — audio/subtitle files must not make a single-video
-    // torrent show a playlist there is nothing to switch to.
+    // the video count alone. A single picture still has a playlist showing
+    // its work title; audio and subtitle files never become picture rows.
     const videoCount = Array.isArray(detail?.video) ? detail.video.length : 0;
-    this.#playlistToggle.hidden = videoCount <= 1;
+    this.#playlistToggle.hidden = videoCount < 1;
   };
 
   constructor() {
@@ -559,6 +572,10 @@ export class Player extends StateDerivedView {
       // position is compared against the old one across the flush.
       this.#video.addEventListener("seeking", this.#onSeeking);
       this.#video.addEventListener("play", this.#onPlayAttempt);
+      this.#video.addEventListener("loadeddata", () => { document.querySelector("#player__poster").hidden = true; });
+      this.#video.addEventListener("emptied", () => this.#applyPoster());
+      new ResizeObserver(() => this.#applyPoster()).observe(this.#video);
+      window.addEventListener("resize", () => this.#applyPoster());
     }
     this.#playButton = document.querySelector(Player.SELECTOR.playButton);
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);

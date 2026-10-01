@@ -40,6 +40,7 @@
           type="button"
           title="Sintel (2010) — an open movie by the Blender Foundation, Creative Commons">…or try a demo movie</button>
       </form>
+      <a id="torrent__about" href="/about">about</a>
     </dialog>
 
 
@@ -62,6 +63,7 @@
            holds the playlist drawer inside its box. Measured, and written down
            at `#sendTheWholePageFullscreen`. -->
       <media-controller id="player__controller" autohide="2">
+        <img id="player__poster" slot="poster" alt="" hidden>
         <video id="player__video" slot="media" playsinline preload="metadata"></video>
 
         <!-- Loading/seeking indicator: a bare spinner (CSS ::before) with a
@@ -235,6 +237,7 @@
     <script type="module" src="./components/playlist/playlist.js"></script>
     <script type="module" src="./components/media-session/media-session.js"></script>
     <script type="module" src="./components/media-info/media-info.js"></script>
+    <script type="module" src="./components/media-info/page-title.js"></script>
     <script type="module" src="./components/torrent-tv/torrent-tv.js"></script>
   </body>
 </html>

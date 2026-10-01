@@ -107,6 +107,7 @@ export class MediaInfoController {
       contents: this.#contents ?? {},
       filesByIndex: this.#filesByIndex
     });
+    this.#publish();
     if (request) {
       void this.#identifyRelease(this.#selection, request);
     }
@@ -172,11 +173,12 @@ export class MediaInfoController {
     }
     // A series that the service identifies as a film is a contradiction, not
     // an answer: the proxy has already stated the pictures are episodes.
-    if (shapeOf(this.#contents) === "series" && answer.work?.kind !== "tv") {
+    const work = answer.work?.normalized ?? answer.work;
+    if (shapeOf(this.#contents) === "series" && !["series", "tv"].includes(work?.kind)) {
       return;
     }
     // Nor is a series that lacks the seasons the files name.
-    if (answer.work?.kind === "tv" && !seasonsAgree([...this.#itemsByIndex.values()], answer.work)) {
+    if (["series", "tv"].includes(work?.kind) && (answer.work?.sources?.tmdb || work?.tmdbId) && !seasonsAgree([...this.#itemsByIndex.values()], work)) {
       return;
     }
     this.#work = answer.work;
@@ -227,8 +229,9 @@ export class MediaInfoController {
    * @param {number} fileIndex
    */
   #askSeasonOf(fileIndex) {
-    const work = this.#work;
-    if (work?.kind !== "tv") {
+    const work = this.#work?.normalized ?? this.#work;
+    const tmdbId = this.#work?.sources?.tmdb?.tmdbId ?? work?.tmdbId;
+    if (!["series", "tv"].includes(work?.kind) || !Number.isInteger(tmdbId)) {
       return;
     }
     const season = seasonOf(this.#itemsByIndex.get(fileIndex)?.episode, work);
@@ -241,7 +244,7 @@ export class MediaInfoController {
     if (files.length === 0) {
       return;
     }
-    void this.#matchSeason(this.#selection, work, season, files);
+    void this.#matchSeason(this.#selection, { ...work, tmdbId }, season, files);
   }
 
   /**
@@ -263,7 +266,7 @@ export class MediaInfoController {
     this.#seasons[String(season)] = answer.season?.name ?? "";
     for (const match of answer.files ?? []) {
       if (match.status === "matched") {
-        this.#episodes[match.key] = { season, episodes: match.episodes, part: match.part ?? null };
+        this.#episodes[match.key] = { source: "tmdb", season, episodes: match.episodes, part: match.part ?? null };
       }
     }
     this.#publish();
@@ -277,7 +280,10 @@ export class MediaInfoController {
           work: this.#work,
           seasons: { ...this.#seasons },
           episodes: { ...this.#episodes },
-          pictures: { ...this.#pictures }
+          pictures: { ...this.#pictures },
+          markers: Object.fromEntries([...this.#itemsByIndex].map(([index, item]) => [index, item.episode])),
+          files: Object.fromEntries(this.#filesByIndex),
+          releaseName: this.#contents?.name ?? this.#selectionNames[0] ?? ""
         }
       })
     );

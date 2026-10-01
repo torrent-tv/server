@@ -264,12 +264,13 @@ export function seasonFiles(items, work, season) {
  *   list that shows several seasons without grouping them.
  * @returns {string}
  */
-export function episodeLabel(match, { withSeason = null } = {}) {
-  const numbers = match.episodes.map((episode) => episode.number);
+export function episodeLabel(match, { withSeason = null, releaseNumbers = null } = {}) {
+  const numbers = releaseNumbers?.length ? releaseNumbers : match.episodes.map((episode) => episode.number);
   const number = numbers.length > 1 ? `${numbers[0]}–${numbers[numbers.length - 1]}` : String(numbers[0]);
-  const names = match.episodes.map((episode) => episode.name).filter((name) => name.length > 0);
+  const names = match.episodes.map((episode) => episode.name).filter((name) => name?.length > 0 && !/^Episode\s+\d+$/i.test(name));
   const title = names.length > 0 ? names.join(" / ") : `Episode ${number}`;
   const part = match.part != null ? ` (part ${match.part})` : "";
+  if (names.length === 0) return `${withSeason != null ? `Season ${withSeason} | ` : ""}${title}${part}`;
   const prefix = withSeason != null ? `S${withSeason} E${number}.` : `${number}.`;
   return `${prefix} ${title}${part}`;
 }
@@ -305,8 +306,8 @@ export function artFor(state, fileIndex) {
   const work = state.pictures?.[String(fileIndex)] ?? state.work;
   return (
     imageUrl(IMAGE_SIZE.still, still) ??
-    imageUrl(IMAGE_SIZE.still, work?.backdrop) ??
-    imageUrl(IMAGE_SIZE.poster, work?.poster)
+    imageUrl(IMAGE_SIZE.still, (work?.normalized ?? work)?.backdrop) ??
+    imageUrl(IMAGE_SIZE.poster, (work?.normalized ?? work)?.poster)
   );
 }
 
@@ -321,7 +322,8 @@ export function workFor(state, fileIndex) {
   if (!state) {
     return null;
   }
-  return state.pictures?.[String(fileIndex)] ?? state.work ?? null;
+  const work = state.pictures?.[String(fileIndex)] ?? state.work ?? null;
+  return work?.normalized ?? work;
 }
 
 /**
@@ -331,6 +333,7 @@ export function workFor(state, fileIndex) {
  * @returns {string | null}
  */
 export function workLine(work) {
+  work = work?.normalized ?? work;
   if (!work?.title) {
     return null;
   }
@@ -353,18 +356,26 @@ export function playlistNaming(state) {
   if (!state) {
     return {};
   }
+  const markerOf = file => state.markers?.[String(file?.index)];
   const matchOf = (file) => state.episodes?.[String(file?.index)] ?? null;
   const seasonsMatched = new Set(Object.values(state.episodes ?? {}).map((match) => match.season));
   const spansSeasons = seasonsMatched.size > 1;
   return {
+    groupKey(file) {
+      const marker = markerOf(file);
+      if (!marker) return null;
+      const season = marker?.season ?? matchOf(file)?.season ?? seasonOf(marker, state.work?.normalized ?? state.work);
+      return Number.isInteger(season) ? "season:" + season : null;
+    },
     fileLabel(file, { grouped }) {
       const match = matchOf(file);
       if (match) {
-        return episodeLabel(match, { withSeason: !grouped && spansSeasons ? match.season : null });
+        return episodeLabel(match, { withSeason: !grouped && spansSeasons ? match.season : null, releaseNumbers: markerOf(file)?.episodes });
       }
-      return workLine(state.pictures?.[String(file?.index)] ?? null);
+      return markerLabel(state.markers?.[String(file?.index)], !grouped && spansSeasons) ?? workLine(state.pictures?.[String(file?.index)] ?? null);
     },
-    groupLabel(_folder, files) {
+    groupLabel(folder, files) {
+      if (folder.startsWith("season:")) { const number = Number(folder.slice(7)); return state.seasons?.[number] || (number === 0 ? "Specials" : "Season " + number); }
       const seasons = new Set(files.map((file) => matchOf(file)?.season ?? null));
       if (seasons.size !== 1 || seasons.has(null)) {
         return null;
@@ -374,4 +385,53 @@ export function playlistNaming(state) {
       return name && name.length > 0 ? name : season === 0 ? "Specials" : `Season ${season}`;
     }
   };
+}
+
+/** A release number remains useful even when provider matching fails. */
+export function markerLabel(marker, withSeason = false) {
+  if (!marker?.episodes?.length) return null;
+  const number = marker.episodes.join("–");
+  const season = withSeason && Number.isInteger(marker.season) ? "Season " + marker.season + " | " : "";
+  return season + "Episode " + number + (marker.part != null ? " (part " + marker.part + ")" : "");
+}
+
+export function pageTitle(state, index) {
+  if (!state) return "Torrent TV";
+  const work = workFor(state, index);
+  const title = work?.title || state.releaseName;
+  if (!title) return "Torrent TV";
+  const parts = ["Torrent TV", title];
+  const marker = state.markers?.[String(index)];
+  const match = state.episodes?.[String(index)];
+  const season = marker?.season ?? match?.season;
+  if (Number.isInteger(season)) parts.push(season === 0 ? "Specials" : "Season " + season);
+  const number = marker?.episodes?.join("–") || match?.episodes?.map(e => e.number).join("–");
+  if (number) {
+    const names = match?.episodes?.map(e => e.name).filter(name => name && !/^Episode\s+\d+$/i.test(name)).join(" / ");
+    parts.push("Episode " + number + (names ? ": " + names : ""));
+  }
+  return parts.join(" | ");
+}
+
+/** Select an orientation and the smallest sufficient TMDB rendition. */
+export function playerArt(state, index, width, height, dpr = 1) {
+  const work = workFor(state, index);
+  const images = work?.images ?? [];
+  const portrait = height > width;
+  const preferred = images.filter(i => (i.role ?? i.kind) === (portrait ? "poster" : "backdrop"));
+  const alternate = images.filter(i => (i.role ?? i.kind) === (portrait ? "backdrop" : "poster"));
+  const still = state?.episodes?.[String(index)]?.episodes.find(e => e.still)?.still;
+  const candidates = [...preferred, ...(still ? [{file: still, kind: "still"}] : []), ...alternate];
+  if (!candidates.length) {
+    const file = portrait ? work?.poster || work?.backdrop || still : work?.backdrop || still || work?.poster;
+    if (file) candidates.push({file, kind: file === work?.poster ? "poster" : "backdrop"});
+  }
+  const sufficient = i => i.width >= width * dpr && i.height >= height * dpr;
+  const image = preferred.find(sufficient) ?? preferred.reduce((best, i) => !best || i.width * i.height > best.width * best.height ? i : best, null) ?? candidates[0];
+  if (!image) return null;
+  const need = image.width && image.height ? Math.max(width * dpr, height * dpr * image.width / image.height) : Infinity;
+  const role = image.role ?? image.kind;
+  const sizes = role === "poster" ? [342, 500, 780] : role === "still" ? [300] : [300, 780, 1280];
+  const size = sizes.find(n => n >= need && (!image.width || n <= image.width));
+  return {url: imageUrl(size ? "w" + size : "original", image.file), width: image.width, height: image.height};
 }

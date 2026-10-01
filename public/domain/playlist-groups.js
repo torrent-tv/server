@@ -55,21 +55,21 @@ export function playlistRows(files, naming = {}) {
   /** @type {Map<string, PlaylistFile[]>} */
   const byFolder = new Map();
   for (const file of list) {
-    const folder = folderOf(file);
+    const folder = naming.groupKey?.(file) ?? folderOf(file);
     if (folder.length > 0) {
       byFolder.set(folder, [...(byFolder.get(folder) ?? []), file]);
     }
   }
   const isGroup = (folder) => {
     const size = byFolder.get(folder)?.length ?? 0;
-    return size >= MIN_GROUP_SIZE && size < list.length;
+    return folder.startsWith("season:") || (size >= MIN_GROUP_SIZE && size < list.length);
   };
 
   /** @type {Array<PlaylistFileRow | PlaylistGroupRow>} */
   const rows = [];
   const placed = new Set();
   for (const file of list) {
-    const folder = folderOf(file);
+    const folder = naming.groupKey?.(file) ?? folderOf(file);
     if (!isGroup(folder)) {
       rows.push({ kind: "file", file, label: naming.fileLabel?.(file, { grouped: false }) ?? labelOf(file) });
       continue;
