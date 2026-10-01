@@ -140,6 +140,8 @@ app.get("/api/metadata/image/:size/:file", async (req, reply) =>
 app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
 app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
 
+app.get("/about", (_req, reply) => reply.sendFile("about.html"));
+
 app.get("/env.js", async (req, reply) => handleEnvGet(req, reply, { version }));
 
 await app.register(fastifyStatic, {

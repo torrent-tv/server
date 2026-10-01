@@ -167,3 +167,17 @@
     }
   }
 }
+
+#torrent__about {
+  position: fixed;
+  inset-block-end: max(1rem, env(safe-area-inset-bottom));
+  inset-inline: 0;
+  margin-inline: auto;
+  inline-size: fit-content;
+  padding: .5rem 1rem;
+  font-size: .875rem;
+  color: light-dark(#666, #aaa);
+  text-decoration: none;
+}
+#torrent__about:focus-visible { outline: .125rem solid currentColor; outline-offset: .125rem; }
+#torrent__about:hover { text-decoration: underline; }

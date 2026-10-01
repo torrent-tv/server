@@ -282,7 +282,8 @@ test("the image fetcher serves only TMDB images and passes their caching headers
   const answer = await images.fetch("w342", "abcdefgh.jpg");
   assert.equal(answer.headers["cache-control"], "public, max-age=31919000");
   assert.deepEqual(asked, ["https://image.tmdb.org/t/p/w342/abcdefgh.jpg"]);
-  await assert.rejects(images.fetch("original", "abcdefgh.jpg"), MetadataUnavailableError);
+  await images.fetch("original", "abcdefgh.jpg");
+  await assert.rejects(images.fetch("w9999", "abcdefgh.jpg"), MetadataUnavailableError);
   await assert.rejects(images.fetch("w342", "../etc/passwd"), MetadataUnavailableError);
 });
 

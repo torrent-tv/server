@@ -80,7 +80,7 @@ POST /api/proxy-clients/register      register a proxy client
 GET  /api/proxy-clients               list all registered proxy clients
 GET  /api/proxy-clients/health        poll health metrics from all connected proxies
 POST /api/proxy-clients/can-serve     which proxies could sustain a described file
-POST /api/metadata/identify           which work a release is (TMDB), from its names
+POST /api/metadata/identify           which work a release is (TMDB and AniList), from its names
 POST /api/metadata/episodes           which episode of one season each file is
 GET  /api/metadata/image/:size/:file  a TMDB image, with TMDB's caching headers
 GET  /ws/proxy-tunnel                 persistent WebSocket tunnel from proxy → server
@@ -96,6 +96,8 @@ token read from the file named by `TMDB_READ_TOKEN_FILE` (see `infra/README.md`,
 "Secrets") and without it answers `unavailable`. Rules, limits and measurements:
 `research/metadata-enrichment-2026-09-30.md` in the parent folder. Nothing on the
 playback path waits for these routes.
+
+The provider-separated response format, anime routing and artwork selection are described in [METADATA.md](METADATA.md).
 
 ### Proxy Tunnel (`/ws/proxy-tunnel`)
 

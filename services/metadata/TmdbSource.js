@@ -154,7 +154,7 @@ export class TmdbSource {
    * @returns {Promise<Work>}
    */
   async work(kind, id, language, options) {
-    const body = await this.#get(`/${kind}/${id}`, { language }, MAX_WORK_BYTES, options);
+    const body = await this.#get(`/${kind}/${id}`, { language, append_to_response: "images,keywords", include_image_language: "en,null" }, MAX_WORK_BYTES, options);
     const seasons = kind === "tv" && Array.isArray(body?.seasons) ? body.seasons : [];
     return {
       kind,
@@ -165,6 +165,13 @@ export class TmdbSource {
       overview: String(body?.overview ?? ""),
       poster: imageFile(body?.poster_path),
       backdrop: imageFile(body?.backdrop_path),
+      anime: [...(body?.keywords?.keywords ?? []), ...(body?.keywords?.results ?? [])].some(k => String(k.name).toLowerCase() === "anime"),
+      images: [
+        ...(body?.images?.backdrops ?? []).map(i => ({ ...i, kind: "backdrop" })),
+        ...(body?.images?.posters ?? []).map(i => ({ ...i, kind: "poster" }))
+      ].filter(i => imageFile(i.file_path) && Number.isInteger(i.width) && i.width > 0 && Number.isInteger(i.height) && i.height > 0)
+        .sort((a, b) => (b.iso_639_1 === "en") - (a.iso_639_1 === "en") || (b.vote_average ?? 0) - (a.vote_average ?? 0))
+        .filter((image, index, all) => all.slice(0, index).filter(i => i.kind === image.kind).length < 6).map(i => ({ file: imageFile(i.file_path), width: i.width, height: i.height, kind: i.kind })),
       seasons: seasons
         .filter((season) => Number.isInteger(season?.season_number))
         .map((season) => ({

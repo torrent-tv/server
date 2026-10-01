@@ -1,3 +1,9 @@
+## 0.36.1
+
+- **New**: Add About with provider credits, release titles in the playlist and page title, and English episode labels when only release numbers are known.
+- **New**: Query AniList for anime hints, TMDB anime records, and releases absent from TMDB; require exact titles and years, retain TMDB episode matching, and keep a single named season expanded.
+- **New**: Select portrait or landscape work artwork for the player, size it for device pixel density, and center insufficient originals without enlargement.
+
 ## 0.36.0
 
 - **New**: When no main or original title matches and the names state a year, a release is also compared with TMDB's alternative titles of the first five results the year admits, which hold the transliterated and romanized spellings: `Trudno byt' bogom` for "Hard to Be a God", `Hauru no Ugoku Shiro` for "Howl's Moving Castle". The comparison is exact equality, and two works matching are ambiguous. A series still unidentified then goes on to its episode names, which can also choose between two works the alternative titles both matched.

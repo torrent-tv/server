@@ -1,0 +1,12 @@
+body { margin: 0; background: var(--view-bg); color: var(--view-text); font-family: system-ui, sans-serif; line-height: 1.6; }
+header, main, footer { max-inline-size: 42rem; margin-inline: auto; padding-inline: clamp(1.5rem, 5vw, 3rem); }
+header { padding-block: 2rem; font-size: 1.5rem; font-weight: 700; }
+main { padding-block: 2rem 4rem; }
+h1 { font-size: clamp(3rem, 10vw, 5rem); line-height: 1.1; margin-block: 0 2rem; }
+h2 { font-size: 1.5rem; line-height: 1.3; margin-block: 3rem 1.5rem; }
+p { max-inline-size: 60ch; color: var(--view-text-muted); }
+a { color: inherit; text-underline-offset: .2em; }
+a:focus-visible { outline: .125rem solid var(--view-accent); outline-offset: .25rem; }
+header a { text-decoration: none; }
+.tmdb-logo { inline-size: 9rem; block-size: auto; }
+footer { padding-block: 1.5rem 3rem; font-size: .875rem; }

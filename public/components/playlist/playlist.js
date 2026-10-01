@@ -58,8 +58,10 @@ export class Playlist {
    * @param {CustomEvent} event
    */
   #onMediaInfo = (event) => {
+    const before = playlistRows(this.#videoFiles, playlistNaming(this.#media)).map(r => r.folder ?? r.file?.index).join("|");
     this.#media = event instanceof CustomEvent ? event.detail : null;
-    this.#applyNames();
+    const after = playlistRows(this.#videoFiles, playlistNaming(this.#media)).map(r => r.folder ?? r.file?.index).join("|");
+    if (before !== after) this.#renderList(); else this.#applyNames();
   };
 
   /** @param {CustomEvent} event */
@@ -67,6 +69,7 @@ export class Playlist {
     const payload = event instanceof CustomEvent ? event.detail : null;
     const fileIndex = Number(payload?.fileIndex);
     this.#currentFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
+    this.#applyNames();
     this.#updateActiveHighlight();
   };
 
@@ -165,18 +168,24 @@ export class Playlist {
 
   #renderList() {
     this.#root.textContent = "";
+    const heading = document.createElement("li");
+    heading.id = "playlist__heading";
+    this.#root.append(heading);
     this.#summaries = new Map();
     /** Rows a viewer sees without opening anything. @type {number[]} */
     const inView = [];
-    for (const row of playlistRows(this.#videoFiles, playlistNaming(this.#media))) {
+    const rows = playlistRows(this.#videoFiles, playlistNaming(this.#media));
+    const singleSeason = rows.filter(r => r.kind === "group" && r.folder.startsWith("season:")).length === 1;
+    for (const row of rows) {
       if (row.kind === "file") {
         this.#root.append(this.#fileItem(row.file, row.label));
         inView.push(Number(row.file?.index));
         continue;
       }
       const item = document.createElement("li");
-      const group = document.createElement("details");
-      const summary = document.createElement("summary");
+      const fixed = singleSeason && row.folder.startsWith("season:");
+      const group = document.createElement(fixed ? "section" : "details");
+      const summary = document.createElement(fixed ? "h2" : "summary");
       summary.textContent = row.label;
       this.#summaries.set(row.folder, summary);
       const files = document.createElement("ul");
@@ -191,10 +200,12 @@ export class Playlist {
           this.#wantNames(memberIndexes);
         }
       });
+      if (fixed) inView.push(...memberIndexes);
       group.append(summary, files);
       item.append(group);
       this.#root.append(item);
     }
+    this.#applyNames();
     this.#wantNames(inView);
     this.#updateActiveHighlight();
   }
@@ -203,6 +214,12 @@ export class Playlist {
    * Put the current names on the rows already built.
    */
   #applyNames() {
+    const heading = this.#root.querySelector("#playlist__heading");
+    if (heading) {
+      const activeWork = this.#media?.pictures?.[String(this.#currentFileIndex)] ?? this.#media?.work;
+      heading.textContent = (activeWork?.normalized ?? activeWork)?.title || this.#media?.releaseName || "";
+      heading.hidden = !heading.textContent;
+    }
     const labels = new Map();
     for (const row of playlistRows(this.#videoFiles, playlistNaming(this.#media))) {
       if (row.kind === "file") {

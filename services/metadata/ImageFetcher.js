@@ -19,13 +19,13 @@ import { MetadataUnavailableError } from "./RequestGate.js";
 const IMAGE_ROOT = "https://image.tmdb.org/t/p";
 
 /** Sizes the page asks for. */
-export const IMAGE_SIZES = new Set(["w185", "w300", "w342", "w780"]);
+export const IMAGE_SIZES = new Set(["w185", "w300", "w342", "w500", "w780", "w1280", "original"]);
 
 /** A TMDB image file name. */
 export const IMAGE_FILE = /^[A-Za-z0-9]{8,64}\.(?:jpg|png)$/;
 
 /** Largest image read, in bytes. */
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 /** How long one image may take. */
 const IMAGE_BUDGET_MS = 5_000;

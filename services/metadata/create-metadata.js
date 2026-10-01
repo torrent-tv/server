@@ -1,3 +1,4 @@
+import { AnimeMetadata } from "./AnimeMetadata.js";
 /**
  * @file The metadata components, built once at startup.
  *
@@ -61,5 +62,5 @@ export function createMetadata({ tokenFile }) {
   // Images do not count against the API's rate: they come from TMDB's image
   // host, which states no such limit. Concurrency and the queue still bound them.
   const images = new ImageFetcher({ gate: new RequestGate({ concurrency: 4, perSecond: Infinity, queueLimit: 32 }) });
-  return { service, images };
+  return { service: new AnimeMetadata(service), images };
 }
