@@ -111,8 +111,13 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
      * @param {{ onSuccess: Function, onError: Function, onTimeout: Function }} callbacks
      */
     load(context, _config, callbacks) {
+      this._abortController?.abort();
+      const controller = new AbortController();
+      this._abortController = controller;
+      const cancelled = () => controller.signal.aborted || this._abortController !== controller;
       this._aborted = false;
       const startedAt = performance.now();
+      this.stats.aborted = false;
       this.stats.loading.start = startedAt;
       this.stats.loading.first = startedAt;
       const parsed = new URL(context.url);
@@ -134,12 +139,12 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
       // the exception escaping the loader and causing an internalException.
       let fetchPromise;
       try {
-        fetchPromise = transport.fetch(path);
+        fetchPromise = transport.fetch(path, { signal: controller.signal });
       } catch (syncErr) {
         // After the abort check, not before it: a load the player itself
         // abandoned is not a failure to report, and reporting it would put a
         // warning in the log for every ordinary cancellation.
-        if (!this._aborted) {
+        if (!cancelled()) {
           console.warn(
             `[torrent-tv][hls-loader] the request for ${path} could not be issued: ${syncErr?.message ?? String(syncErr)}`
           );
@@ -162,7 +167,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
 
       fetchPromise
         .then(async (response) => {
-          if (this._aborted) return;
+          if (cancelled()) return;
 
           if (!response.ok) {
             // WHAT THE PROXY SAID, kept for the viewer. A refusal states its
@@ -182,6 +187,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
               // silent-ok: a body that is not our own JSON says nothing, and
               // the status alone still reaches the player.
             }
+            if (cancelled()) return;
             if (said) {
               noteProxyRefusal(said);
             }
@@ -208,7 +214,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
             data = await response.text();
           }
 
-          if (this._aborted) return;
+          if (cancelled()) return;
 
           const endedAt = performance.now();
           const byteLength = typeof data === "string" ? data.length : data.byteLength;
@@ -279,7 +285,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
           );
         })
         .catch((error) => {
-          if (this._aborted) return;
+          if (cancelled()) return;
           // If onSuccess was already called, the exception originated inside
           // HLS.js internals — do not report it as a load error; HLS.js handles
           // it through its own error pipeline.
@@ -294,10 +300,12 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
 
     abort() {
       this._aborted = true;
+      this._abortController?.abort();
+      this.stats.aborted = true;
     }
 
     destroy() {
-      this._aborted = true;
+      this.abort();
     }
   };
 }

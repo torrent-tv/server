@@ -39,12 +39,16 @@ function isNativeHlsSupported(videoElement) {
  * @param {number} seconds
  * @returns {void}
  */
+const pendingRestores = new WeakMap();
+
 function restorePosition(videoElement, seconds) {
   if (!(videoElement instanceof HTMLVideoElement)) {
     return;
   }
+  pendingRestores.get(videoElement)?.();
   const apply = () => {
-    if (Math.abs(videoElement.currentTime - seconds) > 1) {
+    pendingRestores.delete(videoElement);
+    if (videoElement.currentTime !== seconds) {
       videoElement.currentTime = seconds;
       console.debug(`[torrent-tv][hls] position restored to ${seconds.toFixed(1)}s after recovery`);
     }
@@ -53,6 +57,7 @@ function restorePosition(videoElement, seconds) {
     apply();
     return;
   }
+  pendingRestores.set(videoElement, () => videoElement.removeEventListener("loadedmetadata", apply));
   videoElement.addEventListener("loadedmetadata", apply, { once: true });
 }
 
@@ -714,6 +719,10 @@ export function createHlsPlayer(onLog) {
     /** Destroy any active HLS.js instance and release its resources. */
     clear() {
       stopCushionSampler();
+      if (attachedMedia) {
+        pendingRestores.get(attachedMedia)?.();
+        pendingRestores.delete(attachedMedia);
+      }
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
@@ -771,6 +780,16 @@ export function createHlsPlayer(onLog) {
      * @param {number} position - Seconds on the timeline.
      * @returns {boolean} False when there is no hls.js instance to steer.
      */
+    stopLoad() {
+      hlsInstance?.stopLoad();
+    },
+    seekTo(position, videoElement) {
+      if (!hlsInstance || !Number.isFinite(position) || position < 0) return false;
+      hlsInstance.stopLoad();
+      restorePosition(videoElement, position);
+      hlsInstance.startLoad(position);
+      return true;
+    },
     resumeLoadAt(position) {
       if (!hlsInstance || !Number.isFinite(position) || position < 0) {
         return false;
@@ -1058,7 +1077,7 @@ export function createHlsPlayer(onLog) {
           // the "it jumped back to the start" the field reported on 2026-08-11:
           // the position was never lost by a seek, it was lost by the recovery
           // from an unrelated error a moment earlier.
-          const resumeAt = videoElement instanceof HTMLVideoElement && videoElement.currentTime > 0
+          const failedAt = videoElement instanceof HTMLVideoElement && videoElement.currentTime > 0
             ? videoElement.currentTime
             : -1;
           window.setTimeout(() => {
@@ -1066,6 +1085,10 @@ export function createHlsPlayer(onLog) {
             if (hlsInstance !== instance) {
               return; // superseded / cleared
             }
+            const selectedAt = options.getStartPositionSeconds?.();
+            const resumeAt = videoElement.readyState === 0 && Number.isFinite(selectedAt)
+              ? selectedAt
+              : Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : failedAt;
             try {
               if (type === HlsClass.ErrorTypes.MEDIA_ERROR) {
                 instance.recoverMediaError();
@@ -1077,7 +1100,7 @@ export function createHlsPlayer(onLog) {
                   restorePosition(videoElement, resumeAt);
                 }
               } else {
-                instance.startLoad(-1);
+                instance.startLoad(resumeAt);
               }
               console.debug(
                 `[torrent-tv][hls] recovered fatal ${type}` +
@@ -1169,9 +1192,7 @@ export function createHlsPlayer(onLog) {
             // Deferred to here by `autoStartLoad: false` above, so the first
             // fragment fetched belongs to the variant we chose.
             instance.startLoad(
-              typeof options.startPosition === "number" && options.startPosition > 0
-                ? options.startPosition
-                : -1
+              options.getStartPositionSeconds?.() ?? options.startPosition ?? -1
             );
             resolve();
           };

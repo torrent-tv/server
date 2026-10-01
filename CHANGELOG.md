@@ -1,3 +1,8 @@
+## 0.36.4
+
+- **Fix**: Capture timeline seek requests before video metadata is available, acknowledge the selected position with the proxy before restarting HLS, and retain it through allocation, recovery, and URL reloads.
+- **Fix**: Abort outstanding WebRTC segment requests when seeking or replacing playback; discard superseded responses and prebuffer work.
+
 ## 0.36.3
 
 - **Fix**: Hide the playlist button and prevent opening the playlist when fewer than two video files are available; close an open playlist when switching to a single-video release.
