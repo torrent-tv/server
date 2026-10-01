@@ -37,6 +37,10 @@ function toSeconds(hours, minutes, seconds, milliseconds) {
  * @property {number} startSeconds
  * @property {number} endSeconds
  * @property {string} text
+ * @property {string} [id] - The cue identifier (W3C WebVTT §4.1). Our proxy
+ *   writes its found-order number there, which is how it names a cue it later
+ *   takes back.
+ * @property {number} [seq] - The same number, as a pushed cue carries it.
  */
 
 /**
@@ -75,7 +79,8 @@ export function parseVttCues(vtt) {
     if (!(endSeconds > startSeconds)) {
       continue;
     }
-    cues.push({ startSeconds, endSeconds, text });
+    const id = timingAt > 0 ? lines[timingAt - 1].trim() : "";
+    cues.push(id ? { startSeconds, endSeconds, text, id } : { startSeconds, endSeconds, text });
   }
   return cues;
 }
@@ -89,6 +94,19 @@ export function parseVttCues(vtt) {
  */
 function keyOf(cue) {
   return `${cue.startSeconds}|${cue.endSeconds}|${cue.text}`;
+}
+
+/**
+ * The name a cue goes by, where the proxy gave it one.
+ *
+ * @param {ParsedCue} cue
+ * @returns {string}
+ */
+function idOf(cue) {
+  if (typeof cue.id === "string" && cue.id.length > 0) {
+    return cue.id;
+  }
+  return Number.isInteger(cue.seq) ? String(cue.seq) : "";
 }
 
 /**
@@ -113,9 +131,12 @@ function keyOf(cue) {
  * @param {ParsedCue[]} cues
  * @param {Set<string>} seen - Keys of the cues this track already holds; added
  *   to as they are appended, so the caller keeps one per track.
+ * @param {Map<string, VTTCue>} [byId] - The cues added, by the name the proxy
+ *   gave them, so one can be taken back later even while the track is
+ *   disabled and `track.cues` reads null.
  * @returns {{ added: number, knownUntilSeconds: number }}
  */
-export function appendCues(track, cues, seen) {
+export function appendCues(track, cues, seen, byId = null) {
   let until = -1;
   let added = 0;
   for (const cue of cues) {
@@ -124,7 +145,13 @@ export function appendCues(track, cues, seen) {
       continue;
     }
     try {
-      track.addCue(new VTTCue(cue.startSeconds, cue.endSeconds, cue.text));
+      const vttCue = new VTTCue(cue.startSeconds, cue.endSeconds, cue.text);
+      const id = idOf(cue);
+      if (id) {
+        vttCue.id = id;
+        byId?.set(id, vttCue);
+      }
+      track.addCue(vttCue);
       seen.add(key);
       added += 1;
       until = Math.max(until, cue.startSeconds);
@@ -136,4 +163,35 @@ export function appendCues(track, cues, seen) {
     }
   }
   return { added, knownUntilSeconds: until };
+}
+
+/**
+ * Take back the cues the proxy has withdrawn, by the names it gave them.
+ *
+ * @param {TextTrack} track
+ * @param {Array<number | string>} ids
+ * @param {Set<string>} seen - The track's record of what it holds; the keys of
+ *   the cues removed leave it.
+ * @param {Map<string, VTTCue>} byId
+ * @returns {number} How many were removed.
+ */
+export function removeCues(track, ids, seen, byId) {
+  let removed = 0;
+  for (const raw of Array.isArray(ids) ? ids : []) {
+    const id = String(raw);
+    const cue = byId.get(id);
+    if (!cue) {
+      continue;
+    }
+    byId.delete(id);
+    seen.delete(`${cue.startTime}|${cue.endTime}|${cue.text}`);
+    try {
+      track.removeCue(cue);
+      removed += 1;
+    } catch (error) {
+      // silent-ok: a cue the track no longer holds has nothing left to remove.
+      void error;
+    }
+  }
+  return removed;
 }

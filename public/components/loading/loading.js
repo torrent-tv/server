@@ -1682,6 +1682,13 @@ export class Loading extends StateDerivedView {
     document.addEventListener(LOADING_EVENTS.PROCESS_MAGNET, this.#onProcessMagnet);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
     document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
+    // The subtitle menu and its key belong to the player view; the tracks they
+    // act on belong to the subtitle component, which is the only thing here
+    // that changes a track's mode.
+    document.addEventListener(PLAYER_EVENTS.SELECT_SUBTITLE_TRACK, (event) => {
+      this.#subtitlePlayback.select(event instanceof CustomEvent ? String(event.detail?.key ?? "") : "");
+    });
+    document.addEventListener(PLAYER_EVENTS.TOGGLE_SUBTITLES, () => this.#subtitlePlayback.toggle());
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
     document.addEventListener("mediaseekrequest", this.#onMediaSeekRequest, true);
@@ -4018,25 +4025,7 @@ export class Loading extends StateDerivedView {
 
   /** @param {number} fileIndex */
   #loadSubtitlesForVideo(fileIndex) {
-    return this.#subtitlePlayback.loadForVideo(fileIndex, {
-      primaryAudioLanguage: this.#primaryAudioLanguage()
-    });
-  }
-
-  /**
-   * The film's primary audio-track language, used as a last-resort subtitle
-   * language (forced-signs subs usually match the dub) — from the plan probe.
-   * @returns {{ code: string, name: string } | null}
-   */
-  #primaryAudioLanguage() {
-    const audio = this.#audioTracks;
-    for (const t of audio) {
-      const code = trackLanguageCode(t?.language ?? "");
-      if (code && code !== "und") {
-        return { code, name: languageName(code) || code };
-      }
-    }
-    return null;
+    return this.#subtitlePlayback.loadForVideo(fileIndex);
   }
 
   /**

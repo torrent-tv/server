@@ -47,7 +47,8 @@
     }
   }
 
-  #player__audio-button svg {
+  #player__audio-button svg,
+  #player__subtitle-button svg {
     inline-size: 1.5rem;
     block-size: 1.5rem;
     /* Override media-chrome's filled-icon default for this outline icon. */
@@ -202,12 +203,6 @@
     &:focus-visible {
       background: var(--media-control-hover-background, rgb(50 50 70 / 0.7));
     }
-  }
-
-  /* Hide the captions button until subtitle tracks exist (recommended
-     media-chrome pattern). */
-  media-captions-menu-button:not([mediasubtitleslist]) {
-    display: none;
   }
 
   /* media-chrome components (and .player__button) set their own display,

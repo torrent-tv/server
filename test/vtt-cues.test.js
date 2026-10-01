@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendCues, parseVttCues } from "../public/domain/vtt-cues.js";
+import { appendCues, parseVttCues, removeCues } from "../public/domain/vtt-cues.js";
 
 const SAMPLE = `WEBVTT
 
@@ -22,7 +22,7 @@ test("cues are read with their times and their text", () => {
   const cues = parseVttCues(SAMPLE);
 
   assert.equal(cues.length, 2);
-  assert.deepEqual(cues[0], { startSeconds: 1.5, endSeconds: 3, text: "First line" });
+  assert.deepEqual(cues[0], { startSeconds: 1.5, endSeconds: 3, text: "First line", id: "1" }, "the identifier line is the cue's id");
   assert.equal(cues[1].startSeconds, 4.25);
   assert.equal(cues[1].text, "Second line\nover two rows", "a cue keeps the rows it was written with");
 });
@@ -127,4 +127,28 @@ test("the same cue delivered twice by different routes is added once", () => {
 
   assert.equal(second.added, 0);
   assert.equal(added.length, 1);
+});
+
+test("a cue the proxy takes back is removed by the number it was sent under, even from a disabled track", () => {
+  const held = [];
+  const track = {
+    addCue: (cue) => held.push(cue),
+    removeCue: (cue) => held.splice(held.indexOf(cue), 1)
+  };
+  globalThis.VTTCue = class {
+    constructor(start, end, text) {
+      Object.assign(this, { startTime: start, endTime: end, text, id: "" });
+    }
+  };
+  const seen = new Set();
+  const byId = new Map();
+  appendCues(track, [
+    { startSeconds: 1, endSeconds: 2, text: "real", seq: 1 },
+    { startSeconds: 3, endSeconds: 4, text: "false", seq: 2 }
+  ], seen, byId);
+  assert.equal(removeCues(track, [2], seen, byId), 1);
+  assert.deepEqual(held.map((cue) => cue.text), ["real"]);
+  assert.equal(removeCues(track, [2, 9], seen, byId), 0, "a name it no longer holds is nothing to remove");
+  const back = appendCues(track, [{ startSeconds: 3, endSeconds: 4, text: "false", seq: 2 }], seen, byId);
+  assert.equal(back.added, 1, "and the record of what it holds let it go too");
 });

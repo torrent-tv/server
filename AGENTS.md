@@ -26,8 +26,13 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
   - `components/loading/loading.js` — playback flow, transport orchestration,
     and per-stream codec decisions.
   - `components/loading/SubtitlePlayback.js` — subtitle track elements, sidecar
-    loading, embedded cue delivery, reconnect subscription, and remembered
-    subtitle choice.
+    loading, embedded cue delivery, reconnect subscription, remembered
+    subtitle choice, and the subtitle menu's items. Each item names its track
+    by a key kept for the life of the track (`domain/subtitle-menu.js`), never
+    by its label: a label changes once the text has been read. It is the only
+    thing that changes a track's mode; the player draws the menu and reports
+    the key chosen, and the subtitles key `c` is this page's, not media-chrome's
+    (`hotkeys="noc"`).
   - `domain/torrent-session.js` — proxy registration, playback plan, HLS start.
     Seeking is server-side (no client-side session restart).
     The browser and proxy playback contract is documented in

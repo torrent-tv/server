@@ -10,6 +10,7 @@ import {
 } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { pauseWithoutIntent } from "../../domain/playback-intent.js";
+import { isTypingTarget } from "../../domain/subtitle-menu.js";
 import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
 
 /**
@@ -31,6 +32,8 @@ export class Player extends StateDerivedView {
     playlistToggle: "#player__playlist-toggle",
     audioButton: "#player__audio-button",
     audioMenu: "#player__audio-menu",
+    subtitleButton: "#player__subtitle-button",
+    subtitleMenu: "#player__subtitle-menu",
     buffering: "#player__buffering",
     bufferingPeers: "#player__buffering-peers",
     share: "#player__share",
@@ -54,6 +57,8 @@ export class Player extends StateDerivedView {
   #closeButton;
   #audioButton;
   #audioMenu;
+  #subtitleButton;
+  #subtitleMenu;
   #buffering;
   #bufferingPeers;
   #share;
@@ -582,6 +587,8 @@ export class Player extends StateDerivedView {
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
     this.#audioButton = document.querySelector(Player.SELECTOR.audioButton);
     this.#audioMenu = document.querySelector(Player.SELECTOR.audioMenu);
+    this.#subtitleButton = document.querySelector(Player.SELECTOR.subtitleButton);
+    this.#subtitleMenu = document.querySelector(Player.SELECTOR.subtitleMenu);
     this.#buffering = document.querySelector(Player.SELECTOR.buffering);
     this.#bufferingPeers = document.querySelector(Player.SELECTOR.bufferingPeers);
     this.#share = document.querySelector(Player.SELECTOR.share);
@@ -590,6 +597,7 @@ export class Player extends StateDerivedView {
     if (
       !this.#root || !this.#controller || !this.#video || !this.#playButton || !this.#playlistToggle ||
       !this.#closeButton || !this.#audioButton || !this.#audioMenu ||
+      !this.#subtitleButton || !this.#subtitleMenu ||
       !this.#buffering || !this.#bufferingPeers ||
       !this.#share || !this.#shareMenu
     ) {
@@ -626,7 +634,75 @@ export class Player extends StateDerivedView {
     this.#controller.addEventListener("click", this.#onControllerClick);
     document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
     this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
+    document.addEventListener(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, this.#onSetSubtitleTracks);
+    this.#subtitleMenu.addEventListener("click", this.#onSubtitleMenuClick);
+    this.#controller.addEventListener("keydown", this.#onControllerKeydown);
   }
+
+  /**
+   * Draw the subtitle menu from the items the subtitle component states.
+   *
+   * Every item carries the KEY of its track; the label is only what is shown,
+   * and it may change while the menu is open without the item losing its
+   * track. "Off" is the item with the empty key.
+   *
+   * @param {CustomEvent} event
+   */
+  #onSetSubtitleTracks = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const items = Array.isArray(detail?.items) ? detail.items : [];
+    for (const item of this.#subtitleMenu.querySelectorAll("media-chrome-menu-item")) {
+      item.remove();
+    }
+    this.#subtitleButton.hidden = items.length === 0;
+    if (items.length === 0) {
+      this.#subtitleMenu.hidden = true;
+      return;
+    }
+    const off = document.createElement("media-chrome-menu-item");
+    off.setAttribute("type", "radio");
+    off.dataset.subtitleKey = "";
+    off.toggleAttribute("checked", !items.some((item) => item.checked));
+    off.textContent = "Off";
+    this.#subtitleMenu.appendChild(off);
+    for (const item of items) {
+      const element = document.createElement("media-chrome-menu-item");
+      element.setAttribute("type", "radio");
+      element.dataset.subtitleKey = item.key;
+      element.toggleAttribute("checked", item.checked === true);
+      element.textContent = item.text;
+      this.#subtitleMenu.appendChild(element);
+    }
+  };
+
+  /** @param {MouseEvent} event */
+  #onSubtitleMenuClick = (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const item = target.closest("media-chrome-menu-item[data-subtitle-key]");
+    if (!item) return;
+    this.#subtitleMenu.hidden = true;
+    document.dispatchEvent(
+      new CustomEvent(PLAYER_EVENTS.SELECT_SUBTITLE_TRACK, {
+        detail: { key: item.dataset.subtitleKey ?? "" }
+      })
+    );
+  };
+
+  /**
+   * The subtitles key, `c`, which media-chrome's own handler (turned off with
+   * `hotkeys="noc"`) answered by its own preference of language. Ignored
+   * while something is being typed, and while the controller refuses its keys.
+   *
+   * @param {KeyboardEvent} event
+   */
+  #onControllerKeydown = (event) => {
+    if (event.key !== "c" && event.key !== "C") return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (this.#controller.hasAttribute("nohotkeys") || isTypingTarget(event.target)) return;
+    event.preventDefault();
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.TOGGLE_SUBTITLES));
+  };
 
   /**
    * Populate the audio menu from the playback plan's track inventory. The
