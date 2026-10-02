@@ -182,17 +182,17 @@ export class OutputUnavailableError extends Error {
 
 /**
  * A request the proxy answered with `no-capacity`: THIS MACHINE cannot take the
- * video now — no place for one more encoder beside what it already runs, or no
+ * video now — no place for another output beside what it already runs, or no
  * encoding mode it has shown it can hold for this picture (roadmap item 97,
- * step 14). The loading flow answers it by asking the rest of the pool, before
- * anything plays; the message is what the viewer sees only when nobody else can.
+ * step 14). The loading flow can ask the rest of the pool before anything
+ * plays. The reason and measured figures remain available to the caller.
  */
 export class NoCapacityError extends Error {
   /**
    * @param {{ reason?: string, figures?: object | null }} body
    */
   constructor(body) {
-    super("This proxy is busy with other viewers right now. Press Retry in a moment, or pick a different file.");
+    super("This proxy doesn't currently have enough capacity to prepare this video. Press Retry in a moment, or pick another proxy or file.");
     this.name = "NoCapacityError";
     this.outcome = "no-capacity";
     this.reason = typeof body?.reason === "string" ? body.reason : "";

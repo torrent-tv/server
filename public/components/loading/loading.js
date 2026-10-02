@@ -235,8 +235,8 @@ export class Loading extends StateDerivedView {
     // Retry is offered because the answer changes: it is measured against the
     // machine as it is now, and a machine frees up.
     proxyCannotKeepUp:
-      "This proxy can't keep up with this file right now — another viewer on it "
-      + "is using what it has. Press Retry in a moment, or pick a different file.",
+      "This proxy doesn't currently have enough capacity to prepare this video. "
+      + "Press Retry in a moment, or pick a different proxy or file.",
     // A pick that did not happen has to say so. Switching regardless would empty
     // the buffer and stop the picture, which is worse than the quality the
     // viewer already has.
