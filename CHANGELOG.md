@@ -1,3 +1,7 @@
+## 0.36.13
+
+- **Fix**: Describe a proxy capacity refusal without incorrectly blaming another viewer.
+
 ## 0.36.12
 
 - **Fix**: The subtitle menu identifies each track by a key this page keeps, not by its label and language. media-chrome's captions menu found a track again by both; once a track's label changed — "Unknown" becoming a language — its item matched no track, and choosing it turned nothing on. Two tracks with one label each matched the other's item, and choosing one showed both. The menu is now drawn by the player from keyed items, a label change redraws the item without losing the choice, identical labels get an ordinal, and "Off" is an item of its own.

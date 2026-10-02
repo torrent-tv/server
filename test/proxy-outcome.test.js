@@ -146,5 +146,7 @@ test("no-capacity is a retryable machine refusal with its figures kept for the l
   assert.equal(error.reason, "no measured room");
   assert.equal(error.figures, figures);
   assert.equal(error.canRetry, true);
-  assert.match(error.message, /proxy is busy/);
+  assert.match(error.message, /enough capacity/);
+  // The refusal is about this machine; it does not know who else is on it.
+  assert.doesNotMatch(error.message, /viewer/);
 });
