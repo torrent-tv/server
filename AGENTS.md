@@ -139,9 +139,10 @@ commits since the last `v*` tag ask for it (`feat` → minor;
 `fix`/`perf`/`revert` → patch; anything else → none), the release job in the
 `production` environment writes the version and the changelog heading, builds
 and pushes `ghcr.io/torrent-tv/server:<version>` and `:latest`, pushes the tag
-and the commit, creates the GitHub release, and waits until
-`https://webauth.courses/env.js` reports the new version (watchtower rolls the
-image out within five minutes). Browser cache can hide changes — hard-refresh
+and the commit, creates the GitHub release, writes the image (version and digest)
+into `torrent-tv/infra` with the `torrent-tv-release` app, and waits until
+`https://webauth.courses/env.js` reports the new version: infra checks that commit
+and doco-cd applies it on the droplet. Browser cache can hide changes — hard-refresh
 when verifying by hand. A release can also be started from the Actions tab with
 an explicit `patch` or `minor` step.
 

@@ -2,8 +2,8 @@ name: Main
 
 # Every push to main runs the checks and then the release. The release builds and
 # pushes the container image when the Conventional Commits since the last tag ask
-# for one; watchtower on the droplet rolls it out, and the job waits until the
-# live site reports the new version.
+# for one, writes its version and digest into torrent-tv/infra (which deploys it
+# on the droplet), and waits until the live site reports the new version.
 
 on:
   push:
@@ -87,6 +87,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Build and push the image
+        id: build
         if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
         uses: docker/build-push-action@v7
         with:
@@ -107,20 +108,37 @@ jobs:
           notes-file: ${{ steps.release.outputs.notes-file }}
           github-token: ${{ github.token }}
 
-      - name: Wait until production serves the release
+      - name: The published image's digest
+        id: image
         if: steps.release.outputs.released == 'true'
         env:
+          BUILT: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          # watchtower polls every 300 s; three polls is the most a rollout may take.
-          for attempt in $(seq 1 60); do
-            live=$(curl -fsS "$SITE/env.js?release=$attempt" | sed -n 's/.*version: "\([^"]*\)".*/\1/p' || true)
-            if [ "$live" = "$VERSION" ]; then
-              echo "production serves $VERSION"
-              exit 0
-            fi
-            echo "production serves ${live:-nothing readable}, waiting for $VERSION"
-            sleep 15
-          done
-          echo "::error::production did not report $VERSION within 15 minutes"
-          exit 1
+          # A re-run of a published release built nothing; the registry knows the digest.
+          digest="$BUILT"
+          if [ -z "$digest" ]; then
+            digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Token for infra only
+        id: infra-token
+        if: steps.release.outputs.released == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: torrent-tv
+          repositories: infra
+          permission-contents: write
+          permission-actions: read
+
+      - if: steps.release.outputs.released == 'true'
+        uses: torrent-tv/.github/actions/infra-install-server@main
+        with:
+          github-token: ${{ steps.infra-token.outputs.token }}
+          version: ${{ steps.release.outputs.version }}
+          digest: ${{ steps.image.outputs.digest }}
+          task: "#ttv-91"
+          site: ${{ env.SITE }}
