@@ -2,6 +2,10 @@
   "name": "@torrent-tv/server",
   "version": "0.36.13",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/torrent-tv/server.git"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -12,12 +16,7 @@
   "scripts": {
     "start": "node ./server.js",
     "dev": "node --inspect --experimental-network-inspection ./server.js",
-    "patch": "npm version patch && npm run docker:publish && git push --follow-tags",
-    "minor": "npm version minor && npm run docker:publish && git push --follow-tags",
-    "major": "npm version major && npm run docker:publish && git push --follow-tags",
     "docker:build": "docker build -t ghcr.io/torrent-tv/server:$npm_package_version -t ghcr.io/torrent-tv/server:latest .",
-    "docker:push": "docker push ghcr.io/torrent-tv/server:$npm_package_version && docker push ghcr.io/torrent-tv/server:latest",
-    "docker:publish": "npm run docker:build && npm run docker:push",
     "test": "npm run lint && node --test",
     "lint": "biome lint ."
   },
