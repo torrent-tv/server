@@ -18,10 +18,6 @@ on:
         options: [auto, patch, minor]
         default: auto
 
-concurrency:
-  group: main-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
   contents: read
 
@@ -33,6 +29,11 @@ jobs:
   checks:
     name: Checks
     runs-on: ubuntu-latest
+    # A newer push to a pull request makes its older checks pointless; every push to
+    # main gets a group of its own, so no check of main is ever replaced.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('checks-{0}', github.ref) || format('checks-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,6 +55,11 @@ jobs:
     environment:
       name: production
       url: ${{ env.SITE }}
+    # Every release runs, one at a time, in the order the runs reach the queue.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
       packages: write
@@ -72,16 +78,16 @@ jobs:
           changelog: CHANGELOG.md
           bump: ${{ inputs.bump || 'auto' }}
 
-      - if: steps.release.outputs.released == 'true'
+      - if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
         uses: docker/setup-buildx-action@v4
-      - if: steps.release.outputs.released == 'true'
+      - if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Build and push the image
-        if: steps.release.outputs.released == 'true'
+        if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
