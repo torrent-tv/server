@@ -12,3 +12,5 @@ coverage
 public/*.mp4
 public/*.mkv
 public/*.avi
+.github
+.githooks
