@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Four failure paths in the page that said nothing now say so: a failed seek is written to the client log with whether a retry is offered, an unreadable buffer limit is logged as a warning while the network report still goes, and the two cases where an empty answer is the reading (the buffered ranges of a removed source buffer, a subtitle metadata note that is not JSON) state why.
+
 ## 0.36.13
 
 - **Fix**: Describe a proxy capacity refusal without incorrectly blaming another viewer.
