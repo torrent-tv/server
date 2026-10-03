@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: A release is now rolled out by writing the image version and digest into torrent-tv/infra, which doco-cd applies on the droplet; the release waits until the site serves the new version. Watchtower no longer updates the server.
+
 ## 0.36.14
 
 - **Chore**: Update dependencies: @fastify/cors 11.2.0 → 11.3.0, @fastify/helmet 13.0.2 → 13.1.1, @fastify/static 10.1.2 → 10.1.5, @fastify/websocket 11.2.0 → 11.3.2, hls.js 1.6.16 → 1.7.3, media-chrome 4.19.2 → 4.19.3, ws 8.21.1 → 8.22.0, @biomejs/biome 2.5.7 → 2.5.15, knip 6.32.0 → 6.39.0; 73 package(s) changed in the lock file, 4 removed.
