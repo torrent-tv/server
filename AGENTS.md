@@ -116,20 +116,34 @@ Decided direction — full plan in the parent `../CLAUDE.md`, DNS/TLS limits in
   races `/healthz` over the candidates and uses the first responder; WebRTC
   remains the fallback transport.
 
+## Commits
+
+Every commit header follows Conventional Commits (`<type>(<scope>)!: <subject>`,
+types `feat fix perf refactor docs test build ci chore style revert`); CI refuses
+a pushed commit that does not. Enable the local check once per clone:
+`git config core.hooksPath .githooks`. Rules: `torrent-tv/.github` CONTRIBUTING.md.
+
 ## Changelog
 
-Every behavioural change must be recorded in `CHANGELOG.md` — add an entry under
-a new `## <version>` heading at the top, following the existing
-`- **New**/**Fix**/**Chore**:` format.
-
-**Do NOT edit `package.json` version.** Release is `npm run patch` (= `npm
-version patch` + docker publish + push), which bumps it. Write the CHANGELOG
-entry at the version that bump will produce: **current `package.json` version
-+ 1 patch** (or + 1 minor for `npm run minor`). Accumulate bullets into that
-single pending entry until it's published. See the parent `../CLAUDE.md`.
+Every behavioural change must be recorded in `CHANGELOG.md` — add a bullet
+under `## Unreleased` at the top (create the heading if it is missing),
+following the existing `- **New**/**Fix**/**Chore**:` format. Never write a
+version heading and never edit the `package.json` version: the release job
+does both. CI refuses a releasable push without an `## Unreleased` entry.
 
 ## Deploy
 
-Commit + push to `main`; the container image rebuilds and watchtower rolls it
-out. Confirm live with `window.env.version`. Browser cache can hide changes —
-hard-refresh when verifying.
+GitHub Actions deploys; nothing is published from a workstation. A push to
+`main` runs `.github/workflows/main.yml`: lint and the tests. Then, when the
+commits since the last `v*` tag ask for it (`feat` → minor;
+`fix`/`perf`/`revert` → patch; anything else → none), the release job in the
+`production` environment writes the version and the changelog heading, builds
+and pushes `ghcr.io/torrent-tv/server:<version>` and `:latest`, pushes the tag
+and the commit, creates the GitHub release, and waits until
+`https://webauth.courses/env.js` reports the new version (watchtower rolls the
+image out within five minutes). Browser cache can hide changes — hard-refresh
+when verifying by hand. A release can also be started from the Actions tab with
+an explicit `patch` or `minor` step.
+
+Because the image is built from `package-lock.json`, the daily dependency
+update (`.github/workflows/dependencies.yml`) is released as `fix(deps)`.
