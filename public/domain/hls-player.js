@@ -540,6 +540,8 @@ export function createHlsPlayer(onLog) {
             start: ranges.start(index), end: ranges.end(index)
           })) : [];
         } catch {
+          // silent-ok: a SourceBuffer already removed from its MediaSource throws
+          // on reading `buffered`; it holds nothing, so empty is the reading.
           return [];
         }
       };

@@ -10,5 +10,9 @@ export function subtitleEvidenceOf(vtt, kindHint) {
     const years = (Array.isArray(metadata.years) ? metadata.years : [])
       .filter(year => Number.isInteger(year) && year >= 1888 && year <= 2100).slice(0, 4);
     return titles.length || years.length ? { titles, years } : null;
-  } catch { return null; }
+  } catch {
+    // silent-ok: a note that is not valid JSON states no titles or years, and
+    // null is that answer; the subtitle file comes from the torrent, not from us.
+    return null;
+  }
 }

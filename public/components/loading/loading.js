@@ -621,6 +621,7 @@ export class Loading extends StateDerivedView {
       if (epoch !== this.#playbackEpoch) return;
       const description = error instanceof Error ? error.message : String(error);
       const canRetry = this.#activeFileIndex >= 0;
+      this.#logEvt(`seek to ${position}s failed (retry ${canRetry ? "offered" : "impossible"}): ${description}`);
       if (canRetry) this.#armRetryableStall(this.#activeFileIndex, description);
       this.#failPlayback(epoch, { description, canRetry });
     }

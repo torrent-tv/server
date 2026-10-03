@@ -192,8 +192,10 @@ export function startNetReporter({
     try {
       const value = typeof getBufferLimitSeconds === "function" ? getBufferLimitSeconds() : null;
       bufferLimitSeconds = Number.isFinite(value) && value > 0 ? value : null;
-    } catch {
-      // A missing capacity does not invalidate the other viewer measurements.
+    } catch (error) {
+      // A capacity that cannot be read does not invalidate the other viewer
+      // measurements, so the report still goes, without it.
+      console.warn("[torrent-tv][net-report] buffer limit unreadable:", error);
     }
     // Where the picture is. A session is shared by every viewer of a copied
     // stream, and the proxy used to work this out by subtracting the buffer
