@@ -1,0 +1,120 @@
+name: Main
+
+# Every push to main runs the checks and then the release. The release builds and
+# pushes the container image when the Conventional Commits since the last tag ask
+# for one; watchtower on the droplet rolls it out, and the job waits until the
+# live site reports the new version.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Release step
+        type: choice
+        options: [auto, patch, minor]
+        default: auto
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/torrent-tv/server
+  SITE: https://webauth.courses
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: torrent-tv/.github/actions/checks@main
+        with:
+          changelog: CHANGELOG.md
+          version-file: package.json
+
+  release:
+    name: Release
+    needs: checks
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ env.SITE }}
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - id: release
+        uses: torrent-tv/.github/actions/release-prepare@main
+        with:
+          version-files: package.json,package-lock.json
+          changelog: CHANGELOG.md
+          bump: ${{ inputs.bump || 'auto' }}
+
+      - if: steps.release.outputs.released == 'true'
+        uses: docker/setup-buildx-action@v4
+      - if: steps.release.outputs.released == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push the image
+        if: steps.release.outputs.released == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.release.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+
+      - if: steps.release.outputs.released == 'true'
+        uses: torrent-tv/.github/actions/release-finish@main
+        with:
+          tag: ${{ steps.release.outputs.tag }}
+          notes-file: ${{ steps.release.outputs.notes-file }}
+          github-token: ${{ github.token }}
+
+      - name: Wait until production serves the release
+        if: steps.release.outputs.released == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # watchtower polls every 300 s; three polls is the most a rollout may take.
+          for attempt in $(seq 1 60); do
+            live=$(curl -fsS "$SITE/env.js?release=$attempt" | sed -n 's/.*version: "\([^"]*\)".*/\1/p' || true)
+            if [ "$live" = "$VERSION" ]; then
+              echo "production serves $VERSION"
+              exit 0
+            fi
+            echo "production serves ${live:-nothing readable}, waiting for $VERSION"
+            sleep 15
+          done
+          echo "::error::production did not report $VERSION within 15 minutes"
+          exit 1
