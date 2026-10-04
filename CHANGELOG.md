@@ -1,4 +1,4 @@
-## Unreleased
+## 0.36.16
 
 - **Chore**: Update dependencies: @fastify/websocket 11.3.2 → 11.3.3; 1 package(s) changed in the lock file.
 
