@@ -19,7 +19,12 @@
  * 8. All subsequent communication uses `fetch()` / `ping()` on the channel.
  */
 
-import { wedgeVerdict } from "./transport/wedge-verdict.js";
+import {
+  deliveryDueWithinMs,
+  emptyArrivalEstimate,
+  noteProbeGap,
+  silenceVerdict
+} from "./transport/delivery-deadline.js";
 
 /**
  * A minimal `Response`-like object assembled from data channel chunks.
@@ -180,11 +185,11 @@ export class WebRtcProxy {
    * When the highest probe on each channel arrived here, by this machine's
    * clock.
    *
-   * Sent back with the report, so the proxy can work out the difference between
-   * the two clocks and, with it, how long the probe itself took one way. The
-   * clocks are never assumed to agree: the proxy estimates the difference from
-   * the exchange, and takes the estimate from whichever report crossed with the
-   * least queueing.
+   * Sent back with the report. Proxies from 2.89.9 on no longer read it: they
+   * judge delivery by the age of the newest probe seen, because the one-way
+   * time of a probe that arrived says nothing about one that did not. Older
+   * proxies in the pool still turn it into a one-way delay, so it keeps being
+   * sent.
    *
    * @type {Map<string, number>}
    */
@@ -210,12 +215,25 @@ export class WebRtcProxy {
   #lastChannelCounters = {};
   /** Transport bytes received at the last sample, so the trend is available here too. */
   #lastTransportIn = null;
-  /** Messages delivered to this page on the media channel at the last sample. */
-  #lastChannelMessages = null;
-  /** When the media channel last delivered a message, or 0 while none is expected. */
-  #lastDeliveryAt = 0;
-  /** True once this connection has been declared wedged, so it is declared once. */
-  #wedgeReported = false;
+  /**
+   * When anything last arrived on any channel of this connection, by
+   * `performance.now()`. A message of any kind ends a silence.
+   */
+  #lastArrivalAt = 0;
+  /** Messages handled here, on every channel, compared with what the transport says it received. */
+  #messagesHandled = 0;
+  /**
+   * The rhythm of this connection's deliveries: gaps between consecutive probe
+   * NUMBERS, each number counted once whichever channel brought it first. See
+   * `transport/delivery-deadline.js`.
+   */
+  #arrivalEstimate = emptyArrivalEstimate();
+  /** The newest probe number counted into the estimate, and when it arrived. @type {{ seq: number, at: number } | null} */
+  #lastCountedProbe = null;
+  /** The one pending check of this connection's silence. */
+  #deliveryCheck = null;
+  /** True from a stall being called until the next message arrives. */
+  #stalled = false;
   /** @type {WebSocket | null} */
   #ws = null;
   /**
@@ -256,6 +274,23 @@ export class WebRtcProxy {
    * @type {(() => void) | null}
    */
   onConnectionLost = null;
+
+  /**
+   * Called once when this connection's next delivery is overdue while requests
+   * are waiting — the moment to raise a second connection beside it. Not a
+   * loss: the connection is kept, because the silence may end (the proxy's own
+   * thread was blocked for 21 s on 2026-10-01 while the association was fine).
+   *
+   * @type {(() => void) | null}
+   */
+  onDeliveryStalled = null;
+
+  /**
+   * Called once when a message arrives after a stall was called.
+   *
+   * @type {(() => void) | null}
+   */
+  onDeliveryResumed = null;
 
   /**
    * Called on every unsolicited `subtitle-cues` push from the proxy — new
@@ -580,6 +615,8 @@ export class WebRtcProxy {
 
     this.#channel.addEventListener("open", () => {
       this.#connected = true;
+      // A silence is counted from the moment there was something to deliver on.
+      this.#lastArrivalAt = performance.now();
       settle();
     });
 
@@ -660,6 +697,18 @@ export class WebRtcProxy {
     // draining the channel is one of the two candidate causes of a delivery
     // freeze, and the proxy cannot see it at all; this is the reading that can.
     const handlerStartedAt = performance.now();
+    // A delivery, whatever it carries: it ends any silence.
+    this.#messagesHandled += 1;
+    this.#lastArrivalAt = handlerStartedAt;
+    if (this.#stalled) {
+      this.#stalled = false;
+      console.debug(`[dc-stall] delivery resumed on ${label} at=${new Date().toISOString()}`);
+      try {
+        this.onDeliveryResumed?.();
+      } catch (error) {
+        console.warn("[webrtc-proxy] onDeliveryResumed handler failed:", error);
+      }
+    }
     try {
       this.#dispatchChannelMessage(raw, label);
     } finally {
@@ -667,7 +716,144 @@ export class WebRtcProxy {
       if (elapsed > this.#handlerMaxMs) {
         this.#handlerMaxMs = elapsed;
       }
+      this.#armDeliveryCheck();
     }
+  }
+
+  /**
+   * Count one probe number into this connection's rhythm, once, whichever
+   * channel brought it first.
+   *
+   * @param {number} seq
+   * @returns {void}
+   */
+  #countProbe(seq) {
+    const at = performance.now();
+    const previous = this.#lastCountedProbe;
+    if (previous !== null && seq <= previous.seq) {
+      return;
+    }
+    if (previous !== null) {
+      this.#arrivalEstimate = noteProbeGap(this.#arrivalEstimate, at - previous.at);
+    }
+    this.#lastCountedProbe = { seq, at };
+  }
+
+  /**
+   * Make sure one check of this connection's silence is pending, due when the
+   * next delivery is overdue — or, once a stall has been called, when the
+   * silence reaches the bound a request is given.
+   *
+   * Armed after every message and whenever a request starts waiting: a check
+   * armed only by arrivals would never run after the last one. A check that
+   * runs early, because something arrived after it was armed, only arms the
+   * next one.
+   *
+   * @returns {void}
+   */
+  #armDeliveryCheck() {
+    if (this.#deliveryCheck !== null || !this.#connected || this.#closedByUser) {
+      return;
+    }
+    if (this.#pending.size === 0 && !this.#stalled) {
+      return;
+    }
+    const silentMs = performance.now() - this.#lastArrivalAt;
+    let waitMs;
+    if (this.#stalled) {
+      waitMs = REQUEST_TIMEOUT_MS - silentMs;
+    } else {
+      const due = deliveryDueWithinMs(this.#arrivalEstimate);
+      if (due === null) {
+        // No rhythm yet: the next probe arms this again.
+        return;
+      }
+      waitMs = due - silentMs;
+    }
+    this.#deliveryCheck = setTimeout(() => {
+      this.#deliveryCheck = null;
+      void this.#checkDelivery();
+    }, Math.max(0, waitMs) + 1);
+  }
+
+  /**
+   * Read the silence, after asking the transport whether messages are already
+   * received and only waiting to be handled — a timer that fires late finds
+   * exactly those, and they are deliveries.
+   *
+   * @returns {Promise<void>}
+   */
+  async #checkDelivery() {
+    if (!this.isOpen || this.#closedByUser) {
+      return;
+    }
+    let received = null;
+    try {
+      const stats = await this.#pc?.getStats();
+      stats?.forEach((report) => {
+        if (report.type === "data-channel" && Number.isFinite(report.messagesReceived)) {
+          received = (received ?? 0) + report.messagesReceived;
+        }
+      });
+    } catch {
+      // silent-ok: without the counter the check stands on the silence alone.
+    }
+    if (!this.isOpen || this.#closedByUser) {
+      return;
+    }
+    const silentMs = performance.now() - this.#lastArrivalAt;
+    const due = deliveryDueWithinMs(this.#arrivalEstimate);
+    const verdict = silenceVerdict({
+      silentMs,
+      dueWithinMs: due,
+      outstanding: this.#pending.size,
+      channelOpen: this.isOpen,
+      messagesWaiting: received !== null && received > this.#messagesHandled,
+      stalledAlready: this.#stalled,
+      requestTimeoutMs: REQUEST_TIMEOUT_MS
+    });
+    if (verdict.state === "lost") {
+      console.warn(`[dc-stall] ${verdict.reason}; declaring the connection lost at=${new Date().toISOString()}`);
+      this.#fireConnectionLost();
+      return;
+    }
+    if (verdict.state === "stalled" && !this.#stalled) {
+      this.#stalled = true;
+      console.warn(
+        `[dc-stall] ${verdict.reason}; ` +
+          `state=${this.#pc?.connectionState} ice=${this.#pc?.iceConnectionState} ` +
+          `probes=[${[...this.#probeSeen.entries()].map(([name, seq]) => `${name}:${seq}`).join(" ")}] ` +
+          `received=${received ?? "?"} handled=${this.#messagesHandled} at=${new Date().toISOString()}`
+      );
+      try {
+        this.onDeliveryStalled?.();
+      } catch (error) {
+        console.warn("[webrtc-proxy] onDeliveryStalled handler failed:", error);
+      }
+    }
+    this.#armDeliveryCheck();
+  }
+
+  /**
+   * Close this connection because another has taken its place.
+   *
+   * Every request still waiting on it is answered at once with
+   * `TransportReplacedError` instead of sitting out its own timeout: a request
+   * sent on a connection that stopped delivering will never be answered, and the
+   * requests after the replacement go to the new one. A late answer on this
+   * connection finds nothing to answer — its waits are gone.
+   *
+   * @returns {void}
+   */
+  retire() {
+    const error = new Error("Data channel replaced by another connection.");
+    error.name = "TransportReplacedError";
+    const waiting = [...this.#pending.values()];
+    this.#pending.clear();
+    for (const entry of waiting) {
+      entry.reject(error);
+    }
+    this.close();
   }
 
   /**
@@ -721,6 +907,7 @@ export class WebRtcProxy {
     // proxy sent and what arrived here is what names the fault.
     if (msg.type === "probe") {
       if (Number.isInteger(msg.seq)) {
+        this.#countProbe(msg.seq);
         const previous = this.#probeSeen.get(label);
         if (previous === undefined || msg.seq > previous) {
           this.#probeSeen.set(label, msg.seq);
@@ -942,6 +1129,8 @@ export class WebRtcProxy {
       path,
       firstByteAt: undefined
     });
+    // Somebody is waiting now: a silence from here on means something.
+    this.#armDeliveryCheck();
 
     if (signal) {
       onAbort = () => {
@@ -1386,7 +1575,6 @@ export class WebRtcProxy {
             `pending=${this.#pending.size} probes=[${[...this.#probeSeen.entries()].map(([name, seq]) => `${name}:${seq}`).join(" ")}] ` +
             `${perChannel} at=${new Date().toISOString()}`
         );
-        this.#considerWedge(channel?.messagesReceived ?? null);
       }).catch(() => {});
     }, TRANSPORT_SAMPLE_MS);
   }
@@ -1457,65 +1645,6 @@ export class WebRtcProxy {
     }, PROBE_ECHO_MS);
   }
 
-  /**
-   * Decide whether this connection has stopped delivering, and if so, take the
-   * one reading that cannot be taken afterwards.
-   *
-   * The state being looked for is precise: requests are outstanding, the peer
-   * connection reports itself connected, and not one complete message has been
-   * handed to this page since the last sample. That is the field signature —
-   * every layer reporting success while nothing arrives.
-   *
-   * What it then does is NOT a recovery. It raises a SECOND association to the
-   * same proxy and asks it to carry a few megabytes. If they arrive, the fault
-   * is held in the wedged association's own state, and rotating connections
-   * would cure it; if the second association stalls the same way, the fault is
-   * in the path or at this end, and rotating would not. Nothing else separates
-   * those two, and neither can be established once the session is gone.
-   *
-   * @param {number | null} messagesReceived
-   * @returns {void}
-   */
-  #considerWedge(messagesReceived) {
-    const now = Date.now();
-    const delivered =
-      messagesReceived === null ||
-      this.#lastChannelMessages === null ||
-      messagesReceived > this.#lastChannelMessages;
-    this.#lastChannelMessages = messagesReceived;
-    if (delivered || this.#pending.size === 0) {
-      this.#lastDeliveryAt = now;
-      this.#wedgeReported = false;
-      return;
-    }
-    if (this.#lastDeliveryAt === 0) {
-      this.#lastDeliveryAt = now;
-      return;
-    }
-    const verdict = wedgeVerdict({
-      silentMs: now - this.#lastDeliveryAt,
-      pendingRequests: this.#pending.size,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      channelOpen: this.isOpen
-    });
-    if (!verdict.wedged || this.#wedgeReported) {
-      return;
-    }
-    this.#wedgeReported = true;
-    console.warn(
-      `[dc-wedge] ${verdict.reason}; ` +
-      `state=${this.#pc?.connectionState} ice=${this.#pc?.iceConnectionState} ` +
-      `probes=[${[...this.#probeSeen.entries()].map(([name, seq]) => `${name}:${seq}`).join(" ")}] ` +
-      `at=${new Date(now).toISOString()}`
-    );
-    // A wedged association never recovers — measured, twice, out of the live
-    // association: the congestion window is full and the retransmission timer
-    // is not scheduled, so nothing drains it. Declaring the transport lost is
-    // what lets the reconnect ladder run; it already works on a closed channel
-    // and only ever missed this case because the channel stays `connected`.
-    this.#fireConnectionLost();
-  }
-
   /** @returns {void} */
   #stopProbeEcho() {
     if (this.#probeEchoTimer !== null) {
@@ -1543,6 +1672,10 @@ export class WebRtcProxy {
   close() {
     // Deliberate close — must not be reported as a lost connection.
     this.#closedByUser = true;
+    if (this.#deliveryCheck !== null) {
+      clearTimeout(this.#deliveryCheck);
+      this.#deliveryCheck = null;
+    }
     this.#ws?.close();
     this.#controlChannel?.close();
     this.#controlChannel = null;
