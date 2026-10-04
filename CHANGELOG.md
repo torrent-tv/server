@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @fastify/websocket 11.3.2 → 11.3.3; 1 package(s) changed in the lock file.
+
 ## 0.36.15
 
 - **Chore**: A release is now rolled out by writing the image version and digest into torrent-tv/infra, which doco-cd applies on the droplet; the release waits until the site serves the new version. Watchtower no longer updates the server.
