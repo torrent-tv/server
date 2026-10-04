@@ -85,6 +85,106 @@ export class TorrentSession {
      * @type {{ sessionId: string, transport: import("./proxy-transport.js").ProxyTransport } | null}
      */
     this.currentTranscodeSession = null;
+    /**
+     * The soundtrack this page has told the proxy it is listening to, and
+     * whether its browser needs it re-encoded — as stated, not as the proxy
+     * then decided. Restated after a reconnect; see `restateSoundtrack`.
+     * @type {{ trackIndex: number, transcode: boolean } | null}
+     */
+    this.statedSoundtrack = null;
+  }
+
+  /**
+   * The page has switched to another soundtrack in place.
+   *
+   * @param {number} trackIndex
+   * @param {boolean | null} transcode - What it told the proxy for that track;
+   *   null when it said nothing, and then the proxy kept what it needed for the
+   *   track before, which is what is kept here too.
+   * @returns {void}
+   */
+  noteSoundtrackStated(trackIndex, transcode) {
+    if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+      return;
+    }
+    this.statedSoundtrack = {
+      trackIndex,
+      transcode: typeof transcode === "boolean" ? transcode : this.statedSoundtrack?.transcode === true
+    };
+  }
+
+  /**
+   * Tell the proxy again which soundtrack this viewer is listening to, through
+   * the given connection, and say whether it was recorded.
+   *
+   * The proxy forgets a viewer when their last connection closes, and a viewer
+   * it does not know is sent the sound as it is: on 2026-09-28 a reconnect
+   * turned a soundtrack re-encoded to AAC into a copy under the same address,
+   * and the player ended its audio stream. This is said before the player loads
+   * anything on the new connection.
+   *
+   * @param {number} positionSeconds - Where the viewer is.
+   * @param {import("./proxy-transport.js").ProxyTransport} transport
+   * @returns {Promise<"recorded" | "nothing-to-restate" | "failed">}
+   *   `recorded`: the proxy answered that it keeps the track and its mode —
+   *   ready (204) or still being made (503 with `warming: true`).
+   *   `nothing-to-restate`: no separate soundtrack on this session (404), or
+   *   no session. Anything else — another 503, a 500, no answer — is `failed`:
+   *   nothing says the choice was kept.
+   */
+  async restateSoundtrack(positionSeconds, transport) {
+    const current = this.currentTranscodeSession;
+    const stated = this.statedSoundtrack;
+    if (!current || !stated || !transport) {
+      return "nothing-to-restate";
+    }
+    const position = Number.isFinite(positionSeconds) && positionSeconds > 0 ? positionSeconds : 0;
+    const path =
+      `/transcode/${encodeURIComponent(current.sessionId)}/a/${stated.trackIndex}/warm` +
+      `?position=${position.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}` +
+      `&transcode=${stated.transcode ? 1 : 0}`;
+    try {
+      const response = await transport.fetch(path, { signal: this.abortController.signal });
+      if (response.status === 204) {
+        return "recorded";
+      }
+      if (response.status === 404) {
+        return "nothing-to-restate";
+      }
+      if (response.status === 503) {
+        const body = await response.json().catch(() => null);
+        return body?.warming === true ? "recorded" : "failed";
+      }
+      return "failed";
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+      console.debug(
+        `[torrent-tv] restating soundtrack ${stated.trackIndex} failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return "failed";
+    }
+  }
+
+  /**
+   * The progress of the session on screen, read through the given connection
+   * rather than the one the page is using — how a connection raised beside a
+   * silent one proves the session is still there before it is adopted.
+   *
+   * @param {import("./proxy-transport.js").ProxyTransport} transport
+   * @returns {Promise<object | null>}
+   */
+  async fetchActiveTranscodeProgressVia(transport) {
+    const poll = this.activeProgressPoll;
+    if (!poll || typeof poll.progressUrl !== "string" || poll.progressUrl.length === 0 || !transport) {
+      return null;
+    }
+    const fetchVia = (url, fetchOptions) => {
+      const parsed = new URL(url);
+      return transport.fetch(parsed.pathname + parsed.search, fetchOptions);
+    };
+    return fetchTranscodeProgress(poll.progressUrl, this.abortController.signal, fetchVia);
   }
 
   clear(options = {}) {
@@ -109,6 +209,7 @@ export class TorrentSession {
     this.proxySourceKeyCache.clear();
     this.activeProgressPoll = null;
     this.currentTranscodeSession = null;
+    this.statedSoundtrack = null;
   }
 
   /**
@@ -1115,6 +1216,15 @@ export class TorrentSession {
       // anything addressed to "the first entry" would then reach the episode
       // the viewer has just left.
       this.currentTranscodeSession = { sessionId, transport };
+      // What this page told the proxy about the sound when it opened the file.
+      // The proxy keeps it on the viewer's record, and that record goes when
+      // the viewer's last connection closes — so a page that reconnects has to
+      // say it again, and this is what it says.
+      this.statedSoundtrack = {
+        trackIndex:
+          Number.isInteger(options.audioTrackIndex) && options.audioTrackIndex > 0 ? options.audioTrackIndex : 0,
+        transcode: options.transcodeAudio !== false
+      };
       this.#keepSessionsAlive();
       // [evt] TEMPORARY: timestamped session lifecycle for log correlation.
       console.debug(`[evt] ${nowHms()} transcode-session create id=${sessionId.slice(0, 8)} fileIndex=${fileIndex}`);
