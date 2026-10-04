@@ -1,4 +1,4 @@
-## Unreleased
+## 0.36.18
 
 - **Fix**: A connection that stays open and stops delivering is noticed when its next delivery is overdue, not after 60 s of silence. The proxy sends a numbered probe every half second; the gaps between consecutive probe numbers give this connection's own rhythm (mean plus four mean deviations, the gains of RFC 6298 adapted to heartbeat gaps), and a silence longer than that with requests waiting, and nothing received but not yet handled, is a stall. On 2026-09-28 the 60 s bound equalled the viewer's 60 s cushion, and the picture stopped the second the wedge was declared.
 - **Fix**: A stalled connection is replaced only once a second connection to the same proxy has proved itself: the viewer is named on it, the session on screen answers there, and the soundtrack is recorded again there. If the old connection delivers first, the second is closed and the viewer stays where they were. Requests still waiting on the replaced connection are answered at once as replaced, and the player asks for those segments again on the new one. After 60 s of unbroken silence the connection is declared lost and the reconnect ladder rebuilds as before.
