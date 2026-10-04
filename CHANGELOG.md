@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.2
 
 - **Fix**: Use canonical OpenSubtitles search URLs, omitting the default page and sorting parameters to avoid API redirects while keeping credentials restricted to their origin.
 
