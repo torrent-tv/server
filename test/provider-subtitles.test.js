@@ -81,6 +81,8 @@ test("OpenSubtitles episode lookup sends the parent ID and does not offer a mult
   assert.equal(address.searchParams.get("parent_tmdb_id"), "99");
   assert.equal(address.searchParams.get("season_number"), "2");
   assert.equal(address.searchParams.get("episode_number"), "3");
+  assert.equal(address.searchParams.has("page"), false);
+  assert.equal(address.search, "?episode_number=3&parent_tmdb_id=99&season_number=2&type=episode");
   assert.equal(result.items.length, 1);
 });
 

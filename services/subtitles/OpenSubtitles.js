@@ -18,7 +18,11 @@ export class OpenSubtitles extends SubtitleProvider {
     let readPages = 0;
     for (let page = 1; page <= Math.min(pages, 20); page++) {
       if (Date.now() >= deadlineAt) break;
-      params.set("page", String(page));
+      // The API redirects default pages and unsorted query parameters. Use
+      // canonical URLs so credentials never need to follow an API redirect.
+      if (page === 1) params.delete("page");
+      else params.set("page", String(page));
+      params.sort();
       const data = await this.http.json(`/api/v1/subtitles?${params}`, undefined, { deadlineAt });
       if (!Array.isArray(data.data) || !Number.isInteger(data.total_pages)) throw new MetadataUnavailableError("invalid subtitle search response");
       pages = data.total_pages;
