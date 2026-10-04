@@ -290,6 +290,14 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
           // HLS.js internals — do not report it as a load error; HLS.js handles
           // it through its own error pipeline.
           if (successCalled) return;
+          // The connection this went out on was replaced by one that delivers.
+          // Nothing failed that the player should hear of: the same request is
+          // made again, and the transport now routes it to the new connection.
+          if (error?.name === "TransportReplacedError") {
+            console.debug(`[torrent-tv][hls-loader] ${path} asked again on the replacement connection`);
+            this.load(context, _config, callbacks);
+            return;
+          }
           callbacks.onError(
             { code: 0, text: error?.message ?? String(error) },
             context,

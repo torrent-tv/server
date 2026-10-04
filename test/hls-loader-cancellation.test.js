@@ -38,3 +38,41 @@ test("reusing a loader cannot revive a response from its previous viewing", asyn
   loader.destroy();
   assert.equal(requests[1].signal.aborted, true);
 });
+
+test("a request whose connection was replaced is asked again, and the player never hears of it", async () => {
+  const requests = [];
+  const Loader = createWebRtcHlsLoader({ fetch: (path) => new Promise((resolve, reject) => {
+    requests.push({ path, resolve, reject });
+  }) }, "viewer", () => 1);
+  const loader = new Loader();
+  const calls = [];
+  loader.load({ url: "http://webrtc-proxy/transcode/a/a/0/segment-00268.mp4", responseType: "arraybuffer" }, {}, {
+    onSuccess: () => calls.push("success"), onError: (error) => calls.push(`error ${error.text}`)
+  });
+  const replaced = new Error("Data channel replaced by another connection.");
+  replaced.name = "TransportReplacedError";
+  requests[0].reject(replaced);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 2, "the same request went out again");
+  assert.equal(requests[1].path, requests[0].path);
+  assert.deepEqual(calls, []);
+  requests[1].resolve({ ok: true, arrayBuffer: async () => new ArrayBuffer(4) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ["success"]);
+});
+
+test("any other failure still reaches the player once", async () => {
+  const requests = [];
+  const Loader = createWebRtcHlsLoader({ fetch: () => new Promise((resolve, reject) => {
+    requests.push({ resolve, reject });
+  }) });
+  const loader = new Loader();
+  const calls = [];
+  loader.load({ url: "http://webrtc-proxy/transcode/a/segment.mp4", responseType: "arraybuffer" }, {}, {
+    onSuccess: () => calls.push("success"), onError: (error) => calls.push(`error ${error.text}`)
+  });
+  requests[0].reject(new Error("Data channel request timed out."));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 1);
+  assert.deepEqual(calls, ["error Data channel request timed out."]);
+});
