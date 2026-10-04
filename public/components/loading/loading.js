@@ -413,6 +413,13 @@ export class Loading extends StateDerivedView {
   /** @type {ReturnType<typeof setTimeout> | null} Pending cycle-count reset timer. */
   #stableTimer = null;
   /**
+   * A second connection being raised beside one whose delivery has stopped,
+   * and the connection it is for. Null when none is.
+   *
+   * @type {{ from: import("../../domain/webrtc-proxy.js").WebRtcProxy, cancelled: boolean, startedAt: number } | null}
+   */
+  #rotation = null;
+  /**
    * Cooperative cancellation for the in-flight loading flow. Checked at the
    * await boundaries via #throwIfCancelled(); the thrown AbortError rides the
    * existing silent abort-error handling, which also guarantees a cancelled
@@ -3741,7 +3748,10 @@ export class Loading extends StateDerivedView {
     // long as the page is open.
     if (this.#proxy && this.#proxy !== proxy) {
       try {
-        this.#proxy.close();
+        // Retired, not merely closed: whatever is still waiting on it is
+        // answered at once as replaced, so the player asks again on the new
+        // connection instead of waiting out a request nobody will answer.
+        this.#proxy.retire();
       } catch (error) {
         // Already gone — the point was that it is not left open. Said out loud
         // all the same: a connection that refuses to close is exactly the shape
@@ -3757,6 +3767,10 @@ export class Loading extends StateDerivedView {
     // Surface a mid-playback loss of this connection (auto-reconnect flow). A
     // close() by #stopPlayback never fires this.
     proxy.onConnectionLost = () => this.#onTransportLost();
+    // A connection that stays open and stops delivering. Not a loss: a second
+    // connection is raised beside it and adopted only once it has proved itself.
+    proxy.onDeliveryStalled = () => this.#onDeliveryStalled(proxy);
+    proxy.onDeliveryResumed = () => this.#onDeliveryResumed(proxy);
     // Subtitle cues, pushed as the proxy reads them off its own download —
     // never polled for. See #onSubtitleCuesPush.
     proxy.onSubtitleCues = (event) => this.#subtitlePlayback.onCues(event);
@@ -4210,6 +4224,10 @@ export class Loading extends StateDerivedView {
     // Whether the track was made ready before the switch. A track that is not
     // ready is not switched to.
     let ready = true;
+    // What this page told the proxy about the track it moves to, kept for the
+    // moment the switch is made: it is what a reconnect has to say again.
+    /** @type {boolean | null} */
+    let statedNeed = null;
     const detail = event instanceof CustomEvent ? event.detail : null;
     const trackIndex = Number(detail?.trackIndex);
     // Read before anything is claimed. An event that names no track is not a
@@ -4273,6 +4291,7 @@ export class Loading extends StateDerivedView {
         // file is opened, so a track the browser cannot play is re-encoded and
         // a track it can play is copied unless nothing states its rate.
         const needsTranscode = await this.#trackNeedsTranscode(trackIndex);
+        statedNeed = needsTranscode;
         const readyAt = Date.now();
         let answer = "not-ready";
         // Asked again rather than given up on. The proxy builds the track's
@@ -4331,6 +4350,11 @@ export class Loading extends StateDerivedView {
         // it.
         const applied = this.#hlsPlayer.currentAudioTrack();
         this.#selectedAudioTrackIndex = applied >= 0 ? applied : trackIndex;
+        // A track the player settled on by itself was not the one stated.
+        this.#session.noteSoundtrackStated(
+          this.#selectedAudioTrackIndex,
+          applied >= 0 && applied !== trackIndex ? null : statedNeed
+        );
         this.#rememberAudioChoice();
         this.#logEvt(
           `audio track ${trackIndex} switched in place, without rebuilding the session` +
@@ -4390,6 +4414,11 @@ export class Loading extends StateDerivedView {
    */
   #onTransportLost() {
     this.#logEvt("transport lost (data channel closed/failed)");
+    // A second connection being raised beside this one is the ladder's to
+    // replace now.
+    if (this.#rotation) {
+      this.#rotation.cancelled = true;
+    }
     if (this.#isProcessing) {
       return;
     }
@@ -4519,6 +4548,16 @@ export class Loading extends StateDerivedView {
           // session is still there; resume fetching seamlessly.
           const progress = await this.#session.fetchActiveTranscodeProgress();
           if (progress) {
+            // The proxy let go of this viewer when the old connection closed,
+            // soundtrack choice included, and a viewer it does not know is sent
+            // the sound as it is. Said again before the player asks for a single
+            // segment; a choice that was not kept is a failed attempt, because
+            // resuming would load a different soundtrack under the same address.
+            const sound = await this.#session.restateSoundtrack(resume.positionSeconds, this.#transport);
+            if (sound === "failed") {
+              throw new Error("the soundtrack could not be restated on the new connection");
+            }
+            this.#logEvt(`reconnect: soundtrack ${sound}`);
             this.#hlsPlayer.startLoad();
             // The old channel took the subtitle subscription with it when it
             // closed, and nothing on this path would ever ask again.
@@ -4567,6 +4606,159 @@ export class Loading extends StateDerivedView {
     }
 
     this.#dispatchConnectionLost();
+  }
+
+  /**
+   * This connection stopped delivering while it still calls itself open.
+   *
+   * The connection is NOT given up here. A silence can be the association —
+   * the usrsctp state of 2026-09-13, cured only by a new one — or the proxy's
+   * own thread being busy, 21 s on 2026-10-01, after which the same connection
+   * delivered again. From here the two cannot be told apart, so a second
+   * connection is raised beside the first and adopted only once it has proved
+   * it carries this viewer's session; if the first delivers again before that,
+   * the second is closed.
+   *
+   * @param {import("../../domain/webrtc-proxy.js").WebRtcProxy} proxy
+   * @returns {void}
+   */
+  #onDeliveryStalled(proxy) {
+    if (proxy !== this.#proxy || this.#rotation) {
+      return;
+    }
+    if (this.#isProcessing || !this.#session.current || this.#activeFileIndex < 0) {
+      // A loading flow has its own failure path; the connection's last resort
+      // still declares it lost if the silence lasts.
+      this.#logEvt("delivery stalled during loading — left to the loading flow");
+      return;
+    }
+    if (!this.#lastProxyDescriptor || !this.#transport || this.#transport.isHttp) {
+      return;
+    }
+    void this.#rotateTransport(proxy);
+  }
+
+  /**
+   * The connection delivered again: a second connection still being raised for
+   * it is no longer needed.
+   *
+   * @param {import("../../domain/webrtc-proxy.js").WebRtcProxy} proxy
+   * @returns {void}
+   */
+  #onDeliveryResumed(proxy) {
+    if (this.#rotation?.from === proxy && !this.#rotation.cancelled) {
+      this.#rotation.cancelled = true;
+      this.#logEvt(
+        `delivery resumed on the old connection after ${Math.round(performance.now() - this.#rotation.startedAt)}ms — ` +
+          "the second connection is not adopted"
+      );
+    }
+  }
+
+  /**
+   * Whether this attempt to replace a silent connection still has a purpose.
+   *
+   * It ends when the old connection delivers again, when the ladder took over
+   * (the old one was declared lost), when the viewer stopped or switched
+   * playback — any of which replaces or clears `#proxy` — and when another
+   * attempt took its place.
+   *
+   * @param {{ from: object, cancelled: boolean }} rotation
+   * @returns {boolean}
+   */
+  #rotationLive(rotation) {
+    return this.#rotation === rotation && !rotation.cancelled && this.#proxy === rotation.from && !this.#cancelRequested;
+  }
+
+  /**
+   * Raise a second connection to the same proxy beside a silent one, prove it,
+   * and only then move to it.
+   *
+   * Proof, in order, all of it over the NEW connection before the player is
+   * given it: this viewer is named on it; the session on screen answers its
+   * progress there; the soundtrack this page stated is recorded again. Without
+   * the last, the first segment of sound asked for there is answered for a
+   * viewer the proxy does not know — as a copy — and on 2026-09-28 that ended
+   * the audio stream for good.
+   *
+   * Attempts repeat while the silence lasts, one at a time, the ladder's own
+   * pause apart. They stop when the old connection delivers again, when the
+   * viewer leaves, or when the old connection is declared lost after a whole
+   * request bound of silence — then the ladder rebuilds as before.
+   *
+   * @param {import("../../domain/webrtc-proxy.js").WebRtcProxy} from
+   * @returns {Promise<void>}
+   */
+  async #rotateTransport(from) {
+    const rotation = { from, cancelled: false, startedAt: performance.now() };
+    this.#rotation = rotation;
+    this.#logEvt("delivery stalled — raising a second connection beside the first");
+    try {
+      for (let attempt = 1; this.#rotationLive(rotation); attempt += 1) {
+        if (attempt > 1) {
+          await this.#sleep(RECONNECT_BACKOFF_MS);
+          if (!this.#rotationLive(rotation)) {
+            break;
+          }
+        }
+        /** @type {import("../../domain/webrtc-proxy.js").WebRtcProxy | null} */
+        let trial = null;
+        try {
+          trial = await this.#proxySelector.reconnectTo(this.#lastProxyDescriptor, {
+            connectTimeoutMs: RECONNECT_CONNECT_TIMEOUT_MS
+          });
+          if (!this.#rotationLive(rotation)) {
+            break;
+          }
+          trial.identifyViewer(this.#session.consumerId);
+          const via = ProxyTransport.fromWebRtc(trial);
+          const progress = await this.#session.fetchActiveTranscodeProgressVia(via);
+          if (!progress) {
+            throw new Error("the session did not answer on the second connection");
+          }
+          const position =
+            this.#videoElement instanceof HTMLVideoElement && Number.isFinite(this.#videoElement.currentTime)
+              ? this.#videoElement.currentTime
+              : 0;
+          const sound = await this.#session.restateSoundtrack(position, via);
+          if (sound === "failed") {
+            throw new Error("the soundtrack could not be restated on the second connection");
+          }
+          if (!this.#rotationLive(rotation)) {
+            break;
+          }
+          this.#adoptProxy(trial);
+          trial = null;
+          // The old connection took the subtitle subscription with it.
+          this.#subtitlePlayback.onTransportReconnected();
+          this.#logEvt(
+            `moved to a second connection ${Math.round(performance.now() - rotation.startedAt)}ms after delivery stopped ` +
+              `(attempt ${attempt}, soundtrack ${sound})`
+          );
+          return;
+        } catch (error) {
+          if (this.#isAbortError(error)) {
+            return;
+          }
+          this.#logEvt(
+            `second connection attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+        } finally {
+          // Not adopted: closing it lets the proxy forget it. The viewer stays
+          // theirs on the old connection, which still carries them.
+          trial?.close();
+        }
+      }
+      this.#logEvt(
+        rotation.cancelled
+          ? "second connection not needed any more"
+          : "second connection abandoned: playback moved on"
+      );
+    } finally {
+      if (this.#rotation === rotation) {
+        this.#rotation = null;
+      }
+    }
   }
 
   /**
