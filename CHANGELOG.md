@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The link the page measures when it connects reaches the proxy in the first report. The measurement ran at once, but the reporter started each session with an empty sample window, so every report said nothing about the link until segments had been delivered — 17 s of `link=?` in the field on 2026-10-03, after the probe had carried 2 MiB at 30-37 Mbit/s. The measured figure is now kept as the link's last known speed.
+
 ## 0.36.16
 
 - **Chore**: Update dependencies: @fastify/websocket 11.3.2 → 11.3.3; 1 package(s) changed in the lock file.

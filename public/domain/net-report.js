@@ -385,48 +385,61 @@ export function stopNetReporter() {
  * @returns {Promise<void>}
  */
 export async function measureLink(transport, { signal } = {}) {
-  let bytes = FIRST_PROBE_BYTES;
-  let measurable = 0;
-  for (let ask = 0; ask < 8 && bytes !== null; ask += 1) {
-    const startedAt = performance.now();
-    let received = 0;
-    let ms = 0;
-    try {
-      if (signal?.aborted) {
+  try {
+    let bytes = FIRST_PROBE_BYTES;
+    let measurable = 0;
+    for (let ask = 0; ask < 8 && bytes !== null; ask += 1) {
+      const startedAt = performance.now();
+      let received = 0;
+      let ms = 0;
+      try {
+        if (signal?.aborted) {
+          return;
+        }
+        const response = await transport.fetch(`/api/link-probe?bytes=${bytes}`, { signal });
+        if (response?.ok === false) {
+          return; // a proxy one release behind has no such route
+        }
+        received = await asBytes(response);
+        // The TRANSFER, never the round trip. The other half is the proxy
+        // answering, and adding the two together measures this proxy rather than
+        // this link — the error that reported a link which had just carried 8 MB
+        // at 38 Mbit/s as 0.11 Mbit/s.
+        ms =
+          typeof (/** @type {{ transferMs?: number }} */ (response)?.transferMs) === "number"
+            ? /** @type {{ transferMs: number }} */ (response).transferMs
+            : performance.now() - startedAt;
+      } catch {
+        // silent-ok: a proxy one release behind has no such route and a channel
+        // that is not up cannot be measured. Both mean the same thing — no
+        // figure — and the estimate fills from segments as it always did.
         return;
       }
-      const response = await transport.fetch(`/api/link-probe?bytes=${bytes}`, { signal });
-      if (response?.ok === false) {
-        return; // a proxy one release behind has no such route
+      if (received <= 0 || signal?.aborted) {
+        return;
       }
-      received = await asBytes(response);
-      // The TRANSFER, never the round trip. The other half is the proxy
-      // answering, and adding the two together measures this proxy rather than
-      // this link — the error that reported a link which had just carried 8 MB
-      // at 38 Mbit/s as 0.11 Mbit/s.
-      ms =
-        typeof (/** @type {{ transferMs?: number }} */ (response)?.transferMs) === "number"
-          ? /** @type {{ transferMs: number }} */ (response).transferMs
-          : performance.now() - startedAt;
-    } catch {
-      // silent-ok: a proxy one release behind has no such route and a channel
-      // that is not up cannot be measured. Both mean the same thing — no
-      // figure — and the estimate fills from segments as it always did.
-      return;
+      recordNetSample(received, ms);
+      if (ms >= MIN_SAMPLE_MS) {
+        measurable += 1;
+      }
+      bytes = nextProbeBytes({
+        lastBytes: bytes,
+        lastMs: ms,
+        measurableSoFar: measurable,
+        minSampleMs: MIN_SAMPLE_MS
+      });
     }
-    if (received <= 0 || signal?.aborted) {
-      return;
+  } finally {
+    // THE FIGURE IS KEPT, not only its samples. The reporter starts each
+    // session with an empty sample window, and the window drops anything older
+    // than thirty seconds — so a link measured while the person was still
+    // choosing a film was gone by the first report, which said `link=?` until
+    // segments arrived (field 2026-10-03). The last figure is what stands while
+    // nothing newer has been measured; this is where it is first measured.
+    const measured = medianLinkMbps();
+    if (measured !== null) {
+      lastLinkMbps = measured;
     }
-    recordNetSample(received, ms);
-    if (ms >= MIN_SAMPLE_MS) {
-      measurable += 1;
-    }
-    bytes = nextProbeBytes({
-      lastBytes: bytes,
-      lastMs: ms,
-      measurableSoFar: measurable,
-      minSampleMs: MIN_SAMPLE_MS
-    });
   }
 }
 
