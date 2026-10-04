@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.1
 
 - **Fix**: Cancel pending provider subtitle discovery when metadata withdraws the work or episode match.
 
