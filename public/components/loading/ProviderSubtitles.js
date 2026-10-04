@@ -25,7 +25,15 @@ export class ProviderSubtitles {
   async #search() {
     if (this.#file === null) return;
     const query = providerSubtitleQuery(this.#state, this.#file);
-    if (!query) return;
+    if (!query) {
+      if (this.#key !== null) {
+        this.#abort?.abort();
+        this.#abort = null;
+        this.#key = null;
+        this.#onItems([], []);
+      }
+      return;
+    }
     const key = JSON.stringify(query);
     if (key === this.#key) return;
     this.#abort?.abort();

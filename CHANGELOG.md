@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Cancel pending provider subtitle discovery when metadata withdraws the work or episode match.
+
 ## 0.37.0
 
 - **New**: Discover OpenSubtitles and Jimaku subtitle variants from established catalogue identities. Offer embedded tracks first, torrent subtitle files second, and provider variants last; fetch provider files only when selected, preserving playback and rejecting late responses after a file switch. Providers have a shared base class, separate API clients, bounded request queues, response-directed rate pauses and download quota handling.
