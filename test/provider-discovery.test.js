@@ -53,3 +53,23 @@ test("a stale download permit refreshes the same file once without downloading a
     controller.clear();
   } finally { Object.assign(globalThis, originals); }
 });
+
+test("metadata that withdraws a work match cancels its pending subtitle discovery", async () => {
+  const originals = { document: globalThis.document, CustomEvent: globalThis.CustomEvent, fetch: globalThis.fetch };
+  globalThis.document = new EventTarget();
+  globalThis.CustomEvent = class extends Event { constructor(type, options) { super(type); this.detail = options.detail; } };
+  let request;
+  globalThis.fetch = (_path, options) => new Promise(resolve => { request = { options, resolve }; });
+  try {
+    const answers = [];
+    const controller = new ProviderSubtitles(items => answers.push(items));
+    document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: { work: { normalized: { kind: "movie", tmdbId: 1 } } } }));
+    controller.start(0);
+    document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: { work: null } }));
+    assert.ok(request.options.signal.aborted);
+    request.resolve(new Response(JSON.stringify({ providers: [{ items: [{ id: "old" }] }] })));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(answers, [[]]);
+    controller.clear();
+  } finally { Object.assign(globalThis, originals); }
+});
