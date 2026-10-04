@@ -26,10 +26,11 @@ export class AnimeMetadata {
   #cache = new MetadataCache({ budgetBytes: 1024 * 1024, maxEntryBytes: 128 * 1024 });
   #pending = new Map();
 
-  constructor(tmdb, { fetch = globalThis.fetch, gate = new RequestGate({ concurrency: 1, perSecond: 0.45, queueLimit: 8 }) } = {}) {
+  constructor(tmdb, { fetch = globalThis.fetch, gate = new RequestGate({ concurrency: 1, perSecond: 0.45, queueLimit: 8 }), cache } = {}) {
     this.#tmdb = tmdb;
     this.#fetch = fetch;
     this.#gate = gate;
+    if (cache) this.#cache = cache;
   }
 
   episodes(request) { return this.#tmdb.episodes(request); }
@@ -94,7 +95,7 @@ export class AnimeMetadata {
   }
 
   async #search(title) {
-    const cached = this.#cache.get(title);
+    const cached = await this.#cache.get(title);
     if (cached) return cached;
     if (this.#pending.has(title)) return this.#pending.get(title);
     const pending = this.#gate.run(async () => {
@@ -115,7 +116,7 @@ export class AnimeMetadata {
       catch { throw new MetadataUnavailableError("AniList returned invalid data"); }
       if (body.errors || !Array.isArray(body.data?.Page?.media)) throw new MetadataUnavailableError("AniList search was incomplete");
       const result = { media: body.data.Page.media, incomplete: body.data.Page.pageInfo?.hasNextPage !== false };
-      this.#cache.set(title, result, 60 * 60 * 1000);
+      await this.#cache.set(title, result, 60 * 60 * 1000);
       return result;
     }, { deadlineAt: Date.now() + 10_000 });
     this.#pending.set(title, pending);

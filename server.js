@@ -22,6 +22,11 @@ import { handleHealthGet } from "./routes/health/get.js";
 import { handleHealthzGet } from "./routes/healthz/get.js";
 import { handleEnvGet } from "./routes/env/get.js";
 import { createMetadata } from "./services/metadata/create-metadata.js";
+import { DiskCache } from "./services/cache/DiskCache.js";
+import { MetadataCache } from "./services/metadata/MetadataCache.js";
+import { createSubtitles } from "./services/subtitles/create-subtitles.js";
+import { handleApiSubtitlesSearchPost } from "./routes/api/subtitles/search/post.js";
+import { handleApiSubtitlesFilePost } from "./routes/api/subtitles/file/post.js";
 import {
   IDENTIFY_BODY_LIMIT,
   handleApiMetadataIdentifyPost
@@ -54,9 +59,19 @@ const shutdownState = {
 const clientsStore = createProxyClientsStore();
 const tunnelServer = createProxyTunnelServer();
 const signalHub = createSignalHub();
+const cacheMiB = Number(process.env.SERVER_CACHE_MIB ?? 1024);
+if (!Number.isSafeInteger(cacheMiB) || cacheMiB < 16 || cacheMiB > 16384) throw new Error("SERVER_CACHE_MIB must be an integer from 16 to 16384");
+const reserveMiB = Number(process.env.SERVER_CACHE_RESERVE_MIB ?? 256);
+if (!Number.isSafeInteger(reserveMiB) || reserveMiB < 0 || reserveMiB > 16384) throw new Error("SERVER_CACHE_RESERVE_MIB must be an integer from 0 to 16384");
+const diskCache = process.env.SERVER_CACHE_DIR ? new DiskCache({ directory: process.env.SERVER_CACHE_DIR, budgetBytes: cacheMiB * 1024 ** 2, reserveBytes: reserveMiB * 1024 ** 2 }) : null;
+const subtitleCache = diskCache?.namespace("subtitles") ?? new MetadataCache({ budgetBytes: 8 * 1024 ** 2, maxEntryBytes: 4 * 1024 ** 2 });
+const subtitles = createSubtitles(subtitleCache);
 const { service: metadata, images: metadataImages } = createMetadata({
-  tokenFile: process.env.TMDB_READ_TOKEN_FILE
+  tokenFile: process.env.TMDB_READ_TOKEN_FILE,
+  cache: diskCache?.namespace("tmdb"),
+  animeCache: diskCache?.namespace("anilist")
 });
+app.addHook("onClose", async () => { await diskCache?.close(); });
 
 // Wire up signal routing: proxy → tunnelServer → signalHub → browser
 tunnelServer.setSignalHandler((sessionId, signal) => {
@@ -136,6 +151,8 @@ app.post("/api/metadata/episodes", { bodyLimit: EPISODES_BODY_LIMIT }, async (re
 app.get("/api/metadata/image/:size/:file", async (req, reply) =>
   handleApiMetadataImageGet(req, reply, { images: metadataImages })
 );
+app.post("/api/subtitles/search", { bodyLimit: 4096 }, async (req, reply) => handleApiSubtitlesSearchPost(req, reply, { subtitles }));
+app.post("/api/subtitles/file", { bodyLimit: 8192 }, async (req, reply) => handleApiSubtitlesFilePost(req, reply, { subtitles }));
 
 app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
 app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
