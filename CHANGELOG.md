@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.0
 
 - **New**: Discover OpenSubtitles and Jimaku subtitle variants from established catalogue identities. Offer embedded tracks first, torrent subtitle files second, and provider variants last; fetch provider files only when selected, preserving playback and rejecting late responses after a file switch. Providers have a shared base class, separate API clients, bounded request queues, response-directed rate pauses and download quota handling.
 - **New**: Persist TMDB, AniList, subtitle searches and selected WebVTT files in one independently bounded server disk cache. Evict the least recently accessed records, retain TMDB work details for seven days, reserve disk space, and perform SQLite operations outside the signalling thread. Cache errors never become claims that a work or subtitle is absent.
