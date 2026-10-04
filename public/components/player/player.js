@@ -670,6 +670,7 @@ export class Player extends StateDerivedView {
       element.setAttribute("type", "radio");
       element.dataset.subtitleKey = item.key;
       element.toggleAttribute("checked", item.checked === true);
+      element.toggleAttribute("disabled", item.disabled === true);
       element.textContent = item.text;
       this.#subtitleMenu.appendChild(element);
     }
@@ -680,7 +681,7 @@ export class Player extends StateDerivedView {
     const target = event.target;
     if (!(target instanceof Element)) return;
     const item = target.closest("media-chrome-menu-item[data-subtitle-key]");
-    if (!item) return;
+    if (!item || item.hasAttribute("disabled")) return;
     this.#subtitleMenu.hidden = true;
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SELECT_SUBTITLE_TRACK, {

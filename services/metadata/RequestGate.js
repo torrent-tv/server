@@ -85,10 +85,10 @@ export class RequestGate {
    *
    * @template T
    * @param {() => Promise<T>} task
-   * @param {{ deadlineAt: number }} options
+   * @param {{ deadlineAt: number, priority?: number }} options
    * @returns {Promise<T>}
    */
-  run(task, { deadlineAt }) {
+  run(task, { deadlineAt, priority = 0 }) {
     if (this.pausedUntil > 0) {
       return Promise.reject(new MetadataUnavailableError("the provider asked us to pause"));
     }
@@ -96,7 +96,10 @@ export class RequestGate {
       return Promise.reject(new MetadataUnavailableError("too many requests waiting"));
     }
     return new Promise((resolve, reject) => {
-      this.#queue.push({ task, resolve, reject, deadlineAt });
+      const item = { task, resolve, reject, deadlineAt, priority };
+      const before = this.#queue.findIndex(waiting => (waiting.priority ?? 0) < priority);
+      if (before < 0) this.#queue.push(item);
+      else this.#queue.splice(before, 0, item);
       this.#pump();
     });
   }

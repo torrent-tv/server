@@ -1,3 +1,8 @@
+## Unreleased
+
+- **New**: Discover OpenSubtitles and Jimaku subtitle variants from established catalogue identities. Offer embedded tracks first, torrent subtitle files second, and provider variants last; fetch provider files only when selected, preserving playback and rejecting late responses after a file switch. Providers have a shared base class, separate API clients, bounded request queues, response-directed rate pauses and download quota handling.
+- **New**: Persist TMDB, AniList, subtitle searches and selected WebVTT files in one independently bounded server disk cache. Evict the least recently accessed records, retain TMDB work details for seven days, reserve disk space, and perform SQLite operations outside the signalling thread. Cache errors never become claims that a work or subtitle is absent.
+
 ## 0.36.18
 
 - **Fix**: A connection that stays open and stops delivering is noticed when its next delivery is overdue, not after 60 s of silence. The proxy sends a numbered probe every half second; the gaps between consecutive probe numbers give this connection's own rhythm (mean plus four mean deviations, the gains of RFC 6298 adapted to heartbeat gaps), and a silence longer than that with requests waiting, and nothing received but not yet handled, is a stall. On 2026-09-28 the 60 s bound equalled the viewer's 60 s cushion, and the picture stopped the second the wedge was declared.

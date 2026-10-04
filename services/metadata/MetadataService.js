@@ -438,15 +438,20 @@ export class MetadataService {
    * @returns {Promise<T>}
    */
   async #cached(key, ttlFor, fetch, wait) {
-    const held = this.#cache.get(key);
+    const held = await this.#cache.get(key);
     if (held !== undefined) {
       return /** @type {T} */ (held);
     }
     return this.#fetches.join(
       key,
       async () => {
+        const cached = await this.#cache.get(key);
+        if (cached !== undefined) return cached;
         const value = await fetch(this.#now() + FETCH_BUDGET_MS);
-        this.#cache.set(key, value, ttlFor(value));
+        // Work records and their titles change slowly. Search results and
+        // season inventories keep their shorter refresh interval.
+        const ttl = /^(work|alternative)\|/u.test(key) ? 7 * FOUND_TTL_MS : ttlFor(value);
+        await this.#cache.set(key, value, ttl);
         return value;
       },
       { ...wait, now: this.#now }

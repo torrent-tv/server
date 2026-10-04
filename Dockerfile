@@ -17,7 +17,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=app:app . .
 
 # Create the volume mount point owned by app so the entrypoint can write to it.
-RUN mkdir -p /app/public-volume && chown app:app /app/public-volume
+RUN mkdir -p /app/public-volume /app/cache && chown app:app /app/public-volume /app/cache
 
 USER app
 

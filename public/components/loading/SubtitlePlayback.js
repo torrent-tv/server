@@ -1,4 +1,6 @@
 import { appendCues, parseVttCues, removeCues } from "../../domain/vtt-cues.js";
+import { ProviderSubtitles } from "./ProviderSubtitles.js";
+import { providerSubtitleLabel } from "../../domain/provider-subtitles.js";
 import { subtitleMenuItems, subtitleToggleKey } from "../../domain/subtitle-menu.js";
 import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.js";
 import {
@@ -204,6 +206,11 @@ export class SubtitlePlayback {
    * @type {ReturnType<typeof setInterval> | null}
    */
   #subtitleCoverageTimer = null;
+  #providers;
+  #providerEntries = new Map();
+  #providerStatuses = [];
+  #providerAbort = null;
+  #providerSelection = 0;
   constructor({ getVideoElement, getTransport, getFiles, registerSourceOnProxy, getAbortSignal, getConsumerId, logEvent }) {
     this.#getVideoElement = getVideoElement;
     this.#getTransport = getTransport;
@@ -212,6 +219,7 @@ export class SubtitlePlayback {
     this.#getAbortSignal = getAbortSignal;
     this.#getConsumerId = getConsumerId;
     this.#logEvent = logEvent;
+    this.#providers = new ProviderSubtitles((items, statuses) => this.#offerProviders(items, statuses));
   }
 
   setTorrentSubtitleFiles(files) {
@@ -227,6 +235,11 @@ export class SubtitlePlayback {
    * any Blob URLs that were created for them.
    */
   clear() {
+    this.#providers.clear();
+    this.#providerAbort?.abort();
+    this.#providerSelection++;
+    this.#providerEntries.clear();
+    this.#providerStatuses = [];
     for (const url of this.#subtitleBlobUrls) {
       URL.revokeObjectURL(url);
     }
@@ -281,10 +294,21 @@ export class SubtitlePlayback {
    * @returns {void}
    */
   select(key) {
+    if (typeof key === "string" && key.includes(":status:")) { this.#providers.retry(); return; }
+    const selection = ++this.#providerSelection;
+    this.#providerAbort?.abort();
+    const provider = this.#providerEntries.get(key);
+    if (provider && !provider.loaded) {
+      const abort = new AbortController();
+      this.#providerAbort = abort;
+      void this.#loadProvider(key, provider, selection, abort);
+      return;
+    }
     const chosen = typeof key === "string" && this.#menuEntries.has(key) ? key : "";
     if (chosen) {
       this.#lastChosenKey = chosen;
     }
+    if (!chosen) this.#rememberedSubtitle = { off: true };
     for (const [entryKey, entry] of this.#menuEntries) {
       const wanted = entryKey === chosen ? "showing" : "disabled";
       if (entry.textTrack.mode !== wanted) {
@@ -333,7 +357,8 @@ export class SubtitlePlayback {
 
   /** @returns {Array<{ key: string, label: string, showing: boolean }>} */
   #menuEntriesNow() {
-    return [...this.#menuEntries].map(([key, entry]) => ({
+    const rank = key => key.includes(":embedded:") ? 0 : key.includes(":sidecar:") ? 1 : 2;
+    return [...this.#menuEntries].sort(([a], [b]) => rank(a) - rank(b)).map(([key, entry]) => ({
       key,
       label: entry.textTrack.label,
       showing: entry.textTrack.mode === "showing"
@@ -349,7 +374,7 @@ export class SubtitlePlayback {
    */
   #publishMenu() {
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, {
-      detail: { items: subtitleMenuItems(this.#menuEntriesNow()) }
+      detail: { items: [...subtitleMenuItems(this.#menuEntriesNow()), ...this.#providerStatuses] }
     }));
   }
 
@@ -384,6 +409,7 @@ export class SubtitlePlayback {
    */
   async loadForVideo(fileIndex) {
     this.clear();
+    this.#providers.start(fileIndex);
 
     const transport = this.#getTransport();
     if (!transport) {
@@ -401,8 +427,83 @@ export class SubtitlePlayback {
       return;
     }
 
-    await this.#loadExternalSubtitles(fileIndex, transport, sourceKey);
     this.#loadEmbeddedSubtitles(fileIndex, transport, sourceKey);
+    await this.#loadExternalSubtitles(fileIndex, transport, sourceKey);
+  }
+
+  #offerProviders(items, statuses) {
+    const video = this.#getVideoElement();
+    if (!(video instanceof HTMLVideoElement)) return;
+    for (const entry of this.#providerEntries.values()) {
+      // A metadata refinement may start a new query. Keep a selected provider
+      // track until the viewer changes it, but remove unselected old offers.
+      if (entry.element.track.mode === "showing") continue;
+      entry.element.remove();
+      this.#menuEntries.delete(entry.key);
+      this.#providerEntries.delete(entry.key);
+    }
+    const epoch = this.#subtitleEpoch;
+    for (const item of items) {
+      const key = `${epoch}:provider:${item.provider}:${item.id}`;
+      if (this.#providerEntries.has(key)) continue;
+      const element = document.createElement("track");
+      element.kind = "subtitles";
+      element.label = providerSubtitleLabel(item);
+      element.srclang = item.language;
+      video.appendChild(element);
+      element.track.mode = "disabled";
+      this.#providerEntries.set(key, { key, item, element, loaded: false });
+      this.#addMenuEntry(key, element.track, null);
+      // Provider variants without a confirmed translation identity must not
+      // impersonate an embedded track of the same language on the next episode.
+      this.#subtitleIdentities.set(element.track, null);
+    }
+    this.#providerStatuses = statuses.filter(p => ["unavailable", "partial", "ambiguous"].includes(p.status)).map(p => ({
+      key: `${epoch}:status:${p.provider}`, text: `${p.provider}: ${p.status === "partial" ? "showing partial results" : "search unavailable — retry"}`, checked: false, disabled: p.status === "partial"
+    }));
+    this.#watchSubtitleModes();
+    this.#publishMenu();
+  }
+
+  async #loadProvider(key, entry, selection, abort) {
+    const epoch = this.#subtitleEpoch;
+    const label = providerSubtitleLabel(entry.item);
+    entry.element.label = `${label} (loading)`;
+    this.#publishMenu();
+    try {
+      const vtt = await this.#providers.load(entry.item, abort.signal);
+      if (epoch !== this.#subtitleEpoch || selection !== this.#providerSelection || abort.signal.aborted || this.#providerEntries.get(key) !== entry) return;
+      const url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+      this.#subtitleBlobUrls.push(url);
+      await new Promise((resolve, reject) => {
+        const element = entry.element;
+        const finish = error => {
+          clearTimeout(timer);
+          element.removeEventListener("load", onLoad);
+          element.removeEventListener("error", onError);
+          abort.signal.removeEventListener("abort", onAbort);
+          error ? reject(error) : resolve();
+        };
+        const onLoad = () => finish();
+        const onError = () => finish(new Error("subtitle track could not load"));
+        const onAbort = () => finish(new Error("subtitle selection cancelled"));
+        const timer = setTimeout(onError, 5000);
+        element.addEventListener("load", onLoad, { once: true });
+        element.addEventListener("error", onError, { once: true });
+        abort.signal.addEventListener("abort", onAbort, { once: true });
+        element.src = url;
+        element.track.mode = "hidden";
+      });
+      if (epoch !== this.#subtitleEpoch || selection !== this.#providerSelection || abort.signal.aborted || this.#providerEntries.get(key) !== entry) return;
+      entry.loaded = true;
+      entry.element.label = label;
+      this.select(key);
+    } catch (error) {
+      if (epoch !== this.#subtitleEpoch) return;
+      entry.element.label = abort.signal.aborted ? label : `${label} (unavailable)`;
+      if (!abort.signal.aborted) console.warn("[subtitles] selected provider file unavailable", error);
+      this.#publishMenu();
+    }
   }
 
   /**

@@ -46,7 +46,7 @@ function readToken(path) {
  * @param {{ tokenFile?: string }} params
  * @returns {{ service: MetadataService, images: ImageFetcher }}
  */
-export function createMetadata({ tokenFile }) {
+export function createMetadata({ tokenFile, cache, animeCache }) {
   const token = readToken(tokenFile);
   const apiGate = new RequestGate({ concurrency: 4, perSecond: 10, queueLimit: 32 });
   const source = token ? new TmdbSource({ token, gate: apiGate }) : null;
@@ -56,11 +56,11 @@ export function createMetadata({ tokenFile }) {
     // of this budget with entries of the shape kept here: 13.4 MB of heap and
     // 30.5 MB of process growth for searches (4169 entries), 16.8 MB and
     // 38.9 MB for seasons (8536 entries) — on a droplet with 393 MB available.
-    cache: new MetadataCache({ budgetBytes: 8 * 1024 * 1024, maxEntryBytes: 256 * 1024 }),
+    cache: cache ?? new MetadataCache({ budgetBytes: 8 * 1024 * 1024, maxEntryBytes: 256 * 1024 }),
     fetches: new SharedFetches({ waiterLimit: 256 })
   });
   // Images do not count against the API's rate: they come from TMDB's image
   // host, which states no such limit. Concurrency and the queue still bound them.
   const images = new ImageFetcher({ gate: new RequestGate({ concurrency: 4, perSecond: Infinity, queueLimit: 32 }) });
-  return { service: new AnimeMetadata(service), images };
+  return { service: new AnimeMetadata(service, { cache: animeCache }), images };
 }
