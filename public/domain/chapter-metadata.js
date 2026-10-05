@@ -8,13 +8,21 @@ export class ChapterMetadata {
     this.snapshot = null;
     this.reading = null;
     this.again = false;
+    this.active = false;
     this.publish(null);
   }
 
-  select({ sourceKey, fileIndex, transport }) {
+  select({ sourceKey, fileIndex, transport, defer = false }) {
     this.clear();
     this.selection = { sourceKey, fileIndex, transport };
     this.abort = new AbortController();
+    this.active = !defer;
+    void this.refresh();
+  }
+
+  activate() {
+    if (this.active || !this.selection) return;
+    this.active = true;
     void this.refresh();
   }
 
@@ -25,7 +33,7 @@ export class ChapterMetadata {
   }
 
   async refresh() {
-    if (!this.selection) return;
+    if (!this.selection || !this.active) return;
     if (this.reading) { this.again = true; return this.reading; }
     const selected = this.selection;
     const signal = this.abort.signal;
