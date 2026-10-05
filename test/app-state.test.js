@@ -23,6 +23,7 @@ import {
   INITIAL_STATE,
   MEDIA_INTENT,
   acceptsPlaybackInput,
+  acceptsPlaybackIntent,
   declaredEdges,
   isWaiting,
   isWithin,
@@ -141,7 +142,7 @@ test("an event that means nothing here is ignored, not obeyed", () => {
   assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.FATAL_FAILURE), null);
   assert.equal(nextState(APP_STATE.IDLE, APP_EVENT.CLOSED), null);
   assert.equal(nextState(APP_STATE.ERROR, APP_EVENT.FRAME_AVAILABLE), null);
-  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.RESUMED), null);
+  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.RESUMED), APP_STATE.OPENING);
 });
 
 // ------------------------------------------------------------------ hierarchy
@@ -217,6 +218,14 @@ test("the edges that lead back to their own state are deliberate", () => {
   assert.deepEqual(
     [...new Set(selfEdges)].sort(),
     [
+      // Intent changes update extended state without completing preparation.
+      `${APP_STATE.ADVANCING} + ${APP_EVENT.RESUMED}`,
+      `${APP_STATE.OPENING} + ${APP_EVENT.PAUSED_BY_VIEWER}`,
+      `${APP_STATE.OPENING} + ${APP_EVENT.RESUMED}`,
+      `${APP_STATE.PAUSED} + ${APP_EVENT.PAUSED_BY_VIEWER}`,
+      `${APP_STATE.STALLED} + ${APP_EVENT.RESUMED}`,
+      `${APP_STATE.SWITCHING} + ${APP_EVENT.PAUSED_BY_VIEWER}`,
+      `${APP_STATE.SWITCHING} + ${APP_EVENT.RESUMED}`,
       `${APP_STATE.OPENING} + ${APP_EVENT.REBUILD_REQUIRED}`,
       `${APP_STATE.SWITCHING} + ${APP_EVENT.SWITCH_REQUESTED}`
     ].sort(),
@@ -354,8 +363,20 @@ test("nothing the element says lifts the hold", () => {
   // read as the viewer stopping playback, the machine left the wait for PAUSED,
   // and the viewer resumed into the soundtrack they had just replaced.
   for (const event of [APP_EVENT.RESUMED, APP_EVENT.PAUSED_BY_VIEWER, APP_EVENT.FRAME_BLOCKED, APP_EVENT.FRAME_AVAILABLE]) {
-    assert.equal(nextState(APP_STATE.SWITCHING, event), null, `${event} must not move the hold`);
+    const intent = event === APP_EVENT.RESUMED || event === APP_EVENT.PAUSED_BY_VIEWER;
+    assert.equal(nextState(APP_STATE.SWITCHING, event), intent ? APP_STATE.SWITCHING : null, `${event} must not move the hold`);
   }
+});
+
+test("viewer intent can change during preparation without declaring a ready stream", () => {
+  for (const state of [APP_STATE.OPENING, APP_STATE.SWITCHING]) {
+    assert.equal(acceptsPlaybackIntent(state), true);
+    for (const event of [APP_EVENT.RESUMED, APP_EVENT.PAUSED_BY_VIEWER]) {
+      assert.equal(nextState(state, event), state);
+    }
+  }
+  assert.equal(acceptsPlaybackIntent(APP_STATE.IDLE), false);
+  assert.equal(acceptsPlaybackIntent(APP_STATE.ERROR), false);
 });
 
 test("a hold does not survive the stream it belongs to", () => {

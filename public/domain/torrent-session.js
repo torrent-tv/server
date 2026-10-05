@@ -1,7 +1,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { PLAYER_EVENTS } from "../shared/events.js";
-import { viewerHasStopped } from "./playback-intent.js";
+import { pauseWithoutIntent, viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
 import { bufferedAheadSeconds as measureBufferedAheadSeconds } from "./buffer-metrics.js";
@@ -21,6 +21,7 @@ function fileAtIndex(files, fileIndex) {
 }
 
 export class TorrentSession {
+  #sourcePlayback = null;
   /** @type {(() => void) | null} */
   #seekCleanup = null;
 
@@ -201,6 +202,7 @@ export class TorrentSession {
     }
     this.abortPendingRequests();
     this.releaseActiveTranscodeSessions({ preferBeacon, reason });
+    this.#sourcePlayback = null;
     if (!keepSource) {
       this.current = null;
     }
@@ -246,7 +248,7 @@ export class TorrentSession {
    *   Whether the rung reported itself ready, and — when the proxy answered
    *   that nothing at that height suits this viewer's link — why.
    */
-  async prepareQualityVariant(height, positionSeconds) {
+  async prepareQualityVariant(height, positionSeconds, signal = null) {
     const current = this.currentTranscodeSession;
     if (!current || !this.activeTranscodeSessions.has(current.sessionId) || !Number.isFinite(positionSeconds)) {
       return { ready: false, unavailable: null };
@@ -255,25 +257,20 @@ export class TorrentSession {
     const path =
       `/transcode/${encodeURIComponent(sessionId)}/v/${height}/warm` +
       `?position=${positionSeconds.toFixed(3)}&consumer=${encodeURIComponent(this.consumerId)}`;
-    try {
-      const response = await transport.fetch(path);
-      if (response.status === 409) {
-        let body = null;
-        try {
-          body = await response.json();
-        } catch {
-          // silent-ok: a 409 without our JSON is some other refusal, answered
-          // below as "not ready" as before.
-        }
-        if (body?.outcome === "output-unavailable") {
-          return { ready: false, unavailable: new OutputUnavailableError(body) };
-        }
-      }
-      return { ready: response.status === 204, unavailable: null };
-    } catch (error) {
-      console.debug("[torrent-tv] warming the quality variant failed", error);
-      return { ready: false, unavailable: null };
+    const response = await transport.fetch(path, {
+      signal: signal ? AbortSignal.any([signal, this.abortController.signal]) : this.abortController.signal
+    });
+    if (response.status === 204) return { ready: true, unavailable: null };
+    let body;
+    try { body = await response.json(); }
+    catch { /* silent-ok: an invalid body still produces the explicit HTTP error below. */ }
+    if (response.status === 409 && body?.outcome === "output-unavailable") {
+      return { ready: false, unavailable: new OutputUnavailableError(body) };
     }
+    const error = new Error(body?.error || `Quality preparation failed (${response.status}).`);
+    error.code = body?.reason ?? "quality-preparation-failed";
+    error.canRetry = body?.canRetry === true;
+    throw error;
   }
 
   /**
@@ -285,17 +282,13 @@ export class TorrentSession {
    * first and producing second shows the track's cold start as a spinner over a
    * stopped picture. The same reason the quality rung above is prepared.
    *
-   * Best effort: a track that is not ready in time is not a reason to refuse
-   * the viewer their change, it only means they wait where they would have
-   * waited anyway.
-   *
    * @param {number} trackIndex
    * @param {number} positionSeconds
    * @param {boolean | null} [browserNeedsTranscode] - Whether this browser
    *   cannot play THAT track's codec as it stands; null leaves it unsaid.
    * @returns {Promise<"ready" | "not-ready" | "unsupported">} Whether the track reported itself ready.
    */
-  async prepareAudioTrack(trackIndex, positionSeconds, browserNeedsTranscode = null) {
+  async prepareAudioTrack(trackIndex, positionSeconds, browserNeedsTranscode = null, signal = null) {
     const current = this.currentTranscodeSession;
     if (!current || !this.activeTranscodeSessions.has(current.sessionId) || !Number.isFinite(positionSeconds)) {
       return false;
@@ -307,22 +300,14 @@ export class TorrentSession {
       // What this browser needs for THAT track — the one it is moving to, not
       // the one it is on. The proxy decides how the track is produced from it.
       (browserNeedsTranscode === null ? "" : `&transcode=${browserNeedsTranscode ? 1 : 0}`);
-    try {
-      const response = await transport.fetch(path);
-      if (response.status === 204) {
-        return "ready";
-      }
-      // "Not ready in time" and "this proxy cannot prepare a track at all" are
-      // different answers and were both reported as false, which then refused
-      // the switch for the rest of the session. A 404 is the second: an older
-      // proxy with no such route, or a stream whose audio is not published
-      // separately. Then the switch should proceed the old way rather than be
-      // forbidden.
-      return response.status === 404 ? "unsupported" : "not-ready";
-    } catch (error) {
-      console.debug("[torrent-tv] preparing the audio track failed", error);
-      return "unsupported";
-    }
+    const response = await transport.fetch(path, { signal: signal ? AbortSignal.any([signal, this.abortController.signal]) : this.abortController.signal });
+    if (response.status === 204) return "ready";
+    if (response.status === 404) return "unsupported";
+    let details;
+    try { details = await response.json(); } catch { /* silent-ok: the HTTP status below still produces an explicit preparation error. */ }
+    const error = new Error(details?.error || `Audio preparation failed (${response.status}).`);
+    error.canRetry = details?.canRetry === true;
+    throw error;
   }
 
   /**
@@ -352,6 +337,15 @@ export class TorrentSession {
     this.#viewGeneration += 1;
     const generation = this.#viewGeneration;
     const sessions = Array.from(this.activeTranscodeSessions.entries());
+    if (sessions.length === 0 && this.#sourcePlayback) {
+      const { transport, reportPath } = this.#sourcePlayback;
+      await transport.fetch(reportPath, {
+        method: "POST", signal: this.abortController.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ consumerId: this.consumerId, positionSeconds, seek: true, generation,
+          playing: pictureIsMoving(), waiting: viewerIsWaiting(), bufferedAheadSec: bufferedAheadSecondsForReporter() })
+      });
+    }
     for (const [sessionId, transport] of sessions) {
       const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/seek`;
       const init = {
@@ -866,7 +860,7 @@ export class TorrentSession {
    * @param {ProxyTransport} transport
    * @returns {Promise<{ sourceKey: string, directUrl: string, mode: "direct" | "hls", audioCodec: string, videoCodec: string, container: string, durationSeconds: number, videoWidth: number, videoHeight: number, audioTracksPending: boolean, pending: boolean }>}
    */
-  async prepareProxyPlaybackPlan(fileIndex, transport) {
+  async prepareProxyPlaybackPlan(fileIndex, transport, selection = {}) {
     if (!this.current || this.current.type !== "torrent") {
       throw new Error("Only parsed .torrent file can be streamed in this mode.");
     }
@@ -893,22 +887,33 @@ export class TorrentSession {
       body: JSON.stringify({
         sourceKey,
         fileIndex,
-        userAgent
+        userAgent,
+        consumerId: this.consumerId,
+        positionSeconds: selection.positionSeconds ?? 0,
+        wantsToPlay: selection.wantsToPlay !== false,
+        waitForReady: true
       })
     });
 
     if (!response.ok) {
       let details = "";
+      let canRetry = true;
+      let code;
       try {
         const payload = await response.json();
         details = typeof payload?.error === "string" ? payload.error : "";
+        canRetry = payload?.canRetry !== false;
+        code = payload?.code;
       } catch (_error) {
         // silent-ok: the body is optional detail on top of a status the caller
         // already acts on and already reports. A proxy that answers without
         // JSON has still answered.
       }
       const suffix = details ? `: ${details}` : "";
-      throw new Error(`Proxy playback plan request failed (${response.status})${suffix}`);
+      const error = new Error(`Proxy playback plan request failed (${response.status})${suffix}`);
+      error.canRetry = canRetry;
+      error.code = code;
+      throw error;
     }
 
     const payload = await response.json();
@@ -931,10 +936,15 @@ export class TorrentSession {
     const videoHeight =
       typeof payload?.videoHeight === "number" && Number.isFinite(payload.videoHeight) ? payload.videoHeight : 0;
 
-    // `pending` = the file header is still downloading and codecs could not be
-    // probed yet. The caller should poll again (the proxy keeps the header
-    // prioritised). Not a failure.
+    if (payload?.pending === true) {
+      const error = new Error("This proxy requires an update to support source preparation events.");
+      error.canRetry = false;
+      throw error;
+    }
     const pending = payload?.pending === true;
+
+    this.#sourcePlayback = { transport, directUrl,
+      reportPath: `/api/sources/${encodeURIComponent(sourceKey)}/files/${fileIndex}/viewer` };
 
     return {
       sourceKey,
@@ -983,10 +993,21 @@ export class TorrentSession {
   }
 
   async playFromUrl(videoElement, url) {
-    videoElement.pause();
+    pauseWithoutIntent(videoElement);
     videoElement.src = url;
     videoElement.load();
-    await videoElement.play().catch(() => undefined);
+    if (this.#sourcePlayback?.directUrl === url && this.activeTranscodeSessions.size === 0) {
+      startNetReporter({
+        ...this.#sourcePlayback,
+        consumerId: this.consumerId,
+        getBufferedAheadSec: () => measureBufferedAheadSeconds(videoElement),
+        getPositionSeconds: () => videoElement.currentTime,
+        getGeneration: () => this.#viewGeneration,
+        getPlaying: () => !videoElement.paused && !videoElement.ended && videoElement.readyState >= 3,
+        getWaiting: () => !videoElement.ended && !viewerHasStopped(videoElement) &&
+          (videoElement.paused || videoElement.readyState < 3)
+      });
+    }
   }
 
   /**
@@ -1033,13 +1054,13 @@ export class TorrentSession {
     const initialLinkReading = getLatestLinkReading();
     const initialLinkMbps = getEstimatedLinkMbps() ?? initialLinkReading?.mbps ?? null;
     const initialBufferLimit = Number(options.getBufferLimitSeconds?.());
-    const createDeadlineMs = Date.now() + 90_000;
     let attempt = 0;
     let response = null;
-    while (Date.now() < createDeadlineMs) {
+    while (true) {
+      this.abortController.signal.throwIfAborted();
       response = await transport.fetch("/api/transcode-sessions", {
         method: "POST",
-        timeoutMs: Math.max(1, createDeadlineMs - Date.now()),
+        timeoutMs: 0,
         headers: {
           "Content-Type": "application/json"
         },
@@ -1097,9 +1118,11 @@ export class TorrentSession {
 
       let details = "";
       let unavailable = null;
+      let terminal = false;
       try {
         const payload = await response.json();
         details = typeof payload?.error === "string" ? payload.error : "";
+        terminal = payload?.retryable === false || payload?.terminal === true;
         // Nothing this proxy holds or could make suits this viewer's link. Not
         // a failure to retry against the same link: the loading flow explains
         // it in terms of their connection.
@@ -1124,18 +1147,16 @@ export class TorrentSession {
 
       const isWarmupError =
         response.status === 500 && /HLS playlist is still warming up/i.test(details);
-      if (isWarmupError) {
+      if (isWarmupError && !terminal) {
         attempt += 1;
-        await delay(Math.min(3000, 500 + attempt * 250));
+        await delay(Math.min(3000, 500 + attempt * 250), this.abortController.signal);
         continue;
       }
 
       const suffix = details ? `: ${details}` : "";
-      throw new Error(`Transcode session request failed (${response.status})${suffix}`);
-    }
-
-    if (!response || !response.ok) {
-      throw new Error("Timed out waiting for transcode session allocation.");
+      const refusal = new Error(`Transcode session request failed (${response.status})${suffix}`);
+      refusal.canRetry = !terminal && response.status === 503;
+      throw refusal;
     }
 
     const payload = await response.json();
@@ -1242,6 +1263,7 @@ export class TorrentSession {
         getBufferLimitSeconds: options.getBufferLimitSeconds,
         getBufferedRanges: options.getBufferedRanges,
         getPositionSeconds: () => {
+          if (typeof options.getPositionSeconds === "function") return options.getPositionSeconds();
           const video = document.querySelector("#player__video");
           return video?.readyState === 0
             ? (options.getStartPositionSeconds?.() ?? startPositionSeconds)
@@ -1270,7 +1292,7 @@ export class TorrentSession {
     // The MEDIA playlist, never the master. What is being waited for is a
     // playable segment list, and a master carries none — only pointers to the
     // variants. Waiting on one never finishes.
-    await waitForHlsPlaylist(mediaPlaylistUrl, 15 * 60_000, {
+    await waitForHlsPlaylist(mediaPlaylistUrl, {
       progressUrl,
       fetchFn,
       onProgress: onTranscodeProgress,
@@ -1309,7 +1331,8 @@ export class TorrentSession {
       signal: this.abortController.signal,
       body: JSON.stringify({
         sourceType: this.current.sourceType,
-        source: this.current.sourceValue
+        source: this.current.sourceValue,
+        consumerId: this.consumerId
       })
     });
     if (!response.ok) {
@@ -1317,6 +1340,9 @@ export class TorrentSession {
     }
 
     const payload = await response.json();
+    if (payload?.playbackMapVersion !== 1) {
+      throw new Error("The assigned proxy needs an update before this page can prepare playback.");
+    }
     const sourceKey = typeof payload?.sourceKey === "string" ? payload.sourceKey : "";
     if (!sourceKey) {
       throw new Error("Proxy did not return sourceKey.");
@@ -1376,7 +1402,6 @@ function readOfferedHeights(value) {
 
 /**
  * @param {string} playlistUrl
- * @param {number} timeoutMs
  * @param {{
  *   progressUrl?: string,
  *   fetchFn?: (url: string, options?: object) => Promise<Response>,
@@ -1384,8 +1409,7 @@ function readOfferedHeights(value) {
  *   signal?: AbortSignal | null
  * }} telemetry
  */
-async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
-  const startedAt = Date.now();
+export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
   let attempt = 0;
   let lastProgressPollMs = 0;
   const progressUrl =
@@ -1398,7 +1422,7 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
       ? telemetry.fetchFn
       : (url, options) => fetch(url, options);
 
-  while (Date.now() - startedAt < timeoutMs) {
+  while (true) {
     if (signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
@@ -1413,14 +1437,14 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
 
     try {
       const response = await fetchFn(playlistUrl, { cache: "no-store", signal: signal ?? undefined });
-      if (response.status === 202 || response.status === 404) {
+      if (response.status === 202) {
         const retryAfterHeader = response.headers.get("Retry-After");
         const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
         const backoffMs = Number.isFinite(retryAfterSec)
           ? Math.max(250, retryAfterSec * 1000)
           : Math.min(3000, 500 + attempt * 250);
         attempt += 1;
-        await delay(backoffMs);
+        await delay(backoffMs, signal);
         continue;
       }
       if (response.ok) {
@@ -1442,16 +1466,26 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
           return;
         }
         attempt += 1;
-        await delay(Math.min(3000, 500 + attempt * 250));
+        await delay(Math.min(3000, 500 + attempt * 250), signal);
         continue;
-      } else if (response.status >= 500) {
+      } else if (response.status >= 400) {
         let details = "";
+        // Older proxies used 404 while a playlist was not produced yet.
+        let retryable = response.status === 503 || response.status === 404;
         try {
           const payload = await response.json();
           details = typeof payload?.error === "string" ? payload.error : "";
+          if (payload?.retryable === false || payload?.terminal === true) retryable = false;
         } catch (_error) {
           // silent-ok: the body is optional detail on top of a status that is
           // reported and raised immediately below.
+        }
+        if (retryable) {
+          const retryAfterSec = Number(response.headers.get("Retry-After"));
+          attempt += 1;
+          await delay(retryAfterSec > 0 ? Math.max(250, retryAfterSec * 1000)
+            : Math.min(3000, 500 + attempt * 250), signal);
+          continue;
         }
         const suffix = details ? `: ${details}` : "";
         // The wait ENDS here, so the line says that rather than "still
@@ -1469,14 +1503,8 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
         // generated HLS playlist" — a message that names none of it.
         const refusal = new Error(`Transcode playlist request failed (${response.status})${suffix}`);
         refusal.isProxyRefusal = true;
-        // Retryable, and it must say so: the caller passes `canRetry` straight
-        // from this flag to the error screen, and without it the viewer is left
-        // on a screen with no way back. The commonest way here is the torrent
-        // ceasing to deliver — the run stops short, the session goes to its
-        // failed state and answers 500 to everything — which is data starvation,
-        // the archetypal keep-waiting case, and a Retry makes a new session
-        // that starts the encoder again.
-        refusal.canRetry = true;
+        // A terminal output refusal must not restart the same failed output.
+        refusal.canRetry = false;
         throw refusal;
       }
     } catch (error) {
@@ -1486,9 +1514,8 @@ async function waitForHlsPlaylist(playlistUrl, timeoutMs, telemetry = {}) {
       // Playlist can be temporarily unavailable while ffmpeg is warming up.
     }
     attempt += 1;
-    await delay(Math.min(3000, 500 + attempt * 250));
+    await delay(Math.min(3000, 500 + attempt * 250), signal);
   }
-  throw new Error("Timed out waiting for generated HLS playlist.");
 }
 
 /**
@@ -1577,9 +1604,17 @@ function describeProgressUrl(progressUrl) {
   return match ? `session ${match[1].slice(0, 8)}` : progressUrl.slice(0, 80);
 }
 
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function delay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener("abort", cancelled);
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    const cancelled = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", cancelled, { once: true });
+    if (signal?.aborted) cancelled();
   });
 }
 

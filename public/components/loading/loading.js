@@ -1,5 +1,7 @@
+import { waitForMediaReady } from "../../domain/media-ready.js";
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { SeekPosition } from "../../domain/seek-position.js";
+import { PlaybackTasks } from "../../domain/playback-tasks.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
@@ -7,7 +9,7 @@ import {
   consumePauseCause,
   noteElementFailed,
   noteElementRecovered,
-  noteViewerStopped,
+  viewerHasStopped,
   PAUSE_CAUSE,
   pauseWithoutIntent
 } from "../../domain/playback-intent.js";
@@ -64,7 +66,6 @@ const RECONNECT_SAME_PROXY_ATTEMPTS = 2;
 const RECONNECT_TOTAL_ATTEMPTS = 3;
 const RECONNECT_CONNECT_TIMEOUT_MS = 10_000;
 const RECONNECT_BACKOFF_MS = 2_000; // pause before attempt 2
-const RECONNECT_ONLINE_WAIT_MS = 15_000; // max wait for `online` per attempt
 const RECONNECT_STABLE_RESET_MS = 30_000; // healthy playback resets the cycle count
 const RECONNECT_MAX_CYCLES = 3; // consecutive loss→recover cycles before giving up
 
@@ -255,13 +256,6 @@ export class Loading extends StateDerivedView {
     // not understand and leaving them to seek back afterwards, which is a worse
     // thing to do to them than a wait they can see the reason for.
     audioPreparing: "Preparing the soundtrack you chose…",
-    // Shown INSTEAD of failing once the ordinary wait has been exhausted. There
-    // is nothing wrong on our side and nothing to retry: the file simply has
-    // nobody to download it from, and that can change at any moment or never.
-    // Saying so and waiting on is more useful than an error screen, and the
-    // Cancel and Playlist buttons are there for a viewer who would rather not.
-    noPeersKeepWaiting:
-      "No one is sharing this file yet. Downloading cannot start until someone does — this may take a while, or may not happen at all. You can wait, pick another video, or cancel.",
     connectionLost: "Connection to the proxy was lost.",
     reconnecting: "Reconnecting...",
     waitingForNetwork: "Waiting for the network to come back…",
@@ -297,26 +291,7 @@ export class Loading extends StateDerivedView {
       "This magnet link names no tracker, so only the distributed hash table could look for the swarm — and it found nobody. The link is incomplete rather than the file being dead: a link that carries its trackers, or the original .torrent file, will usually work."
   };
 
-  // How long to wait for the file header quietly before SAYING that nothing is
-  // arriving (cold torrent / peers connecting). It used to be the point at which
-  // the load failed, which was wrong: a torrent with no seeders is not a fault
-  // to report, it is a fact to state — nothing is broken, nothing would be fixed
-  // by retrying, and someone may start sharing a minute later. Past this point
-  // the wait continues with an honest message; the viewer leaves by cancelling
-  // or by picking another video.
-  static PLAN_WAIT_MS = 180_000;
 
-  // How long the picture waits, stopped, for a soundtrack the viewer chose.
-  //
-  // It has to outlast a COLD one: a soundtrack that ships as its own file may
-  // have nothing downloaded when it is asked for, and the swarm has to deliver
-  // its first pieces before anything can be encoded. Field 2026-08-31: the
-  // first piece of one took 27.7 s, which is longer than the proxy's own warm
-  // request waits before answering — so a single ask cannot settle it and this
-  // is the bound on asking repeatedly. Past it the viewer is told the track is
-  // not ready and keeps the one they had, which is recoverable; they can choose
-  // it again once more of it has arrived.
-  static AUDIO_TRACK_WAIT_MS = 120_000;
 
   /** The last figure shown, and when — so the countdown can only go down. */
   /**
@@ -344,8 +319,6 @@ export class Loading extends StateDerivedView {
    * are dropped when they arrive for a choice that has been replaced.
    */
   #mediaSelection = 0;
-  /** The "nobody is sharing this" notice has been shown for this attempt. */
-  #longWaitAnnounced = false;
   #actionButton;
   #videoElement = null;
   #session;
@@ -446,6 +419,7 @@ export class Loading extends StateDerivedView {
    * @type {number}
    */
   #playbackEpoch = 0;
+  #playbackTasks = new PlaybackTasks();
   /**
    * The element as it was when the current wait was noticed, or null when no
    * check is pending. What is compared against it decides whether the viewer is
@@ -473,6 +447,7 @@ export class Loading extends StateDerivedView {
    * happen to be ready — not the order they were made.
    */
   #qualityPickSeq = 0;
+  #qualityPreparation = null;
   /**
    * The cushion this file needs before a switch between outputs is made, in
    * seconds, as the proxy last said (`minimumBufferSeconds`). Null until said.
@@ -493,6 +468,7 @@ export class Loading extends StateDerivedView {
    * queueing behind it.
    */
   #audioPickSeq = 0;
+  #audioPreparation = null;
   /**
    * Which pick the picture is being held for, or null when it is not held. A
    * hold outlives the pick that took it — a second choice made during one
@@ -635,6 +611,7 @@ export class Loading extends StateDerivedView {
     } catch (error) {
       if (epoch !== this.#playbackEpoch) return;
       const description = error instanceof Error ? error.message : String(error);
+      this.#logEvt(`seek failed: ${description}`);
       const canRetry = this.#activeFileIndex >= 0;
       this.#logEvt(`seek to ${position}s failed (retry ${canRetry ? "offered" : "impossible"}): ${description}`);
       if (canRetry) this.#armRetryableStall(this.#activeFileIndex, description);
@@ -702,15 +679,7 @@ export class Loading extends StateDerivedView {
   /** @param {CustomEvent} event */
   #onProcessPlayback = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
-    const epoch = this.#beginPlaybackAttempt();
-    void this.#processPlayback(payload).catch((error) => {
-      if (this.#isAbortError(error)) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[torrent-tv] playback failed:", message, error);
-      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
-    });
+    this.#runPlaybackTask(() => this.#processPlayback(payload));
   };
 
   /** @param {CustomEvent} event */
@@ -748,31 +717,12 @@ export class Loading extends StateDerivedView {
     for (const name of ["seeking", "seeked", "waiting", "playing", "pause", "ended", "stalled", "error"]) {
       videoElement.addEventListener(name, () => {
         log(name);
-        // Who caused a pause decides everything that follows it, so it is
-        // asked once, before anything reacts.
         const pauseCause = name === "pause" ? consumePauseCause(videoElement) : null;
-        if (name === "error") {
-          this.#onMediaElementFailed(videoElement);
-        }
+        if (name === "error") this.#onMediaElementFailed(videoElement);
         this.#onPlaybackEventForBuffering(name, pauseCause);
-        // The viewer stopping or restarting playback is a state of the
-        // application, not merely of the element. Mirrored, never decided here:
-        // the element owns the fact and this reports it.
-        if (name === "pause") {
-          // A pause we caused ourselves is not a decision by the viewer, and
-          // neither is the one the element makes when it fails.
-          if (pauseCause === PAUSE_CAUSE.VIEWER) {
-            this.#viewerPaused = true;
-            noteViewerStopped(videoElement, true);
-            signalApp(APP_EVENT.PAUSED_BY_VIEWER, { viewerWantsPlayback: false });
-          } else if (pauseCause === PAUSE_CAUSE.ELEMENT) {
-            this.#logEvt("the element stopped itself after failing — not the viewer's pause");
-          }
-        } else if (name === "playing") {
-          this.#viewerPaused = false;
-          noteViewerStopped(videoElement, false);
+        // Explicit controls own viewer intent; recovery preserves that decision.
+        if (name === "playing") {
           noteElementRecovered(videoElement);
-          signalApp(APP_EVENT.RESUMED, { viewerWantsPlayback: true });
         }
         this.#reportSeekIntent(name, videoElement);
         // Whether the picture is moving is a fact the proxy orders its work by:
@@ -795,6 +745,9 @@ export class Loading extends StateDerivedView {
         }
       });
     }
+    document.addEventListener(APP_EVENTS.SIGNAL, (event) => {
+      if (event.detail?.event === APP_EVENT.PAUSED_BY_VIEWER || event.detail?.event === APP_EVENT.RESUMED) reportNow();
+    });
     // While playing, the position moves continuously and the address bar has to
     // follow it, or a bookmark taken mid-film reopens at the last discrete
     // event. `timeupdate` fires about four times a second, which is far too
@@ -1493,13 +1446,6 @@ export class Loading extends StateDerivedView {
     if (!this.#session.current) {
       return;
     }
-    if (this.#isProcessing) {
-      return;
-    }
-    this.#pendingCurrentTime = 0;
-    // A different file has its own tracks and resolution — reset audio + quality.
-    this.#selectedAudioTrackIndex = 0;
-    this.#playingHeight = 0;
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SHOW, {
         detail: {
@@ -1508,14 +1454,11 @@ export class Loading extends StateDerivedView {
         }
       })
     );
-    const epoch = this.#beginPlaybackAttempt();
-    void this.#switchToVideoFile(fileIndex).catch((error) => {
-      if (this.#isAbortError(error)) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[torrent-tv] playback failed:", message, error);
-      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
+    this.#runPlaybackTask(() => {
+      this.#pendingCurrentTime = 0;
+      this.#selectedAudioTrackIndex = 0;
+      this.#playingHeight = 0;
+      return this.#switchToVideoFile(fileIndex);
     });
   };
 
@@ -1524,16 +1467,32 @@ export class Loading extends StateDerivedView {
     const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
     const currentTime = event instanceof CustomEvent ? (event.detail?.currentTime ?? null) : null;
     const fileIndex = event instanceof CustomEvent ? (event.detail?.fileIndex ?? null) : null;
-    const epoch = this.#beginPlaybackAttempt();
-    void this.#processMagnetPlayback(magnetUri, currentTime, fileIndex).catch((error) => {
-      if (this.#isAbortError(error)) {
-        return;
+    this.#runPlaybackTask(() => this.#processMagnetPlayback(magnetUri, currentTime, fileIndex));
+  };
+
+  #runPlaybackTask(run, { preservePlayer = false } = {}) {
+    let epoch = this.#playbackEpoch;
+    return this.#playbackTasks.replace(async () => {
+      epoch = this.#beginPlaybackAttempt();
+      this.#cancelRequested = false;
+      await run();
+    }, () => {
+      this.#cancelRequested = true;
+      this.#playbackEpoch += 1;
+      this.#qualityPreparation?.abort();
+      this.#audioPreparation?.abort();
+      this.#session.abortPendingRequests();
+      if (!preservePlayer) {
+        this.#hlsPlayer.clear();
+        this.#subtitlePlayback.clear();
       }
+    }).catch((error) => {
+      if (this.#isAbortError(error)) return;
       const message = error instanceof Error ? error.message : String(error);
-      console.error("[torrent-tv] magnet playback failed:", message, error);
+      console.error("[torrent-tv] playback failed:", message, error);
       this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
     });
-  };
+  }
 
   #onErrorShow = () => {
     // For a multi-file torrent keep the parsed source so the error screen's
@@ -1616,25 +1575,14 @@ export class Loading extends StateDerivedView {
   #stages = new StageTimeline({ log: (message) => this.#logEvt(message) });
 
   /**
-   * Whether the VIEWER stopped playback — not whether the element is stopped.
-   * The two differ wherever we pause on our own account, which is the whole of
-   * the pre-buffer gate. See domain/playback-intent.js.
-   *
-   * @type {boolean}
-   */
-  #viewerPaused = false;
-
-  /**
-   * Whether the viewer wants the picture to move — their last decision, taken
-   * from the element's `pause` and `playing` events whose cause was the viewer.
-   * Sent with a stream that has just become usable, and with the end of a
-   * stall, so a rebuild finishing under a pause does not start playing at
-   * someone who stopped it, and one finishing after a failure does.
+   * Whether the viewer wants the picture to move — read from the element, which
+   * owns the fact. Sent with a stream that has just become usable so a rebuild
+   * finishing under a pause does not start playing at someone who stopped it.
    *
    * @returns {boolean}
    */
   #viewerWantsPlayback() {
-    return !this.#viewerPaused;
+    return !viewerHasStopped(this.#videoElement);
   }
 
   #onAppReset = () => {
@@ -1665,6 +1613,9 @@ export class Loading extends StateDerivedView {
   }
 
   #stopPlayback(options = {}) {
+    this.#qualityPreparation?.abort();
+    this.#audioPreparation?.abort();
+    this.#playbackTasks.invalidate();
     this.#cancelRequested = true;
     this.#playbackEpoch += 1;
     this.#seekPosition.reset();
@@ -1693,7 +1644,7 @@ export class Loading extends StateDerivedView {
       this.#transport = null;
     }
     if (this.#videoElement instanceof HTMLVideoElement) {
-      this.#videoElement.pause();
+      pauseWithoutIntent(this.#videoElement);
       this.#videoElement.removeAttribute("src");
       this.#videoElement.load();
     }
@@ -1819,9 +1770,6 @@ export class Loading extends StateDerivedView {
     this.#playbackEpoch += 1;
     this.#openingFileIndex = null;
     this.#browserBufferLimitSeconds = null;
-    // Per attempt: a new file, or the same one tried again, starts with the
-    // ordinary wait rather than the notice left over from the last one.
-    this.#longWaitAnnounced = false;
     this.#hasPlayedOnce = false;
     this.#waitingModel.reset();
     this.#refusedProxiesForThisOpen.clear();
@@ -1903,6 +1851,9 @@ export class Loading extends StateDerivedView {
   }
 
   #onCancelClick = () => {
+    this.#qualityPreparation?.abort();
+    this.#audioPreparation?.abort();
+    this.#playbackTasks.invalidate();
     this.#logEvt("loading cancelled by user");
     this.#cancelRequested = true;
     // A connect in flight is part of this attempt and dies with it. Left in
@@ -1917,7 +1868,7 @@ export class Loading extends StateDerivedView {
     this.#hlsPlayer.clear();
     this.#subtitlePlayback.clear();
     if (this.#videoElement instanceof HTMLVideoElement) {
-      this.#videoElement.pause();
+      pauseWithoutIntent(this.#videoElement);
       this.#videoElement.removeAttribute("src");
       this.#videoElement.load();
     }
@@ -2268,8 +2219,8 @@ export class Loading extends StateDerivedView {
     for (;;) {
       this.#throwIfCancelled();
       const response = await transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/files?maxWaitMs=8000`,
-        { signal: this.#session.abortController.signal, timeoutMs: 15_000 }
+        `/api/sources/${encodeURIComponent(sourceKey)}/files?consumerId=${encodeURIComponent(this.#session.consumerId)}`,
+        { signal: this.#session.abortController.signal, timeoutMs: 0 }
       );
       this.#throwIfCancelled();
       if (response.ok) {
@@ -2285,6 +2236,10 @@ export class Loading extends StateDerivedView {
           }
           return body;
         }
+      } else {
+        const error = new Error(`Torrent file list request failed (${response.status}).`);
+        error.canRetry = response.status >= 500;
+        throw error;
       }
       whileWaiting?.();
       await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -2309,28 +2264,7 @@ export class Loading extends StateDerivedView {
           this.#logEvt(`warm-up abandoned after registering: a newer attempt began (file ${fileIndex ?? "-"})`);
           return;
         }
-        const response = await transport.fetch(`/api/sources/${sourceKey}/warm`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            fileIndex === null
-              ? { userAgent: navigator.userAgent }
-              : {
-                fileIndex,
-                userAgent: navigator.userAgent,
-                // Where this viewer will start. The proxy fetches the file's
-                // edges because the codec probe reads them; the region under
-                // the viewer's own position was asked for by nobody until the
-                // encoder opened its input, which on a cold retry is nearly a
-                // minute after the button was pressed.
-                ...(positionSeconds > 0 ? { positionSeconds } : {})
-              }
-          )
-        });
-        this.#logEvt(
-          `warm-up requested (${response.ok ? "accepted" : `refused ${response.status}`})` +
-          `${positionSeconds > 0 ? `, resuming at ${Math.round(positionSeconds)}s` : ""}`
-        );
+        this.#logEvt(`source ${sourceKey} registered for viewer-owned preparation`);
       } catch (error) {
         if (this.#isAbortError(error)) {
           // Abandoned work says so. An aborted warm-up is ordinary — the viewer
@@ -2582,8 +2516,10 @@ export class Loading extends StateDerivedView {
     this.#rebuildingSession = true;
     this.#logEvt(`session gone — rebuilding at ${position.toFixed(1)}s`);
     try {
-      this.#pendingCurrentTime = position > 0 ? position : null;
-      await this.#playVideoFile(fileIndex);
+      await this.#runPlaybackTask(async () => {
+        this.#pendingCurrentTime = position > 0 ? position : null;
+        await this.#switchToVideoFile(fileIndex);
+      });
     } catch (error) {
       this.#logEvt(`session rebuild failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -2651,12 +2587,13 @@ export class Loading extends StateDerivedView {
         return;
       }
       // open-file: the torrent is already loaded, so only the file changes.
-      this.#pendingCurrentTime = currentTime;
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.SHOW, {
         detail: { status: Loading.MESSAGES.switchingToSelectedFile, progress: 0 }
       }));
-      this.#beginPlaybackAttempt();
-      await this.#switchToVideoFile(fileIndex);
+      await this.#runPlaybackTask(async () => {
+        this.#pendingCurrentTime = currentTime;
+        await this.#switchToVideoFile(fileIndex);
+      });
     } catch (error) {
       this.#logEvt(`history navigation failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -2943,26 +2880,6 @@ export class Loading extends StateDerivedView {
    * @param {string} [message] - Defaults to the data-starvation stall message.
    * @returns {Error}
    */
-  /**
-   * Say, once, that the wait has gone past what is ordinary.
-   *
-   * Called instead of failing. The status line keeps showing live peers, speed
-   * and progress underneath, so a torrent that comes to life is visible
-   * immediately; this only replaces the implication that something must happen
-   * soon.
-   *
-   * @param {number} deadline - When the ordinary wait was to have ended.
-   * @returns {void}
-   */
-  #noteLongWait(deadline) {
-    if (this.#longWaitAnnounced || Date.now() < deadline) {
-      return;
-    }
-    this.#longWaitAnnounced = true;
-    this.#logEvt("no peers after the ordinary wait — saying so and continuing");
-    this.setStatus(Loading.MESSAGES.noPeersKeepWaiting);
-  }
-
   #armRetryableStall(fileIndex, message = Loading.MESSAGES.headerDownloadStalled) {
     if (this.#session.current) {
       // Where the viewer actually was. Zero was written here regardless, so
@@ -3153,42 +3070,18 @@ export class Loading extends StateDerivedView {
     // not held up by it.
     this.#warmSourceInBackground(fileIndex, this.#resumePositionFor(fileIndex).position ?? 0);
     try {
-      // Poll the playback plan until the file header has downloaded. On a cold
-      // torrent (peers still connecting) the proxy returns `pending` quickly
-      // instead of blocking — so a single request never races the transport's
-      // 60 s timeout. The stats poll above keeps showing live peers/speed/% the
-      // whole time. Bounded so a truly dead torrent (no peers) still fails.
-      const planDeadline = Date.now() + Loading.PLAN_WAIT_MS;
-      for (;;) {
-        this.#throwIfCancelled();
-        try {
-          prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport);
-        } catch (planError) {
-          // A slow torrent (few peers) can keep the proxy busy waiting on
-          // pieces long enough for the data-channel request itself to time out,
-          // even though the connection is healthy. That is data starvation, not
-          // a fatal error: keep polling (the stats poll keeps peers/speed/% on
-          // screen) until the wall-clock budget is spent, instead of dropping to
-          // the error screen.
-          if (this.#isTransientRequestTimeout(planError) && (this.#proxy?.isOpen ?? true)) {
-            this.#logEvt("plan request timed out while waiting on pieces — keep waiting");
-            this.#noteLongWait(planDeadline);
-            await new Promise((resolve) => setTimeout(resolve, 2_000));
-            continue;
-          }
-          // The transport itself died mid-request (see #isTransportClosedError)
-          // — retryable, not a dead end.
-          if (this.#isTransportClosedError(planError)) {
-            this.#logEvt("transport closed while polling playback plan — retryable");
-            throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.connectionLost);
-          }
-          throw planError;
+      this.#throwIfCancelled();
+      try {
+        prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport, {
+          positionSeconds: this.#resumePositionFor(fileIndex).position ?? 0,
+          wantsToPlay: !viewerHasStopped(this.#videoElement)
+        });
+      } catch (planError) {
+        if (this.#isTransportClosedError(planError)) {
+          this.#logEvt("transport closed while preparing source declarations");
+          throw this.#armRetryableStall(fileIndex, Loading.MESSAGES.connectionLost);
         }
-        if (!prepared.pending) {
-          break;
-        }
-        this.#noteLongWait(planDeadline);
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        throw planError;
       }
     } finally {
       stopStatsPoll();
@@ -4188,6 +4081,10 @@ export class Loading extends StateDerivedView {
     // this one, supersedes it (`#followQualityRequest`).
     const pick = (this.#qualityPickSeq ?? 0) + 1;
     this.#qualityPickSeq = pick;
+    this.#qualityPreparation?.abort();
+    const preparation = new AbortController();
+    this.#qualityPreparation = preparation;
+    try {
     // Prepare at the PLAYHEAD, and let the run cover everything after it.
     //
     // Read from the vendored hls.js rather than guessed: `nextLevelSwitch()`
@@ -4216,8 +4113,8 @@ export class Loading extends StateDerivedView {
       `(buffered to ${Math.round(this.#videoElement instanceof HTMLVideoElement ? bufferedEndSeconds(this.#videoElement) : 0)}s) ` +
       `before switching`
     );
-    const { ready, unavailable } = await this.#session.prepareQualityVariant(height, position);
-    if (this.#qualityPickSeq !== pick) {
+    const { ready, unavailable } = await this.#session.prepareQualityVariant(height, position, preparation.signal);
+    if (preparation.signal.aborted || this.#qualityPickSeq !== pick) {
       this.#logEvt(`quality: ${height}p was superseded; not switching`);
       return;
     }
@@ -4242,13 +4139,16 @@ export class Loading extends StateDerivedView {
       this.#logEvt(`quality: ${height}p is not ready; staying on the current one rather than emptying the buffer`);
       return;
     }
-    if (!urgent && !(await this.#cushionHeld(pick, height))) {
+    if (!urgent && !(await this.#cushionHeld(pick, height, preparation.signal))) {
       this.#logEvt(`quality: ${height}p was superseded while the cushion was filling; not switching`);
       return;
     }
     this.#logEvt(`quality: ${height}p is ready, switching${urgent ? " at once — the buffer would run dry first" : ""}`);
     if (!this.#hlsPlayer.switchLevel(level.index)) {
       this.#logEvt(`quality: the player refused the switch to ${height}p`);
+    }
+    } finally {
+      if (this.#qualityPreparation === preparation) this.#qualityPreparation = null;
     }
   }
 
@@ -4265,7 +4165,8 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<boolean>} True when the cushion is held; false when the
    *   pick was superseded or the element let go of its source.
    */
-  #cushionHeld(pick, height) {
+  #cushionHeld(pick, height, signal) {
+    if (signal.aborted) return Promise.resolve(false);
     const video = this.#videoElement;
     if (!(video instanceof HTMLVideoElement)) {
       return Promise.resolve(false);
@@ -4282,7 +4183,11 @@ export class Loading extends StateDerivedView {
       `(holding ${bufferedAheadSeconds(video).toFixed(1)}s)`
     );
     return new Promise((resolve) => {
+      let settled = false;
       const finish = (held) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", gone);
         video.removeEventListener("progress", check);
         video.removeEventListener("timeupdate", check);
         video.removeEventListener("emptied", gone);
@@ -4299,6 +4204,8 @@ export class Loading extends StateDerivedView {
       video.addEventListener("progress", check);
       video.addEventListener("timeupdate", check);
       video.addEventListener("emptied", gone);
+      signal.addEventListener("abort", gone, { once: true });
+      if (signal.aborted) gone(); else check();
     });
   }
 
@@ -4331,6 +4238,11 @@ export class Loading extends StateDerivedView {
     // when it is asked for the new one, and this side stops waiting for it.
     const pick = (this.#audioPickSeq ?? 0) + 1;
     this.#audioPickSeq = pick;
+    this.#qualityPreparation?.abort();
+    this.#audioPreparation?.abort();
+    const preparation = new AbortController();
+    const epoch = this.#playbackEpoch;
+    this.#audioPreparation = preparation;
     // Every way out of this handler releases the hold, including the ones that
     // return before it was ever taken and the ones that throw. A hold nothing
     // releases is a picture the viewer cannot restart, so it is released in one
@@ -4381,33 +4293,9 @@ export class Loading extends StateDerivedView {
         const needsTranscode = await this.#trackNeedsTranscode(trackIndex);
         statedNeed = needsTranscode;
         const readyAt = Date.now();
-        let answer = "not-ready";
-        // Asked again rather than given up on. The proxy builds the track's
-        // session whether or not it finished in time to answer: field
-        // 2026-08-31, a first switch was refused after 20.3 s and the session it
-        // had started was ready 8 s later — the second switch then took 107 ms.
-        // One refusal was treated as final, so the viewer was told the track was
-        // not ready when it was about to be.
-        while (Date.now() - readyAt < Loading.AUDIO_TRACK_WAIT_MS) {
-          answer = await this.#session.prepareAudioTrack(trackIndex, playhead, needsTranscode);
-          if (this.#audioPickSeq !== pick) {
-            this.#logEvt(`audio track ${trackIndex} abandoned — the viewer chose another meanwhile`);
-            return;
-          }
-          if (answer !== "not-ready") {
-            break;
-          }
-          this.#logEvt(
-            `audio track ${trackIndex} not ready after ${((Date.now() - readyAt) / 1000).toFixed(1)}s — ` +
-              "the proxy is preparing it, asking again"
-          );
-        }
-        // Only "not-ready" refuses, and now only after the whole wait.
-        // "unsupported" means this proxy cannot prepare tracks at all — older
-        // than 2.14.0, or a stream that does not publish them separately — and
-        // there the switch has always worked by rebuilding the session, so
-        // forbidding it would take away something that works.
-        ready = answer !== "not-ready";
+        const answer = await this.#session.prepareAudioTrack(trackIndex, playhead, needsTranscode, preparation.signal);
+        if (this.#audioPickSeq !== pick) return;
+        ready = answer === "ready" || answer === "unsupported";
         this.#logEvt(
           `audio track ${trackIndex} ${answer} after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
         );
@@ -4472,22 +4360,17 @@ export class Loading extends StateDerivedView {
           detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
         })
       );
-      const epoch = this.#beginPlaybackAttempt();
-      void this.#switchToVideoFile(fileIndex)
-        .then(() => {
-          if (position > 1 && this.#videoElement instanceof HTMLVideoElement) {
-            this.#videoElement.currentTime = position;
-          }
-        })
-        .catch((error) => {
-          if (this.#isAbortError(error)) {
-            return;
-          }
-          const message = error instanceof Error ? error.message : String(error);
-          console.error("[torrent-tv] audio switch failed:", message, error);
-          this.#failPlayback(epoch, { description: message });
-        });
+      await this.#runPlaybackTask(async () => {
+        this.#pendingCurrentTime = position > 0 ? position : null;
+        await this.#switchToVideoFile(fileIndex);
+      });
+    } catch (error) {
+      this.#logEvt(`audio preparation ended: ${error?.message ?? error}`);
+      if (error?.name !== "AbortError" && this.#audioPickSeq === pick) {
+        this.#failPlayback(epoch, { description: error?.message ?? String(error), canRetry: error?.canRetry === true });
+      }
     } finally {
+      if (this.#audioPreparation === preparation) this.#audioPreparation = null;
       this.#releaseAudioHold(pick);
     }
   };
@@ -4530,7 +4413,11 @@ export class Loading extends StateDerivedView {
       sessionCurrent: current
     };
     this.#resumeState = resume;
-    void this.#autoReconnect(resume);
+    void this.#runPlaybackTask(async () => {
+      this.#isProcessing = true;
+      try { await this.#autoReconnect(resume); }
+      finally { this.#isProcessing = false; }
+    }, { preservePlayer: true });
   }
 
   /**
@@ -4614,7 +4501,7 @@ export class Loading extends StateDerivedView {
         if (overlayShown) {
           this.setStatus(Loading.MESSAGES.waitingForNetwork);
         }
-        await this.#waitForOnline(RECONNECT_ONLINE_WAIT_MS);
+        await this.#waitForOnline();
         if (this.#cancelRequested) {
           this.#logEvt(`reconnect abandoned while waiting for the network: the viewer cancelled (attempt ${attempt})`);
           return;
@@ -4628,13 +4515,19 @@ export class Loading extends StateDerivedView {
       try {
         if (sameProxy) {
           const proxy = await this.#proxySelector.reconnectTo(this.#lastProxyDescriptor, {
-            connectTimeoutMs: RECONNECT_CONNECT_TIMEOUT_MS
+            connectTimeoutMs: RECONNECT_CONNECT_TIMEOUT_MS,
+            signal: this.#session.abortController.signal
           });
+          if (this.#cancelRequested) {
+            proxy.close();
+            this.#throwIfCancelled();
+          }
           this.#adoptProxy(proxy); // swaps the inner proxy under the live player
           // Liveness + session-exists probe over the NEW channel (routes
           // through the swapped transport). Non-null → the warm transcode
           // session is still there; resume fetching seamlessly.
           const progress = await this.#session.fetchActiveTranscodeProgress();
+          this.#throwIfCancelled();
           if (progress) {
             // The proxy let go of this viewer when the old connection closed,
             // soundtrack choice included, and a viewer it does not know is sent
@@ -4690,6 +4583,7 @@ export class Loading extends StateDerivedView {
         }
         const message = error instanceof Error ? error.message : String(error);
         console.debug(`[torrent-tv] reconnect attempt ${attempt} failed: ${message}`);
+        if (error?.canRetry === false) throw error;
       }
     }
 
@@ -4906,35 +4800,43 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   #sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    const signal = this.#session.abortController.signal;
+    return new Promise((resolve, reject) => {
+      const finished = () => { signal.removeEventListener("abort", aborted); resolve(); };
+      const timer = setTimeout(finished, ms);
+      const aborted = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", aborted);
+        reject(new DOMException("Playback preparation was cancelled.", "AbortError"));
+      };
+      signal.addEventListener("abort", aborted, { once: true });
+      if (signal.aborted) aborted();
+    });
   }
 
   /**
-   * Resolve when the browser regains connectivity (`online` event) or after
-   * `timeoutMs`, whichever comes first. Also polls #cancelRequested so a
-   * cancel during the wait ends it promptly.
+   * Resolve when connectivity returns; cancellation rejects the pending wait.
    *
-   * @param {number} timeoutMs
    * @returns {Promise<void>}
    */
-  #waitForOnline(timeoutMs) {
-    return new Promise((resolve) => {
+  #waitForOnline() {
+    const signal = this.#session.abortController.signal;
+    return new Promise((resolve, reject) => {
       let done = false;
-      const finish = () => {
+      const finish = (error) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
-        clearInterval(poll);
-        window.removeEventListener("online", finish);
-        resolve();
+        window.removeEventListener("online", online);
+        signal.removeEventListener("abort", aborted);
+        if (error) reject(error);
+        else resolve();
       };
-      const timer = setTimeout(finish, timeoutMs);
-      const poll = setInterval(() => {
-        if (this.#cancelRequested || (typeof navigator === "object" && navigator.onLine === true)) {
-          finish();
-        }
-      }, 250);
-      window.addEventListener("online", finish);
+      const online = () => finish();
+      const aborted = () => finish(new DOMException("Playback preparation was cancelled.", "AbortError"));
+      window.addEventListener("online", online);
+      signal.addEventListener("abort", aborted, { once: true });
+      if (signal.aborted || this.#cancelRequested) aborted();
+      else if (typeof navigator !== "object" || navigator.onLine !== false) online();
     });
   }
 
@@ -4954,15 +4856,9 @@ export class Loading extends StateDerivedView {
       })
     );
     // A manual retry starts a fresh connection — do not reuse the dead one.
-    this.#transport = null;
-    const epoch = this.#beginPlaybackAttempt();
-    void this.#resumePlayback(resume).catch((error) => {
-      if (this.#isAbortError(error)) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[torrent-tv] retry failed:", message, error);
-      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
+    void this.#runPlaybackTask(async () => {
+      this.#transport = null;
+      await this.#resumePlayback(resume);
     });
   };
 
@@ -5079,6 +4975,10 @@ export class Loading extends StateDerivedView {
         startPositionSeconds:
           typeof resumeStartPosition === "number" && resumeStartPosition > 0 ? resumeStartPosition : 0,
         getStartPositionSeconds: () => this.#seekPosition.value,
+        // Metadata can exist while the element still stands at zero. During
+        // opening the viewer's selected destination remains authoritative.
+        getPositionSeconds: () => this.#isProcessing
+          ? this.#seekPosition.value : this.#videoElement.currentTime,
         // The picture as the viewer sees it, which bounds the height of a
         // re-encoded output (roadmap item 98). Sent with the request that opens
         // the output, and restated in every report the moment it changes.
@@ -5197,7 +5097,7 @@ export class Loading extends StateDerivedView {
       }
       // Re-assert pause in case leftover play-intent resumed it.
       if (!videoElement.paused) {
-        videoElement.pause();
+        pauseWithoutIntent(videoElement);
       }
       const now = Date.now();
       if (now - lastProgressFetchAt >= 1500) {
@@ -5416,95 +5316,16 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   async #ensureVideoReady(options = {}) {
-    const requireDecodedFrame = options?.requireDecodedFrame !== false;
     const videoElement = this.#videoElement;
     if (!(videoElement instanceof HTMLVideoElement)) {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
-    if (videoElement.error) {
-      throw new Error(Loading.MESSAGES.selectedFileUnsupported);
-    }
-    if (videoElement.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      // In lenient mode (transcode path) the stream is known-compatible. Skip the
-      // dimensions/decoded-frame checks: iOS does not populate videoWidth/Height
-      // nor present frames while the <video> is still occluded by the modal
-      // loading dialog, so those checks would spuriously report "unsupported".
-      if (requireDecodedFrame) {
-        if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
-          throw new Error(Loading.MESSAGES.selectedFileUnsupported);
-        }
-        await this.#waitForDecodedVideoFrame(videoElement);
-      }
-      return;
-    }
-    await new Promise((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        cleanup();
-        if (videoElement.error) {
-          reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
-          return;
-        }
-        resolve(undefined);
-      }, 1500);
-
-      const onLoadedMetadata = () => {
-        cleanup();
-        resolve(undefined);
-      };
-      const onError = () => {
-        cleanup();
-        reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
-      };
-      const cleanup = () => {
-        window.clearTimeout(timeoutId);
-        videoElement.removeEventListener("loadedmetadata", onLoadedMetadata);
-        videoElement.removeEventListener("error", onError);
-      };
-
-      videoElement.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
-      videoElement.addEventListener("error", onError, { once: true });
+    await waitForMediaReady(videoElement, {
+      signal: this.#session.abortController.signal,
+      requirePicture: options?.requireDecodedFrame !== false,
+      unsupportedMessage: Loading.MESSAGES.selectedFileUnsupported
     });
-    if (requireDecodedFrame) {
-      if (videoElement.videoWidth <= 0 || videoElement.videoHeight <= 0) {
-        throw new Error(Loading.MESSAGES.selectedFileUnsupported);
-      }
-      await this.#waitForDecodedVideoFrame(videoElement);
-    }
   }
-
-  /**
-   * @param {HTMLVideoElement} videoElement
-   * @returns {Promise<void>}
-   */
-  async #waitForDecodedVideoFrame(videoElement) {
-    if (typeof videoElement.requestVideoFrameCallback === "function") {
-      await new Promise((resolve, reject) => {
-        const timeoutId = window.setTimeout(() => {
-          reject(new Error(Loading.MESSAGES.selectedFileUnsupported));
-        }, 4000);
-        videoElement.requestVideoFrameCallback(() => {
-          window.clearTimeout(timeoutId);
-          resolve(undefined);
-        });
-      });
-      return;
-    }
-
-    if (typeof videoElement.webkitDecodedFrameCount === "number") {
-      const initialCount = videoElement.webkitDecodedFrameCount;
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 4000) {
-        if (videoElement.webkitDecodedFrameCount > initialCount) {
-          return;
-        }
-        await new Promise((resolve) => {
-          window.setTimeout(resolve, 100);
-        });
-      }
-      throw new Error(Loading.MESSAGES.selectedFileUnsupported);
-    }
-  }
-
   /**
    * @param {unknown} error
    * @returns {boolean}
@@ -6060,6 +5881,7 @@ export class Loading extends StateDerivedView {
     if (this.#autoQualityRequestHeight > 0 && height !== this.#autoQualityRequestHeight) {
       this.#logEvt(`quality: the proxy no longer asks for ${this.#autoQualityRequestHeight}p; dropping the move`);
       this.#autoQualityRequestHeight = 0;
+      this.#qualityPreparation?.abort();
       this.#qualityPickSeq = (this.#qualityPickSeq ?? 0) + 1;
     }
     if (!Number.isFinite(height) || height <= 0) {
@@ -6080,6 +5902,10 @@ export class Loading extends StateDerivedView {
     this.#autoQualityRequestHeight = height;
     this.#logEvt(`the proxy asks for ${height}p${urgent ? " before the buffer runs dry" : ""} — moving`);
     void this.#switchQualityLevel(level, height, { urgent })
+      .catch(error => {
+        if (error?.name === "AbortError") return;
+        this.#logEvt(`quality: preparation failed (${error?.code ?? "unknown"}, retry=${error?.canRetry === true}): ${error?.message ?? error}`);
+      })
       .finally(() => {
         if (this.#autoQualityRequestHeight === height) {
           this.#autoQualityRequestHeight = 0;

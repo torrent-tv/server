@@ -86,7 +86,7 @@ function base64ToBytes(b64) {
 
 /** @type {Array<{ urls: string }>} */
 const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
-const REQUEST_TIMEOUT_MS = 60_000;
+const TRANSPORT_SILENCE_WINDOW_MS = 60_000;
 const PING_TIMEOUT_MS = 5_000;
 
 // Chunked request bodies. A request whose body exceeds the threshold is sent
@@ -259,6 +259,7 @@ export class WebRtcProxy {
   #remoteDescriptionSet = false;
   /** @type {boolean} True once the data channel opened successfully. */
   #connected = false;
+  #connectSettler = null;
   /** @type {boolean} True when close() was called by the app itself. */
   #closedByUser = false;
   /** @type {boolean} Guards onConnectionLost against double-firing. */
@@ -307,6 +308,12 @@ export class WebRtcProxy {
       return;
     }
     this.#lostFired = true;
+    const error = new Error("Proxy connection lost.");
+    error.code = "TRANSPORT_LOST";
+    for (const entry of this.#pending.values()) {
+      entry.reject(error);
+    }
+    this.#pending.clear();
     try {
       this.onConnectionLost?.();
     } catch (error) {
@@ -392,16 +399,18 @@ export class WebRtcProxy {
    * the data channel to become open.
    *
    * @param {number} [timeoutMs=CONNECT_TIMEOUT_MS]
+   * @param {{ signal?: AbortSignal }} [options]
    * @returns {Promise<void>}
    */
-  async connect(timeoutMs = CONNECT_TIMEOUT_MS) {
+  async connect(timeoutMs = CONNECT_TIMEOUT_MS, { signal } = {}) {
+    if (signal?.aborted) throw new DOMException("Proxy connection was cancelled.", "AbortError");
     const wsUrl = `${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`;
     this.#ws = new WebSocket(wsUrl);
 
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.#ws?.close();
-        reject(new Error("WebRTC connection timed out."));
+        settle(new Error("WebRTC connection timed out."));
+        this.close();
         // Never longer than CONNECT_TIMEOUT_MS: the server counts on it when it
         // hands over (connect-deadline.js).
       }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, CONNECT_TIMEOUT_MS) : CONNECT_TIMEOUT_MS);
@@ -412,8 +421,14 @@ export class WebRtcProxy {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", aborted);
+        this.#connectSettler = null;
         if (err) reject(err); else resolve();
       };
+      const aborted = () => this.close();
+      this.#connectSettler = settle;
+      signal?.addEventListener("abort", aborted, { once: true });
+      if (signal?.aborted) { aborted(); return; }
 
       this.#ws.addEventListener("message", (event) => {
         this.#onSignalMessage(event.data, settle);
@@ -631,10 +646,6 @@ export class WebRtcProxy {
     });
 
     this.#channel.addEventListener("close", () => {
-      for (const entry of this.#pending.values()) {
-        entry.reject(new Error("Data channel closed."));
-      }
-      this.#pending.clear();
       this.#fireConnectionLost();
     });
 
@@ -763,7 +774,7 @@ export class WebRtcProxy {
     const silentMs = performance.now() - this.#lastArrivalAt;
     let waitMs;
     if (this.#stalled) {
-      waitMs = REQUEST_TIMEOUT_MS - silentMs;
+      waitMs = TRANSPORT_SILENCE_WINDOW_MS - silentMs;
     } else {
       const due = deliveryDueWithinMs(this.#arrivalEstimate);
       if (due === null) {
@@ -812,7 +823,7 @@ export class WebRtcProxy {
       channelOpen: this.isOpen,
       messagesWaiting: received !== null && received > this.#messagesHandled,
       stalledAlready: this.#stalled,
-      requestTimeoutMs: REQUEST_TIMEOUT_MS
+      requestTimeoutMs: TRANSPORT_SILENCE_WINDOW_MS
     });
     if (verdict.state === "lost") {
       console.warn(`[dc-stall] ${verdict.reason}; declaring the connection lost at=${new Date().toISOString()}`);
@@ -1060,13 +1071,9 @@ export class WebRtcProxy {
    * Send a request over the data channel and return a `Response`-like object.
    *
    * @param {string} path - Absolute path on the proxy, e.g. `"/api/sources"`.
-   * @param {{ method?: string, headers?: object, body?: string | null, signal?: AbortSignal, timeoutMs?: number }} [options]
-   *   Fetch options.  When `signal` aborts, the pending request is dropped and
-   *   the promise rejects immediately with an `AbortError` (so a cancelled or
-   *   superseded flow does not sit until `timeoutMs`, then reject and surface a
-   *   stale error). `timeoutMs` (default `REQUEST_TIMEOUT_MS`) still bounds a
-   *   channel that never responds; long-running responses (e.g.
-   *   embedded-subtitle extraction) pass a larger value.
+   * @param {{ method?: string, headers?: object, body?: string | null, signal?: AbortSignal }} [options]
+   *   Requests wait for a response, cancellation or connection loss. A healthy
+   *   connection may legitimately wait while its proxy prepares media.
    * @returns {Promise<DataChannelResponse>}
    */
   fetch(path, options = {}) {
@@ -1076,13 +1083,9 @@ export class WebRtcProxy {
 
     const requestId = crypto.randomUUID();
     const url = new URL(path, "http://proxy");
-    const timeoutMs =
-      Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
-        ? options.timeoutMs
-        : REQUEST_TIMEOUT_MS;
     const signal = options.signal instanceof AbortSignal ? options.signal : null;
 
-    // Hoist resolve/reject so we can cancel the timeout if channel.send() throws.
+    // Keep settlement available if channel.send() throws.
     let pendingResolve;
     let pendingReject;
     const responsePromise = new Promise((resolve, reject) => {
@@ -1090,15 +1093,9 @@ export class WebRtcProxy {
       pendingReject = reject;
     });
 
-    // Tear down the timer and the abort listener exactly once, whichever path
-    // (response / timeout / abort / send-throw) settles the promise first.
-    let timer = null;
+    // Remove the abort listener whichever event settles the request.
     let onAbort = null;
     const cleanup = () => {
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
       if (signal && onAbort) {
         signal.removeEventListener("abort", onAbort);
         onAbort = null;
@@ -1112,12 +1109,6 @@ export class WebRtcProxy {
       pendingReject(err);
       return responsePromise;
     }
-
-    timer = setTimeout(() => {
-      this.#pending.delete(requestId);
-      cleanup();
-      pendingReject(new Error("Data channel request timed out."));
-    }, timeoutMs);
 
     this.#pending.set(requestId, {
       resolve: (result) => { cleanup(); pendingResolve(result); },
@@ -1138,6 +1129,11 @@ export class WebRtcProxy {
       onAbort = () => {
         this.#pending.delete(requestId);
         cleanup();
+        try {
+          this.#channelFor(url.pathname).send(JSON.stringify({ type: "request-cancel", requestId }));
+        } catch {
+          // silent-ok: a closed connection already ends its outstanding proxy requests.
+        }
         const err = new Error("Data channel request aborted.");
         err.name = "AbortError";
         pendingReject(err);
@@ -1148,13 +1144,7 @@ export class WebRtcProxy {
     const method = options.method ?? "GET";
     const reqPath = url.pathname;
     const query = url.search.slice(1);
-    // HOW LONG THIS PAGE WILL WAIT, told to the proxy, so a request it holds is
-    // answered while somebody is still waiting for the answer: this request's
-    // own deadline, less the round trip the answer needs to come back. The
-    // proxy used to hold for a figure of its own that happened to equal this
-    // page's, so its "retry" reached a page that had given up at that instant.
-    const holdMs = Math.max(0, timeoutMs - (this.#lastRoundTripMs ?? 0));
-    const headers = { "x-hold-ms": String(holdMs), ...(options.headers ?? {}) };
+    const headers = { ...(options.headers ?? {}) };
     // Measure the body in UTF-8 bytes (what the proxy reassembles), not string
     // length — a body may contain multi-byte characters.
     const payload = options.body != null ? new TextEncoder().encode(options.body) : null;
@@ -1174,7 +1164,7 @@ export class WebRtcProxy {
       } catch (err) {
         // channel.send() can throw if the channel transitions to closing/closed
         // between the isOpen check and the send.  Remove the pending entry, cancel
-        // the timer, and convert to a rejected promise so callers always receive a
+        // its listener, and convert to a rejected promise so callers always receive a
         // Promise, never a synchronous exception.
         this.#pending.delete(requestId);
         cleanup();
@@ -1678,6 +1668,11 @@ export class WebRtcProxy {
       clearTimeout(this.#deliveryCheck);
       this.#deliveryCheck = null;
     }
+    this.#connectSettler?.(new DOMException("Proxy connection was cancelled.", "AbortError"));
+    for (const entry of this.#pending.values()) {
+      entry.reject(new DOMException("Proxy connection closed.", "AbortError"));
+    }
+    this.#pending.clear();
     this.#ws?.close();
     this.#controlChannel?.close();
     this.#controlChannel = null;

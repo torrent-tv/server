@@ -11,7 +11,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describeTrackBuffers } from "../public/domain/hls-player.js";
+import { describeTrackBuffers, readPlayerBuffers } from "../public/domain/hls-player.js";
 
 /**
  * A stand-in for `TimeRanges`.
@@ -26,6 +26,30 @@ function timeRanges(ranges) {
     end: (i) => ranges[i][1]
   };
 }
+
+test("readiness clocks are read per buffer with the held ranges", () => {
+  const video = { buffered: timeRanges([[850.100997, 860.111003]]), timestampOffset: 0 };
+  const audio = { buffered: timeRanges([[849.995, 860.1]]), timestampOffset: -0.021 };
+  const instance = { bufferController: { sourceBuffers: [["video", video], ["audio", audio]] } };
+  assert.deepEqual(readPlayerBuffers(instance, video).timestampOffsets, { video: 0, audio: -0.021 });
+  video.timestampOffset = 850.1;
+  assert.equal(readPlayerBuffers(instance, video).timestampOffsets.video, 850.1);
+  instance.bufferController.sourceBuffers = [["audio", audio]];
+  assert.deepEqual(readPlayerBuffers(instance, audio).timestampOffsets, { audio: -0.021 });
+});
+
+test("multiplexed buffer reports the same applied clock for both tracks", () => {
+  const source = { buffered: timeRanges([[4, 8]]), timestampOffset: -0.08 };
+  const reading = readPlayerBuffers({ bufferController: { sourceBuffers: [["audiovideo", source]] } }, source);
+  assert.deepEqual(reading.timestampOffsets, { video: -0.08, audio: -0.08 });
+  assert.deepEqual(reading.video, reading.audio);
+});
+
+test("removed buffers cannot retain an earlier track's clock", () => {
+  const source = { get timestampOffset() { throw new Error("detached"); }, get buffered() { throw new Error("detached"); } };
+  assert.deepEqual(readPlayerBuffers({ bufferController: { sourceBuffers: [["video", source]] } }, null),
+    { media: [], timestampOffsets: {} });
+});
 
 test("each track's own buffer is named and printed", () => {
   const instance = {

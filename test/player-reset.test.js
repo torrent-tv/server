@@ -27,7 +27,7 @@ test("player resets source controls on close and replacement through its owning 
   const node = selector => { if (!nodes.has(selector)) nodes.set(selector, new Node()); return nodes.get(selector); };
   const document = Object.assign(new EventTarget(), { readyState: "loading", querySelector: node, createElement: () => new Node() });
   globalThis.document = document;
-  globalThis.window = { devicePixelRatio: 1 };
+  globalThis.window = { devicePixelRatio: 1, setInterval: () => 1, clearInterval() {} };
   globalThis.HTMLVideoElement = class {};
   globalThis.customElements = { whenDefined: () => new Promise(() => {}) };
   try {
@@ -52,5 +52,9 @@ test("player resets source controls on close and replacement through its owning 
       assert.equal(node("#player").classList.contains("player--playlist"), false);
     }
     player.reset();
+    send(APP_EVENTS.STATE_CHANGED, { state: "OPENING" });
+    assert.equal(node("#player__buffering").hidden, false);
+    send(MEDIA_INFO_EVENTS.SELECTED, { selection: 3, names: ["Opening"] });
+    assert.equal(node("#player__buffering").hidden, false, "source reset preserves the current waiting state");
   } finally { Object.assign(globalThis, saved); }
 });

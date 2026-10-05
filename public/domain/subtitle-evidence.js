@@ -13,6 +13,7 @@ export function subtitleEvidenceOf(vtt, kindHint) {
   } catch {
     // silent-ok: a note that is not valid JSON states no titles or years, and
     // null is that answer; the subtitle file comes from the torrent, not from us.
+
     return null;
   }
 }

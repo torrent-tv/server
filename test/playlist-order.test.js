@@ -14,7 +14,16 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mediaFilesFrom } from "../public/domain/torrent-parser.js";
+import { mediaFilesFrom, normalizeRemoteFileList } from "../public/domain/torrent-parser.js";
+
+test("excluded clips are not possible episode choices in the normalized file list", () => {
+  const files = normalizeRemoteFileList("Film", [
+    { fileIndex: 0, name: "Film.mkv", kind: "video" },
+    { fileIndex: 1, name: "Sample.mp4", kind: "video", excludedReason: "sample" },
+    { fileIndex: 2, name: "GROUP.mp4", kind: "video", excludedReason: "release-group-promo" }
+  ]);
+  assert.deepEqual(files.map((file) => file.isVideo), [true, false, false]);
+});
 
 /**
  * The proxy's answer, in the shape it arrives in.

@@ -1,15 +1,17 @@
-import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, signalApp } from "../../shared/events.js";
 import { playerArt } from "../../domain/media-info.js";
 import {
   APP_VIEW,
+  APP_EVENT,
   MEDIA_INTENT,
   acceptsPlaybackInput,
+  acceptsPlaybackIntent,
   isWaiting,
   mediaIntentForState,
   viewForState
 } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
-import { pauseWithoutIntent } from "../../domain/playback-intent.js";
+import { noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { isTypingTarget } from "../../domain/subtitle-menu.js";
 import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
 
@@ -149,31 +151,23 @@ export class Player extends StateDerivedView {
   }
 
   /**
-   * Whether the play control accepts input, applied to every way there is of
-   * starting the picture: the button, the keyboard, and a press on the frame.
-   * All three exist, and blocking one of them leaves the other two — the
-   * controller mounts a gesture receiver of its own and binds space by default.
-   *
-   * The state where they are refused is the hold a change the viewer asked for
-   * puts the picture in. Playing on through it means watching in the language
-   * they have just replaced and then going back over it, which is the report
-   * this answers.
+   * Enable explicit intent controls while a source is open, including its
+   * preparation and track changes. The button, keyboard and frame gesture all
+   * update viewer intent; actual playback remains held during a track change.
    *
    * @param {string} state
    * @returns {void}
    */
   #applyPlaybackInput(state) {
-    const accepts = acceptsPlaybackInput(state);
+    const accepts = acceptsPlaybackIntent(state);
     this.#playButton.toggleAttribute("disabled", !accepts);
     this.#controller.toggleAttribute("nohotkeys", !accepts);
     this.#controller.toggleAttribute("gesturesdisabled", !accepts);
   }
 
   /**
-   * The picture started while the state forbids it. Refusing the controls is
-   * what a viewer meets; this is the guarantee behind it, for every other way
-   * an element can be started — a script, a remote control, a browser's own
-   * media keys, an `autoplay` after a source change.
+   * Keep the element paused while a track change is incomplete. Explicit
+   * controls still update intent, which is applied when preparation finishes.
    *
    * Marked as our pause, so the machine does not read it as the viewer stopping
    * playback: that is precisely the confusion this whole change removes.
@@ -215,6 +209,11 @@ export class Player extends StateDerivedView {
       const started = this.#video.play();
       if (started && typeof started.catch === "function") {
         started.catch((error) => {
+          if (error?.name === "AbortError") return;
+          if (error?.name !== "NotAllowedError") {
+            console.error("[torrent-tv] playback start failed:", error);
+            return;
+          }
           // A refused autoplay leaves the element paused, which raises a `pause`
           // event — and that event was being read as the VIEWER stopping
           // playback. The machine went to PAUSED, resumed, called play() again,
@@ -669,6 +668,8 @@ export class Player extends StateDerivedView {
     this.#closeButton.addEventListener("click", this.#closeHandler);
     this.#playlistToggle.addEventListener("click", this.#togglePlaylist);
     this.#controller.addEventListener("click", this.#onControllerClick);
+    this.#controller.addEventListener("mediaplayrequest", this.#onPlaybackRequest, true);
+    this.#controller.addEventListener("mediapauserequest", this.#onPlaybackRequest, true);
     document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
     this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
     document.addEventListener(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, this.#onSetSubtitleTracks);
@@ -695,7 +696,7 @@ export class Player extends StateDerivedView {
     this.#bufferSamples = [];
     this.#media = null;
     this.#activeFileIndex = -1;
-    this.#hideBuffering();
+    this.#buffering.hidden = !(this.onScreen && isWaiting(this.#state));
     this.#bufferingPeers.textContent = "";
     this.#applyPoster();
   };
@@ -705,6 +706,20 @@ export class Player extends StateDerivedView {
     if (hide) menu.hidden = true;
     button.hidden = true;
   }
+
+  /** Record explicit controls before media-chrome changes the element. */
+  #onPlaybackRequest = (event) => {
+    if (!acceptsPlaybackIntent(this.#state)) return;
+    const paused = event.type === "mediapauserequest";
+    noteViewerStopped(this.#video, paused);
+    signalApp(paused ? APP_EVENT.PAUSED_BY_VIEWER : APP_EVENT.RESUMED, {
+      viewerWantsPlayback: !paused
+    });
+    if (!paused && !acceptsPlaybackInput(this.#state)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
 
   /**
    * Draw the subtitle menu from the items the subtitle component states.

@@ -32,3 +32,10 @@ test("a proxy without the readiness forecast is identified", () => {
     /This proxy needs an update before playback can start/
   );
 });
+
+test("unknown media positions and unknown arrivals remain distinct waiting causes", () => {
+  assert.match(formatWaitingText({ readinessReason: "source-input-ranges-unavailable" }),
+    /required media positions have not been determined/);
+  assert.match(formatWaitingText({ readinessReason: "download-schedule-unavailable" }),
+    /Arrival times for required source data are not available/);
+});
