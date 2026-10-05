@@ -1,5 +1,6 @@
 ## Unreleased
 
+- **New**: The page asks the browser for client hints of the viewport and pixel density (`Sec-CH-Viewport-Width`, `Sec-CH-Viewport-Height`, `Sec-CH-DPR`). Browsers that implement them state these on every later request; the others send nothing.
 - **Fix**: The system media controls receive the chosen poster in every size it is large enough for (185 to 780 pixels wide), so the system takes the one its slot and pixel density need; only the 185-pixel one was offered, which a dense screen enlarges.
 
 ## 0.38.0
