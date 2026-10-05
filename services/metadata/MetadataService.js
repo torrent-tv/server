@@ -18,7 +18,7 @@
  * carries counts and outcomes only.
  */
 
-import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, resultYearAgrees } from "./identification.js";
+import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, preferYearMatches } from "./identification.js";
 import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
@@ -42,6 +42,13 @@ const MAX_EPISODE_CHECKS = 5;
 
 /** Results checked by their alternative titles when no title matched. A stated limit. */
 const MAX_ALTERNATIVE_CHECKS = 5;
+
+/** Expanded discovery only when a measured file duration can distinguish titles. */
+const MAX_RUNTIME_SEARCH_PAGES = 20;
+const MAX_RUNTIME_CHECKS = 60;
+const RUNTIME_REQUEST_BUDGET_MS = 15_000;
+/** User-selected allowance for cuts, credits and inserted advertising. */
+export const DEFAULT_RUNTIME_TOLERANCE_SECONDS = 15 * 60;
 
 /**
  * The answer of the alternative-title stage joined with the episode stage's.
@@ -74,9 +81,6 @@ const NOTHING_TTL_MS = 60 * 60 * 1000;
  * @typedef {object} IdentifyRequest
  * @property {string[]} names
  * @property {"tv" | "movie" | null} kindHint
- * @property {boolean} [requireYear] - Identify only when a name states a year:
- *   for one picture of a release not known to be one work, where a bare title
- *   (a performer's folder, a file called `01`) says too little.
  * @property {{ season: number, titles: string[] } | null} [episodeEvidence] - The
  *   titles one season of the release's files carry, used only when no title
  *   matched; see {@link decideByEpisodeTitles}.
@@ -96,6 +100,7 @@ export class MetadataService {
 
   /** @type {() => number} */
   #now;
+  #runtimeToleranceSeconds;
 
   /**
    * @param {object} params
@@ -104,11 +109,13 @@ export class MetadataService {
    * @param {import("./SharedFetches.js").SharedFetches} params.fetches
    * @param {() => number} [params.now]
    */
-  constructor({ source, cache, fetches, now = Date.now }) {
+  constructor({ source, cache, fetches, now = Date.now, runtimeToleranceSeconds = DEFAULT_RUNTIME_TOLERANCE_SECONDS }) {
+    if (!Number.isFinite(runtimeToleranceSeconds) || runtimeToleranceSeconds < 0) throw new TypeError("runtimeToleranceSeconds must be a non-negative finite number");
     this.#source = source;
     this.#cache = cache;
     this.#fetches = fetches;
     this.#now = now;
+    this.#runtimeToleranceSeconds = runtimeToleranceSeconds;
   }
 
   /**
@@ -122,7 +129,6 @@ export class MetadataService {
     if (!this.#source) return { status: "unavailable" };
     const readings = names.map(parseReleaseName);
     const years = [...new Set([...readings.map(reading => reading.years?.from), ...(subtitleEvidence?.years ?? [])].filter(Number.isInteger))];
-    if (years.length > 1) return { status: "not-found" };
     const titles = [...new Set(readings.flatMap(reading => reading.titles).map(normalizeTitle))];
     const latin = titles.filter(title => /^[a-z0-9 ]+$/u.test(title));
     const words = [...new Set(latin.flatMap(title => title.split(" ")).filter(word => /^[a-z]{5,}$/u.test(word)))];
@@ -143,16 +149,15 @@ export class MetadataService {
           const found = await this.#search(kind, word, language, wait);
           if (found.capped) return { status: "undetermined" };
           for (const candidate of found.results) {
-            if (!years.length || candidate.year === years[0]) candidates.set(`${kind}|${candidate.id}`, { ...candidate, kind });
+            candidates.set(`${kind}|${candidate.id}`, { ...candidate, kind });
           }
         }
       }
       if (candidates.size > MAX_ALTERNATIVE_CHECKS) return { status: "undetermined" };
       const matches = [];
       for (const candidate of candidates.values()) {
-        const russian = await this.#cached(`work|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
+        const russian = await this.#cached(`work|v2|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
           deadlineAt => this.#source.work(candidate.kind, candidate.id, "ru-RU", { deadlineAt }), wait);
-        if (years.length && russian.year !== years[0]) continue;
         const aliases = await this.#cached(`alternative|${candidate.kind}|${candidate.id}`, () => FOUND_TTL_MS,
           deadlineAt => this.#source.alternativeTitles(candidate.kind, candidate.id, { deadlineAt }), wait);
         const catalogTitles = [candidate.name, candidate.originalName, russian.title, russian.originalTitle, ...aliases].filter(Boolean);
@@ -162,9 +167,10 @@ export class MetadataService {
         matches.push(candidate);
       }
       if (!matches.length) continue;
-      if (matches.length !== 1) return { status: "ambiguous" };
-      const [chosen] = matches;
-      const work = await this.#cached(`work|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
+      const found = preferYearMatches(matches, years);
+      if (found.length !== 1) return { status: "ambiguous" };
+      const [chosen] = found;
+      const work = await this.#cached(`work|v2|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
         deadlineAt => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
       return { status: "identified", work };
       }
@@ -175,7 +181,7 @@ export class MetadataService {
     }
   }
 
-  async identify({ names, kindHint, requireYear = false, episodeEvidence = null, language, signal }) {
+  async identify({ names, kindHint, episodeEvidence = null, durationSeconds = null, language, signal }) {
     if (episodeEvidence) {
       episodeEvidence = { ...episodeEvidence, titles: episodeEvidence.titles.filter(title => parseReleaseName(title).titles.length > 0) };
       if (!episodeEvidence.titles.length) episodeEvidence = null;
@@ -183,17 +189,12 @@ export class MetadataService {
     if (!this.#source) {
       return { status: "unavailable" };
     }
-    const deadlineAt = this.#now() + REQUEST_BUDGET_MS;
+    const hasDuration = Number.isFinite(durationSeconds) && durationSeconds > 0;
+    const deadlineAt = this.#now() + (hasDuration ? RUNTIME_REQUEST_BUDGET_MS : REQUEST_BUDGET_MS);
     const readings = names.map(parseReleaseName);
     const seriesEvidence = readings.some((reading) => reading.seriesEvidence);
     const kinds = kindHint ? [kindHint] : seriesEvidence ? ["tv"] : ["tv", "movie"];
     const statedYears = [...new Set(readings.map((reading) => reading.years?.from).filter(Number.isInteger))];
-    // Measured 2026-09-30: one picture of an adult pack, under a folder named
-    // after a performer, matched a film of that name. Without a stated year a
-    // bare title is not enough when nothing says the picture is a film at all.
-    if (requireYear && statedYears.length === 0) {
-      return { status: "undetermined" };
-    }
 
     // What is SENT is the spelling as written, apostrophes made plain: a
     // provider's own search may not find `christies` for `Christie's`. What is
@@ -228,7 +229,7 @@ export class MetadataService {
       queries.flatMap(({ sent, normalized }) =>
         kinds.map(async (kind) => {
           try {
-            const found = await this.#search(kind, sent, language, { deadlineAt, signal });
+            const found = await this.#search(kind, sent, language, { deadlineAt, signal }, hasDuration ? MAX_RUNTIME_SEARCH_PAGES : MAX_SEARCH_PAGES);
             return { kind, query: normalized, status: found.capped ? "capped" : "complete", results: found.results };
           } catch (error) {
             if (error instanceof MetadataUnavailableError) {
@@ -240,13 +241,40 @@ export class MetadataService {
       )
     );
 
-    let identity = decideIdentity({ searches, statedYears });
-    // No main or original title matched. Two further stages, each only among
-    // results a stated year admits — without one the set is every work of that
-    // name, and a remake shares its alternative titles and its episode titles:
+    let identity = decideIdentity({ searches, statedYears: hasDuration ? [] : statedYears });
+    let runtimeMatches = null;
+    if (hasDuration && ["ambiguous", "undetermined"].includes(identity.status)) {
+      const candidates = decideIdentity({ searches, statedYears: [], candidateLimit: MAX_RUNTIME_CHECKS + 1 }).candidates;
+      if (candidates.length <= MAX_RUNTIME_CHECKS) {
+        try {
+          const checked = [];
+          // Match the source's concurrency instead of filling its shared queue.
+          for (let offset = 0; offset < candidates.length; offset += 4) {
+            checked.push(...await Promise.all(candidates.slice(offset, offset + 4).map(async candidate => {
+            const work = await this.#cached(`work|v2|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
+              fetchDeadline => this.#source.work(candidate.kind, candidate.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+            const runtimes = work.kind === "movie" ? [work.runtimeSeconds] : work.episodeRuntimeSeconds ?? [];
+            const differences = runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0).map(runtime => Math.abs(runtime - durationSeconds));
+            return { candidate, difference: Math.min(...differences) };
+            })));
+          }
+          const closest = Math.min(...checked.filter(item => item.difference <= this.#runtimeToleranceSeconds).map(item => item.difference));
+          runtimeMatches = new Set(checked.filter(item => item.difference === closest && Number.isFinite(closest)).map(({ candidate }) => `${candidate.kind}:${candidate.tmdbId}`));
+          identity = decideIdentity({ searches, statedYears, runtimeMatches });
+        } catch (error) {
+          if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
+          throw error;
+        }
+      } else identity = { status: "undetermined", candidates: [] };
+    }
+    if (identity.status === "ambiguous" && searches.every(search => search.status === "complete")) {
+      identity = decideIdentity({ searches, statedYears, runtimeMatches, preferLatest: true });
+    }
+    // No complete main or original title match. Check further evidence without
+    // restricting the candidates by their years:
     // the provider's alternative titles (a transliterated or romanized name),
     // and, for a series, its episodes.
-    if (identity.status === "not-found" && statedYears.length > 0) {
+    if (identity.status === "not-found" || identity.status === "undetermined") {
       try {
         const byAlternative = await this.#identifyByAlternativeTitles({
           searches,
@@ -255,10 +283,10 @@ export class MetadataService {
           deadlineAt,
           signal
         });
-        identity = byAlternative;
+        identity = combineStages(identity, byAlternative);
         if (byAlternative.status !== "identified" && kinds.includes("tv") && episodeEvidence) {
           const byEpisodes = await this.#identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal });
-          identity = combineStages(byAlternative, byEpisodes);
+          identity = combineStages(identity, byEpisodes);
         }
       } catch (error) {
         if (error instanceof MetadataUnavailableError) {
@@ -272,9 +300,9 @@ export class MetadataService {
     }
     const [chosen] = identity.candidates;
     try {
-      const work = await this.#cached(`work|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS, (fetchDeadline) =>
+      const work = await this.#cached(`work|v2|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS, (fetchDeadline) =>
         this.#source.work(chosen.kind, chosen.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
-      return { status: "identified", work };
+      return { status: "identified", work: { ...work, identification: identity.selectionReason ?? (runtimeMatches?.size ? "duration" : "title") } };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) {
         return { status: "unavailable" };
@@ -284,8 +312,8 @@ export class MetadataService {
   }
 
   /**
-   * The alternative-title stage of {@link identify}: the first results a
-   * stated year admits, of every kind searched, each checked for a searched
+   * The alternative-title stage of {@link identify}: bounded search results
+   * of every kind searched, each checked for a searched
    * spelling among its alternative titles.
    *
    * @param {object} params
@@ -297,7 +325,7 @@ export class MetadataService {
     for (const search of searches) {
       for (const result of search.results) {
         const key = `${search.kind}:${result.id}`;
-        if (!seen.has(key) && resultYearAgrees(result.year, statedYears)) {
+        if (!seen.has(key)) {
           seen.add(key);
           admitted.push({ kind: search.kind, result });
         }
@@ -315,12 +343,12 @@ export class MetadataService {
         )
       }))
     );
-    return decideByAlternativeTitles({ checked, queries, uncheckedRemain: admitted.length > toCheck.length });
+    return decideByAlternativeTitles({ checked, queries, statedYears, uncheckedRemain: admitted.length > toCheck.length });
   }
 
   /**
-   * The episode stage of {@link identify}: the first results a stated year
-   * admits, each checked against the files' titles for one season.
+   * The episode stage of {@link identify}: bounded search results, each
+   * checked against the files' titles for one season.
    *
    * @param {object} params
    * @returns {Promise<import("./identification.js").Identity>}
@@ -333,7 +361,7 @@ export class MetadataService {
         continue;
       }
       for (const result of search.results) {
-        if (!seen.has(result.id) && resultYearAgrees(result.year, statedYears)) {
+        if (!seen.has(result.id)) {
           seen.add(result.id);
           admitted.push(result);
         }
@@ -362,6 +390,7 @@ export class MetadataService {
     );
     return decideByEpisodeTitles({
       checked,
+      statedYears,
       titles: episodeEvidence.titles,
       uncheckedRemain: admitted.length > toCheck.length
     });
@@ -409,19 +438,19 @@ export class MetadataService {
    * @param {{ deadlineAt: number, signal?: AbortSignal }} wait
    * @returns {Promise<{ results: import("./TmdbSource.js").SearchResult[], capped: boolean }>}
    */
-  #search(kind, query, language, wait) {
+  #search(kind, query, language, wait, pageLimit = MAX_SEARCH_PAGES) {
     return this.#cached(
-      `search|${kind}|${language}|${query}`,
+      `search|${pageLimit}|${kind}|${language}|${query}`,
       (found) => (found.results.length > 0 ? FOUND_TTL_MS : NOTHING_TTL_MS),
       async (fetchDeadline) => {
         const first = await this.#source.search(kind, query, language, 1, { deadlineAt: fetchDeadline });
         const results = [...first.results];
-        const lastPage = Math.min(first.totalPages, MAX_SEARCH_PAGES);
+        const lastPage = Math.min(first.totalPages, pageLimit);
         for (let page = 2; page <= lastPage; page += 1) {
           const next = await this.#source.search(kind, query, language, page, { deadlineAt: fetchDeadline });
           results.push(...next.results);
         }
-        return { results, capped: first.totalPages > MAX_SEARCH_PAGES };
+        return { results, capped: first.totalPages > pageLimit };
       },
       wait
     );

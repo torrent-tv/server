@@ -63,11 +63,20 @@ test("a year-bearing AniList synonym identifies the supplied 2026 series", async
   assert.equal(result.work.sources.anilist.id,1);
 });
 
-test("ambiguous, incomplete and wrong-year anime results are never selected", async () => {
-  for (const [results, options] of [[[anime, {...anime,id:3}], {}], [[anime], {incomplete:true}], [[{...anime,startDate:{year:2000}}], {}]]) {
+test("ambiguous and incomplete anime results are never selected", async () => {
+  for (const [results, options] of [[[anime, {...anime,id:3}], {}], [[anime], {incomplete:true}]]) {
     const { metadata } = service({status:"not-found"}, results, options);
     const result = await metadata.identify({names:["Example 2026"],kindHint:"tv"});
     assert.equal(result.status, "not-found");
+  }
+});
+
+test("a differing or missing anime year does not prevent identification", async () => {
+  for (const year of [2000, null]) {
+    const { metadata } = service({ status: "not-found" }, [{ ...anime, startDate: { year } }]);
+    const result = await metadata.identify({ names: ["Example 2026"], kindHint: "tv" });
+    assert.equal(result.status, "identified");
+    assert.equal(result.work.sources.anilist.id, 1);
   }
 });
 

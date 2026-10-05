@@ -46,6 +46,8 @@ export const MEDIA_INFO_EVENTS = {
   WANT_FILES: "MEDIA_INFO:WANT_FILES",
   /** A snapshot of everything known, or `null` when nothing is. See `MediaInfoState`. */
   SUBTITLE_EVIDENCE: "MEDIA_INFO:SUBTITLE_EVIDENCE",
+  /** `{ selection, fileIndex, durationSeconds }` — measured source duration. */
+  PROBED: "MEDIA_INFO:PROBED",
   CHANGED: "MEDIA_INFO:CHANGED"
 };
 

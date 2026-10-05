@@ -22,7 +22,7 @@ import { ImageFetcher } from "../services/metadata/ImageFetcher.js";
  * @param {Record<string, Array<{ id: number, name: string, year: number | null }>>} table - `kind|query` → results.
  * @param {{ fail?: Set<string>, totalPages?: number, seasons?: Record<string, string[]>, alternative?: Record<string, string[]> }} [options]
  */
-function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {}, alternative = {} } = {}) {
+function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {}, alternative = {}, works = {} } = {}) {
   const asked = [];
   return {
     asked,
@@ -36,7 +36,7 @@ function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {}, alt
     },
     async work(kind, id) {
       asked.push(`work|${kind}|${id}`);
-      return { kind, tmdbId: id, title: "T", originalTitle: "T", year: 2000, overview: "", poster: null, backdrop: null, seasons: [] };
+      return { kind, tmdbId: id, title: "T", originalTitle: "T", year: 2000, overview: "", poster: null, backdrop: null, seasons: [], ...works[`${kind}|${id}`] };
     },
     async alternativeTitles(kind, id) {
       asked.push(`alternative|${kind}|${id}`);
@@ -115,14 +115,68 @@ test("a transliterated title is identified by the provider's alternative titles"
   assert.equal(answer.work.tmdbId, 110402);
 });
 
-test("without a stated year the alternative titles are not consulted", async () => {
+test("without a stated year alternative titles still identify the work", async () => {
   const source = fakeSource(
     { "movie|Trudno byt Bogom": [{ id: 110402, name: "Hard to Be a God", year: 2014 }] },
     { alternative: { "movie|110402": ["Trudno byt' bogom"] } }
   );
   const answer = await service(source).identify({ names: ["Trudno.byt.Bogom"], kindHint: "movie", language: "en-US" });
-  assert.equal(answer.status, "not-found");
-  assert.ok(!source.asked.some((line) => line.startsWith("alternative|")));
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 110402);
+  assert.ok(source.asked.some((line) => line.startsWith("alternative|")));
+});
+
+test("First Blood is identified by its Rambo alias with missing or differing years", async () => {
+  for (const name of ["Rambo.First.Blood.1080p.rus.LostFilm.TV.mkv", "Rambo.First.Blood.2026.1080p.mkv"]) {
+    const source = fakeSource({ "movie|Rambo First Blood": [{ id: 1368, name: "First Blood", year: 1982 }] },
+      { alternative: { "movie|1368": ["Rambo: First Blood"] } });
+    const answer = await service(source).identify({ names: [name], kindHint: null, language: "en-US" });
+    assert.equal(answer.status, "identified");
+    assert.equal(answer.work.tmdbId, 1368);
+    assert.ok(source.asked.includes("alternative|movie|1368"));
+  }
+});
+
+test("measured durations distinguish the two recent ambiguous movie titles", async () => {
+  for (const [name, query, durationSeconds, expectedId, results, works] of [
+    ["Minions.and.Monsters.1080p.mkv", "Minions and Monsters", 5559, 1315772,
+      [{ id: 878357, name: "Minions & Monsters", year: 2021 }, { id: 1315772, name: "Minions & Monsters", year: 2026 }],
+      { "movie|878357": { runtimeSeconds: 240 }, "movie|1315772": { runtimeSeconds: 5400, imdbId: "tt32890033" } }],
+    ["Frankenstein.1080p.rus.LostFilm.TV.mkv", "Frankenstein", 8998, 1062722,
+      [{ id: 3035, name: "Frankenstein", year: 1931 }, { id: 1062722, name: "Frankenstein", year: 2025 }],
+      { "movie|3035": { runtimeSeconds: 4200 }, "movie|1062722": { runtimeSeconds: 9000, imdbId: "tt1312221" } }]
+  ]) {
+    const source = fakeSource({ [`movie|${query}`]: results }, { works, totalPages: 4 });
+    const metadata = service(source);
+    assert.notEqual((await metadata.identify({ names: [name], kindHint: null, language: "en-US" })).status, "identified");
+    const answer = await metadata.identify({ names: [name], kindHint: null, durationSeconds, language: "en-US" });
+    assert.equal(answer.status, "identified");
+    assert.equal(answer.work.tmdbId, expectedId);
+    assert.ok(answer.work.imdbId);
+    assert.ok(source.asked.includes(`search|movie|${query}|4`));
+  }
+});
+
+test("equally matching runtimes select the later year by explicit policy", async () => {
+  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2000 }, { id: 2, name: "Title", year: 2020 }] },
+    { works: { "movie|1": { runtimeSeconds: 5400 }, "movie|2": { runtimeSeconds: 5500 } } });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 5450, language: "en-US" });
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 2);
+  assert.equal(answer.work.identification, "latest-year");
+});
+
+test("duration prefers the closest record within the configured allowance", async () => {
+  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2000 }, { id: 2, name: "Title", year: 2026 }] },
+    { works: { "movie|1": { runtimeSeconds: 7200 }, "movie|2": { runtimeSeconds: 6000 } } });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 7600, language: "en-US" });
+  assert.equal(answer.work.tmdbId, 1);
+  assert.equal(answer.work.identification, "duration");
+  const strict = new MetadataService({ source, runtimeToleranceSeconds: 60,
+    cache: new MetadataCache({ budgetBytes: 1 << 20, maxEntryBytes: 1 << 16 }), fetches: new SharedFetches({ waiterLimit: 64 }) });
+  const withoutDurationMatch = await strict.identify({ names: ["Title"], kindHint: "movie", durationSeconds: 7600, language: "en-US" });
+  assert.equal(withoutDurationMatch.work.tmdbId, 2);
+  assert.equal(withoutDurationMatch.work.identification, "latest-year");
 });
 
 test("a shortened series title is identified by the episode names of its files", async () => {
@@ -138,27 +192,29 @@ test("a shortened series title is identified by the episode names of its files",
   });
   assert.equal(answer.status, "identified");
   assert.equal(answer.work.tmdbId, 790);
-  // Only the result the stated year admits was checked.
-  assert.ok(!source.asked.includes("season|9|1"));
+  // Year evidence never prevents checking another result's episodes.
+  assert.ok(source.asked.includes("season|9|1"));
 });
 
-test("without a stated year the episode names are not consulted", async () => {
-  const source = fakeSource({ "tv|Poirot": [{ id: 790, name: "Agatha Christie's Poirot", year: 1989 }] });
+test("without a stated year episode names still identify the series", async () => {
+  const source = fakeSource({ "tv|Poirot": [{ id: 790, name: "Agatha Christie's Poirot", year: 1989 }] },
+    { seasons: { "790|1": ["Clapham Cook", "Murder in the Mews"] } });
   const answer = await service(source).identify({
     names: ["Poirot"],
     kindHint: "tv",
-    episodeEvidence: { season: 1, titles: ["A", "B"] },
+    episodeEvidence: { season: 1, titles: ["Clapham Cook", "Murder in the Mews"] },
     language: "en-US"
   });
-  assert.equal(answer.status, "not-found");
-  assert.ok(!source.asked.some((line) => line.startsWith("season|")));
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 790);
+  assert.ok(source.asked.some((line) => line.startsWith("season|")));
 });
 
-test("a picture that must state a year and does not is not searched for", async () => {
+test("legacy requireYear requests still search pictures without a year", async () => {
   const source = fakeSource({ "movie|27 nights": [{ id: 1, name: "27 Nights", year: 2025 }] });
   const answer = await service(source).identify({ names: ["27_nights"], kindHint: null, requireYear: true, language: "en-US" });
-  assert.equal(answer.status, "undetermined");
-  assert.deepEqual(source.asked, []);
+  assert.equal(answer.status, "identified");
+  assert.ok(source.asked.includes("search|movie|27 nights|1"));
 });
 
 test("more pages than are read make a single match undetermined", async () => {

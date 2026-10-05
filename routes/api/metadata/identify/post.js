@@ -79,9 +79,14 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
     return reply.code(400).send({ error: "subtitleEvidence must contain at most four titles and years." });
   }
   const started = Date.now();
+  const durationSeconds = body.durationSeconds ?? null;
+  if (durationSeconds !== null && !(typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= 86_400)) {
+    return reply.code(400).send({ error: "durationSeconds must be a positive number of at most 86400 seconds." });
+  }
   const answer = await metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
+    durationSeconds,
     requireYear: body.requireYear === true,
     episodeEvidence: evidence,
     subtitleEvidence,

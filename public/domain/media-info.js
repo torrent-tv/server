@@ -160,12 +160,12 @@ export function episodeEvidenceOf(items) {
 /**
  * The identification of ONE picture of a release whose pictures are not known
  * to be one work: its own name and the folder it sits in, nothing of the rest.
- * A year must be stated: in such a release a bare title — a performer's folder,
- * a file called `01` — matched unrelated films in the survey collection.
+ * Missing years never prevent identification; ambiguous titles remain unresolved
+ * until the service has additional evidence.
  *
  * @param {{ relativePath?: string } | undefined} file
  * @param {{ episode?: object | null } | undefined} item
- * @returns {{ names: string[], kindHint: "tv" | null, requireYear: true }}
+ * @returns {{ names: string[], kindHint: "tv" | null }}
  */
 export function pictureIdentification(file, item) {
   const parts = String(file?.relativePath ?? "").split("/");
@@ -173,8 +173,7 @@ export function pictureIdentification(file, item) {
   const seasonFolder = /^(?:season|сезон|s)[ ._-]*\d{1,3}$/iu.test(folder.trim());
   return {
     names: boundedNames([stemOf(file?.relativePath ?? ""), seasonFolder ? "" : folder]),
-    kindHint: item?.episode ? "tv" : null,
-    requireYear: true
+    kindHint: item?.episode ? "tv" : null
   };
 }
 
