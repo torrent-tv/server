@@ -42,7 +42,7 @@ export class ProviderSubtitles {
     this.#key = key;
     try {
       const response = await fetch("/api/subtitles/search", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: key,
+        method: "POST", headers: requestHeaders(), body: key,
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(35_000)])
       });
       if (!response.ok) throw new Error(`subtitle search returned ${response.status}`);
@@ -58,7 +58,7 @@ export class ProviderSubtitles {
 
   async load(item, signal) {
     const request = token => fetch("/api/subtitles/file", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
+      method: "POST", headers: requestHeaders(), body: JSON.stringify({ token }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(50_000)])
     });
     let response = await request(item.token);
@@ -67,7 +67,7 @@ export class ProviderSubtitles {
       // A restart rotates selection permits. Refresh discovery once; a refused
       // permit has not consumed a download, so this cannot double-charge one.
       const refreshed = await fetch("/api/subtitles/search", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: this.#key,
+        method: "POST", headers: requestHeaders(), body: this.#key,
         signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)])
       });
       if (refreshed.ok) {
@@ -82,3 +82,4 @@ export class ProviderSubtitles {
     return text;
   }
 }
+import { requestHeaders } from "../../shared/request-headers.js";

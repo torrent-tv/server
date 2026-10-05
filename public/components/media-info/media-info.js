@@ -1,5 +1,6 @@
 import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS } from "../../shared/events.js";
 import { subtitleEvidenceOf } from "../../domain/subtitle-evidence.js";
+import { requestHeaders } from "../../shared/request-headers.js";
 import {
   METADATA_LANGUAGE,
   boundedNames,
@@ -362,7 +363,7 @@ export class MediaInfoController {
     try {
       const response = await fetch(path, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: requestHeaders(),
         body: JSON.stringify(body),
         signal: this.#abort?.signal
       });

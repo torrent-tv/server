@@ -25,8 +25,8 @@ export class MetadataUnavailableError extends Error {
   /**
    * @param {string} reason
    */
-  constructor(reason) {
-    super(`metadata unavailable: ${reason}`);
+  constructor(reason, options) {
+    super(`metadata unavailable: ${reason}`, options);
     this.name = "MetadataUnavailableError";
     this.reason = reason;
   }
