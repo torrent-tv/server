@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: `GET /health` states the free space of the filesystem holding the server cache and the reserve the cache keeps there, as `disk: { freeBytes, reserveBytes }` (`null` without a cache directory). On the droplet that filesystem also holds Docker's images; infra checks after every deployment and every day that the next server image still fits, since a full disk once stopped releases from rolling out without anyone noticing (torrent-tv/meta#71).
+
 ## 0.39.5
 
 - **Fix**: A viewing opened from a magnet link — the demo film and every shared link — now tells the proxy which torrent it is watching, so the browser log file the proxy keeps is named after that torrent. Only a viewing opened from a `.torrent` file did, and on the addon host on 2026-10-05 146 of 147 files ended in `-no-torrent-yet` (torrent-tv/meta#123).

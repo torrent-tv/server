@@ -154,7 +154,9 @@ app.get("/api/metadata/image/:size/:file", async (req, reply) =>
 app.post("/api/subtitles/search", { bodyLimit: 4096 }, async (req, reply) => handleApiSubtitlesSearchPost(req, reply, { subtitles }));
 app.post("/api/subtitles/file", { bodyLimit: 8192 }, async (req, reply) => handleApiSubtitlesFilePost(req, reply, { subtitles }));
 
-app.get("/health", async (req, reply) => handleHealthGet(req, reply, { shutdownState, version }));
+app.get("/health", async (req, reply) =>
+  handleHealthGet(req, reply, { shutdownState, version, diskDirectory: diskCache ? process.env.SERVER_CACHE_DIR : null, diskReserveBytes: reserveMiB * 1024 ** 2 })
+);
 app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
 
 app.get("/about", (_req, reply) => reply.sendFile("about.html"));

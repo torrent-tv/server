@@ -85,7 +85,7 @@ POST /api/metadata/episodes           which episode of one season each file is
 GET  /api/metadata/image/:size/:file  a TMDB image, with TMDB's caching headers
 GET  /ws/proxy-tunnel                 persistent WebSocket tunnel from proxy → server
 GET  /ws/browser-signal               WebRTC signalling WebSocket for browser ↔ proxy P2P setup
-GET  /health                          health check
+GET  /health                          health check; `disk` states free space of the cache filesystem
 GET  /healthz                         Kubernetes liveness probe
 ```
 
