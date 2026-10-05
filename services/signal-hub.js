@@ -12,6 +12,10 @@ import { randomUUID } from "node:crypto";
  * @typedef {Object} SignalHub
  * @property {(socket: import("ws").WebSocket, onSignal: (sessionId: string, proxyId: string, signal: object) => void) => string} registerBrowser
  * @property {(sessionId: string, signal: object) => void} forwardToBrowser
+ * @property {() => number | null} latestOpenedAt
+ *   When the newest open browser socket was opened (`Date.now()`), or null.
+ * @property {(code: number, reason: string) => void} closeAll
+ *   Close every browser socket.
  */
 
 /**
@@ -22,6 +26,8 @@ import { randomUUID } from "node:crypto";
 export function createSignalHub() {
   /** @type {Map<string, import("ws").WebSocket>} sessionId → browser socket */
   const sessions = new Map();
+  /** @type {Map<string, number>} sessionId → when its socket was opened */
+  const openedAt = new Map();
 
   return {
     /**
@@ -36,6 +42,7 @@ export function createSignalHub() {
     registerBrowser(socket, onSignal) {
       const sessionId = randomUUID();
       sessions.set(sessionId, socket);
+      openedAt.set(sessionId, Date.now());
 
       // Send the session ID to the browser immediately so it can include it in signals.
       socket.send(JSON.stringify({ type: "session", sessionId }));
@@ -59,6 +66,7 @@ export function createSignalHub() {
 
       socket.on("close", () => {
         sessions.delete(sessionId);
+        openedAt.delete(sessionId);
       });
 
       return sessionId;
@@ -75,6 +83,24 @@ export function createSignalHub() {
       const socket = sessions.get(sessionId);
       if (socket && socket.readyState === 1 /* OPEN */) {
         socket.send(JSON.stringify(signal));
+      }
+    },
+
+    latestOpenedAt() {
+      let latest = null;
+      for (const at of openedAt.values()) {
+        if (latest === null || at > latest) {
+          latest = at;
+        }
+      }
+      return latest;
+    },
+
+    closeAll(code, reason) {
+      for (const socket of sessions.values()) {
+        if (socket.readyState < 2 /* CLOSING */) {
+          socket.close(code, reason);
+        }
       }
     }
   };

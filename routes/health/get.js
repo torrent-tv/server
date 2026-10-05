@@ -15,10 +15,10 @@ import { statfs } from "node:fs/promises";
  *
  * @param {import("fastify").FastifyRequest} _req
  * @param {import("fastify").FastifyReply} reply
- * @param {{ shutdownState: { isShuttingDown: boolean }, version: string, diskDirectory?: string | null, diskReserveBytes?: number }} deps
+ * @param {{ shutdownState: { isShuttingDown: boolean }, version: string, role?: { describe: () => { state: string, slot: string } }, diskDirectory?: string | null, diskReserveBytes?: number }} deps
  * @returns {Promise<void>}
  */
-export async function handleHealthGet(_req, reply, { shutdownState, version, diskDirectory = null, diskReserveBytes = 0 }) {
+export async function handleHealthGet(_req, reply, { shutdownState, version, role, diskDirectory = null, diskReserveBytes = 0 }) {
   if (shutdownState.isShuttingDown) {
     return reply.code(503).send({
       ok: false,
@@ -31,7 +31,11 @@ export async function handleHealthGet(_req, reply, { shutdownState, version, dis
     ok: true,
     status: "ok",
     version,
-    disk: await diskSpace(diskDirectory, diskReserveBytes)
+    disk: await diskSpace(diskDirectory, diskReserveBytes),
+    // Which slot this is and whether it serves. Both slots answer ok: one that
+    // stands by is healthy, and nginx skips it because every other route
+    // answers 503 there.
+    instance: role?.describe() ?? null
   });
 }
 
