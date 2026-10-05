@@ -1,4 +1,4 @@
-## Unreleased
+## 0.38.0
 
 - **New**: The picture shown while an episode loads, and the poster in the system's media controls (lock screen, media window), is a random one of the work's images that suit the place: the orientation needed and a size large enough for it. Language and rating no longer decide it. One load keeps one picture; choosing another episode or release chooses again.
 
