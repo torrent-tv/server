@@ -362,3 +362,16 @@ test("an image source that answers something other than an image is refused", as
   const images = new ImageFetcher({ gate: new RequestGate({ concurrency: 1, perSecond: Infinity, queueLimit: 4 }), fetch });
   await assert.rejects(images.fetch("w342", "abcdefgh.jpg"), MetadataUnavailableError);
 });
+
+
+test("duration never admits an unrelated title and follows alternative-title checks", async () => {
+  const source = fakeSource({ "movie|Alias": [
+    { id: 1, name: "First", year: 2000 }, { id: 2, name: "Second", year: 2001 }, { id: 3, name: "Unrelated", year: 2026 }
+  ] }, { alternative: { "movie|1": ["Alias"], "movie|2": ["Alias"] }, works: {
+    "movie|1": { runtimeSeconds: 5500 }, "movie|2": { runtimeSeconds: 6000 }, "movie|3": { runtimeSeconds: 5520 }
+  } });
+  const answer = await service(source).identify({ names: ["Alias"], kindHint: "movie", durationSeconds: 5520, language: "en-US" });
+  assert.equal(answer.work.tmdbId, 1);
+  assert.ok(source.asked.indexOf("alternative|movie|3") < source.asked.indexOf("work|movie|1"));
+  assert.ok(!source.asked.includes("work|movie|3"));
+});

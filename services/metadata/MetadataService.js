@@ -242,23 +242,8 @@ export class MetadataService {
       )
     );
 
-    let identity = decideIdentity({ searches, statedYears: hasDuration ? [] : statedYears });
+    let identity = decideIdentity({ searches, statedYears: hasDuration ? [] : statedYears, candidateLimit: MAX_RUNTIME_CHECKS + 1 });
     let runtimeMatches = null;
-    if (hasDuration && ["ambiguous", "undetermined"].includes(identity.status)) {
-      const candidates = decideIdentity({ searches, statedYears: [], candidateLimit: MAX_RUNTIME_CHECKS + 1 }).candidates;
-      if (candidates.length <= MAX_RUNTIME_CHECKS) {
-        try {
-          runtimeMatches = await this.#closestByDuration(candidates, { durationSeconds, language, deadlineAt, signal });
-          identity = decideIdentity({ searches, statedYears, runtimeMatches });
-        } catch (error) {
-          if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
-          throw error;
-        }
-      } else identity = { status: "undetermined", candidates: [] };
-    }
-    if (identity.status === "ambiguous" && searches.every(search => search.status === "complete")) {
-      identity = decideIdentity({ searches, statedYears, runtimeMatches, preferLatest: true });
-    }
     // No complete main or original title match. Check further evidence without
     // restricting the candidates by their years:
     // the provider's alternative titles (a transliterated or romanized name),
@@ -267,14 +252,14 @@ export class MetadataService {
       try {
         const byAlternative = await this.#identifyByAlternativeTitles({
           searches,
-          statedYears,
+          statedYears: hasDuration ? [] : statedYears,
           queries: queries.map((query) => query.normalized),
           deadlineAt,
           signal
         });
         identity = combineStages(identity, byAlternative);
         if (byAlternative.status !== "identified" && kinds.includes("tv") && episodeEvidence) {
-          const byEpisodes = await this.#identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal });
+          const byEpisodes = await this.#identifyByEpisodes({ searches, statedYears: hasDuration ? [] : statedYears, episodeEvidence, language, deadlineAt, signal });
           identity = combineStages(identity, byEpisodes);
         }
       } catch (error) {
@@ -284,8 +269,9 @@ export class MetadataService {
         throw error;
       }
     }
-    // Alias and episode candidates need the same duration refinement as main titles.
+    // Refine only candidates already qualified by main, alternative or episode titles.
     if (identity.status === "ambiguous" && !identity.incomplete && searches.every(search => search.status === "complete")) {
+      if (identity.candidates.length > MAX_RUNTIME_CHECKS) return { status: "undetermined" };
       try {
         if (hasDuration) runtimeMatches = await this.#closestByDuration(identity.candidates, { durationSeconds, language, deadlineAt, signal });
         const matching = identity.candidates.filter(candidate => runtimeMatches?.has(`${candidate.kind}:${candidate.tmdbId}`));
