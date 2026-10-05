@@ -1,4 +1,4 @@
-## Unreleased
+## 0.40.0
 
 - **New**: `GET /health` states the free space of the filesystem holding the server cache and the reserve the cache keeps there, as `disk: { freeBytes, reserveBytes }` (`null` without a cache directory). On the droplet that filesystem also holds Docker's images; infra checks after every deployment and every day that the next server image still fits, since a full disk once stopped releases from rolling out without anyone noticing (torrent-tv/meta#71).
 
