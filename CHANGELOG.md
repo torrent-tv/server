@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.12
 
 - **Fix**: The waiting notice's poll no longer leaves an unhandled rejection when a failure ends playback while it waits: a read aborted by the session being torn down is not reported, and any other failed read is said once.
 
