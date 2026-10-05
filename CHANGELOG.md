@@ -1,4 +1,4 @@
-## Unreleased
+## 0.41.0
 
 - **New**: The server can run in two slots and hand over at a release, so a page that opens or connects to a proxy during a release finds a server and the full list of proxies. The new instance (`SERVER_SLOT`, its peer named by `SERVER_PEER`) asks the serving one to hand over; the serving one stops accepting tunnels and asks every proxy that follows moves to open a second connection, which nginx sends to the new instance; when each of them has arrived, the new instance serves and the old one stops accepting pages, finishes the signalling already under way — until its newest signalling socket is as old as the page's connect deadline — and stands by. An instance that does not serve answers 503 so nginx uses the other slot; `/healthz` names the slot and its state. Without `SERVER_PEER` the server serves alone, as before (torrent-tv/meta#94).
 - **New**: A proxy is registered from its tunnel connection when it sends its name with it, because during a release its separate registration request may reach the other instance (torrent-tv/meta#94).
