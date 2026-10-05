@@ -1,17 +1,16 @@
 # syntax=docker/dockerfile:1.7
 
-# Production dependencies are installed with the official image's npm.
-FROM node:24-alpine AS dependencies
+# Both stages take node from Alpine's own package; npm is installed only in
+# the stage that installs the production dependencies.
+FROM alpine:3 AS dependencies
+RUN apk add --no-cache nodejs npm
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-# The runtime is Alpine with node copied from that image — what the official
-# image itself is, without npm, yarn and corepack, which nothing here runs.
 FROM alpine:3
-RUN apk add --no-cache libstdc++ \
+RUN apk add --no-cache nodejs \
  && addgroup -S app && adduser -S -G app app
-COPY --from=dependencies /usr/local/bin/node /usr/local/bin/node
 
 ENV NODE_ENV=production
 ENV PORT=8080

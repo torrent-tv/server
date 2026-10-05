@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The image takes node from Alpine's own `nodejs` package, as the add-on does, instead of copying the official image's binary: one way of getting node, and 135 MB instead of 197 MB on the HA host. The binary was chosen for being three patch releases newer, and none of those three is a security release; 24.18.1, which Alpine ships, is the last one (torrent-tv/meta#98).
+
 ## 0.39.3
 
 - **Fix**: The image holds only what the server runs: the server, its routes and services, `public/`, the entrypoint, the licence and the production dependencies. It carried the whole repository — `.claude/`, `AGENTS.md`, the changelog, `docs/`, `openspec/`, the tests and the lint configuration — and the official image's npm, yarn and corepack; the runtime is now Alpine with node copied from that image. Built on the HA host it is 197 MB against 223 MB (torrent-tv/meta#98).
