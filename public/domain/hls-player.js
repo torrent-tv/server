@@ -11,6 +11,7 @@
 
 import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
 import { PLAYER_EVENTS } from "../shared/events.js";
+import { describeMediaFailure, ELEMENT_RECOVERY_STEP, elementRecoveryStep } from "./media-failure.js";
 
 /**
  * How often the cushion is read. Ten seconds is the same cadence the link
@@ -382,6 +383,37 @@ export function describeTrackBuffers(instance, videoElement) {
 }
 
 /**
+ * The fragment of a playlist that holds `position`.
+ *
+ * Where a media element failed is a place in the playlist, not a number of
+ * seconds: decoding runs ahead of what is shown, so the same bad frame stops
+ * the element at slightly different playheads, and the fragment is what both
+ * of them have in common.
+ *
+ * @param {Array<{ sn?: unknown, start?: unknown, duration?: unknown }> | null | undefined} fragments -
+ *   `LevelDetails.fragments` of the level being played.
+ * @param {number} position - Seconds on the timeline.
+ * @returns {{ sn: number, start: number, end: number } | null} Null when no
+ *   fragment holds the position or the playlist is not known.
+ */
+export function fragmentAt(fragments, position) {
+  if (!Array.isArray(fragments) || !Number.isFinite(position) || position < 0) {
+    return null;
+  }
+  for (const fragment of fragments) {
+    const start = Number(fragment?.start);
+    const duration = Number(fragment?.duration);
+    if (!Number.isFinite(start) || !(duration > 0)) {
+      continue;
+    }
+    if (position >= start && position < start + duration) {
+      return { sn: Number(fragment.sn), start, end: start + duration };
+    }
+  }
+  return null;
+}
+
+/**
  * Create a stateful HLS player instance.
  *
  * @param {(message: string) => void} onLog - Called with status/error messages
@@ -517,7 +549,7 @@ export function createHlsPlayer(onLog) {
   let pinRestores = 0;
 
   /**
-   * The last jump the PLAYER made over a hole in its own buffer, and when.
+   * The last move of the playhead the PLAYER made itself, and why.
    *
    * hls.js moves `currentTime` itself when a fragment lands with a gap before
    * it, and the media element then fires `seeking` exactly as it does for a
@@ -527,9 +559,22 @@ export function createHlsPlayer(onLog) {
    * each of those moves the priority map, and through it every encoder, for
    * every viewer on that film.
    *
-   * @type {{ to: number, at: number } | null}
+   * A rebuild of the media source moves it too: the element starts again at
+   * zero and is put back where it was, by us and by hls.js, which may also
+   * step it forward to where the first fragment begins. Those moves are the
+   * same position the viewer was already at, and reporting them as a seek
+   * would stop the very load that is putting the picture back.
+   *
+   * `to` is the far end of the range a move may land in. `withinMs` bounds a
+   * jump by age; a rebuild's move has no age bound and lasts until the picture
+   * moves again (`playing`), because how long a rebuild takes to reach its
+   * position depends on the delivery and is not known in advance.
+   *
+   * @type {{ from: number, to: number, at: number, withinMs: number | null, consume: boolean, reason: string } | null}
    */
-  let ownJump = null;
+  let ownMove = null;
+  // Stops watching the element of the current hls.js instance.
+  let stopWatchingElement = null;
 
   return {
     getBufferedRanges(videoElement) {
@@ -564,30 +609,36 @@ export function createHlsPlayer(onLog) {
      * @returns {{ index: number, height: number, width: number, bitrate: number }[]}
      */
     /**
-     * Was the seek now in progress the player's own jump over a hole?
+     * Was the seek now in progress a move the player made itself?
      *
-     * Answered by position and by age together: the jump is announced the
-     * instant before the media element fires `seeking`, and a person cannot
-     * have arrived at the same hundredth of a second by hand in that window. A
-     * true answer is consumed, so one jump excuses one `seeking` and a later
-     * one by a person is reported as it should be.
+     * Asked when the element fires `seeking`, while `currentTime` still names
+     * where the move goes. Answered by position, and for a jump over a hole by
+     * age as well: the jump is announced the instant before the media element
+     * fires `seeking`, and a person cannot have arrived at the same hundredth
+     * of a second by hand in that window. A jump is consumed by its answer, so
+     * one jump excuses one `seeking` and a later one by a person is reported
+     * as it should be. A rebuild's move may be answered more than once — the
+     * rebuild and hls.js each move the element — and ends when the picture
+     * moves again.
      *
      * @param {number} position - Where the element now stands.
-     * @param {number} [withinMs] - How recent the jump must be. The default is
-     *   the same order as one media event loop turn.
-     * @returns {boolean}
+     * @returns {string | null} Why the player moved, or null when it did not.
      */
-    wasOwnJump(position, withinMs = 1000) {
-      if (ownJump === null) {
-        return false;
+    wasOwnMove(position) {
+      if (ownMove === null) {
+        return null;
       }
-      const fresh = Date.now() - ownJump.at <= withinMs;
-      const same = Math.abs(Number(position) - ownJump.to) < 0.01;
-      if (fresh && same) {
-        ownJump = null;
-        return true;
+      const fresh = ownMove.withinMs === null || Date.now() - ownMove.at <= ownMove.withinMs;
+      const at = Number(position);
+      const inside = at > ownMove.from - 0.01 && at < ownMove.to + 0.01;
+      if (!fresh || !inside) {
+        return null;
       }
-      return false;
+      const reason = ownMove.reason;
+      if (ownMove.consume) {
+        ownMove = null;
+      }
+      return reason;
     },
 
     levels() {
@@ -721,6 +772,9 @@ export function createHlsPlayer(onLog) {
     /** Destroy any active HLS.js instance and release its resources. */
     clear() {
       stopCushionSampler();
+      stopWatchingElement?.();
+      stopWatchingElement = null;
+      ownMove = null;
       if (attachedMedia) {
         pendingRestores.get(attachedMedia)?.();
         pendingRestores.delete(attachedMedia);
@@ -1055,6 +1109,96 @@ export function createHlsPlayer(onLog) {
             options.onUnrecoverable(details);
           }
         };
+        /**
+         * Give the element a new media source and put loading and the playhead
+         * back at `resumeAt`.
+         *
+         * Both halves are needed: the loader is told where to fetch from, and
+         * the element is put back there once it will accept a position again.
+         * The moves this makes are the player's own, not the viewer's — see
+         * `ownMove`. hls.js may step the start forward by up to the larger of
+         * `maxBufferHole` and `maxFragLookUpTolerance` to where the first
+         * fragment begins (`seekToStartPos`), so that is the range they land in.
+         *
+         * @param {number} resumeAt - Seconds; not positive means "where hls.js
+         *   would start on its own".
+         * @param {string} reason - Said in the log beside the move.
+         * @returns {void}
+         */
+        const rebuildMediaAt = (resumeAt, reason) => {
+          if (resumeAt > 0) {
+            const startTolerance = Math.max(
+              Number(instance.config?.maxBufferHole) || 0,
+              Number(instance.config?.maxFragLookUpTolerance) || 0
+            );
+            ownMove = {
+              from: resumeAt, to: resumeAt + startTolerance, at: Date.now(), withinMs: null, consume: false,
+              reason: `put back at ${resumeAt.toFixed(1)}s after it ${reason}`
+            };
+          }
+          instance.recoverMediaError();
+          if (resumeAt > 0) {
+            instance.startLoad(resumeAt);
+            restorePosition(videoElement, resumeAt);
+          }
+        };
+        // Element failures this player has met, by the place they happened at:
+        // how many rebuilds have been made there. The place is the fragment of
+        // the playing level that holds the position, so a failure a few frames
+        // later in the same fragment is the same place.
+        const rebuildsByPlace = new Map();
+        /**
+         * The media element has failed.
+         *
+         * Handled at the element's own `error`, not at hls.js's next append:
+         * by then the source has closed and the position reads zero, which is
+         * what put the viewer back at the start of the film on 2026-10-04.
+         *
+         * @returns {void}
+         */
+        const onElementFailed = () => {
+          if (hlsInstance !== instance || attachedMedia !== videoElement) {
+            return;
+          }
+          const failure = describeMediaFailure(videoElement.error);
+          const position = Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : -1;
+          const levelIndex = Number.isInteger(instance.currentLevel) && instance.currentLevel >= 0
+            ? instance.currentLevel
+            : desiredLevel;
+          const fragment = fragmentAt(instance.levels?.[levelIndex]?.details?.fragments, position);
+          const place = fragment ? `${levelIndex}:${fragment.sn}` : "unplaced";
+          const rebuildsHere = rebuildsByPlace.get(place) ?? 0;
+          const step = recovering
+            ? "already-recovering"
+            : elementRecoveryStep({ failure, rebuildsHere, manifestReady });
+          console.warn(
+            `[torrent-tv][hls] ${new Date().toISOString().slice(11, 23)} media element failed: ` +
+            `${failure.kind} (code ${failure.code ?? "-"}) "${failure.message}" ` +
+            `at ${position.toFixed(2)}s, fragment ${fragment ? `sn=${fragment.sn} ` +
+              `${fragment.start.toFixed(3)}-${fragment.end.toFixed(3)}s level=${levelIndex}` : "-"}, ` +
+            `rebuilds here ${rebuildsHere}, msReadyState=${liveMediaSource?.readyState ?? "-"} ` +
+            `${describeTrackBuffers(instance, videoElement)} → ${step}`
+          );
+          if (step === ELEMENT_RECOVERY_STEP.REBUILD_AT_POSITION) {
+            rebuildsByPlace.set(place, rebuildsHere + 1);
+            options.onMediaRebuild?.();
+            rebuildMediaAt(position, `failed (${failure.kind})`);
+            return;
+          }
+          if (step === ELEMENT_RECOVERY_STEP.RESTART_STREAM && !unrecoverableAnnounced) {
+            unrecoverableAnnounced = true;
+            options.onUnrecoverable?.(`media element ${failure.kind} failure`);
+          }
+        };
+        const elementWatch = new AbortController();
+        stopWatchingElement = () => elementWatch.abort();
+        videoElement.addEventListener("error", onElementFailed, { signal: elementWatch.signal });
+        // A rebuild's own move ends when the picture moves again.
+        videoElement.addEventListener("playing", () => {
+          if (ownMove !== null && ownMove.withinMs === null) {
+            ownMove = null;
+          }
+        }, { signal: elementWatch.signal });
         const recoverFatal = (data) => {
           // Why a recovery did NOT happen, said out loud. Without it a player
           // left at `currentTime=0 readyState=0` is indistinguishable from one
@@ -1093,14 +1237,7 @@ export function createHlsPlayer(onLog) {
               : Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : failedAt;
             try {
               if (type === HlsClass.ErrorTypes.MEDIA_ERROR) {
-                instance.recoverMediaError();
-                if (resumeAt > 0) {
-                  // Both halves are needed: the loader is told where to fetch
-                  // from, and the element is put back there once it will accept
-                  // a position again.
-                  instance.startLoad(resumeAt);
-                  restorePosition(videoElement, resumeAt);
-                }
+                rebuildMediaAt(resumeAt, `recovered from ${data?.details ?? "a media error"}`);
               } else {
                 instance.startLoad(resumeAt);
               }
@@ -1577,7 +1714,12 @@ export function createHlsPlayer(onLog) {
             if (data?.details === "bufferSeekOverHole") {
               const landed = Number(videoElement?.currentTime);
               if (Number.isFinite(landed)) {
-                ownJump = { to: landed, at: Date.now() };
+                // One media event loop turn: the `seeking` this causes is
+                // dispatched right after.
+                ownMove = {
+                  from: landed, to: landed, at: Date.now(), withinMs: 1000, consume: true,
+                  reason: "jumped its own hole"
+                };
               }
             }
             if (data?.fatal) {

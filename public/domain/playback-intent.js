@@ -14,9 +14,31 @@
  * first frame.
  *
  * So a pause we cause is marked as ours before it is issued, and the marker is
- * consumed by the `pause` handler that follows. Anything unmarked came from the
- * viewer.
+ * consumed by the `pause` handler that follows.
+ *
+ * The element can also stop ITSELF: when it fails it pauses, a few
+ * milliseconds after its `error` (measured 2026-10-04: `error` at .016,
+ * `pause` at .028). Read as the viewer's, that pause put the application in
+ * PAUSED, and nothing started the picture again once the player had been
+ * rebuilt. A failure is therefore recorded when it happens, and the pause that
+ * follows it is the element's.
+ *
+ * Anything that is neither came from the viewer.
  */
+
+/**
+ * Who caused a `pause`.
+ *
+ * @readonly
+ */
+export const PAUSE_CAUSE = Object.freeze({
+  /** We paused it — see {@link pauseWithoutIntent}. */
+  OURS: "ours",
+  /** The element stopped itself after failing — see {@link noteElementFailed}. */
+  ELEMENT: "element",
+  /** The person watching. */
+  VIEWER: "viewer"
+});
 
 /**
  * Elements whose next `pause` event was caused by us. A `WeakSet` so an element
@@ -41,19 +63,66 @@ export function pauseWithoutIntent(video) {
 }
 
 /**
- * Whether the `pause` event now being handled was one of ours, consuming the
- * marker either way — a marker that outlived its event would swallow the
- * viewer's next pause.
+ * Elements that have failed and whose own pause has not been seen yet.
  *
- * @param {HTMLVideoElement} video
- * @returns {boolean}
+ * @type {WeakSet<object>}
  */
-export function consumeOurPause(video) {
-  if (!ourPauses.has(video)) {
-    return false;
+const failedElements = new WeakSet();
+
+/**
+ * Record that the element has failed, so the pause it makes next is not read
+ * as the viewer's.
+ *
+ * Recorded whether or not the element is still moving at that instant: the
+ * order in which a browser sets `paused` and dispatches `error` is not
+ * something this code can rely on, and the record is withdrawn when the
+ * picture moves again ({@link noteElementRecovered}), so it cannot outlive the
+ * failure it describes. Its one blind spot is a viewer who presses pause
+ * between the failure and the element's own pause, which is a few
+ * milliseconds, or — on an element the viewer had already stopped, which makes
+ * no pause of its own — presses play and pause again before the picture moves.
+ *
+ * @param {object} video
+ * @returns {void}
+ */
+export function noteElementFailed(video) {
+  if (video && typeof video === "object") {
+    failedElements.add(video);
   }
-  ourPauses.delete(video);
-  return true;
+}
+
+/**
+ * The picture is moving again: any failure recorded on this element is over.
+ *
+ * @param {object} video
+ * @returns {void}
+ */
+export function noteElementRecovered(video) {
+  if (video && typeof video === "object") {
+    failedElements.delete(video);
+  }
+}
+
+/**
+ * Who caused the `pause` now being handled, consuming the marker that answered
+ * — a marker that outlived its event would swallow the viewer's next pause.
+ *
+ * Ours is asked first: a pause we issued while a failure is pending is still
+ * ours, and the failure's own pause is then still to come.
+ *
+ * @param {object} video
+ * @returns {string} One of {@link PAUSE_CAUSE}.
+ */
+export function consumePauseCause(video) {
+  if (ourPauses.has(video)) {
+    ourPauses.delete(video);
+    return PAUSE_CAUSE.OURS;
+  }
+  if (failedElements.has(video)) {
+    failedElements.delete(video);
+    return PAUSE_CAUSE.ELEMENT;
+  }
+  return PAUSE_CAUSE.VIEWER;
 }
 
 /**

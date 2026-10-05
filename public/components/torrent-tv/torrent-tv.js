@@ -47,8 +47,8 @@ class TorrentTV {
   #videoCount = 0;
 
   /**
-   * Whether the viewer wants the picture to move — mirrored from the media
-   * element by the player, never decided here. Consulted by the guard on
+   * Whether the viewer wants the picture to move — the viewer's own last
+   * decision, recorded from the media element's events and never decided here. Consulted by the guard on
    * `STREAM_READY`, so a rebuild that finishes while the viewer is paused lands
    * in PAUSED instead of starting playback at them.
    *
