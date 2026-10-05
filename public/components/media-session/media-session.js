@@ -192,13 +192,12 @@ export class MediaSessionBridge {
     const work = workFor(this.#media, this.#currentFileIndex);
     const match = this.#media?.episodes?.[String(this.#currentFileIndex)] ?? null;
     const title = match ? episodeLabel(match, { withSeason: match.season }) : (workLine(work) ?? fileName);
-    this.#artwork ??= systemArtwork(this.#media, this.#currentFileIndex);
-    const poster = this.#artwork;
+    if (!this.#artwork?.length) this.#artwork = systemArtwork(this.#media, this.#currentFileIndex);
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title,
         artist: match ? (workLine(work) ?? MediaSessionBridge.APP_NAME) : MediaSessionBridge.APP_NAME,
-        artwork: poster ? [{ src: poster.url, sizes: poster.sizes, type: poster.url.endsWith(".png") ? "image/png" : "image/jpeg" }] : []
+        artwork: this.#artwork.map(({ src, sizes }) => ({ src, sizes, type: src.endsWith(".png") ? "image/png" : "image/jpeg" }))
       });
     } catch {
       // silent-ok: as above — the title shown by the operating system's media

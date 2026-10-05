@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The system media controls receive the chosen poster in every size it is large enough for (185 to 780 pixels wide), so the system takes the one its slot and pixel density need; only the 185-pixel one was offered, which a dense screen enlarges.
+
 ## 0.38.0
 
 - **New**: The picture shown while an episode loads, and the poster in the system's media controls (lock screen, media window), is a random one of the work's images that suit the place: the orientation needed and a size large enough for it. Language and rating no longer decide it. One load keeps one picture; choosing another episode or release chooses again.

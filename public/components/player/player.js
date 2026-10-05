@@ -139,9 +139,6 @@ export class Player extends StateDerivedView {
     if (belongsOnScreen) {
       this.#logEvt(`view=player shown state=${state}`);
     }
-    // The player has a size only once it is on screen, and the picture is
-    // chosen for that size.
-    if (belongsOnScreen && !this.onScreen) this.#applyPoster();
     // Whether the viewer is waiting is a property of the state. The text beside
     // the spinner is not — it is measured (peers, speed) and keeps arriving on
     // PLAYER:SET_BUFFERING.
@@ -555,19 +552,15 @@ export class Player extends StateDerivedView {
    */
   #applyPoster() {
     const poster = document.querySelector("#player__poster");
-    const rect = this.#video.getBoundingClientRect();
-    // Chosen only once the player has a size: a choice made off screen would
-    // fit no screen, and it is kept for the whole load.
-    if (!this.#loadArt && rect.width > 0 && rect.height > 0) {
-      this.#loadArt = playerArt(this.#media, this.#activeFileIndex, rect.width, rect.height, window.devicePixelRatio);
-    }
+    // The picture fills the video, and the video is the whole viewport
+    // (`#player__controller` is 100dvw x 100dvh), so the viewport is its size.
+    this.#loadArt ??= playerArt(this.#media, this.#activeFileIndex, window.innerWidth, window.innerHeight, window.devicePixelRatio);
     const art = this.#loadArt;
     if (!art?.url) { poster.hidden = true; poster.removeAttribute("src"); return; }
     const fit = () => {
       if (poster.getAttribute("src") !== art.url) return;
       const dpr = window.devicePixelRatio || 1;
-      const box = this.#video.getBoundingClientRect();
-      const enough = poster.naturalWidth >= box.width * dpr && poster.naturalHeight >= box.height * dpr;
+      const enough = poster.naturalWidth >= window.innerWidth * dpr && poster.naturalHeight >= window.innerHeight * dpr;
       const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
       poster.style.inlineSize = enough ? "100%" : poster.naturalWidth / dpr / rem + "rem";
       poster.style.blockSize = enough ? "100%" : poster.naturalHeight / dpr / rem + "rem";

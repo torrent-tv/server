@@ -126,12 +126,24 @@ test("the system media controls get a random poster at least as wide as their sl
     {kind:"poster",file:"posterfirst.jpg",width:1000,height:1500},
     {kind:"poster",file:"postersecond.jpg",width:680,height:1000}
   ]})};
-  assert.deepEqual(systemArtwork(state,0,() => 0),{url:"/api/metadata/image/w185/posterfirst.jpg",sizes:"185x278"});
-  assert.deepEqual(systemArtwork(state,0,() => 0.99),{url:"/api/metadata/image/w185/postersecond.jpg",sizes:"185x272"});
+  const image=width=>"/api/metadata/image/w"+width;
+  // The renditions offered are those the chosen poster is wide enough for, so
+  // the system can pick one for its own slot and pixel density.
+  assert.deepEqual(systemArtwork(state,0,() => 0),[
+    {src:image(185)+"/posterfirst.jpg",sizes:"185x278"},
+    {src:image(342)+"/posterfirst.jpg",sizes:"342x513"},
+    {src:image(500)+"/posterfirst.jpg",sizes:"500x750"},
+    {src:image(780)+"/posterfirst.jpg",sizes:"780x1170"}
+  ]);
+  assert.deepEqual(systemArtwork(state,0,() => 0.99),[
+    {src:image(185)+"/postersecond.jpg",sizes:"185x272"},
+    {src:image(342)+"/postersecond.jpg",sizes:"342x503"},
+    {src:image(500)+"/postersecond.jpg",sizes:"500x735"}
+  ]);
   // A work with no listed posters keeps its main one.
   const plain={work:normalizeWork({...tmdb,poster:"mainposter.jpg"})};
-  assert.deepEqual(systemArtwork(plain,0,() => 0),{url:"/api/metadata/image/w185/mainposter.jpg",sizes:"185x278"});
-  assert.equal(systemArtwork(null,0),null);
+  assert.deepEqual(systemArtwork(plain,0,() => 0),[{src:image(185)+"/mainposter.jpg",sizes:"185x278"}]);
+  assert.deepEqual(systemArtwork(null,0),[]);
 });
 
 test("without a large enough image the largest of the orientation is kept", () => {
