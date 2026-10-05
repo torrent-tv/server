@@ -5064,7 +5064,7 @@ export class Loading extends StateDerivedView {
             // no guard: a fault from an abandoned attempt's player would then be
             // able to kill the live one.
             onUnrecoverable: (details) => this.#onPlayerUnrecoverable(details, playerEpoch),
-            onMediaRebuild: () => this.#onMediaRebuild(playerEpoch),
+            onMediaRebuild: (position) => this.#onMediaRebuild(playerEpoch, position),
             ...playOptions,
             attemptId: playerEpoch
           }),
@@ -5964,14 +5964,24 @@ export class Loading extends StateDerivedView {
    * stopped it — which is why that end carries the viewer's decision and not
    * `!video.paused`.
    *
+   * The position it is rebuilt at becomes where the viewer is: while the new
+   * source has no media the element reads zero, and the reports that say
+   * where the viewer is fall back to the position last chosen, which by then
+   * can be a seek made minutes earlier. Recorded, not reported as a seek —
+   * nobody moved.
+   *
    * @param {number} epoch - The attempt the player belongs to.
+   * @param {number} position - Seconds the player is rebuilt at.
    * @returns {void}
    */
-  #onMediaRebuild(epoch) {
+  #onMediaRebuild(epoch, position) {
     if (epoch !== this.#playbackEpoch || !this.#playbackLive) {
       return;
     }
-    this.#logEvt("player rebuilding the failed element at its position");
+    if (Number.isFinite(position) && position > 0) {
+      this.#seekPosition.reset(position);
+    }
+    this.#logEvt(`player rebuilding its media source at ${Number(position).toFixed(1)}s`);
     void this.#showBuffering();
   }
 

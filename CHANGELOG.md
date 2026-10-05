@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: While the player rebuilds its media source, the proxy is told the position it is rebuilt at. The emptied element reads zero and the report fell back to the last seek made, so the proxy heard the viewer was at 60 s and stuck 74 s behind its buffer while they were at 80 s.
+
 ## 0.37.10
 
 - **Fix**: A media source that ends under the player — Chrome ends it when an append cannot be parsed, while the element itself holds no error — is rebuilt at the position where it ended instead of offering a restart at once. It takes the same steps as a failed element: a rebuild at the position first, a restart only when the same fragment fails again after it. Correction to 0.37.9: that release did not cover this case, because the element held no error.

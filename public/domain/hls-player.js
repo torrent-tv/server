@@ -1197,7 +1197,8 @@ export function createHlsPlayer(onLog) {
             ? "already-recovering"
             : elementRecoveryStep({ failure, rebuildsHere, manifestReady });
           console.warn(
-            `[torrent-tv][hls] ${new Date().toISOString().slice(11, 23)} media ${failure.origin} failed: ` +
+            `[torrent-tv][hls] ${new Date().toISOString().slice(11, 23)} ` +
+            `${failure.origin === "element" ? "media element" : "media source"} failed: ` +
             `${failure.kind} (code ${failure.code ?? "-"}) "${failure.message}" ` +
             `at ${position.toFixed(2)}s, fragment ${fragment ? `sn=${fragment.sn} ` +
               `${fragment.start.toFixed(3)}-${fragment.end.toFixed(3)}s level=${levelIndex}` : "-"}, ` +
@@ -1206,7 +1207,7 @@ export function createHlsPlayer(onLog) {
           );
           if (step === ELEMENT_RECOVERY_STEP.REBUILD_AT_POSITION) {
             rebuildsByPlace.set(place, rebuildsHere + 1);
-            options.onMediaRebuild?.();
+            options.onMediaRebuild?.(position);
             rebuildMediaAt(position, `failed (${failure.origin}: ${failure.kind})`);
             return;
           }
@@ -1541,7 +1542,16 @@ export function createHlsPlayer(onLog) {
               // forward. The proxy is the only side that can say whether the
               // segment it produced holds the boundary its number claims, and
               // it was never asked.
-              if (typeof options.onFragmentFar === "function" && !videoElement.seeking) {
+              // Not while a rebuild is putting the element back: until then
+              // its playhead reads zero, which is where the element is and not
+              // where the viewer is, and the proxy would be told the player
+              // was stuck 80 s behind a viewer who never moved.
+              if (
+                typeof options.onFragmentFar === "function" &&
+                !videoElement.seeking &&
+                !rebuildingSource &&
+                !pendingRestores.has(videoElement)
+              ) {
                 try {
                   options.onFragmentFar({
                     sn,
@@ -1694,14 +1704,20 @@ export function createHlsPlayer(onLog) {
             rebuildingSource = false;
             const attachTookMs = Math.round(performance.now() - attachRequestedAt);
             stopWatchingTasks();
-            noteStage(
-              `media attached after ${attachTookMs}ms` +
-              (attachTookMs > 1000
-                ? (canWatchTasks
-                  ? ` — the main thread was busy ${Math.round(blockedMs)}ms of it, longest task ${Math.round(longestTaskMs)}ms`
-                  : " — this browser does not report long tasks, so what the main thread was doing is unmeasured")
-                : "")
-            );
+            // Every attach after the first is a rebuild of the media source,
+            // and the start-up and its clock are long over.
+            if (sourceRequested) {
+              console.debug("[torrent-tv][hls] the rebuilt media source is attached");
+            } else {
+              noteStage(
+                `media attached after ${attachTookMs}ms` +
+                (attachTookMs > 1000
+                  ? (canWatchTasks
+                    ? ` — the main thread was busy ${Math.round(blockedMs)}ms of it, longest task ${Math.round(longestTaskMs)}ms`
+                    : " — this browser does not report long tasks, so what the main thread was doing is unmeasured")
+                  : "")
+              );
+            }
             // The real MediaSource, listened to directly instead of through
             // hls.js's own derived events — see the comment beside
             // `liveMediaSource`'s declaration for why. `sourceclose` is
