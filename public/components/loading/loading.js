@@ -1582,13 +1582,30 @@ export class Loading extends StateDerivedView {
 
   #onAppReset = () => {
     this.#stopPlayback();
+    this.#resetSourceState();
     this.setProgress(0);
     this.setStatus("");
     this.setFileName("Waiting for a .torrent file...");
     this.#directPlaybackUnsupportedCache.clear();
+  };
+
+  /** Forget source preferences and publish empty source facts to their owners. */
+  #resetSourceState() {
+    this.#playbackEpoch += 1;
+    this.#audioMetadataRefreshSeq += 1;
     this.#activeFileIndex = -1;
     this.#resumeState = null;
-  };
+    this.#selectedAudioTrackIndex = 0;
+    this.#rememberedAudio = null;
+    this.#playingHeight = 0;
+    this.#sourceVideoWidth = 0;
+    this.#sourceVideoHeight = 0;
+    this.#audioTracks = [];
+    this.#subtitlePlayback.reset();
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, { detail: { tracks: [], activeIndex: 0 } }));
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_MEDIA_FILES, { detail: { video: [] } }));
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SHARE_LINK, { detail: { url: "" } }));
+  }
 
   #stopPlayback(options = {}) {
     this.#cancelRequested = true;
@@ -1934,13 +1951,8 @@ export class Loading extends StateDerivedView {
 
     // A fresh torrent invalidates any pending resume state, cancellation and
     // track selection.
-    this.#activeFileIndex = -1;
-    this.#resumeState = null;
+    this.#resetSourceState();
     this.#cancelRequested = false;
-    this.#selectedAudioTrackIndex = 0;
-    this.#playingHeight = 0;
-    this.#audioTracks = [];
-    this.#subtitlePlayback.setPlan({});
     // Shared-link position/file, applied once the player is shown / files known.
     this.#pendingCurrentTime = Number.isFinite(payload?.currentTime) ? payload.currentTime : null;
     this.#pendingFileIndex = Number.isFinite(payload?.fileIndex) ? payload.fileIndex : null;
@@ -2286,13 +2298,8 @@ export class Loading extends StateDerivedView {
 
     // A fresh source invalidates any pending resume state, cancellation and
     // track selection (same as the parsed-torrent flow).
-    this.#activeFileIndex = -1;
-    this.#resumeState = null;
+    this.#resetSourceState();
     this.#cancelRequested = false;
-    this.#selectedAudioTrackIndex = 0;
-    this.#playingHeight = 0;
-    this.#audioTracks = [];
-    this.#subtitlePlayback.setPlan({});
     // Shared-link position/file, applied once the player is shown / files known.
     this.#pendingCurrentTime = Number.isFinite(currentTime) ? currentTime : null;
     this.#pendingFileIndex = Number.isFinite(fileIndex) ? fileIndex : null;

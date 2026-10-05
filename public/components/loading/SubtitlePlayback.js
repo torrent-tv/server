@@ -230,10 +230,14 @@ export class SubtitlePlayback {
     this.#planTracks = { subtitles: subtitleTracks, sidecarSubtitles };
   }
 
-  /**
-   * Remove all subtitle `<track>` elements from the video element and revoke
-   * any Blob URLs that were created for them.
-   */
+  /** Clear the previous source, including its remembered subtitle preference. */
+  reset() {
+    this.clear();
+    this.#rememberedSubtitle = null;
+    this.setPlan({});
+  }
+
+  /** Remove active tracks and URLs while keeping the same source's preference. */
   clear() {
     this.#providers.clear();
     this.#providerAbort?.abort();

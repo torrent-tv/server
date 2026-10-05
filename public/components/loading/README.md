@@ -24,6 +24,8 @@ This component renders processing progress while playback is being prepared and 
 
 `SubtitlePlayback` owns subtitle track elements, sidecar subtitle loading, embedded cue delivery, reconnect resubscription, and the viewer's remembered subtitle choice. `Loading` supplies the active video element, session access, transport, subtitle plan, and primary audio language. Audio track selection remains in `Loading`.
 
+Closing or replacing a source calls `Loading`'s source reset method: audio preferences and inventory are cleared, pending playback and audio metadata epochs are invalidated, and empty source facts are published. `SubtitlePlayback.reset()` additionally forgets the previous source's subtitle preference; ordinary episode changes use `clear()` to retain it. `Player.reset()` owns removal of source controls, menus, sharing feedback and artwork. These operations do not create application transitions or change state-derived visibility.
+
 ## State Machine
 
 Visibility is derived from the application state, not commanded: see

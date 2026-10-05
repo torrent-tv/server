@@ -67,6 +67,7 @@ export class Player extends StateDerivedView {
   #shareUrl = "";
   /** @type {ReturnType<typeof setTimeout> | null} Copied-feedback reset timer. */
   #shareCopiedTimer = null;
+  #sourceEpoch = 0;
 
   /**
    * Recent buffer readings, for the fill rate. Held here because this component
@@ -443,6 +444,7 @@ export class Player extends StateDerivedView {
       return;
     }
     const url = this.#buildShareUrl(item.dataset.share === "currentTime");
+    const sourceEpoch = this.#sourceEpoch;
     try {
       this.#shareMenu.hidePopover();
     } catch {
@@ -451,7 +453,7 @@ export class Player extends StateDerivedView {
     }
     try {
       await navigator.clipboard.writeText(url);
-      this.#flashShareCopied();
+      if (sourceEpoch === this.#sourceEpoch) this.#flashShareCopied();
     } catch (error) {
       // The viewer pressed a button and nothing happened: no link on the
       // clipboard, and no sign of why. This is the rule's second half — a
@@ -609,6 +611,8 @@ export class Player extends StateDerivedView {
   }
 
   #setupEventHandlers() {
+    document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.reset);
+    document.addEventListener(MEDIA_INFO_EVENTS.SELECTED, this.reset);
     document.addEventListener(PLAYER_EVENTS.REQUEST_READY, this.#onRequestReady);
     document.addEventListener(PLAYER_EVENTS.DECLARED_TRACKS, this.#onDeclaredTracks);
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onBackToPlaylist);
@@ -639,6 +643,36 @@ export class Player extends StateDerivedView {
     this.#controller.addEventListener("keydown", this.#onControllerKeydown);
   }
 
+  /** Restore source-dependent presentation without changing application flow. */
+  reset = () => {
+    this.#sourceEpoch += 1;
+    this.#clearTrackMenu(this.#audioMenu, this.#audioButton);
+    this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton);
+    this.#playlistToggle.hidden = true;
+    this.#closePlaylist();
+    this.#root.classList.remove(Player.CLASSES.isAnimated);
+    this.#shareUrl = "";
+    this.#share.hidden = true;
+    if (this.#shareMenu.matches(":popover-open")) this.#shareMenu.hidePopover();
+    if (this.#shareCopiedTimer !== null) clearTimeout(this.#shareCopiedTimer);
+    this.#shareCopiedTimer = null;
+    this.#share.classList.remove("player__button--copied");
+    this.#share.setAttribute("aria-label", "Copy a share link for what you are watching");
+    this.#declaredTracks = null;
+    this.#bufferSamples = [];
+    this.#media = null;
+    this.#activeFileIndex = -1;
+    this.#hideBuffering();
+    this.#bufferingPeers.textContent = "";
+    this.#applyPoster();
+  };
+
+  #clearTrackMenu(menu, button, hide = true) {
+    for (const item of menu.querySelectorAll("media-chrome-menu-item")) item.remove();
+    if (hide) menu.hidden = true;
+    button.hidden = true;
+  }
+
   /**
    * Draw the subtitle menu from the items the subtitle component states.
    *
@@ -651,9 +685,7 @@ export class Player extends StateDerivedView {
   #onSetSubtitleTracks = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const items = Array.isArray(detail?.items) ? detail.items : [];
-    for (const item of this.#subtitleMenu.querySelectorAll("media-chrome-menu-item")) {
-      item.remove();
-    }
+    this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton, items.length === 0);
     this.#subtitleButton.hidden = items.length === 0;
     if (items.length === 0) {
       this.#subtitleMenu.hidden = true;
@@ -717,9 +749,7 @@ export class Player extends StateDerivedView {
     const tracks = Array.isArray(detail?.tracks) ? detail.tracks : [];
     const activeIndex = Number.isInteger(detail?.activeIndex) ? detail.activeIndex : 0;
 
-    for (const item of this.#audioMenu.querySelectorAll("media-chrome-menu-item")) {
-      item.remove();
-    }
+    this.#clearTrackMenu(this.#audioMenu, this.#audioButton, tracks.length <= 1);
 
     const show = tracks.length > 1;
     this.#audioButton.hidden = !show;
