@@ -18,6 +18,10 @@ import { handleApiClientLogsPost } from "./routes/api/client-logs/post.js";
 import { handleWsProxyTunnel } from "./routes/ws/proxy-tunnel/get.js";
 import { handleWsBrowserSignal } from "./routes/ws/browser-signal/get.js";
 import { createSignalHub } from "./services/signal-hub.js";
+import { createInstanceRole } from "./services/instance-role.js";
+import { publishRelease } from "./services/static-release.js";
+import { CONNECT_TIMEOUT_MS } from "./public/domain/connect-deadline.js";
+import { ExclusiveCache } from "./services/cache/ExclusiveCache.js";
 import { handleHealthGet } from "./routes/health/get.js";
 import { handleHealthzGet } from "./routes/healthz/get.js";
 import { handleEnvGet } from "./routes/env/get.js";
@@ -63,7 +67,10 @@ const cacheMiB = Number(process.env.SERVER_CACHE_MIB ?? 1024);
 if (!Number.isSafeInteger(cacheMiB) || cacheMiB < 16 || cacheMiB > 16384) throw new Error("SERVER_CACHE_MIB must be an integer from 16 to 16384");
 const reserveMiB = Number(process.env.SERVER_CACHE_RESERVE_MIB ?? 256);
 if (!Number.isSafeInteger(reserveMiB) || reserveMiB < 0 || reserveMiB > 16384) throw new Error("SERVER_CACHE_RESERVE_MIB must be an integer from 0 to 16384");
-const diskCache = process.env.SERVER_CACHE_DIR ? new DiskCache({ directory: process.env.SERVER_CACHE_DIR, budgetBytes: cacheMiB * 1024 ** 2, reserveBytes: reserveMiB * 1024 ** 2 }) : null;
+// Opened only while this instance serves: the other slot shares the directory.
+const diskCache = process.env.SERVER_CACHE_DIR
+  ? new ExclusiveCache(() => new DiskCache({ directory: process.env.SERVER_CACHE_DIR, budgetBytes: cacheMiB * 1024 ** 2, reserveBytes: reserveMiB * 1024 ** 2 }))
+  : null;
 const subtitleCache = diskCache?.namespace("subtitles") ?? new MetadataCache({ budgetBytes: 8 * 1024 ** 2, maxEntryBytes: 4 * 1024 ** 2 });
 const subtitles = createSubtitles(subtitleCache);
 const { service: metadata, images: metadataImages } = createMetadata({
@@ -71,7 +78,35 @@ const { service: metadata, images: metadataImages } = createMetadata({
   cache: diskCache?.namespace("tmdb"),
   animeCache: diskCache?.namespace("anilist")
 });
-app.addHook("onClose", async () => { await diskCache?.close(); });
+app.addHook("onClose", async () => { await diskCache?.stop(); });
+
+// Which of the two slots serves, and the handover between them at a release
+// (services/instance-role.js). Without SERVER_PEER this instance serves alone.
+const slot = process.env.SERVER_SLOT ?? "solo";
+const role = createInstanceRole({
+  slot,
+  version,
+  peerUrl: process.env.SERVER_PEER ? `ws://${process.env.SERVER_PEER}/internal/hand-over` : null,
+  tunnelServer,
+  signalHub,
+  connectDeadlineMs: CONNECT_TIMEOUT_MS,
+  async onServe() {
+    await diskCache?.start();
+    if (process.env.STATIC_VOLUME_DIR && process.env.STATIC_RELEASE) {
+      try {
+        await publishRelease({ volumeDir: process.env.STATIC_VOLUME_DIR, release: process.env.STATIC_RELEASE });
+      } catch (error) {
+        console.error(`[static] could not publish release ${process.env.STATIC_RELEASE}: ${error?.message ?? error}`);
+      }
+    }
+  },
+  async onLeave() {
+    await diskCache?.stop();
+  }
+});
+tunnelServer.setConnectionHandler((proxyId, connected) => {
+  role.onProxyConnection(proxyId, connected);
+});
 
 // Wire up signal routing: proxy → tunnelServer → signalHub → browser
 tunnelServer.setSignalHandler((sessionId, signal) => {
@@ -90,6 +125,36 @@ app.addHook("onClose", async () => {
 });
 
 await app.register(fastifyWebsocket);
+
+// An instance that does not serve answers 503, and nginx sends the request to
+// the other slot. Health and the handover itself are always answered; proxy
+// tunnels are accepted by the instance taking over before it serves pages.
+app.addHook("onRequest", (req, reply, done) => {
+  const path = req.url.split("?", 1)[0];
+  if (path === "/health" || path === "/healthz") {
+    done();
+    return;
+  }
+  // The handover is for the peer slot alone, which connects directly. nginx
+  // marks everything it forwards with the client's address, and an instance
+  // without a peer expects no handover at all.
+  if (path.startsWith("/internal/")) {
+    if (process.env.SERVER_PEER && !req.headers["x-forwarded-for"] && !req.headers["x-real-ip"]) {
+      done();
+      return;
+    }
+    reply.code(404).send({ error: "Not found." });
+    return;
+  }
+  const accepted = path === "/ws/proxy-tunnel" ? role.acceptsTunnels() : role.acceptsPages();
+  if (accepted) {
+    done();
+    return;
+  }
+  reply.code(503).send({ error: "This server instance is not serving.", instance: role.describe() });
+});
+
+app.get("/internal/hand-over", { websocket: true }, (socket) => role.acceptPeer(socket));
 
 await app.register(fastifyHelmet, {
   contentSecurityPolicy: {
@@ -112,7 +177,7 @@ await app.register(fastifyCors, {
 });
 
 app.get("/ws/proxy-tunnel", { websocket: true }, (socket, req) =>
-  handleWsProxyTunnel(socket, req, { tunnelServer, serverToken })
+  handleWsProxyTunnel(socket, req, { tunnelServer, clientsStore, serverToken })
 );
 
 app.get("/ws/browser-signal", { websocket: true }, (socket, req) =>
@@ -155,9 +220,9 @@ app.post("/api/subtitles/search", { bodyLimit: 4096 }, async (req, reply) => han
 app.post("/api/subtitles/file", { bodyLimit: 8192 }, async (req, reply) => handleApiSubtitlesFilePost(req, reply, { subtitles }));
 
 app.get("/health", async (req, reply) =>
-  handleHealthGet(req, reply, { shutdownState, version, diskDirectory: diskCache ? process.env.SERVER_CACHE_DIR : null, diskReserveBytes: reserveMiB * 1024 ** 2 })
+  handleHealthGet(req, reply, { shutdownState, version, role, diskDirectory: diskCache ? process.env.SERVER_CACHE_DIR : null, diskReserveBytes: reserveMiB * 1024 ** 2 })
 );
-app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version }));
+app.get("/healthz", async (req, reply) => handleHealthzGet(req, reply, { shutdownState, version, role }));
 
 app.get("/about", (_req, reply) => reply.sendFile("about.html"));
 
@@ -238,6 +303,9 @@ try {
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`[server] Listening on http://localhost:${port}`);
   console.log(`[server] Token validation: ${serverToken ? "enabled" : "disabled (PROXY_TOKEN not set)"}`);
+  // After listening, so a peer that starts at the same moment always reaches
+  // whichever of the two listened first.
+  await role.start();
 } catch (error) {
   console.error(error);
   process.exit(1);

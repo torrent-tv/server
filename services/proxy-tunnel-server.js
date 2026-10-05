@@ -31,8 +31,18 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * Public API of the server-side tunnel manager.
  *
  * @typedef {Object} ProxyTunnelServer
- * @property {(proxyId: string, socket: import("ws").WebSocket) => void} registerConnection
- *   Register (or replace) the WebSocket connection for a proxy.
+ * @property {(proxyId: string, socket: import("ws").WebSocket, options?: { followsMoves?: boolean }) => void} registerConnection
+ *   Register (or replace) the WebSocket connection for a proxy. `followsMoves`
+ *   says the proxy opens a new connection when asked to move and answers each
+ *   request on the connection it arrived on.
+ * @property {() => { proxyId: string, followsMoves: boolean }[]} connectedProxies
+ *   Every proxy with an open tunnel connection now.
+ * @property {(proxyId: string) => void} askToMove
+ *   Ask a proxy to open a connection to the server instance that replaces this one.
+ * @property {(code: number, reason: string) => void} closeAll
+ *   Close every tunnel connection.
+ * @property {(handler: (proxyId: string, connected: boolean) => void) => void} setConnectionHandler
+ *   Wire up the callback told when a proxy's tunnel opens or closes.
  * @property {(proxyId: string) => boolean} isConnected
  *   Return true when the proxy has an open tunnel connection.
  * @property {(handler: (sessionId: string, signal: WebRtcSignal) => void) => void} setSignalHandler
@@ -65,6 +75,19 @@ const REQUEST_TIMEOUT_MS = 60_000;
 export function createProxyTunnelServer() {
   /** @type {Map<string, import("ws").WebSocket>} */
   const connections = new Map();
+  /**
+   * The connections whose proxy follows a move (see `registerConnection`).
+   *
+   * @type {WeakSet<import("ws").WebSocket>}
+   */
+  const followingMoves = new WeakSet();
+
+  /**
+   * Called when a proxy's tunnel opens or closes. Set from server.js.
+   *
+   * @type {((proxyId: string, connected: boolean) => void) | null}
+   */
+  let onConnectionChange = null;
 
   /** @type {Map<string, PendingRequest>} */
   const pendingRequests = new Map();
@@ -230,18 +253,52 @@ export function createProxyTunnelServer() {
      * @param {import("ws").WebSocket} socket
      * @returns {void}
      */
-    registerConnection(proxyId, socket) {
+    registerConnection(proxyId, socket, { followsMoves = false } = {}) {
       const previousSocket = connections.get(proxyId);
       if (previousSocket && previousSocket.readyState < 2 /* CLOSING */) {
         previousSocket.close(1000, "replaced");
       }
       connections.set(proxyId, socket);
+      if (followsMoves) {
+        followingMoves.add(socket);
+      }
       socket.on("message", (data) => onMessage(data, proxyId));
       socket.on("close", () => {
         if (connections.get(proxyId) === socket) {
           connections.delete(proxyId);
+          onConnectionChange?.(proxyId, false);
         }
       });
+      onConnectionChange?.(proxyId, true);
+    },
+
+    connectedProxies() {
+      const proxies = [];
+      for (const [proxyId, socket] of connections) {
+        if (socket.readyState === 1 /* OPEN */) {
+          proxies.push({ proxyId, followsMoves: followingMoves.has(socket) });
+        }
+      }
+      return proxies;
+    },
+
+    askToMove(proxyId) {
+      const socket = connections.get(proxyId);
+      if (socket && socket.readyState === 1 /* OPEN */) {
+        socket.send(JSON.stringify({ type: "server-moving" }));
+      }
+    },
+
+    closeAll(code, reason) {
+      for (const socket of connections.values()) {
+        if (socket.readyState < 2 /* CLOSING */) {
+          socket.close(code, reason);
+        }
+      }
+    },
+
+    setConnectionHandler(handler) {
+      onConnectionChange = handler;
     },
 
     /**

@@ -1,3 +1,11 @@
+## Unreleased
+
+- **New**: The server can run in two slots and hand over at a release, so a page that opens or connects to a proxy during a release finds a server and the full list of proxies. The new instance (`SERVER_SLOT`, its peer named by `SERVER_PEER`) asks the serving one to hand over; the serving one stops accepting tunnels and asks every proxy that follows moves to open a second connection, which nginx sends to the new instance; when each of them has arrived, the new instance serves and the old one stops accepting pages, finishes the signalling already under way — until its newest signalling socket is as old as the page's connect deadline — and stands by. An instance that does not serve answers 503 so nginx uses the other slot; `/healthz` names the slot and its state. Without `SERVER_PEER` the server serves alone, as before (torrent-tv/meta#94).
+- **New**: A proxy is registered from its tunnel connection when it sends its name with it, because during a release its separate registration request may reach the other instance (torrent-tv/meta#94).
+- **New**: With two slots the page is copied into a release directory of its own on the shared volume and nginx serves `current`, which the instance that starts to serve repoints in one step; the previous release is kept for pages loaded just before the switch. Without `SERVER_SLOT` the page is copied into the volume root as before (torrent-tv/meta#94).
+- **Fix**: Only the serving instance holds the disk cache open, so the two slots never write its SQLite file at once (torrent-tv/meta#94).
+- **Fix**: A page never waits longer than 30 s for one WebRTC connection to open, whatever a caller asks; the server relies on that deadline when it hands over (torrent-tv/meta#94).
+
 ## 0.40.0
 
 - **New**: `GET /health` states the free space of the filesystem holding the server cache and the reserve the cache keeps there, as `disk: { freeBytes, reserveBytes }` (`null` without a cache directory). On the droplet that filesystem also holds Docker's images; infra checks after every deployment and every day that the next server image still fits, since a full disk once stopped releases from rolling out without anyone noticing (torrent-tv/meta#71).

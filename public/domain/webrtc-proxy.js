@@ -19,6 +19,7 @@
  * 8. All subsequent communication uses `fetch()` / `ping()` on the channel.
  */
 
+import { CONNECT_TIMEOUT_MS } from "./connect-deadline.js";
 import {
   deliveryDueWithinMs,
   emptyArrivalEstimate,
@@ -85,7 +86,6 @@ function base64ToBytes(b64) {
 
 /** @type {Array<{ urls: string }>} */
 const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
-const CONNECT_TIMEOUT_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 const PING_TIMEOUT_MS = 5_000;
 
@@ -402,7 +402,9 @@ export class WebRtcProxy {
       const timer = setTimeout(() => {
         this.#ws?.close();
         reject(new Error("WebRTC connection timed out."));
-      }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : CONNECT_TIMEOUT_MS);
+        // Never longer than CONNECT_TIMEOUT_MS: the server counts on it when it
+        // hands over (connect-deadline.js).
+      }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, CONNECT_TIMEOUT_MS) : CONNECT_TIMEOUT_MS);
 
       // Store settler so the data channel open / error events can resolve/reject the outer promise.
       let settled = false;
