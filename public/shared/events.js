@@ -38,6 +38,8 @@ export const LOADING_EVENTS = {
  * not at all, and nothing that plays waits for them.
  */
 export const MEDIA_INFO_EVENTS = {
+  /** Selected-file chapter snapshot, or null on close/source change. */
+  CHAPTERS: "MEDIA_INFO:CHAPTERS",
   /** `{ selection, names }` — a release was chosen; `names` is what is known of it yet. */
   SELECTED: "MEDIA_INFO:SELECTED",
   /** `{ selection, contents, files }` — the proxy said what is in the release. */
