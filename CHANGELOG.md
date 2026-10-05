@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.8
 
 - **Fix**: Send canonical numeric IMDb IDs to OpenSubtitles to avoid redirects for older titles.
 
