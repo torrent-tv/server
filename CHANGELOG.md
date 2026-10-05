@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.6
 
 - **Fix**: A failure of the media element is no longer read as the viewer pausing. The pause the element makes after its `error` is recorded as the element's own; an hls.js player rebuilds its media source at the position where the element failed, shows the waiting notice while it does, and starts the picture again unless the viewer had stopped it. A second failure at the same fragment after that rebuild, or a failure on native HLS or a directly played file, offers a restart with the reason. The element's error code and message are logged with the fragment it failed in.
 - **Fix**: The player's own moves of the playhead — a jump over a hole and the restore after a media source rebuild — are recognised when the element starts seeking and are not reported to the proxy as the viewer's seek.
