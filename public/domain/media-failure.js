@@ -1,17 +1,24 @@
 /**
- * @file What a failure of the media element is, and the next step against it.
+ * @file What a failure of the media pipeline is, and the next step against it.
  *
- * A media element that fails stops for good: the HTML specification gives it
- * an `error` and no way back other than loading a new source. hls.js notices
- * only on its next append — measured 2026-10-04, 4.7 s later — and its own
- * reset reads the position after the source has closed, which is zero, so the
- * film started again from the beginning.
+ * Two parts of the pipeline can fail for good, and each has one way back —
+ * loading a new source:
+ *
+ * 1. the media element: the HTML specification gives it an `error`. hls.js
+ *    notices only on its next append — measured 2026-10-04, 4.7 s later — and
+ *    its own reset reads the position after the source has closed, which is
+ *    zero, so the film started again from the beginning;
+ * 2. the `MediaSource`: an append it cannot parse ends it, and every append
+ *    after that is refused. Measured 2026-10-05 in Chrome: the source reads
+ *    `ended`, the element holds no error and fires no `error`, and the page
+ *    offered a restart at once.
  *
  * Recovery is therefore decided here, from what the failure IS, and in the
  * order of what each step costs. Two things are kept apart on purpose:
  *
- * 1. the description of the failure — the element's own code and message,
- *    which is the only statement of the cause there is;
+ * 1. the description of the failure — which part failed, and its own
+ *    statement of why: the element's code and message, or the error the
+ *    refused append carried;
  * 2. the step taken against it, which is a function of that description and
  *    of what has already been tried at the same place.
  *
@@ -40,6 +47,8 @@ export const MEDIA_FAILURE_KIND = Object.freeze({
   UNSUPPORTED: "unsupported",
   /** A code the specification does not define. */
   UNKNOWN: "unknown",
+  /** The `MediaSource` has ended and refuses appends; the element is intact. */
+  SOURCE_ENDED: "source-ended",
   /** The element holds no error. */
   NONE: "none"
 });
@@ -52,7 +61,18 @@ const KIND_BY_CODE = Object.freeze({
 });
 
 /**
+ * Which part of the pipeline failed.
+ *
+ * @readonly
+ */
+export const MEDIA_FAILURE_ORIGIN = Object.freeze({
+  ELEMENT: "element",
+  MEDIA_SOURCE: "media-source"
+});
+
+/**
  * @typedef {object} MediaFailure
+ * @property {string} origin - One of {@link MEDIA_FAILURE_ORIGIN}.
  * @property {number | null} code - `MediaError.code`, or null without an error.
  * @property {string} kind - One of {@link MEDIA_FAILURE_KIND}.
  * @property {string} message - The browser's own message; empty when it gave
@@ -60,7 +80,22 @@ const KIND_BY_CODE = Object.freeze({
  */
 
 /**
- * Describe the element's error as it stands.
+ * Describe a `MediaSource` that has ended under the player.
+ *
+ * @param {string} message - The error the refused append carried.
+ * @returns {MediaFailure}
+ */
+export function describeEndedSource(message) {
+  return {
+    origin: MEDIA_FAILURE_ORIGIN.MEDIA_SOURCE,
+    code: null,
+    kind: MEDIA_FAILURE_KIND.SOURCE_ENDED,
+    message: typeof message === "string" ? message : ""
+  };
+}
+
+/**
+ * Describe the media element's error as it stands.
  *
  * @param {{ code?: unknown, message?: unknown } | null | undefined} error -
  *   `HTMLMediaElement.error`.
@@ -68,10 +103,11 @@ const KIND_BY_CODE = Object.freeze({
  */
 export function describeMediaFailure(error) {
   if (!error || typeof error !== "object") {
-    return { code: null, kind: MEDIA_FAILURE_KIND.NONE, message: "" };
+    return { origin: MEDIA_FAILURE_ORIGIN.ELEMENT, code: null, kind: MEDIA_FAILURE_KIND.NONE, message: "" };
   }
   const code = Number.isInteger(error.code) ? Number(error.code) : null;
   return {
+    origin: MEDIA_FAILURE_ORIGIN.ELEMENT,
     code,
     kind: (code !== null && KIND_BY_CODE[code]) || MEDIA_FAILURE_KIND.UNKNOWN,
     message: typeof error.message === "string" ? error.message : ""
@@ -79,7 +115,7 @@ export function describeMediaFailure(error) {
 }
 
 /**
- * The steps against a failed element, cheapest first.
+ * The steps against a failed pipeline, cheapest first.
  *
  * @readonly
  */
@@ -90,8 +126,8 @@ export const ELEMENT_RECOVERY_STEP = Object.freeze({
    */
   LEAVE_TO_START_UP: "leave-to-start-up",
   /**
-   * Give the element a new source and put loading and the playhead back where
-   * it failed. Costs the media buffered ahead of that point.
+   * Give the element a new media source and put loading and the playhead back
+   * where it failed. Costs the media buffered ahead of that point.
    */
   REBUILD_AT_POSITION: "rebuild-at-position",
   /**
@@ -102,7 +138,7 @@ export const ELEMENT_RECOVERY_STEP = Object.freeze({
 });
 
 /**
- * The next step against a failed element.
+ * The next step against a failed pipeline, element or media source alike.
  *
  * `rebuildsHere` counts the rebuilds already made at the place this failure
  * happened at. A rebuild there that was followed by the same failure is a

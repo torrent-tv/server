@@ -11,7 +11,7 @@
 
 import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
 import { PLAYER_EVENTS } from "../shared/events.js";
-import { describeMediaFailure, ELEMENT_RECOVERY_STEP, elementRecoveryStep } from "./media-failure.js";
+import { describeEndedSource, describeMediaFailure, ELEMENT_RECOVERY_STEP, elementRecoveryStep } from "./media-failure.js";
 
 /**
  * How often the cushion is read. Ten seconds is the same cadence the link
@@ -1051,6 +1051,27 @@ export function createHlsPlayer(onLog) {
         // directly — only hls.js's own derived events (BUFFER_EOS,
         // MEDIA_DETACHING) were watched, and neither fired before either death.
         let liveMediaSource = null;
+        // Pipeline failures this player has met, by the place they happened
+        // at: how many rebuilds have been made there. The place is the fragment
+        // of the playing level that holds the position, so a failure a few
+        // frames later in the same fragment is the same place.
+        const rebuildsByPlace = new Map();
+        // What the last failure acted on was — the element's `MediaError`, or
+        // the `MediaSource` that ended — so a second report of the same one
+        // does not count as a second failure.
+        let handledFailureOf = null;
+        // The last position the element played while it held media. A source
+        // that ends can take the element's position with it before anyone
+        // asks, and the rebuild needs somewhere to go back to that is not the
+        // start of the film.
+        let lastHeldPosition = -1;
+        // True from a rebuild of the media source until its new source is
+        // attached. Removing the old source ends it, and hls.js may still
+        // report that ending afterwards; it is about the source just
+        // replaced, not a failure of the one coming.
+        let rebuildingSource = false;
+        // Whether the playlist has been asked for (on the first attach).
+        let sourceRequested = false;
         /**
          * An append refused by an ENDED MediaSource is the end of this player:
          * nothing downstream can mend it, and the viewer is otherwise left with
@@ -1085,7 +1106,7 @@ export function createHlsPlayer(onLog) {
          */
         const announceEndedSource = (t, details, data) => {
           if (unrecoverableAnnounced || !/MediaSource readyState: ended/i.test(String(data?.error?.message ?? ""))) {
-            return;
+            return false;
           }
           if (data?.fatal !== true) {
             // 0 is hls.js's `NetworkErrorAction.DoNothing`; an absent action is
@@ -1097,17 +1118,19 @@ export function createHlsPlayer(onLog) {
                 `action=${data?.errorAction?.action ?? "-"} resolved=${data?.errorAction?.resolved ?? "-"} ` +
                 `recovering=${recovering}`
               );
-              return;
+              return false;
             }
           }
-          unrecoverableAnnounced = true;
-          console.warn(
-            `[torrent-tv][hls] ${t} unrecoverable: the media source has ended; the player cannot continue ` +
-            `(msReadyState=${liveMediaSource?.readyState ?? "-"})`
-          );
-          if (typeof options.onUnrecoverable === "function") {
-            options.onUnrecoverable(details);
+          if (rebuildingSource) {
+            console.debug(`[torrent-tv][hls] ${t} ${details} is about the source a rebuild has just replaced`);
+            return true;
           }
+          // The source is gone and so is every append after this one, but the
+          // element is intact: the same ladder as a failed element answers it,
+          // and a rebuild at the position comes before a restart.
+          console.warn(`[torrent-tv][hls] ${t} the media source has ended (${details})`);
+          onMediaFailed(describeEndedSource(String(data?.error?.message ?? details)), liveMediaSource ?? data);
+          return true;
         };
         /**
          * Give the element a new media source and put loading and the playhead
@@ -1136,30 +1159,87 @@ export function createHlsPlayer(onLog) {
               reason: `put back at ${resumeAt.toFixed(1)}s after it ${reason}`
             };
           }
+          rebuildingSource = true;
           instance.recoverMediaError();
           if (resumeAt > 0) {
             instance.startLoad(resumeAt);
             restorePosition(videoElement, resumeAt);
           }
         };
-        // Element failures this player has met, by the place they happened at:
-        // how many rebuilds have been made there. The place is the fragment of
-        // the playing level that holds the position, so a failure a few frames
-        // later in the same fragment is the same place.
-        const rebuildsByPlace = new Map();
-        // The element error already acted on, so a second report of the same
-        // one does not count as a second failure.
-        let handledElementError = null;
+        /**
+         * The media pipeline has failed: the element, or the source feeding
+         * it. One ladder answers both (`elementRecoveryStep`), cheapest step
+         * first.
+         *
+         * @param {import("./media-failure.js").MediaFailure} failure
+         * @param {object} failedPart - The `MediaError` or `MediaSource` that
+         *   failed, which identifies this failure.
+         * @returns {void}
+         */
+        const onMediaFailed = (failure, failedPart) => {
+          if (hlsInstance !== instance || attachedMedia !== videoElement) {
+            return;
+          }
+          if (failedPart === handledFailureOf) {
+            return;
+          }
+          handledFailureOf = failedPart;
+          const position = videoElement.readyState > 0 && videoElement.currentTime > 0
+            ? videoElement.currentTime
+            : lastHeldPosition;
+          const levelIndex = Number.isInteger(instance.currentLevel) && instance.currentLevel >= 0
+            ? instance.currentLevel
+            : desiredLevel;
+          const fragment = fragmentAt(instance.levels?.[levelIndex]?.details?.fragments, position);
+          const place = fragment ? `${levelIndex}:${fragment.sn}` : "unplaced";
+          const rebuildsHere = rebuildsByPlace.get(place) ?? 0;
+          const step = recovering
+            ? "already-recovering"
+            : elementRecoveryStep({ failure, rebuildsHere, manifestReady });
+          console.warn(
+            `[torrent-tv][hls] ${new Date().toISOString().slice(11, 23)} media ${failure.origin} failed: ` +
+            `${failure.kind} (code ${failure.code ?? "-"}) "${failure.message}" ` +
+            `at ${position.toFixed(2)}s, fragment ${fragment ? `sn=${fragment.sn} ` +
+              `${fragment.start.toFixed(3)}-${fragment.end.toFixed(3)}s level=${levelIndex}` : "-"}, ` +
+            `rebuilds here ${rebuildsHere}, msReadyState=${liveMediaSource?.readyState ?? "-"} ` +
+            `${describeTrackBuffers(instance, videoElement)} → ${step}`
+          );
+          if (step === ELEMENT_RECOVERY_STEP.REBUILD_AT_POSITION) {
+            rebuildsByPlace.set(place, rebuildsHere + 1);
+            options.onMediaRebuild?.();
+            rebuildMediaAt(position, `failed (${failure.origin}: ${failure.kind})`);
+            return;
+          }
+          if (step === ELEMENT_RECOVERY_STEP.RESTART_STREAM && !unrecoverableAnnounced) {
+            unrecoverableAnnounced = true;
+            options.onUnrecoverable?.(`media ${failure.origin} ${failure.kind} failure`);
+          }
+        };
+        /**
+         * The media element has failed.
+         *
+         * Handled at the element's own `error`, not at hls.js's next append:
+         * by then the source has closed and the position reads zero, which is
+         * what put the viewer back at the start of the film on 2026-10-04. An
+         * `error` whose error has gone arrived after the element was given a
+         * new source, and is about nothing now.
+         *
+         * @returns {void}
+         */
+        const onElementFailed = () => {
+          const elementError = videoElement.error;
+          if (elementError !== null) {
+            onMediaFailed(describeMediaFailure(elementError), elementError);
+          }
+        };
         /**
          * Whether an hls.js error belongs to a failure of the element itself.
          *
-         * hls.js learns of a failed element through its own appends — a
-         * `SourceBuffer` that refused, a source that has ended — and its
+         * hls.js learns of a failed element through its own appends, and its
          * error handling runs before ours. Left to the rules for hls.js's
-         * errors, the same failure was answered by a restart offer, while the
-         * element's own `error` would have been answered by a rebuild at the
-         * position: two answers to one failure. While the element holds an
-         * error, the failure is the element's, and its ladder decides.
+         * errors, one failure had two answers depending on which side reported
+         * it first. While the element holds an error, the failure is the
+         * element's, and the ladder decides.
          *
          * @param {string} details - hls.js's name for the error, for the log.
          * @returns {boolean} True when the element's failure took it over.
@@ -1172,60 +1252,14 @@ export function createHlsPlayer(onLog) {
           onElementFailed();
           return true;
         };
-        /**
-         * The media element has failed.
-         *
-         * Handled at the element's own `error`, not at hls.js's next append:
-         * by then the source has closed and the position reads zero, which is
-         * what put the viewer back at the start of the film on 2026-10-04.
-         *
-         * @returns {void}
-         */
-        const onElementFailed = () => {
-          if (hlsInstance !== instance || attachedMedia !== videoElement) {
-            return;
-          }
-          // One failure is handled once, whichever of hls.js and the element
-          // reported it first. An `error` whose error has gone arrived after
-          // the element was given a new source, and is about nothing now.
-          const elementError = videoElement.error;
-          if (elementError === null || elementError === handledElementError) {
-            return;
-          }
-          handledElementError = elementError;
-          const failure = describeMediaFailure(elementError);
-          const position = Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : -1;
-          const levelIndex = Number.isInteger(instance.currentLevel) && instance.currentLevel >= 0
-            ? instance.currentLevel
-            : desiredLevel;
-          const fragment = fragmentAt(instance.levels?.[levelIndex]?.details?.fragments, position);
-          const place = fragment ? `${levelIndex}:${fragment.sn}` : "unplaced";
-          const rebuildsHere = rebuildsByPlace.get(place) ?? 0;
-          const step = recovering
-            ? "already-recovering"
-            : elementRecoveryStep({ failure, rebuildsHere, manifestReady });
-          console.warn(
-            `[torrent-tv][hls] ${new Date().toISOString().slice(11, 23)} media element failed: ` +
-            `${failure.kind} (code ${failure.code ?? "-"}) "${failure.message}" ` +
-            `at ${position.toFixed(2)}s, fragment ${fragment ? `sn=${fragment.sn} ` +
-              `${fragment.start.toFixed(3)}-${fragment.end.toFixed(3)}s level=${levelIndex}` : "-"}, ` +
-            `rebuilds here ${rebuildsHere}, msReadyState=${liveMediaSource?.readyState ?? "-"} ` +
-            `${describeTrackBuffers(instance, videoElement)} → ${step}`
-          );
-          if (step === ELEMENT_RECOVERY_STEP.REBUILD_AT_POSITION) {
-            rebuildsByPlace.set(place, rebuildsHere + 1);
-            options.onMediaRebuild?.();
-            rebuildMediaAt(position, `failed (${failure.kind})`);
-            return;
-          }
-          if (step === ELEMENT_RECOVERY_STEP.RESTART_STREAM && !unrecoverableAnnounced) {
-            unrecoverableAnnounced = true;
-            options.onUnrecoverable?.(`media element ${failure.kind} failure`);
-          }
-        };
         const elementWatch = new AbortController();
         stopWatchingElement = () => elementWatch.abort();
         videoElement.addEventListener("error", onElementFailed, { signal: elementWatch.signal });
+        videoElement.addEventListener("timeupdate", () => {
+          if (videoElement.readyState > 0 && videoElement.currentTime > 0) {
+            lastHeldPosition = videoElement.currentTime;
+          }
+        }, { signal: elementWatch.signal });
         // A rebuild's own move ends when the picture moves again.
         videoElement.addEventListener("playing", () => {
           if (ownMove !== null && ownMove.withinMs === null) {
@@ -1655,6 +1689,9 @@ export function createHlsPlayer(onLog) {
             }
           });
           instance.on(HlsClass.Events.MEDIA_ATTACHED, (_event, data) => {
+            // A rebuild is over once its new source is attached: reports about
+            // an ended source are about this one again from here on.
+            rebuildingSource = false;
             const attachTookMs = Math.round(performance.now() - attachRequestedAt);
             stopWatchingTasks();
             noteStage(
@@ -1684,6 +1721,17 @@ export function createHlsPlayer(onLog) {
               }
               console.debug(`[torrent-tv][hls] MediaSource attached, msReadyState=${liveMediaSource.readyState}`);
             }
+            // The playlist is asked for once, on the first attach. Every later
+            // attach is a rebuild of the media source (`recoverMediaError`),
+            // which keeps the playlist and has already been told where to load
+            // from. `loadSource` begins with `stopLoad()`, and nothing would
+            // start the loading again: after hls.js's own reset on 2026-10-04
+            // the log read "MediaSource attached … start-up: manifest
+            // requested" and the picture stayed black at zero.
+            if (sourceRequested) {
+              return;
+            }
+            sourceRequested = true;
             instance.loadSource(manifestUrl);
             noteStage("manifest requested");
           });
@@ -1774,8 +1822,7 @@ export function createHlsPlayer(onLog) {
               // player. Reported here and from the non-fatal branch alike —
               // `announceEndedSource` holds the rule about which non-fatal ones
               // count, and the latch that keeps it to one message per player.
-              if (!elementFailureOwns(details)) {
-                announceEndedSource(t, details, data);
+              if (!elementFailureOwns(details) && !announceEndedSource(t, details, data)) {
                 recoverFatal(data);
               }
             } else {

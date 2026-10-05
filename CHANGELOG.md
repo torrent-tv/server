@@ -1,3 +1,8 @@
+## Unreleased
+
+- **Fix**: A media source that ends under the player — Chrome ends it when an append cannot be parsed, while the element itself holds no error — is rebuilt at the position where it ended instead of offering a restart at once. It takes the same steps as a failed element: a rebuild at the position first, a restart only when the same fragment fails again after it. Correction to 0.37.9: that release did not cover this case, because the element held no error.
+- **Fix**: Loading continues after the player rebuilds its media source. Every new source attached asked for the playlist again, and asking stops loading, so a recovered player stayed black at zero.
+
 ## 0.37.9
 
 - **Fix**: An hls.js error caused by a failed media element is handled by the element's recovery. When hls.js noticed the failure first — a `SourceBuffer` refusing an append to an ended source — the page offered a restart at once instead of rebuilding the source at the position, so one failure had two different answers depending on which side reported it.

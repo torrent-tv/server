@@ -10,10 +10,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  describeEndedSource,
   describeMediaFailure,
   ELEMENT_RECOVERY_STEP,
   elementRecoveryStep,
-  MEDIA_FAILURE_KIND
+  MEDIA_FAILURE_KIND,
+  MEDIA_FAILURE_ORIGIN
 } from "../public/domain/media-failure.js";
 import {
   consumePauseCause,
@@ -26,13 +28,45 @@ import { fragmentAt } from "../public/domain/hls-player.js";
 test("the element's code is named and its message kept whole", () => {
   assert.deepEqual(
     describeMediaFailure({ code: 3, message: "PIPELINE_ERROR_DECODE: video decode failed" }),
-    { code: 3, kind: MEDIA_FAILURE_KIND.DECODE, message: "PIPELINE_ERROR_DECODE: video decode failed" }
+    {
+      origin: MEDIA_FAILURE_ORIGIN.ELEMENT,
+      code: 3,
+      kind: MEDIA_FAILURE_KIND.DECODE,
+      message: "PIPELINE_ERROR_DECODE: video decode failed"
+    }
   );
   assert.equal(describeMediaFailure({ code: 1 }).kind, MEDIA_FAILURE_KIND.ABORTED);
   assert.equal(describeMediaFailure({ code: 2 }).kind, MEDIA_FAILURE_KIND.NETWORK);
   assert.equal(describeMediaFailure({ code: 4 }).kind, MEDIA_FAILURE_KIND.UNSUPPORTED);
   assert.equal(describeMediaFailure({ code: 9 }).kind, MEDIA_FAILURE_KIND.UNKNOWN);
-  assert.deepEqual(describeMediaFailure(null), { code: null, kind: MEDIA_FAILURE_KIND.NONE, message: "" });
+  assert.deepEqual(
+    describeMediaFailure(null),
+    { origin: MEDIA_FAILURE_ORIGIN.ELEMENT, code: null, kind: MEDIA_FAILURE_KIND.NONE, message: "" }
+  );
+});
+
+test("a media source that has ended is a failure of the source, with the refused append's message", () => {
+  assert.deepEqual(
+    describeEndedSource("video SourceBuffer error. MediaSource readyState: ended"),
+    {
+      origin: MEDIA_FAILURE_ORIGIN.MEDIA_SOURCE,
+      code: null,
+      kind: MEDIA_FAILURE_KIND.SOURCE_ENDED,
+      message: "video SourceBuffer error. MediaSource readyState: ended"
+    }
+  );
+});
+
+test("an ended source takes the same ladder as a failed element", () => {
+  const failure = describeEndedSource("");
+  assert.equal(
+    elementRecoveryStep({ failure, rebuildsHere: 0, manifestReady: true }),
+    ELEMENT_RECOVERY_STEP.REBUILD_AT_POSITION
+  );
+  assert.equal(
+    elementRecoveryStep({ failure, rebuildsHere: 1, manifestReady: true }),
+    ELEMENT_RECOVERY_STEP.RESTART_STREAM
+  );
 });
 
 test("the first failure at a place rebuilds there; a failure after that rebuild restarts the stream", () => {
