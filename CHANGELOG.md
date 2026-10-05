@@ -1,4 +1,4 @@
-## Unreleased
+## 0.39.1
 
 - **Chore**: The page no longer asks the browser for viewport and pixel density client hints. Nothing read them: the page measures the viewport itself, in every browser.
 
