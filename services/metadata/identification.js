@@ -62,6 +62,10 @@ export function preferYearMatches(candidates, statedYears = []) {
   return preferred.length ? preferred : candidates;
 }
 
+export function latestCandidate(candidates) {
+  return [...candidates].sort((left, right) => (right.year ?? 0) - (left.year ?? 0) || left.tmdbId - right.tmdbId || left.kind.localeCompare(right.kind))[0];
+}
+
 /**
  * @param {object} params
  * @param {SearchOutcome[]} params.searches
@@ -88,8 +92,7 @@ export function decideIdentity({ searches, statedYears, runtimeMatches = null, c
   const found = preferYearMatches(durationPreferred.length ? durationPreferred : all, statedYears);
   const reported = found.slice(0, candidateLimit);
   if (found.length >= 2 && preferLatest && searches.every(search => search.status === "complete")) {
-    const ordered = [...found].sort((left, right) => (right.year ?? 0) - (left.year ?? 0) || left.tmdbId - right.tmdbId || left.kind.localeCompare(right.kind));
-    return { status: "identified", candidates: [ordered[0]], selectionReason: "latest-year" };
+    return { status: "identified", candidates: [latestCandidate(found)], selectionReason: "latest-year" };
   }
   if (found.length >= 2) {
     return { status: "ambiguous", candidates: reported };

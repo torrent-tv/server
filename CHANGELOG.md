@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Apply measured duration and the latest-year selection policy to ambiguous alternative-title matches as well as main titles. Distinguish First Blood from Rambo III despite the latter sharing its Rambo First Blood alias in TMDB.
+
 ## 0.37.3
 
 - **Fix**: Reset audio, subtitle, playlist and share controls, artwork and source preferences when a torrent closes or is replaced. Owning classes clear their source state and invalidate pending work while preserving subtitle preferences between episodes of the same torrent.

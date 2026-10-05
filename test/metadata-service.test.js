@@ -137,6 +137,20 @@ test("First Blood is identified by its Rambo alias with missing or differing yea
   }
 });
 
+test("duration distinguishes First Blood from the Rambo III record sharing its alias", async () => {
+  const source = fakeSource({ "movie|Rambo First Blood": [
+    { id: 1370, name: "Rambo III", year: 1988 }, { id: 1368, name: "First Blood", year: 1982 }
+  ] }, { alternative: { "movie|1370": ["Rambo First Blood"], "movie|1368": ["Rambo: First Blood"] },
+    works: { "movie|1370": { runtimeSeconds: 6120 }, "movie|1368": { runtimeSeconds: 5580, imdbId: "tt0083944" } } });
+  const metadata = service(source);
+  const request = { names: ["Rambo.First.Blood.1080p.rus.LostFilm.TV.mkv"], kindHint: null, language: "en-US" };
+  assert.equal((await metadata.identify(request)).work.identification, "latest-year");
+  const answer = await metadata.identify({ ...request, durationSeconds: 5620 });
+  assert.equal(answer.work.tmdbId, 1368);
+  assert.equal(answer.work.imdbId, "tt0083944");
+  assert.equal(answer.work.identification, "duration");
+});
+
 test("measured durations distinguish the two recent ambiguous movie titles", async () => {
   for (const [name, query, durationSeconds, expectedId, results, works] of [
     ["Minions.and.Monsters.1080p.mkv", "Minions and Monsters", 5559, 1315772,

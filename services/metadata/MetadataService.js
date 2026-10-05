@@ -18,7 +18,7 @@
  * carries counts and outcomes only.
  */
 
-import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, preferYearMatches } from "./identification.js";
+import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, preferYearMatches, latestCandidate } from "./identification.js";
 import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
@@ -248,19 +248,7 @@ export class MetadataService {
       const candidates = decideIdentity({ searches, statedYears: [], candidateLimit: MAX_RUNTIME_CHECKS + 1 }).candidates;
       if (candidates.length <= MAX_RUNTIME_CHECKS) {
         try {
-          const checked = [];
-          // Match the source's concurrency instead of filling its shared queue.
-          for (let offset = 0; offset < candidates.length; offset += 4) {
-            checked.push(...await Promise.all(candidates.slice(offset, offset + 4).map(async candidate => {
-            const work = await this.#cached(`work|v2|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
-              fetchDeadline => this.#source.work(candidate.kind, candidate.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
-            const runtimes = work.kind === "movie" ? [work.runtimeSeconds] : work.episodeRuntimeSeconds ?? [];
-            const differences = runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0).map(runtime => Math.abs(runtime - durationSeconds));
-            return { candidate, difference: Math.min(...differences) };
-            })));
-          }
-          const closest = Math.min(...checked.filter(item => item.difference <= this.#runtimeToleranceSeconds).map(item => item.difference));
-          runtimeMatches = new Set(checked.filter(item => item.difference === closest && Number.isFinite(closest)).map(({ candidate }) => `${candidate.kind}:${candidate.tmdbId}`));
+          runtimeMatches = await this.#closestByDuration(candidates, { durationSeconds, language, deadlineAt, signal });
           identity = decideIdentity({ searches, statedYears, runtimeMatches });
         } catch (error) {
           if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
@@ -296,6 +284,18 @@ export class MetadataService {
         throw error;
       }
     }
+    // Alias and episode candidates need the same duration refinement as main titles.
+    if (identity.status === "ambiguous" && !identity.incomplete && searches.every(search => search.status === "complete")) {
+      try {
+        if (hasDuration) runtimeMatches = await this.#closestByDuration(identity.candidates, { durationSeconds, language, deadlineAt, signal });
+        const matching = identity.candidates.filter(candidate => runtimeMatches?.has(`${candidate.kind}:${candidate.tmdbId}`));
+        const found = preferYearMatches(matching.length ? matching : identity.candidates, statedYears);
+        identity = { status: "identified", candidates: [latestCandidate(found)], selectionReason: found.length > 1 ? "latest-year" : matching.length ? "duration" : "title" };
+      } catch (error) {
+        if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
+        throw error;
+      }
+    }
     if (identity.status !== "identified") {
       return { status: identity.status, candidates: identity.status === "ambiguous" ? identity.candidates : undefined };
     }
@@ -310,6 +310,22 @@ export class MetadataService {
       }
       throw error;
     }
+  }
+
+  async #closestByDuration(candidates, { durationSeconds, language, deadlineAt, signal }) {
+    const checked = [];
+    // Match source concurrency rather than filling its shared request queue.
+    for (let offset = 0; offset < candidates.length; offset += 4) {
+      checked.push(...await Promise.all(candidates.slice(offset, offset + 4).map(async candidate => {
+        const work = await this.#cached(`work|v2|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
+          fetchDeadline => this.#source.work(candidate.kind, candidate.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+        const runtimes = work.kind === "movie" ? [work.runtimeSeconds] : work.episodeRuntimeSeconds ?? [];
+        const differences = runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0).map(runtime => Math.abs(runtime - durationSeconds));
+        return { candidate, difference: Math.min(...differences) };
+      })));
+    }
+    const closest = Math.min(...checked.filter(item => item.difference <= this.#runtimeToleranceSeconds).map(item => item.difference));
+    return new Set(checked.filter(item => item.difference === closest && Number.isFinite(closest)).map(({ candidate }) => `${candidate.kind}:${candidate.tmdbId}`));
   }
 
   /**
@@ -344,7 +360,8 @@ export class MetadataService {
         )
       }))
     );
-    return decideByAlternativeTitles({ checked, queries, statedYears, uncheckedRemain: admitted.length > toCheck.length });
+    return { ...decideByAlternativeTitles({ checked, queries, statedYears, uncheckedRemain: admitted.length > toCheck.length }),
+      incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete") };
   }
 
   /**
@@ -389,12 +406,12 @@ export class MetadataService {
         };
       })
     );
-    return decideByEpisodeTitles({
+    return { ...decideByEpisodeTitles({
       checked,
       statedYears,
       titles: episodeEvidence.titles,
       uncheckedRemain: admitted.length > toCheck.length
-    });
+    }), incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete") };
   }
 
   /**
