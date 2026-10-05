@@ -3,9 +3,11 @@
  *
  * Mobile Safari makes copying eruda/console logs off an iPhone painful. This
  * module tees every `console.*` call (and uncaught errors) to the server over
- * plain HTTPS, so the logs show up in the server container log (readable with
- * `docker logs` / `ssh do`) — no copy-paste, and it works even when the WebRTC
- * data channel never connects (the failures we most want to see).
+ * plain HTTPS, so the logs show up in the server's log — on the droplet
+ * `/var/log/torrent-tv/client.log` (`infra` README, "Logs") — no copy-paste,
+ * and it works even when the WebRTC data channel never connects (the failures
+ * we most want to see). Once a data channel is up the lines go to the proxy
+ * instead (`proxy/docs/logs.md`).
  *
  * Each line is tagged with a device/browser label (e.g. `iPhone/Safari`,
  * `Windows/Chrome`) and a short per-page session id so logs from different
