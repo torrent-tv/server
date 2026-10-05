@@ -7,7 +7,8 @@ import { episodeLabel, systemArtwork, workFor, workLine } from "../../domain/med
  * Bridges the OS-level media controls (lock screen, notification shade,
  * hardware/headset keys, Picture-in-Picture) to the app's event-driven model:
  * - metadata reflects the currently active video file;
- * - play / pause / seek act on the shared `<video>` element;
+ * - play / pause use the same explicit requests as the page controls;
+ * - seek acts on the shared `<video>` element;
  * - previous / next track dispatch `PLAYER:SELECT_MEDIA_FILE` for the adjacent
  *   video file (mirroring the playlist), and are disabled at the list edges;
  * - stop dispatches `APP:RESET_TO_PICKER` (closing the player) — the action the
@@ -108,10 +109,10 @@ export class MediaSessionBridge {
    */
   #registerStaticActionHandlers() {
     this.#setActionHandler("play", () => {
-      void this.#video?.play().catch(() => undefined);
+      this.#requestPlayback("mediaplayrequest");
     });
     this.#setActionHandler("pause", () => {
-      this.#video?.pause();
+      this.#requestPlayback("mediapauserequest");
     });
     this.#setActionHandler("seekbackward", (details) => {
       this.#seekBy(-(details?.seekOffset || MediaSessionBridge.SEEK_OFFSET_SECONDS));
@@ -127,6 +128,12 @@ export class MediaSessionBridge {
     this.#setActionHandler("stop", () => {
       document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
     });
+  }
+
+  #requestPlayback(type) {
+    this.#video?.dispatchEvent(new CustomEvent(type, {
+      bubbles: true, composed: true, cancelable: true
+    }));
   }
 
   /**

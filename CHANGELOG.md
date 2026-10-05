@@ -1,3 +1,37 @@
+## Unreleased
+
+- **Fix**: Shared torrent links wait for module initialization before announcing their source, so a first page load cannot lose the playback request while another component is still loading.
+
+- **Fix**: During opening, viewer reports retain the chosen destination until preparation finishes. A media element temporarily at zero after reading metadata cannot move source preparation and playback readiness back to the beginning.
+
+- **Fix**: Source registration requires the proxy's map playback contract before preparation. A page assigned to an older proxy reports that it needs an update instead of silently using unsupported preparation requests.
+
+- **Fix**: Resetting source controls during opening preserves the waiting indicator derived from the current application state.
+
+- **Fix**: Playback readiness reports the applied timestamp offset from each actual SourceBuffer together with its held ranges. A demuxer event cannot overwrite a separate audio clock or retain a clock from an earlier buffer.
+
+- **Fix**: Embedded subtitle tracks appear without waiting for external subtitle documents to download.
+
+- **Fix**: Legacy media playlist opening waits without a production deadline and stops on terminal proxy refusals instead of offering automatic output restart.
+
+- **Fix**: New proxies declare pushed subtitle delivery, avoiding repeated pending-document pulls. Changing the file cancels subtitle requests and obsolete source registration cannot restore an earlier file's tracks. Older proxies retain their existing pending-response behavior.
+
+- **Fix**: Subtitle menu choices report the selected source file and track to the proxy, including an explicit off state, independently of subtitle document delivery.
+
+- **Fix**: Direct playback sends source viewer reports, preserves explicit pause when assigning a URL and cancels pending reports when replaced. Seek generations prevent older reports from restoring a previous position.
+
+- **Fix**: A newer quality request, file preparation or stop cancels the previous quality wait, including waiting for the browser buffer. Quality preparation preserves explicit error codes and retry classification instead of reporting every failure as unavailable readiness.
+- **Fix**: Playback plans and audio or quality preparation wait on source and output events without polling or elapsed deadlines. Cancelled requests release their subscriptions; terminal refusals preserve their retry classification.
+- **Fix**: Automatic reconnection and manual retry share serialized preparation. Reconnection preserves the current player buffer, a newer file selection cancels recovery, and explicit terminal refusals stop repeated recovery attempts.
+- **Fix**: Preparing a direct stream preserves pause intent. Metadata and decoded-frame readiness are observed without elapsed-time refusals; cancellation releases pending waits. History, expired-session recovery and audio-session rebuilding share serialized preparation.
+- **Fix**: Only explicit play and pause requests change viewer intent. Internal pauses and playback events preserve that intent, including during initial preparation and track changes, and explicit requests are reported immediately to the proxy.
+- **Fix**: Selecting an episode during preparation cancels the previous preparation and starts the latest selection after its cleanup. Playback cancellation does not get reported as an autoplay permission refusal.
+- **Fix**: HLS startup and custom media loads have no production deadline. Automatic HLS error recovery cannot select another proxy output or silently accept a different level after repeated failures.
+- **Fix**: HLS cannot remove and renumber levels after an output is selected. Its picture-size and dropped-frame caps are disabled; level-controller contracts are checked against the installed library.
+- **Fix**: Proxy requests wait for their result, explicit cancellation, or connection loss without a playback request deadline or an X-Hold-Ms budget.
+- **Fix**: The file picker respects the proxy's exclusion of samples and release-group promos.
+- **Fix**: Cancelling a browser data-channel request also cancels its proxy-side HTTP wait instead of only discarding the browser's pending response.
+
 ## 0.42.1
 
 - **Chore**: The sources of film metadata share one interface, `MetadataProvider`, like the sources of subtitles: TMDB, AniList and the media container are providers held by `MetadataRegistry`, which replaces `AnimeMetadata`. A source states what evidence it takes, preference between sources is stated per field in `normalize-work.js`, and the media container is both a source of fields and evidence for the others. The answers of the metadata routes do not change (torrent-tv/meta#137).

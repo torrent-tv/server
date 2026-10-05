@@ -242,7 +242,7 @@ export function normalizeRemoteFileList(baseName, rawFiles) {
       relativePath,
       length: Number.isFinite(entry?.length) ? entry.length : 0,
       kind: typeof entry?.kind === "string" ? entry.kind : "other",
-      isVideo: entry?.kind === "video"
+      isVideo: entry?.kind === "video" && !entry?.excludedReason
     };
   });
 }

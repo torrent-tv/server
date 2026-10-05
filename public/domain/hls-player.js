@@ -12,6 +12,7 @@
 import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
 import { PLAYER_EVENTS } from "../shared/events.js";
 import { describeEndedSource, describeMediaFailure, ELEMENT_RECOVERY_STEP, elementRecoveryStep } from "./media-failure.js";
+import { constrainOutputLevel, fixedOutputErrorController } from "./hls-load-control.js";
 
 /**
  * How often the cushion is read. Ten seconds is the same cadence the link
@@ -94,8 +95,6 @@ export function forwardBufferCeilingSeconds(statedSeconds) {
  */
 const FORWARD_BUFFER_CEILING_WITHOUT_A_PROXY_FIGURE = 60;
 
-/** How many unasked-for level changes are undone before the wander stands. */
-const MAX_PIN_RESTORES = 3;
 
 /**
  * hls.js's own default byte budget, kept as the answer whenever the level's
@@ -414,15 +413,45 @@ export function fragmentAt(fragments, position) {
 }
 
 /**
- * Create a stateful HLS player instance.
- *
- * @param {(message: string) => void} onLog - Called with status/error messages
- *   emitted by the HLS.js event handler.
- * @returns {{ clear: () => void, isActive: () => boolean, stopLoad: () => void, startLoad: () => void, play: (videoElement: HTMLVideoElement, manifestUrl: string, options?: { loader?: HlsLoaderClass }) => Promise<void> }}
+ * Read ranges and their applied clocks together from the actual SourceBuffers.
+ * INIT_PTS_FOUND describes a demuxer result before queued appends run and can
+ * belong to another track. It is not a reading of the current buffer clock.
  */
+export function readPlayerBuffers(instance, videoElement) {
+  const read = source => {
+    try {
+      const ranges = source?.buffered;
+      return ranges ? Array.from({ length: ranges.length }, (_, index) => ({
+        start: ranges.start(index), end: ranges.end(index)
+      })) : [];
+    } catch {
+      // silent-ok: a detached SourceBuffer has no readable held ranges.
+      return [];
+    }
+  };
+  const result = { media: read(videoElement), timestampOffsets: {} };
+  for (const [name, source] of instance?.bufferController?.sourceBuffers ?? []) {
+    const names = name === "audiovideo" ? ["video", "audio"] :
+      name === "video" || name === "audio" ? [name] : [];
+    if (!names.length || !source) continue;
+    const ranges = read(source);
+    let offset;
+    try { offset = source.timestampOffset; }
+    catch {
+      // silent-ok: a removed SourceBuffer cannot state its clock.
+      continue;
+    }
+    for (const track of names) {
+      result[track] = ranges;
+      if (Number.isFinite(offset)) result.timestampOffsets[track] = offset;
+    }
+  }
+  return result;
+}
+
+/** Create a stateful HLS player instance. */
 export function createHlsPlayer(onLog) {
   let hlsInstance = null;
-  let timestampOffsets = {};
   /**
    * The periodic reading of the cushion: what was asked for, what is held, and
    * whether the device has refused the depth. Stopped with the instance.
@@ -538,15 +567,7 @@ export function createHlsPlayer(onLog) {
   // on naming the rung the viewer has just left. Read that way, the menu would
   // snap back to the old height right after a switch and refuse to switch back.
   let desiredLevel = -1;
-  /**
-   * How many times a level change nobody asked for has been undone.
-   *
-   * Bounded because hls.js lowers the level to ESCAPE an error: if the error is
-   * real, putting the level back re-enters it, and a loop between the two is
-   * worse than either. Three attempts distinguish a stray wander from a rung
-   * the player genuinely cannot stay on.
-   */
-  let pinRestores = 0;
+
 
   /**
    * The last move of the playhead the PLAYER made itself, and why.
@@ -578,24 +599,7 @@ export function createHlsPlayer(onLog) {
 
   return {
     getBufferedRanges(videoElement) {
-      const read = (source) => {
-        try {
-          const ranges = source?.buffered;
-          return ranges ? Array.from({ length: ranges.length }, (_, index) => ({
-            start: ranges.start(index), end: ranges.end(index)
-          })) : [];
-        } catch {
-          // silent-ok: a SourceBuffer already removed from its MediaSource throws
-          // on reading `buffered`; it holds nothing, so empty is the reading.
-          return [];
-        }
-      };
-      const result = { media: read(videoElement) };
-      if (Object.keys(timestampOffsets).length) result.timestampOffsets = { ...timestampOffsets };
-      for (const [name, source] of hlsInstance?.bufferController?.sourceBuffers ?? []) {
-        if (name === "video" || name === "audio") result[name] = read(source);
-      }
-      return result;
+      return readPlayerBuffers(hlsInstance, videoElement);
     },
     /**
      * The quality variants this stream offers, in the player's own order.
@@ -691,8 +695,8 @@ export function createHlsPlayer(onLog) {
       if (!Array.isArray(hlsInstance.levels) || index >= hlsInstance.levels.length) {
         return false;
       }
-      hlsInstance.nextLevel = index;
       desiredLevel = index;
+      hlsInstance.nextLevel = index;
       return true;
     },
     /**
@@ -782,10 +786,8 @@ export function createHlsPlayer(onLog) {
       if (hlsInstance) {
         hlsInstance.destroy();
         hlsInstance = null;
-        timestampOffsets = {};
       }
       desiredLevel = -1;
-      pinRestores = 0;
       attachedMedia = null;
     },
     /**
@@ -920,33 +922,19 @@ export function createHlsPlayer(onLog) {
       const hlsSupported = !!(HlsClass && typeof HlsClass.isSupported === "function" && HlsClass.isSupported());
       // Prefer hls.js where available (Chrome/Firefox). Native HLS fallback is for Safari.
       if (hlsSupported) {
-        // Extend the fragment-load retry budget. The source is torrent-backed:
-        // a seek into not-yet-downloaded data, or a fragment whose ffmpeg
-        // segment is still warming, briefly fails to load. The default policy
-        // gives up after a few quick retries and goes fatal; a wider budget lets
-        // hls.js keep re-requesting until the pieces arrive, so a transient
-        // stall self-heals instead of killing the stream. Based on the default
-        // policy so unrelated fields (timeoutRetry) are preserved.
-        const baseFragPolicy = HlsClass.DefaultConfig?.fragLoadPolicy;
-        const fragLoadPolicy = baseFragPolicy
-          ? {
-              default: {
-                ...baseFragPolicy.default,
-                errorRetry: {
-                  ...baseFragPolicy.default?.errorRetry,
-                  // Widened again alongside the proxy's short segment hold
-                  // (SEGMENT_WAIT_MS): the proxy now answers "retry" within
-                  // ~2 s instead of holding the request, so a segment that
-                  // takes a while to produce is spread over more retries than
-                  // before. This budget (with the growing delay below) still
-                  // covers well over a minute of production time.
-                  maxNumRetry: 12,
-                  retryDelayMs: 1000,
-                  maxRetryDelayMs: 8000
-                }
-              }
-            }
-          : undefined;
+        // The custom loader waits for production and owns request cancellation.
+        const loadPolicies = {};
+        if (options.loader) {
+          for (const name of ["manifestLoadPolicy", "playlistLoadPolicy", "fragLoadPolicy"]) {
+            loadPolicies[name] = { default: {
+              ...HlsClass.DefaultConfig?.[name]?.default,
+              maxTimeToFirstByteMs: Infinity,
+              maxLoadTimeMs: Infinity,
+              timeoutRetry: null,
+              errorRetry: null
+            } };
+          }
+        }
         // What the proxy says it keeps produced ahead of the viewer. Both the
         // seconds ceiling and the byte budget are sized from this one figure,
         // so they cannot disagree about how deep the cushion is meant to be.
@@ -955,8 +943,11 @@ export function createHlsPlayer(onLog) {
           detail: { attemptId: options.attemptId, ceilingSeconds: forwardBufferCeiling }
         }));
         const hlsConfig = {
+          errorController: fixedOutputErrorController(HlsClass.DefaultConfig.errorController),
+          capLevelToPlayerSize: false,
+          capLevelOnFPSDrop: false,
           ...(options.loader ? { loader: options.loader } : {}),
-          ...(fragLoadPolicy ? { fragLoadPolicy } : {}),
+          ...loadPolicies,
           // Forward buffer cushion to ride out transient production/delivery
           // dips — the only thing that makes an interruption invisible,
           // whatever caused it.
@@ -1014,14 +1005,8 @@ export function createHlsPlayer(onLog) {
           autoStartLoad: false
         };
         const instance = new HlsClass(hlsConfig);
+        constrainOutputLevel(instance, () => desiredLevel);
         hlsInstance = instance;
-        timestampOffsets = {};
-        instance.on(HlsClass.Events.INIT_PTS_FOUND, (_event, { id, initPTS, timescale }) => {
-          if (!(timescale > 0) || !Number.isFinite(initPTS)) return;
-          const offset = -initPTS / timescale;
-          if (id === "main") timestampOffsets = { video: offset, audio: offset };
-          else if (id === "audio") timestampOffsets.audio = offset;
-        });
         startCushionSampler(instance, videoElement, forwardBufferCeiling, options.attemptId);
         // Set once the manifest is parsed, so post-manifest fatal errors (live
         // playback) are recovered in place, while warm-up fatals still reject
@@ -1268,125 +1253,43 @@ export function createHlsPlayer(onLog) {
           }
         }, { signal: elementWatch.signal });
         const recoverFatal = (data) => {
-          // Why a recovery did NOT happen, said out loud. Without it a player
-          // left at `currentTime=0 readyState=0` is indistinguishable from one
-          // whose recovery ran and lost the position — the two need opposite
-          // fixes, and on 2026-08-14 the log could not tell them apart.
-          if (recovering || !manifestReady) {
-            console.warn(
-              `[torrent-tv][hls] recovery declined for ${data?.details ?? "?"}: ` +
-              `${recovering ? "already recovering" : "manifest not ready"}`
-            );
-            return;
-          }
-          const type = data?.type;
-          if (type !== HlsClass.ErrorTypes.NETWORK_ERROR && type !== HlsClass.ErrorTypes.MEDIA_ERROR) {
-            console.warn(`[torrent-tv][hls] recovery declined for ${data?.details ?? "?"}: type=${type ?? "-"}`);
-            return;
-          }
-          recovering = true;
-          // Where the viewer was, taken NOW — recovering a media error tears the
-          // MediaSource down and builds it again, and what comes back starts at
-          // the beginning of the playlist unless it is told otherwise. That is
-          // the "it jumped back to the start" the field reported on 2026-08-11:
-          // the position was never lost by a seek, it was lost by the recovery
-          // from an unrelated error a moment earlier.
-          const failedAt = videoElement instanceof HTMLVideoElement && videoElement.currentTime > 0
-            ? videoElement.currentTime
-            : -1;
-          window.setTimeout(() => {
-            recovering = false;
-            if (hlsInstance !== instance) {
-              return; // superseded / cleared
+          const retry = data?.type === HlsClass.ErrorTypes.NETWORK_ERROR &&
+            data?.networkDetails?.canRetry === true && !data?.outputTerminal;
+          if (!retry) {
+            if (!unrecoverableAnnounced) {
+              unrecoverableAnnounced = true;
+              options.onUnrecoverable?.(data?.details);
             }
+            return;
+          }
+          if (recovering || !manifestReady) return;
+          recovering = true;
+          queueMicrotask(() => {
+            recovering = false;
+            if (hlsInstance !== instance) return;
             const selectedAt = options.getStartPositionSeconds?.();
             const resumeAt = videoElement.readyState === 0 && Number.isFinite(selectedAt)
-              ? selectedAt
-              : Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : failedAt;
-            try {
-              if (type === HlsClass.ErrorTypes.MEDIA_ERROR) {
-                rebuildMediaAt(resumeAt, `recovered from ${data?.details ?? "a media error"}`);
-              } else {
-                instance.startLoad(resumeAt);
+              ? selectedAt : Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : -1;
+            try { instance.startLoad(resumeAt); }
+            catch (error) {
+              console.warn("[torrent-tv][hls] recoverable request could not restart", error);
+              if (!unrecoverableAnnounced) {
+                unrecoverableAnnounced = true;
+                options.onUnrecoverable?.(data?.details);
               }
-              console.debug(
-                `[torrent-tv][hls] recovered fatal ${type}` +
-                (resumeAt > 0 ? `, resuming at ${resumeAt.toFixed(1)}s` : "")
-              );
-            } catch (recoverError) {
-              console.warn("[torrent-tv][hls] recovery failed", recoverError);
             }
-          }, 1000);
+          });
         };
 
         await new Promise((resolve, reject) => {
-          // What the start-up actually got through. A manifest that times out
-          // says only that nothing arrived; these say WHERE it stopped — and on
-          // 2026-08-15 that was the one thing nobody could tell: the browser
-          // was handed a master playlist, no request for it ever reached the
-          // proxy, and the log held nothing between "attaching" and the
-          // timeout.
-          let reached = "attach requested";
+          // Loading completes on a manifest or a terminal error, without a deadline.
           const noteStage = (stage) => {
-            reached = stage;
             console.debug(`[torrent-tv][hls] start-up: ${stage}`);
           };
-          // Chrome does not open a MediaSource for a HIDDEN page, and hls.js
-          // waits for it to open before it will ask for anything — so a viewer
-          // who looks away while a file is loading gets no manifest, no
-          // request, and this timeout, while a viewer who watches the screen
-          // gets a film. Measured 2026-08-15 in a hidden tab: `sourceopen`
-          // never fires, whatever `preload` says (`metadata`, `auto` and `none`
-          // all leave the source `closed`).
-          //
-          // So the clock does not run while nobody is looking. It starts when
-          // the page is shown, which is also the first moment the browser will
-          // do any of this work.
-          let timeoutId = 0;
-          const startTimeout = () => {
-            instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
-            instance.off(HlsClass.Events.ERROR, onError);
-            stopWatchingTasks();
-            const media = videoElement instanceof HTMLVideoElement ? videoElement : null;
-            console.warn(
-              `[torrent-tv][hls] start-up stopped at "${reached}" — ` +
-              `readyState=${media?.readyState ?? "-"} networkState=${media?.networkState ?? "-"} ` +
-              `src=${media?.src ? (media.src.startsWith("blob:") ? "blob" : "url") : "none"} ` +
-              `error=${media?.error?.code ?? "-"} inDocument=${media ? document.contains(media) : "-"} ` +
-              `url=${manifestUrl.slice(manifestUrl.lastIndexOf("/") + 1)} ` +
-              (canWatchTasks
-                ? `mainThreadBusy=${Math.round(blockedMs)}ms longestTask=${Math.round(longestTaskMs)}ms`
-                : "mainThreadBusy=unmeasured")
-            );
-            document.removeEventListener("visibilitychange", onVisibilityChange);
-            reject(new Error("HLS manifest parsing timed out."));
-          };
-          const armTimeout = () => {
-            window.clearTimeout(timeoutId);
-            timeoutId = window.setTimeout(startTimeout, 10_000);
-          };
-          const onVisibilityChange = () => {
-            if (document.hidden) {
-              // Nothing can progress now; stop counting against it.
-              window.clearTimeout(timeoutId);
-              console.debug("[torrent-tv][hls] page hidden — the browser will not open a media source; waiting");
-              return;
-            }
-            console.debug("[torrent-tv][hls] page shown — start-up can proceed");
-            armTimeout();
-          };
-          document.addEventListener("visibilitychange", onVisibilityChange);
-          if (!document.hidden) {
-            armTimeout();
-          } else {
-            console.debug("[torrent-tv][hls] start-up begins on a hidden page; the clock waits for it to be shown");
-          }
 
           const onManifestParsed = () => {
             noteStage("manifest parsed");
             stopWatchingTasks();
-            window.clearTimeout(timeoutId);
-            document.removeEventListener("visibilitychange", onVisibilityChange);
             manifestReady = true;
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
@@ -1410,8 +1313,6 @@ export function createHlsPlayer(onLog) {
             }
             console.error("[torrent-tv][hls] fatal error", data?.details, data);
             stopWatchingTasks();
-            window.clearTimeout(timeoutId);
-            document.removeEventListener("visibilitychange", onVisibilityChange);
             instance.off(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
             instance.off(HlsClass.Events.ERROR, onError);
             const details = typeof data?.details === "string" ? data.details : "unknown";
@@ -1605,16 +1506,7 @@ export function createHlsPlayer(onLog) {
           // What settles it is where the fragment says it is against what its
           // OWN track's buffer holds, which is what this prints.
           //
-          // Counted on DELIVERY, not on the request. A request is re-issued for
-          // reasons that are not faults and are common here: a segment still
-          // being produced fails and is retried up to twelve times by design
-          // (see `fragLoadPolicy` above, and the reason it is twelve), and a
-          // load aborted by a seek or a rung switch is re-issued too. Counting
-          // requests would print a dozen lines for one warming segment, in
-          // exactly the stretch of log a session is read for. The field case
-          // was 22 SUCCESSFUL deliveries of an identical 64825 bytes, so
-          // counting what arrived catches it and excludes every retry by
-          // construction.
+          // Count successful deliveries; canceled requests have no appended bytes.
           //
           // Keyed by rung as well as track and number, and forgotten whenever
           // the player flushes: a quality switch fetches the same numbers from
@@ -1657,39 +1549,11 @@ export function createHlsPlayer(onLog) {
             const level = instance.levels?.[data?.level];
             const height = Number(level?.height) || 0;
             console.debug(`[torrent-tv][hls] level switched to ${height}p (index ${data?.level})`);
-            // A level nobody here asked for is hls.js moving itself, and it does
-            // that despite the pin. `hls.currentLevel = N` sets
-            // `manualLevelIndex` and the `nextLoadLevel` GETTER honours it — but
-            // the error controller assigns `hls.nextLoadLevel`, and that SETTER
-            // writes the level unconditionally, consulting `manualLevelIndex`
-            // only to decide whether to touch `nextAutoLevel` as well. So one
-            // fragment error steps the viewer down a rung.
-            //
-            // What that costs here is not a slightly softer picture: a rung
-            // below a COPIED source is a full re-encode on somebody's home
-            // machine. Field 2026-08-31 — one `fragLoadError` moved a viewer off
-            // a 1038p copy running at 3.22x onto an encode that ran at 0.71x for
-            // the next fifty minutes, and the picture stood still 161 times.
-            //
-            // Put back, with a bound: hls.js lowers the level to escape an
-            // error, so if the error is real this fights it, and a fight is
-            // worse than either outcome. After MAX_PIN_RESTORES the wander
-            // stands and the line says so.
             if (desiredLevel >= 0 && data?.level !== desiredLevel) {
-              if (pinRestores < MAX_PIN_RESTORES) {
-                pinRestores += 1;
-                console.warn(
-                  `[torrent-tv][hls] level moved to ${height}p (index ${data?.level}) without being asked — ` +
-                  `putting it back to index ${desiredLevel}, attempt ${pinRestores} of ${MAX_PIN_RESTORES}`
-                );
-                instance.currentLevel = desiredLevel;
-                return;
-              }
-              console.warn(
-                `[torrent-tv][hls] level moved to ${height}p (index ${data?.level}) without being asked, ` +
-                `and it has been put back ${MAX_PIN_RESTORES} times already — letting it stand`
-              );
-              desiredLevel = data?.level;
+              console.error("[torrent-tv][hls] unexpected output level", data?.level, desiredLevel);
+              instance.stopLoad();
+              options.onUnrecoverable?.("unexpected-output-level");
+              return;
             }
             // Another rung is another bitrate, so the cushion costs a different
             // number of bytes to hold.

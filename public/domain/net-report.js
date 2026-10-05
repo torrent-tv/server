@@ -136,11 +136,13 @@ function medianLinkReading() {
 export function startNetReporter({
   transport,
   sessionId,
+  reportPath,
   consumerId = "",
   getBufferedAheadSec,
   getBufferLimitSeconds,
   getBufferedRanges,
   getPositionSeconds,
+  getGeneration,
   getPlaying,
   getWaiting,
   getPlayingHeight,
@@ -151,7 +153,7 @@ export function startNetReporter({
   const abortController = new AbortController();
   let probing = false;
   let lastProbeAt = 0;
-  const path = `/api/transcode-sessions/${encodeURIComponent(sessionId)}/net-report`;
+  const path = reportPath ?? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/net-report`;
   const send = () => {
     // The last figure stands when nothing has been measured recently. A viewer
     // who has stopped the picture measures nothing by construction, and their
@@ -196,6 +198,7 @@ export function startNetReporter({
       // A capacity that cannot be read does not invalidate the other viewer
       // measurements, so the report still goes, without it.
       console.warn("[torrent-tv][net-report] buffer limit unreadable:", error);
+
     }
     // Where the picture is. A session is shared by every viewer of a copied
     // stream, and the proxy used to work this out by subtracting the buffer
@@ -309,6 +312,7 @@ export function startNetReporter({
     }
     void transport
       .fetch(path, {
+        signal: abortController.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -323,6 +327,7 @@ export function startNetReporter({
           ...(playingHeight > 0 ? { playingHeight } : {}),
           ...(visiblePicture ? { visiblePicture } : {}),
           ...(consumerId ? { consumerId } : {}),
+          ...(getGeneration ? { generation: getGeneration() } : {}),
           ...(linkMbps === null ? {} : { linkMbps }),
           ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
           ...(linkSampleAt === null ? {} : { linkSampleAt }),

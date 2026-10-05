@@ -263,6 +263,8 @@ const TRANSITIONS = deepFreeze({
   },
 
   [APP_STATE.OPENING]: {
+    [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.OPENING,
+    [APP_EVENT.RESUMED]: APP_STATE.OPENING,
     // A rebuild that finishes while the viewer is paused must land in PAUSED,
     // not start playing at them.
     [APP_EVENT.STREAM_READY]: (context) =>
@@ -270,17 +272,21 @@ const TRANSITIONS = deepFreeze({
   },
 
   [APP_STATE.ADVANCING]: {
+    [APP_EVENT.RESUMED]: APP_STATE.ADVANCING,
     [APP_EVENT.FRAME_BLOCKED]: APP_STATE.STALLED,
     [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.PAUSED
   },
 
   [APP_STATE.STALLED]: {
+    [APP_EVENT.RESUMED]: APP_STATE.STALLED,
     [APP_EVENT.FRAME_AVAILABLE]: (context) =>
       context.viewerWantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING,
     [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.PAUSED
   },
 
   [APP_STATE.SWITCHING]: {
+    [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.SWITCHING,
+    [APP_EVENT.RESUMED]: APP_STATE.SWITCHING,
     // Where the hold ends is decided by what the viewer wanted BEFORE it began.
     // The pause that holds the picture is one of ours and is marked as such, so
     // `viewerWantsPlayback` still carries their last real decision — which is
@@ -291,6 +297,7 @@ const TRANSITIONS = deepFreeze({
   },
 
   [APP_STATE.PAUSED]: {
+    [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.PAUSED,
     [APP_EVENT.RESUMED]: APP_STATE.ADVANCING,
     // Scrubbing while paused DOES want a frame — the target one — so it is a
     // stall like any other. This is why the predicate is "a frame is wanted and
@@ -490,18 +497,19 @@ export function isWaiting(state) {
 }
 
 /**
- * Whether the play control accepts input. False while the picture is held for a
- * change the viewer asked for, and true everywhere else.
- *
- * A separate output, and not something read off {@link mediaIntentForState}:
- * PAUSED says "pause" too, and there the control must work. The two states
- * differ in exactly this, which is what makes the hold a state at all.
+ * Whether the element may start playing. Explicit controls use
+ * acceptsPlaybackIntent instead and remain active during preparation.
  *
  * @param {string} state
  * @returns {boolean}
  */
 export function acceptsPlaybackInput(state) {
   return state !== APP_STATE.SWITCHING;
+}
+
+/** Explicit play/pause intent remains editable while a source is being prepared. */
+export function acceptsPlaybackIntent(state) {
+  return isWithin(state, APP_SUPERSTATE.OPEN);
 }
 
 /**

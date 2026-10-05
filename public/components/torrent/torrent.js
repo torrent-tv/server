@@ -208,12 +208,14 @@ export class Torrent extends StateDerivedView {
     this.#setupElements();
     this.#setupEventHandlers();
     this.visible = true;
-    // Defer URL-source loading to the next macrotask so every other component
-    // (torrent-tv, loading, player) has finished bootstrapping and registered
-    // its event listeners first. Otherwise the MAGNET_READY / FILE_DETAILS_READY
-    // dispatched from #loadFromUrl can fire before anyone listens, and a shared
-    // link opens the picker instead of starting playback.
-    setTimeout(() => { void this.#loadFromUrl(); }, 0);
+    // Module scripts finish before DOMContentLoaded. A timer can run while
+    // another module is still loading and lose the source event entirely.
+    const loadFromUrl = () => { void this.#loadFromUrl(); };
+    if (document.readyState === "complete") {
+      queueMicrotask(loadFromUrl);
+    } else {
+      document.addEventListener("DOMContentLoaded", loadFromUrl, { once: true });
+    }
   }
 
   async #loadFromUrl() {

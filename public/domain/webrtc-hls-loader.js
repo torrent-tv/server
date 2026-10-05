@@ -151,7 +151,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
           callbacks.onError(
             { code: 0, text: syncErr?.message ?? String(syncErr) },
             context,
-            null
+            transportFailure(syncErr)
           );
         }
         return;
@@ -178,9 +178,11 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
             // earlier.
             let said = "";
             let outcome = null;
+            let refusal = null;
             try {
               const body = await response.text();
               const parsed = JSON.parse(body);
+              refusal = parsed;
               said = typeof parsed?.reason === "string" ? parsed.reason : "";
               outcome = outcomeOf(parsed, path);
             } catch {
@@ -201,7 +203,8 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
             callbacks.onError(
               { code: response.status, text: said || `HTTP ${response.status}` },
               context,
-              null
+              { canRetry: typeof refusal?.canRetry === "boolean" ? refusal.canRetry : response.status === 503,
+                reason: said || `HTTP ${response.status}`, status: response.status }
             );
             return;
           }
@@ -301,7 +304,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
           callbacks.onError(
             { code: 0, text: error?.message ?? String(error) },
             context,
-            null
+            transportFailure(error)
           );
         });
     }
@@ -316,4 +319,10 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
       this.abort();
     }
   };
+}
+
+function transportFailure(error) {
+  const waitingTransport = error?.code === "TRANSPORT_LOST";
+  return { canRetry: waitingTransport || error?.canRetry === true || error?.name === "TypeError",
+    waitingTransport, reason: error?.message ?? String(error), code: error?.code ?? null };
 }

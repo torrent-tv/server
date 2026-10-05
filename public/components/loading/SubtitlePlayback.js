@@ -12,7 +12,6 @@ import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/
 
 import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
-const EMBEDDED_SUBTITLE_TIMEOUT_MS = 10 * 60_000;
 const SUBTITLE_POLL_INTERVAL_MS = 5_000;
 const TRACK_READY_STATE_LOADED = 2;
 const TRACK_READY_STATE_ERROR = 3;
@@ -109,6 +108,7 @@ export class SubtitlePlayback {
    * @type {number}
    */
   #subtitleEpoch = 0;
+  #subtitleCancellation = new AbortController();
   /**
    * What the text-track listener needs to follow a track the viewer turns on:
    * the transport, the source and the file being watched RIGHT NOW.
@@ -121,6 +121,7 @@ export class SubtitlePlayback {
    * @type {{ transport: object, sourceKey: string, fileIndex: number } | null}
    */
   #subtitleContext = null;
+  #subtitleSelectionPending = Promise.resolve();
   /**
    * The same for subtitles, with one more state: `{ off: true }`, the viewer
    * having turned them off. Off has to be remembered as a choice of its own,
@@ -244,6 +245,8 @@ export class SubtitlePlayback {
     this.#providerSelection++;
     this.#providerEntries.clear();
     this.#providerStatuses = [];
+    this.#subtitleCancellation.abort(new DOMException("Subtitle file changed.", "AbortError"));
+    this.#subtitleCancellation = new AbortController();
     for (const url of this.#subtitleBlobUrls) {
       URL.revokeObjectURL(url);
     }
@@ -320,6 +323,7 @@ export class SubtitlePlayback {
       }
     }
     this.#logEvent(chosen ? `subtitles: the viewer chose ${chosen}` : "subtitles: the viewer turned them off");
+    this.#reportSubtitleSelection(chosen ? this.#menuEntries.get(chosen) : null);
     this.#publishMenu();
     this.#reportSubtitleCoverage("menu choice");
   }
@@ -354,9 +358,25 @@ export class SubtitlePlayback {
    * @param {number | null} planIndex
    * @returns {void}
    */
-  #addMenuEntry(key, textTrack, planIndex) {
-    this.#menuEntries.set(key, { textTrack, planIndex });
+  #addMenuEntry(key, textTrack, planIndex, fileIndex = this.#subtitleContext?.fileIndex) {
+    this.#menuEntries.set(key, { textTrack, planIndex, fileIndex });
     this.#publishMenu();
+  }
+
+  #reportSubtitleSelection(entry) {
+    const context = this.#subtitleContext;
+    if (!context) return;
+    const epoch = this.#subtitleEpoch;
+      this.#subtitleSelectionPending = this.#subtitleSelectionPending.then(async () => {
+      if (epoch !== this.#subtitleEpoch || context !== this.#subtitleContext) return;
+        const response = await context.transport.fetch("/api/subtitles", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ consumerId: this.#getConsumerId(), sourceKey: context.sourceKey,
+        fileIndex: entry?.fileIndex ?? context.fileIndex, trackIndex: entry?.planIndex ?? null, off: !entry }),
+      signal: this.#subtitleSignal(), timeoutMs: 0
+      });
+        if (response?.ok === false) throw new Error(`Subtitle selection was refused (${response.status}).`);
+    }).catch(error => { if (!isAbortError(error)) console.warn("[torrent-tv][subtitles] selection report failed:", error); });
   }
 
   /** @returns {Array<{ key: string, label: string, showing: boolean }>} */
@@ -414,6 +434,7 @@ export class SubtitlePlayback {
   async loadForVideo(fileIndex) {
     this.clear();
     this.#providers.start(fileIndex);
+    const epoch = this.#subtitleEpoch;
 
     const transport = this.#getTransport();
     if (!transport) {
@@ -431,6 +452,8 @@ export class SubtitlePlayback {
       return;
     }
 
+    if (epoch !== this.#subtitleEpoch) return;
+    this.#subtitleContext = { transport, sourceKey, fileIndex };
     this.#loadEmbeddedSubtitles(fileIndex, transport, sourceKey);
     await this.#loadExternalSubtitles(fileIndex, transport, sourceKey);
   }
@@ -510,6 +533,10 @@ export class SubtitlePlayback {
     }
   }
 
+  #subtitleSignal() {
+    return AbortSignal.any([this.#getAbortSignal(), this.#subtitleCancellation.signal]);
+  }
+
   /**
    * Read the proxy's detected language from a subtitle response's
    * `X-Subtitle-Language` / `X-Subtitle-Language-Name` headers.
@@ -579,7 +606,7 @@ export class SubtitlePlayback {
         // returning it in X-Subtitle-Language. The browser no longer converts.
         const response = await transport.fetch(
           `/api/subtitles?sourceKey=${encodeURIComponent(sourceKey)}&fileIndex=${sub.fileIndex}`,
-          { signal: this.#getAbortSignal(), timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS }
+          { signal: this.#subtitleSignal(), timeoutMs: 0 }
         );
         if (!response.ok) {
           console.warn(
@@ -643,7 +670,7 @@ export class SubtitlePlayback {
         this.#getVideoElement().appendChild(track);
         // What this track IS, for carrying a choice of it to the next episode.
         this.#subtitleIdentities.set(track.track, trackIdentity({ code: info.code, releaser: info.group }));
-        this.#addMenuEntry(`${epoch}:sidecar:${sub.fileIndex}`, track.track, null);
+        this.#addMenuEntry(`${epoch}:sidecar:${sub.fileIndex}`, track.track, null, sub.fileIndex);
         // A subtitle FILE is never the container's choice, so `null` — and the
         // mode reading is registered here too, because a video with only
         // external files never reaches the embedded loader at all.
@@ -894,11 +921,8 @@ export class SubtitlePlayback {
    */
   async #seedEmbeddedTrack({ track, el, fileIndex, transport, sourceKey, epoch, since = null }) {
     try {
-      // The proxy prepares an embedded track in the background and answers
-      // 202 until it is ready — the fallback extraction path, for a container
-      // this side cannot read cluster-by-cluster, makes ffmpeg read the whole
-      // film. Measured 2026-08-19, one track produced 3040 bytes over 752
-      // seconds; asking again is free, the answer is kept once it exists.
+      // Map-driven proxies publish new cues to the registered viewer. Older
+      // proxies without that declaration still require a pull after 202.
       // Everything this page does not already hold. `since` is HANDED IN, never
       // read here: a push landing between the element being created and its
       // load settling would otherwise move the cursor forward before the first
@@ -917,17 +941,18 @@ export class SubtitlePlayback {
         `&consumerId=${encodeURIComponent(this.#getConsumerId())}` +
         (Number.isInteger(since) ? `&since=${since}` : "");
       let response = await transport.fetch(url, {
-        signal: this.#getAbortSignal(),
-        timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
+        signal: this.#subtitleSignal(),
+        timeoutMs: 0
       });
       while (response.status === 202) {
+        if (response.headers.get("x-subtitle-delivery") === "push") return;
         await new Promise((resolve) => { window.setTimeout(resolve, SUBTITLE_POLL_INTERVAL_MS); });
         if (this.#getAbortSignal().aborted || epoch !== this.#subtitleEpoch) {
           return;
         }
         response = await transport.fetch(url, {
-          signal: this.#getAbortSignal(),
-          timeoutMs: EMBEDDED_SUBTITLE_TIMEOUT_MS
+          signal: this.#subtitleSignal(),
+          timeoutMs: 0
         });
       }
       if (epoch !== this.#subtitleEpoch) {
@@ -1358,6 +1383,7 @@ export class SubtitlePlayback {
     const wanted = show ? "showing" : "disabled";
     if (show) {
       this.#subtitleShowingWeApplied = textTrack;
+      this.#reportSubtitleSelection([...this.#menuEntries.values()].find(entry => entry.textTrack === textTrack) ?? null);
     }
     const apply = () => {
       if (epoch !== this.#subtitleEpoch) {
@@ -1457,6 +1483,7 @@ export class SubtitlePlayback {
       return;
     }
     this.#subtitleShowingWeApplied = showing;
+    this.#reportSubtitleSelection([...this.#menuEntries.values()].find(entry => entry.textTrack === showing) ?? null);
     this.#rememberedSubtitle = showing === null
       ? { off: true }
       : this.#subtitleIdentities.get(showing) ?? null;

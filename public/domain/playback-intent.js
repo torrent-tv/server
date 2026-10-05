@@ -13,17 +13,8 @@
  * just paused it one line earlier — and every cold open ended stopped on its
  * first frame.
  *
- * So a pause we cause is marked as ours before it is issued, and the marker is
- * consumed by the `pause` handler that follows.
- *
- * The element can also stop ITSELF: when it fails it pauses, a few
- * milliseconds after its `error` (measured 2026-10-04: `error` at .016,
- * `pause` at .028). Read as the viewer's, that pause put the application in
- * PAUSED, and nothing started the picture again once the player had been
- * rebuilt. A failure is therefore recorded when it happens, and the pause that
- * follows it is the element's.
- *
- * Anything that is neither came from the viewer.
+ * A pause we cause is marked before it is issued. Explicit control requests
+ * record viewer intent; element events never establish who requested a pause.
  */
 
 /**
@@ -137,8 +128,7 @@ export function consumePauseCause(video) {
  * consumes nothing and can wait; a viewer waiting on material is the most
  * urgent there is.
  *
- * Written by whoever handles the element's own `pause` and `playing` events,
- * which is the one place that already knows whether a pause was ours.
+ * Written only by explicit viewer control requests.
  *
  * @type {WeakSet<HTMLVideoElement>}
  */

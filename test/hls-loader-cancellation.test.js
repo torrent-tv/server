@@ -76,3 +76,21 @@ test("any other failure still reaches the player once", async () => {
   assert.equal(requests.length, 1);
   assert.deepEqual(calls, ["error Data channel request timed out."]);
 });
+test("proxy retry decisions and connection loss reach the HLS error controller", async () => {
+  for (const [status, body, expected] of [[500, { reason: "damaged source", canRetry: false }, false],
+    [503, {}, true], [503, { canRetry: true }, true], [503, { canRetry: false }, false]]) {
+    const Loader = createWebRtcHlsLoader({ fetch: async () => ({ ok: false, status, text: async () => JSON.stringify(body) }) });
+    const details = await new Promise(resolve => new Loader().load({ url: "http://webrtc-proxy/segment.mp4" }, {}, {
+      onError: (_error, _context, details) => resolve(details)
+    }));
+    assert.equal(details.canRetry, expected);
+    assert.equal(details.status, status);
+  }
+  const lost = Object.assign(new Error("connection closed"), { code: "TRANSPORT_LOST", canRetry: true });
+  const Loader = createWebRtcHlsLoader({ fetch: async () => { throw lost; } });
+  const details = await new Promise(resolve => new Loader().load({ url: "http://webrtc-proxy/segment.mp4" }, {}, {
+    onError: (_error, _context, details) => resolve(details)
+  }));
+  assert.equal(details.waitingTransport, true);
+  assert.equal(details.canRetry, true);
+});

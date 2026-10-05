@@ -259,13 +259,13 @@ export class ProxySelector {
    * policy) of the connection that just dropped and dial it again.
    *
    * @param {{ proxyId: string, proxyLocalPort: number | null, allowPrivateCandidates: boolean }} descriptor
-   * @param {{ connectTimeoutMs?: number }} [options]
+   * @param {{ connectTimeoutMs?: number, signal?: AbortSignal }} [options]
    * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy`.
    */
-  async reconnectTo({ proxyId, proxyLocalPort, allowPrivateCandidates }, { connectTimeoutMs } = {}) {
+  async reconnectTo({ proxyId, proxyLocalPort, allowPrivateCandidates }, { connectTimeoutMs, signal } = {}) {
     const proxy = new WebRtcProxy(proxyId, proxyLocalPort ?? null, allowPrivateCandidates !== false);
     try {
-      await proxy.connect(connectTimeoutMs);
+      await proxy.connect(connectTimeoutMs, { signal });
     } catch (error) {
       proxy.close();
       throw error;

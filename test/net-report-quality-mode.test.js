@@ -29,6 +29,23 @@ function capture(extra) {
   return body;
 }
 
+test("source reports use the selected file route and are cancelled when replaced", () => {
+  let request;
+  startNetReporter({ transport: { fetch: (path, options) => {
+    request = { path, options };
+    return Promise.resolve();
+  } }, reportPath: "/api/sources/source/files/7/viewer", consumerId: "person",
+  getBufferedAheadSec: () => 8, getPositionSeconds: () => 123,
+  getPlaying: () => false, getWaiting: () => false });
+  reportNow();
+  assert.equal(request.path, "/api/sources/source/files/7/viewer");
+  assert.equal(JSON.parse(request.options.body).positionSeconds, 123);
+  assert.equal(JSON.parse(request.options.body).waiting, false);
+  assert.equal(request.options.signal.aborted, false);
+  stopNetReporter();
+  assert.equal(request.options.signal.aborted, true);
+});
+
 test("every report says the quality is the automatic choice", () => {
   assert.equal(capture({}).qualityMode, "auto");
 });
