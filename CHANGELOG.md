@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The waiting notice's poll no longer leaves an unhandled rejection when a failure ends playback while it waits: a read aborted by the session being torn down is not reported, and any other failed read is said once.
+
 ## 0.37.11
 
 - **Fix**: While the player rebuilds its media source, the proxy is told the position it is rebuilt at. The emptied element reads zero and the report fell back to the last seek made, so the proxy heard the viewer was at 60 s and stuck 74 s behind its buffer while they were at 80 s.

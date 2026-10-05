@@ -594,7 +594,7 @@ export class Loading extends StateDerivedView {
    */
   #statsUnreadable = false;
 
-  /** Same, for the two transcode-progress polls. */
+  /** Same, for the transcode-progress polls. */
   #progressPollFailing = false;
 
   /** Same, for the metadata poll under the waiting interface. */
@@ -1134,10 +1134,30 @@ export class Loading extends StateDerivedView {
     // re-entrant #showBuffering() call's poll can never have its DOM write
     // clobbered by a slower, now-stale response from an earlier one.
     const poll = async () => {
-      const [downloadStats, transcodeProgress] = await Promise.all([
-        this.#fetchBufferingStats(),
-        this.#session.fetchActiveTranscodeProgress()
-      ]);
+      let downloadStats = null;
+      let transcodeProgress = null;
+      try {
+        [downloadStats, transcodeProgress] = await Promise.all([
+          this.#fetchBufferingStats(),
+          this.#session.fetchActiveTranscodeProgress()
+        ]);
+      } catch (error) {
+        // Aborted when the session is torn down under the wait — a failure
+        // that ends playback does exactly that — and then there is nothing
+        // left to read. Any other failure is said once, on the edge, as the
+        // pre-buffer wait does: this poll runs every 1.5 s.
+        if (error?.name === "AbortError" || epoch !== this.#bufferingEpoch) {
+          return;
+        }
+        if (!this.#progressPollFailing) {
+          this.#progressPollFailing = true;
+          console.warn(
+            `[torrent-tv] the transcode progress stopped being readable: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+        return;
+      }
       if (downloadStats) {
         this.#lastDownloadStats = downloadStats;
       }
