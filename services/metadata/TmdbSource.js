@@ -12,6 +12,7 @@
 
 import { readBoundedBody } from "./bounded-body.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
+import { providerFailure, providerResponseError, registerDiagnosticSecret } from "./provider-diagnostics.js";
 
 const API_ROOT = "https://api.themoviedb.org/3";
 
@@ -113,6 +114,7 @@ export class TmdbSource {
    */
   constructor({ token, gate, fetch = globalThis.fetch, now = Date.now }) {
     this.#token = token;
+    registerDiagnosticSecret(token);
     this.#gate = gate;
     this.#fetch = fetch;
     this.#now = now;
@@ -248,22 +250,22 @@ export class TmdbSource {
             signal: AbortSignal.timeout(remaining)
           });
         } catch (error) {
-          throw new MetadataUnavailableError(`the provider did not answer (${error?.name ?? "error"})`);
+          throw new MetadataUnavailableError(`the provider did not answer (${error?.name ?? "error"})`, { cause: error });
         }
         if (response.status === 429) {
-          await response.body?.cancel().catch(() => {});
+          const error = await providerResponseError(response);
+          providerFailure("tmdb", path, error);
           this.#gate.pause(pauseEnd(response, this.#now()));
           return { rateLimited: true };
         }
         if (!response.ok) {
-          await response.body?.cancel().catch(() => {});
-          throw new MetadataUnavailableError(`the provider answered ${response.status}`);
+          throw new MetadataUnavailableError(`the provider answered ${response.status}`, { cause: await providerResponseError(response) });
         }
         const bytes = await readBoundedBody(response, maxBytes);
         try {
           return { body: JSON.parse(bytes.toString("utf8")) };
-        } catch {
-          throw new MetadataUnavailableError("the provider's answer is not JSON");
+        } catch (cause) {
+          throw new MetadataUnavailableError("the provider's answer is not JSON", { cause });
         }
       }, { deadlineAt });
 

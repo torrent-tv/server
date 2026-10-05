@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { SharedFetches } from "../metadata/SharedFetches.js";
 import { subtitleVtt } from "./convert.js";
+import { providerFailure, providerOutcome } from "../metadata/provider-diagnostics.js";
 
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
@@ -57,6 +58,7 @@ export class SubtitleService {
       const parameters = provider.name === "jimaku" ? [query.kind, query.anilistId, query.anilistEpisode ?? null] : [query.kind, query.tmdbId, query.season ?? null, query.episode ?? null];
       const key = `list|${provider.name}|${JSON.stringify(parameters)}`;
       let answer = await this.#cache.get(key);
+      const cacheHit = answer !== undefined;
       try {
         if (answer === undefined) answer = await this.#fetches.join(key, async () => {
           const cached = await this.#cache.get(key);
@@ -68,12 +70,13 @@ export class SubtitleService {
           if (result.status === "partial" && result.items.length) await this.#cache.set(key, result, HOUR);
           return result;
         }, { deadlineAt: Date.now() + 30_000, signal });
+        providerOutcome(provider.name, "subtitle-search", { status: answer.status, cacheHit, count: answer.items.length, tmdbId: query.tmdbId, anilistId: query.anilistId });
         return { provider: provider.name, status: answer.status, items: answer.items.map(item => {
           const { url: _url, ...publicItem } = item;
           return { ...publicItem, token: this.#permit(item) };
         }) };
       } catch (error) {
-        console.warn(`[subtitles] ${provider.name} search unavailable: ${error.httpStatus ?? error.reason ?? error.name}`);
+        providerFailure(provider.name, "subtitle-search", error);
         return { provider: provider.name, status: "unavailable", items: [] };
       }
     }));
@@ -104,7 +107,7 @@ export class SubtitleService {
       }, { deadlineAt: Date.now() + 45_000, signal });
       return { status: "ready", vtt: value.vtt };
     } catch (error) {
-      console.warn(`[subtitles] ${provider.name} download unavailable: ${error.httpStatus ?? error.reason ?? error.name}`);
+      providerFailure(provider.name, "subtitle-download", error);
       return { status: "unavailable" };
     }
   }

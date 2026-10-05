@@ -1,5 +1,6 @@
 import { RequestGate, MetadataUnavailableError } from "../metadata/RequestGate.js";
 import { readBoundedBody } from "../metadata/bounded-body.js";
+import { providerResponseError, registerDiagnosticSecret } from "../metadata/provider-diagnostics.js";
 
 export function retryAt(headers, now = Date.now()) {
   const retry = headers.get("retry-after");
@@ -18,6 +19,7 @@ export class ProviderHttp {
   constructor({ origin, headers, fetch = globalThis.fetch, perSecond = 1 }) {
     this.origin = origin;
     this.headers = { "User-Agent": "TorrentTV v1", ...headers };
+    for (const [name, value] of Object.entries(headers ?? {})) if (/authorization|api-key/iu.test(name)) registerDiagnosticSecret(value);
     this.fetch = fetch;
     // A conservative local ceiling; response headers can require longer pauses.
     this.gate = new RequestGate({ concurrency: 1, perSecond, queueLimit: 16 });
@@ -34,14 +36,12 @@ export class ProviderHttp {
         this.gate.pause(retryAt(response.headers));
       }
       if (!response.ok) {
-        const error = new MetadataUnavailableError(`provider returned ${response.status}`);
+        const cause = await providerResponseError(response);
+        const error = new MetadataUnavailableError(`provider returned ${response.status}`, { cause });
         error.httpStatus = response.status;
         if (response.status === 406) {
-          try {
-            const body = JSON.parse((await readBoundedBody(response, 8192)).toString("utf8"));
-            error.resetAt = Date.parse(body.reset_time_utc) || Date.now() + 24 * 60 * 60_000;
-          } catch { error.resetAt = Date.now() + 24 * 60 * 60_000; }
-        } else await response.body?.cancel();
+          error.resetAt = cause.resetAt || Date.now() + 24 * 60 * 60_000;
+        }
         throw error;
       }
       return JSON.parse((await readBoundedBody(response, 1024 * 1024)).toString("utf8"));
@@ -67,7 +67,7 @@ export class ProviderHttp {
           url = new URL(location, url);
           continue;
         }
-        if (!response.ok) { await response.body?.cancel(); throw new MetadataUnavailableError(`subtitle download returned ${response.status}`); }
+        if (!response.ok) throw new MetadataUnavailableError(`subtitle download returned ${response.status}`, { cause: await providerResponseError(response) });
         return readBoundedBody(response, 4 * 1024 * 1024);
       }
       throw new MetadataUnavailableError("too many download redirects");

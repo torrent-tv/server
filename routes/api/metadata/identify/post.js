@@ -13,6 +13,7 @@
 
 import { LANGUAGE, signalOfRequest } from "../request-signal.js";
 import { parseReleaseName } from "../../../../services/metadata/release-name.js";
+import { withProviderContext, providerOutcome } from "../../../../services/metadata/provider-diagnostics.js";
 
 /** Most names one request may carry. */
 export const MAX_NAMES = 24;
@@ -83,7 +84,7 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
   if (durationSeconds !== null && !(typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= 86_400)) {
     return reply.code(400).send({ error: "durationSeconds must be a positive number of at most 86400 seconds." });
   }
-  const answer = await metadata.identify({
+  const answer = await withProviderContext(req, () => metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
     durationSeconds,
@@ -92,8 +93,10 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
     subtitleEvidence,
     language: body.language,
     signal: signalOfRequest(reply)
-  });
+  }));
   // Counts and the outcome only: the names themselves are not logged.
-  console.log(`[metadata] identify ${answer.status} names=${names.length} in ${Date.now() - started}ms`);
+  withProviderContext(req, () => providerOutcome("metadata", "identify", { status: answer.status, names: names.length,
+    elapsedMs: Date.now() - started, durationSeconds, tmdbId: answer.work?.sources?.tmdb?.tmdbId ?? answer.work?.tmdbId ?? null,
+    selectionReason: answer.work?.sources?.tmdb?.identification ?? answer.work?.identification ?? null }));
   return reply.send({ ...answer, releaseEvidence: names.map(name => parseReleaseName(name)) });
 }

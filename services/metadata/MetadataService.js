@@ -22,6 +22,7 @@ import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, prefe
 import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
+import { providerFailure } from "./provider-diagnostics.js";
 import { normalizeTitle } from "./title.js";
 import { matchesRussianTransliteration, russianSearchSpellings, russianTitleSpellings } from "./russian-transliteration.js";
 
@@ -484,6 +485,9 @@ export class MetadataService {
         return value;
       },
       { ...wait, now: this.#now }
-    );
+    ).catch(error => {
+      providerFailure("tmdb", key.split("|")[0], error);
+      throw error;
+    });
   }
 }

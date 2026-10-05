@@ -5,6 +5,7 @@ import { RequestGate, MetadataUnavailableError } from "./RequestGate.js";
 import { MetadataCache } from "./MetadataCache.js";
 import { readBoundedBody } from "./bounded-body.js";
 import { preferYearMatches } from "./identification.js";
+import { providerFailure, providerResponseError } from "./provider-diagnostics.js";
 
 const QUERY = `query($search:String!, $page:Int!) {
   Page(page:$page, perPage:50) {
@@ -77,7 +78,7 @@ export class AnimeMetadata {
         }
       }));
     } catch (error) {
-      if (error instanceof MetadataUnavailableError) return answer;
+      if (error instanceof MetadataUnavailableError) { providerFailure("anilist", "identify", error); return answer; }
       throw error;
     }
     const found = preferYearMatches([...matches.values()].map(media => ({ media, year: media.startDate?.year })), years).map(({ media }) => media);
@@ -108,16 +109,20 @@ export class AnimeMetadata {
           method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ query: QUERY, variables: { search: title, page: 1 } }), signal: AbortSignal.timeout(4000)
         });
-      } catch { throw new MetadataUnavailableError("AniList did not answer"); }
+      } catch (cause) { throw new MetadataUnavailableError("AniList did not answer", { cause }); }
       if (response.status === 429 || response.headers.get("x-ratelimit-remaining") === "0") {
         const retry = Number(response.headers.get("retry-after"));
         this.#gate.pause(Date.now() + (retry > 0 ? retry : 60) * 1000);
       }
-      if (!response.ok) { await response.body?.cancel(); throw new MetadataUnavailableError("AniList refused the search"); }
+      if (!response.ok) throw new MetadataUnavailableError("AniList refused the search", { cause: await providerResponseError(response) });
       let body;
       try { body = JSON.parse((await readBoundedBody(response, 128 * 1024)).toString("utf8")); }
-      catch { throw new MetadataUnavailableError("AniList returned invalid data"); }
-      if (body.errors || !Array.isArray(body.data?.Page?.media)) throw new MetadataUnavailableError("AniList search was incomplete");
+      catch (cause) { throw new MetadataUnavailableError("AniList returned invalid data", { cause }); }
+      if (body.errors || !Array.isArray(body.data?.Page?.media)) {
+        const cause = new Error("AniList search was incomplete");
+        cause.providerMessage = JSON.stringify(body.errors ?? []);
+        throw new MetadataUnavailableError("AniList search was incomplete", { cause });
+      }
       const result = { media: body.data.Page.media, incomplete: body.data.Page.pageInfo?.hasNextPage !== false };
       await this.#cache.set(title, result, 60 * 60 * 1000);
       return result;
