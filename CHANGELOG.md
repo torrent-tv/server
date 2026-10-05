@@ -3,6 +3,7 @@
 - **Fix**: Reset audio, subtitle, playlist and share controls, artwork and source preferences when a torrent closes or is replaced. Owning classes clear their source state and invalidate pending work while preserving subtitle preferences between episodes of the same torrent.
 
 - **Fix**: Preserve provider HTTP messages, original transport and parsing errors and their causes in bounded, redacted diagnostic logs correlated with API requests and browser sessions. Record subtitle search outcomes and metadata selection reasons without logging credentials or download URLs.
+- **Fix**: Honour the default TMDB rate-limit pause when an HTTP 429 response omits `Retry-After`.
 
 - **Fix**: Continue movie and anime identification through alternative titles, episode names and transliteration regardless of missing or differing years. Use measured source duration to distinguish otherwise ambiguous titles, preserve catalogue IMDb IDs, and discard superseded metadata responses.
 

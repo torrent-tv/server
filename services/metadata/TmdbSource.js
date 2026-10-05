@@ -85,7 +85,7 @@ function imageFile(path) {
 function pauseEnd(response, now) {
   const header = response.headers.get("retry-after");
   const seconds = Number(header);
-  if (Number.isFinite(seconds) && seconds >= 0) {
+  if (header !== null && header.trim() !== "" && Number.isFinite(seconds) && seconds >= 0) {
     return now + seconds * 1000;
   }
   const date = Date.parse(header ?? "");
@@ -267,7 +267,10 @@ export class TmdbSource {
         } catch (cause) {
           throw new MetadataUnavailableError("the provider's answer is not JSON", { cause });
         }
-      }, { deadlineAt });
+      }, { deadlineAt }).catch(error => {
+        providerFailure("tmdb", path, error);
+        throw error;
+      });
 
     const first = await attempt();
     if (!first.rateLimited) {
