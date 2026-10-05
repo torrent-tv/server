@@ -10,6 +10,18 @@ function deferred() {
 const response = (fileIndex, revision = 1) => ({ ok: true, status: 200,
   json: async () => ({ version: 1, state: "available", sourceKey: "source", fileIndex, revision }) });
 
+test("deferred discovery waits until playback starts and activates only once", async () => {
+  let calls = 0;
+  const metadata = new ChapterMetadata(() => {});
+  metadata.select({ sourceKey: "source", fileIndex: 0, defer: true,
+    transport: { fetch: async () => { calls++; return response(0); } } });
+  await metadata.refresh();
+  assert.equal(calls, 0);
+  metadata.activate(); await metadata.reading;
+  metadata.activate();
+  assert.equal(calls, 1);
+});
+
 test("late chapter response cannot replace the newly selected file", async () => {
   const first = deferred(), second = deferred(), published = [];
   const transport = { fetch: (url) => url.endsWith("=0") ? first.promise : second.promise };

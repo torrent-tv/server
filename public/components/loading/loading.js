@@ -805,6 +805,7 @@ export class Loading extends StateDerivedView {
         this.#onPlaybackEventForBuffering(name, pauseCause);
         // Explicit controls own viewer intent; recovery preserves that decision.
         if (name === "playing") {
+          this.#chapters.activate();
           noteElementRecovered(videoElement);
         }
         this.#reportSeekIntent(name, videoElement);
@@ -3613,7 +3614,7 @@ export class Loading extends StateDerivedView {
         sequence: audioMetadataRefreshSeq
       });
     }
-    this.#chapters.select({ sourceKey: prepared.sourceKey, fileIndex, transport });
+    this.#chapters.select({ sourceKey: prepared.sourceKey, fileIndex, transport, defer: true });
     this.#subtitlePlayback.setPlan({
       subtitleTracks: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : [],
       // The files BESIDE this picture that belong to it, paired and read by the
