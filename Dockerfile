@@ -1,19 +1,25 @@
 # syntax=docker/dockerfile:1.7
-FROM node:24-alpine
+
+# Production dependencies are installed with the official image's npm.
+FROM node:24-alpine AS dependencies
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+# The runtime is Alpine with node copied from that image — what the official
+# image itself is, without npm, yarn and corepack, which nothing here runs.
+FROM alpine:3
+RUN apk add --no-cache libstdc++ \
+ && addgroup -S app && adduser -S -G app app
+COPY --from=dependencies /usr/local/bin/node /usr/local/bin/node
 
 ENV NODE_ENV=production
 ENV PORT=8080
 
 WORKDIR /app
-
-# Create an unprivileged runtime user.
-RUN addgroup -S app && adduser -S -G app app
-
-# Install only production dependencies first for better layer caching.
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
-
-# Copy application sources.
+COPY --from=dependencies /app/node_modules ./node_modules
+# .dockerignore names what is copied: the server, its routes and services,
+# public/, the entrypoint and the licence.
 COPY --chown=app:app . .
 
 # Create the volume mount point owned by app so the entrypoint can write to it.

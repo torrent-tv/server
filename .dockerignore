@@ -1,16 +1,22 @@
-node_modules
-npm-debug.log*
-.npm
-.git
-.gitignore
-.cursor
-agent-transcripts
-terminals
-.DS_Store
-Thumbs.db
-coverage
+# The image holds what the server runs and nothing else: every path not named
+# here stays out of the build context.
+*
+!package.json
+!package-lock.json
+!server.js
+!docker-entrypoint.sh
+!LICENSE
+!public
+!routes
+!services
+!store
+!utils
+
+# public/ is copied into the volume nginx serves, so whatever is left in it is
+# published: notes for developers, the file only Chrome DevTools asks for, and
+# media dropped in for local testing stay out.
+public/**/README.md
+public/.well-known
 public/*.mp4
 public/*.mkv
 public/*.avi
-.github
-.githooks
