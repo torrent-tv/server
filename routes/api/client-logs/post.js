@@ -46,12 +46,16 @@ function sanitizeLine(s) {
 /**
  * POST /api/client-logs
  *
- * Body: { sessionId, tag, userAgent, signalSessionId, lines: [{ level, ts, msg }] }
+ * Body: { sessionId, tag, userAgent, signalSessionId, seq, lines: [{ level, ts, msg }] }
  *
  * `signalSessionId` is the WebRTC signalling session id — the same id the
  * proxy prints as `[webrtc] Session <id>` — so a proxy-side session id greps
  * straight to this client's lines. Absent until the page opens a WebRTC
  * session (and it changes on reconnect).
+ *
+ * `seq` numbers the page's sends and is printed as `batch=<seq>`. The proxy
+ * prints the same number, so a batch that reached neither side shows as a gap,
+ * and one the proxy took without being able to acknowledge shows on both.
  *
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
@@ -63,10 +67,11 @@ export async function handleApiClientLogsPost(req, reply) {
   const sessionId = safeString(body.sessionId, MAX_SID_LEN) || "????????";
   const signalSessionId = safeString(body.signalSessionId, MAX_SIGNAL_SID_LEN);
   const lines = Array.isArray(body.lines) ? body.lines.slice(0, MAX_LINES) : [];
+  const batch = Number.isSafeInteger(body.seq) && body.seq > 0 ? ` batch=${body.seq}` : "";
 
   const prefix = signalSessionId
-    ? `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)} sig=${sanitizeLine(signalSessionId)}]`
-    : `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)}]`;
+    ? `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)} sig=${sanitizeLine(signalSessionId)}${batch}]`
+    : `[client ${sanitizeLine(tag)} ${sanitizeLine(sessionId)}${batch}]`;
   for (const line of lines) {
     const entry = line && typeof line === "object" ? line : {};
     const level = safeString(entry.level, 8) || "log";
