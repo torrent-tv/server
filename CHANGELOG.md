@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.3
 
 - **Fix**: Reset audio, subtitle, playlist and share controls, artwork and source preferences when a torrent closes or is replaced. Owning classes clear their source state and invalidate pending work while preserving subtitle preferences between episodes of the same torrent.
 
