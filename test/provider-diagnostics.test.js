@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { errorDetails, providerResponseError, registerDiagnosticSecret, providerFailure, withProviderContext } from "../services/metadata/provider-diagnostics.js";
-import { MetadataUnavailableError } from "../services/metadata/RequestGate.js";
+import { MetadataUnavailableError, RequestGate } from "../services/metadata/RequestGate.js";
 import { TmdbSource } from "../services/metadata/TmdbSource.js";
 import { ProviderHttp } from "../services/subtitles/ProviderHttp.js";
 
@@ -50,4 +50,17 @@ test("request contexts remain separate across concurrent provider failures", asy
     })));
   } finally { console.warn = original; }
   assert.deepEqual(lines.map(line => [line.requestId, line.sessionId]), [["first", "first"], ["second", "second"]]);
+});
+
+test("TMDB applies its default rate pause when Retry-After is missing", async () => {
+  let calls = 0;
+  const now = Date.now();
+  const gate = new RequestGate({ concurrency: 1, perSecond: Infinity, queueLimit: 8 });
+  const source = new TmdbSource({ token: "test-token", gate, fetch: async () => {
+    calls++;
+    return Response.json({ status_message: "Too many requests" }, { status: 429 });
+  } });
+  await assert.rejects(source.search("movie", "Title", "en-US", 1, { deadlineAt: now + 1000 }), MetadataUnavailableError);
+  assert.equal(calls, 1);
+  assert.ok(gate.pausedUntil >= now + 10_000);
 });
