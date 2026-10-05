@@ -1,5 +1,7 @@
 ## Unreleased
 
+- **Fix**: Discover movie subtitles by confirmed IMDb identities when provider records lack TMDB mappings.
+
 - **Fix**: Refine title-qualified candidates by duration after alternative-title discovery.
 
 ## 0.37.6

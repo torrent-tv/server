@@ -12,7 +12,9 @@ export function validateSubtitleQuery(body) {
   if (!positive(body.tmdbId) && !positive(body.anilistId)) return null;
   if (body.tmdbId != null && !positive(body.tmdbId)) return null;
   if (body.anilistId != null && !positive(body.anilistId)) return null;
+  if (body.imdbId != null && (body.kind !== "movie" || !positive(body.tmdbId) || typeof body.imdbId !== "string" || !/^tt\d{1,12}$/u.test(body.imdbId))) return null;
   const query = { kind: body.kind, tmdbId: body.tmdbId ?? null, anilistId: body.anilistId ?? null };
+  if (body.imdbId != null) query.imdbId = body.imdbId;
   if (body.kind === "series") {
     if (body.tmdbId && !(Number.isInteger(body.season) && body.season >= 0 && body.season <= 999 && positive(body.episode) && body.episode <= 9999)) return null;
     if (body.anilistEpisode != null && !(positive(body.anilistEpisode) && body.anilistEpisode <= 9999)) return null;
@@ -55,7 +57,7 @@ export class SubtitleService {
   async search(query, signal) {
     const results = await Promise.all(this.#providers.map(async provider => {
       // Provider-specific keys omit inputs that cannot change that provider's answer.
-      const parameters = provider.name === "jimaku" ? [query.kind, query.anilistId, query.anilistEpisode ?? null] : [query.kind, query.tmdbId, query.season ?? null, query.episode ?? null];
+      const parameters = provider.name === "jimaku" ? [query.kind, query.anilistId, query.anilistEpisode ?? null] : [query.kind, query.tmdbId, query.imdbId ?? null, query.season ?? null, query.episode ?? null];
       const key = `list|${provider.name}|${JSON.stringify(parameters)}`;
       let answer = await this.#cache.get(key);
       const cacheHit = answer !== undefined;
@@ -70,7 +72,7 @@ export class SubtitleService {
           if (result.status === "partial" && result.items.length) await this.#cache.set(key, result, HOUR);
           return result;
         }, { deadlineAt: Date.now() + 30_000, signal });
-        providerOutcome(provider.name, "subtitle-search", { status: answer.status, cacheHit, count: answer.items.length, tmdbId: query.tmdbId, anilistId: query.anilistId });
+        providerOutcome(provider.name, "subtitle-search", { status: answer.status, cacheHit, count: answer.items.length, tmdbId: query.tmdbId, imdbId: query.imdbId ?? null, anilistId: query.anilistId });
         return { provider: provider.name, status: answer.status, items: answer.items.map(item => {
           const { url: _url, ...publicItem } = item;
           return { ...publicItem, token: this.#permit(item) };

@@ -12,6 +12,10 @@ export class OpenSubtitles extends SubtitleProvider {
     if (!query.tmdbId) return { items: [], status: "not-applicable" };
     const params = new URLSearchParams({ tmdb_id: String(query.tmdbId), type: query.kind === "movie" ? "movie" : "episode" });
     if (query.kind !== "movie") { params.set("parent_tmdb_id", String(query.tmdbId)); params.delete("tmdb_id"); params.set("season_number", String(query.season)); params.set("episode_number", String(query.episode)); }
+    if (query.kind === "movie" && query.imdbId) {
+      params.delete("tmdb_id");
+      params.set("imdb_id", query.imdbId.slice(2));
+    }
     const items = [];
     const deadlineAt = Date.now() + 25_000;
     let pages = 1;
