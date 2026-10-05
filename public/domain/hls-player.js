@@ -1147,6 +1147,31 @@ export function createHlsPlayer(onLog) {
         // the playing level that holds the position, so a failure a few frames
         // later in the same fragment is the same place.
         const rebuildsByPlace = new Map();
+        // The element error already acted on, so a second report of the same
+        // one does not count as a second failure.
+        let handledElementError = null;
+        /**
+         * Whether an hls.js error belongs to a failure of the element itself.
+         *
+         * hls.js learns of a failed element through its own appends — a
+         * `SourceBuffer` that refused, a source that has ended — and its
+         * error handling runs before ours. Left to the rules for hls.js's
+         * errors, the same failure was answered by a restart offer, while the
+         * element's own `error` would have been answered by a rebuild at the
+         * position: two answers to one failure. While the element holds an
+         * error, the failure is the element's, and its ladder decides.
+         *
+         * @param {string} details - hls.js's name for the error, for the log.
+         * @returns {boolean} True when the element's failure took it over.
+         */
+        const elementFailureOwns = (details) => {
+          if (!(videoElement instanceof HTMLVideoElement) || videoElement.error === null) {
+            return false;
+          }
+          console.debug(`[torrent-tv][hls] ${details} follows a failure of the media element; its recovery decides`);
+          onElementFailed();
+          return true;
+        };
         /**
          * The media element has failed.
          *
@@ -1160,7 +1185,15 @@ export function createHlsPlayer(onLog) {
           if (hlsInstance !== instance || attachedMedia !== videoElement) {
             return;
           }
-          const failure = describeMediaFailure(videoElement.error);
+          // One failure is handled once, whichever of hls.js and the element
+          // reported it first. An `error` whose error has gone arrived after
+          // the element was given a new source, and is about nothing now.
+          const elementError = videoElement.error;
+          if (elementError === null || elementError === handledElementError) {
+            return;
+          }
+          handledElementError = elementError;
+          const failure = describeMediaFailure(elementError);
           const position = Number.isFinite(videoElement.currentTime) ? videoElement.currentTime : -1;
           const levelIndex = Number.isInteger(instance.currentLevel) && instance.currentLevel >= 0
             ? instance.currentLevel
@@ -1741,8 +1774,10 @@ export function createHlsPlayer(onLog) {
               // player. Reported here and from the non-fatal branch alike —
               // `announceEndedSource` holds the rule about which non-fatal ones
               // count, and the latch that keeps it to one message per player.
-              announceEndedSource(t, details, data);
-              recoverFatal(data);
+              if (!elementFailureOwns(details)) {
+                announceEndedSource(t, details, data);
+                recoverFatal(data);
+              }
             } else {
               // A non-fatal error that names an exception gets the same fields
               // as a fatal one. `bufferAppendError` arrives NON-fatal — hls.js
@@ -1777,7 +1812,9 @@ export function createHlsPlayer(onLog) {
               // at 217.20 s, the media detached, `bufferAppendError` at 0.00,
               // and then three minutes in which the browser requested nothing
               // while the overlay said playback was about to start.
-              announceEndedSource(t, details, data);
+              if (!elementFailureOwns(details)) {
+                announceEndedSource(t, details, data);
+              }
             }
           });
           instance.on(HlsClass.Events.MANIFEST_PARSED, onManifestParsed);
