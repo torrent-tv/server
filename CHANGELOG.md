@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.4
 
 - **Fix**: Apply measured duration and the latest-year selection policy to ambiguous alternative-title matches as well as main titles. Distinguish First Blood from Rambo III despite the latter sharing its Rambo First Blood alias in TMDB.
 
