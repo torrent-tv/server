@@ -1,10 +1,14 @@
 /**
  * @file Receive forwarded browser console logs and write them to the server
- * log, so they are readable with `docker logs` / `ssh do` without copy-pasting
- * eruda output off a phone.
+ * log, so they are readable without copy-pasting eruda output off a phone.
  *
- * Strictly a debugging aid: best-effort, size-capped, no storage. Each line is
- * prefixed with the client's device/browser tag and short session id.
+ * Strictly a debugging aid: best-effort, size-capped, no storage of its own.
+ * Each line is prefixed with `[client `, the client's device/browser tag and
+ * short session id. Where the lines are kept is the host's business: on the
+ * droplet the server logs to the host journal and rsyslog writes these lines to
+ * `/var/log/torrent-tv/client.log`, choosing them by that `[client ` prefix
+ * (`infra/host/logs/30-torrent-tv.conf`, `infra` README "Logs"). Changing the
+ * prefix moves them into `server.log`.
  */
 
 const MAX_LINES = 50;
