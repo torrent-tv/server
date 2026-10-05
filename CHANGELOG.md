@@ -1,4 +1,4 @@
-## Unreleased
+## 0.39.3
 
 - **Fix**: The image holds only what the server runs: the server, its routes and services, `public/`, the entrypoint, the licence and the production dependencies. It carried the whole repository — `.claude/`, `AGENTS.md`, the changelog, `docs/`, `openspec/`, the tests and the lint configuration — and the official image's npm, yarn and corepack; the runtime is now Alpine with node copied from that image. Built on the HA host it is 197 MB against 223 MB (torrent-tv/meta#98).
 - **Fix**: The site no longer publishes the developers' notes in `public/components/**/README.md` and the file only Chrome DevTools asks for: `public/` is copied into the volume nginx serves, and both reached it, answering 200. The entrypoint also emptied that volume with `*`, which leaves names starting with a dot in place, so a file removed from the image under such a name stayed on the site; it now empties it with `find` (torrent-tv/meta#98).
