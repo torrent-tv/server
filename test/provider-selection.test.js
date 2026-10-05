@@ -59,5 +59,13 @@ test("announced provider tracks stay disabled, and a late download cannot undo O
     await playback.loadForVideo(1);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(video.textTracks[0].mode, "disabled");
+    playback.select(menu[0].key);
+    const pendingResetDownload = downloads.at(-1);
+    playback.reset();
+    assert.equal(menu.length, 0);
+    pendingResetDownload(new Response("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nLate\n"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(menu.length, 0);
+    assert.equal(video.textTracks.length, 0);
   } finally { playback?.clear(); Object.assign(globalThis, saved); }
 });
