@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.7
 
 - **Fix**: Discover movie subtitles by confirmed IMDb identities when provider records lack TMDB mappings.
 
