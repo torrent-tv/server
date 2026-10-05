@@ -307,6 +307,7 @@ export class WebRtcProxy {
    * @type {((event: { fileIndex: number, trackIndex: number, cues: object[], language: string, cursor: number | null }) => void) | null}
    */
   onSubtitleCues = null;
+  onChaptersChanged = null;
 
   /** Fire onConnectionLost once, only for losses of an established connection. */
   #fireConnectionLost() {
@@ -978,6 +979,10 @@ export class WebRtcProxy {
     // Unsolicited — not a reply to any request this side made, so it is
     // dispatched before the requestId lookup below (which would find nothing
     // and drop it).
+    if (msg.type === "chapters-changed") {
+      try { this.onChaptersChanged?.(msg); } catch (error) { console.warn("[webrtc-proxy] chapter notification failed:", error); }
+      return;
+    }
     if (msg.type === "subtitle-cues") {
       try {
         this.onSubtitleCues?.({

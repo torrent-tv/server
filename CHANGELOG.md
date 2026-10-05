@@ -253,6 +253,8 @@
 
 - **Fix**: Source registration requires the proxy's map playback contract before preparation. A page assigned to an older proxy reports that it needs an update instead of silently using unsupported preparation requests.
 
+- **New**: Receive file chapter metadata separately from playback preparation, refresh it on proxy notifications and discard responses from previously selected files. Older proxies report unsupported chapter metadata explicitly (torrent-tv/meta#110).
+
 - **Fix**: Resetting source controls during opening preserves the waiting indicator derived from the current application state.
 
 - **Fix**: Playback readiness reports the applied timestamp offset from each actual SourceBuffer together with its held ranges. A demuxer event cannot overwrite a separate audio clock or retain a clock from an earlier buffer.

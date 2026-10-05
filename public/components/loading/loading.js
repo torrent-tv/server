@@ -54,6 +54,7 @@ import { startPageTimings, timed } from "../../domain/page-timings.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
 import { subtitleStartHold } from "../../domain/subtitle-start.js";
+import { ChapterMetadata } from "../../domain/chapter-metadata.js";
 import { mediaInfoHintFromFilename } from "../../domain/release-hints.js";
 import { categoryOfTorrent } from "../../domain/torrent-category.js";
 
@@ -453,6 +454,7 @@ export class Loading extends StateDerivedView {
   /** @type {boolean} Whether the current plan requires an audio track. */
   #audioRequired = false;
   #subtitlePlayback;
+  #chapters = new ChapterMetadata((snapshot) => document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHAPTERS, { detail: snapshot })));
   /** @type {number} The height of the rung the player is playing, as hls.js last switched to (0 = not known yet). */
   #playingHeight = 0;
   // The height an automatic move is being made to right now, so a request
@@ -1816,6 +1818,7 @@ export class Loading extends StateDerivedView {
     this.#qualityPreparation?.abort();
     this.#audioPreparation?.abort();
     this.#playbackTasks.invalidate();
+    this.#chapters.clear();
     this.#cancelRequested = true;
     this.#playbackEpoch += 1;
     this.#seekPosition.reset();
@@ -2087,6 +2090,7 @@ export class Loading extends StateDerivedView {
     this.#playbackEpoch += 1;
     this.#session.abortPendingRequests();
     this.#session.releaseActiveTranscodeSessions({ reason: "cancel" });
+    this.#chapters.clear();
     this.#hlsPlayer.clear();
     this.#subtitlePlayback.clear();
     if (this.#videoElement instanceof HTMLVideoElement) {
@@ -2195,6 +2199,7 @@ export class Loading extends StateDerivedView {
       this.#hlsPlayer.clear();
       this.#subtitlePlayback.clear();
       this.#session.clear();
+      this.#chapters.clear();
       const parsed = this.#session.openParsedTorrentDetails({
         fileName: file.name,
         torrentBytes,
@@ -2762,6 +2767,7 @@ export class Loading extends StateDerivedView {
       this.#hlsPlayer.clear();
       this.#subtitlePlayback.clear();
       this.#session.clear();
+      this.#chapters.clear();
       const current = this.#session.openMagnetDetails({ magnetUri });
       const addressed = this.#addressedRecord();
       this.#recordSourceIntent();
@@ -3381,6 +3387,7 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   async #switchToVideoFile(fileIndex) {
+    this.#chapters.clear();
     if (!(this.#videoElement instanceof HTMLVideoElement)) {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
@@ -3606,6 +3613,7 @@ export class Loading extends StateDerivedView {
         sequence: audioMetadataRefreshSeq
       });
     }
+    this.#chapters.select({ sourceKey: prepared.sourceKey, fileIndex, transport });
     this.#subtitlePlayback.setPlan({
       subtitleTracks: Array.isArray(prepared.subtitleTracks) ? prepared.subtitleTracks : [],
       // The files BESIDE this picture that belong to it, paired and read by the
@@ -4273,6 +4281,8 @@ export class Loading extends StateDerivedView {
     // Subtitle cues, pushed as the proxy reads them off its own download —
     // never polled for. See #onSubtitleCuesPush.
     proxy.onSubtitleCues = (event) => this.#subtitlePlayback.onCues(event);
+    proxy.onChaptersChanged = (event) => this.#chapters.changed(event);
+    if (this.#chapters.selection) void this.#chapters.refresh();
     // Stamp the forwarded log with the connection that is about to carry the
     // session. The connection announces itself as soon as it has an id, which
     // is what covers the connect phase; this is the correction, for the case
