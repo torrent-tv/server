@@ -76,6 +76,18 @@ test("older revisions cannot overwrite an available result", async () => {
   assert.equal(metadata.snapshot.revision, 2);
 });
 
+test("a new cache generation accepts its lower revision after expiry or proxy replacement", async () => {
+  let generation = "first", revision = 9;
+  const metadata = new ChapterMetadata(() => {});
+  metadata.select({ sourceKey: "source", fileIndex: 0, transport: { fetch: async () => ({ ok: true, status: 200,
+    json: async () => ({ version: 1, state: "available", sourceKey: "source", fileIndex: 0, generation, revision }) }) } });
+  await metadata.reading;
+  generation = "second"; revision = 1;
+  await metadata.refresh();
+  assert.equal(metadata.snapshot.generation, "second");
+  assert.equal(metadata.snapshot.revision, 1);
+});
+
 test("a transport error remains recoverable", async () => {
   let failed = true;
   const metadata = new ChapterMetadata(() => {});

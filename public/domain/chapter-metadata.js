@@ -49,7 +49,7 @@ export class ChapterMetadata {
           else if (answer.sourceKey !== selected.sourceKey || answer.fileIndex !== selected.fileIndex) throw new Error("Chapter response does not match selected file");
         }
         if (this.selection !== selected || signal.aborted) return;
-        if (Number.isFinite(answer.revision) && Number.isFinite(this.snapshot?.revision) && answer.revision < this.snapshot.revision) return;
+        if (answer.generation === this.snapshot?.generation && Number.isFinite(answer.revision) && Number.isFinite(this.snapshot?.revision) && answer.revision < this.snapshot.revision) return;
         this.snapshot = answer;
         this.publish(answer);
       } catch (error) {
