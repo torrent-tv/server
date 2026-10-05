@@ -412,29 +412,38 @@ export function pageTitle(state, index) {
   return parts.join(" | ");
 }
 
-/** Width of the poster given to the operating system's media controls. */
-const SYSTEM_ARTWORK_WIDTH = 185;
+/** Widths of the poster renditions the operating system's media controls choose from. */
+const SYSTEM_ARTWORK_WIDTHS = [185, 342, 500, 780];
 
 /**
  * The poster for the operating system's media controls (lock screen, media
- * window), served at `IMAGE_SIZE.artwork`. Every poster at least that wide is
- * equally suitable, so one of them is taken at random; the work's main poster
- * is the answer when the provider listed none.
+ * window). Every poster at least as wide as the smallest rendition is equally
+ * suitable, so one of them is taken at random; the work's main poster is the
+ * answer when the provider listed none.
+ *
+ * The chosen poster is offered in every listed width it is large enough for:
+ * the slot's size and pixel density are the system's, not the page's, so the
+ * system picks the rendition by the `sizes` it is given.
  *
  * @param {MediaInfoState | null} state
  * @param {number} index
  * @param {() => number} [random] - A number in [0, 1), as `Math.random` gives.
- * @returns {{ url: string, sizes: string } | null}
+ * @returns {Array<{ src: string, sizes: string }>}
  */
 export function systemArtwork(state, index, random = Math.random) {
   const work = workFor(state, index);
-  const suitable = (work?.images ?? []).filter(i => (i.role ?? i.kind) === "poster" && i.width >= SYSTEM_ARTWORK_WIDTH);
+  const smallest = SYSTEM_ARTWORK_WIDTHS[0];
+  const suitable = (work?.images ?? []).filter(i => (i.role ?? i.kind) === "poster" && i.width >= smallest);
   const image = suitable[Math.floor(random() * suitable.length)];
-  const url = imageUrl(IMAGE_SIZE.artwork, image?.file ?? work?.poster);
-  if (!url) return null;
-  // The main poster's size is not listed; 278 is the 2:3 height declared for it before.
-  const height = image ? Math.round(SYSTEM_ARTWORK_WIDTH * image.height / image.width) : 278;
-  return { url, sizes: SYSTEM_ARTWORK_WIDTH + "x" + height };
+  if (!image) {
+    // The main poster's size is not listed; 278 is the 2:3 height declared for it before.
+    const src = imageUrl(IMAGE_SIZE.artwork, work?.poster);
+    return src ? [{ src, sizes: smallest + "x278" }] : [];
+  }
+  return SYSTEM_ARTWORK_WIDTHS.filter(width => width <= image.width).map(width => ({
+    src: imageUrl("w" + width, image.file),
+    sizes: width + "x" + Math.round(width * image.height / image.width)
+  })).filter(rendition => rendition.src);
 }
 
 /**
