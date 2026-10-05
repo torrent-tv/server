@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Continue movie and anime identification through alternative titles, episode names and transliteration regardless of missing or differing years. Use measured source duration to distinguish otherwise ambiguous titles, preserve catalogue IMDb IDs, and discard superseded metadata responses.
+
 ## 0.37.2
 
 - **Fix**: Use canonical OpenSubtitles search URLs, omitting the default page and sorting parameters to avoid API redirects while keeping credentials restricted to their origin.

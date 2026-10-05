@@ -4,6 +4,7 @@ import { normalizeTitle } from "./title.js";
 import { RequestGate, MetadataUnavailableError } from "./RequestGate.js";
 import { MetadataCache } from "./MetadataCache.js";
 import { readBoundedBody } from "./bounded-body.js";
+import { preferYearMatches } from "./identification.js";
 
 const QUERY = `query($search:String!, $page:Int!) {
   Page(page:$page, perPage:50) {
@@ -37,8 +38,9 @@ export class AnimeMetadata {
 
   async identify(request) {
     let result = await this.#identify(request);
-    if (result.status === "not-found" && this.#tmdb.identifyTransliterated) {
-      result = await this.#tmdb.identifyTransliterated(request);
+    if (["not-found", "undetermined", "unavailable"].includes(result.status) && this.#tmdb.identifyTransliterated) {
+      const other = await this.#tmdb.identifyTransliterated(request);
+      if (["identified", "ambiguous"].includes(other.status) || result.status === "not-found") result = other;
       if (result.status === "identified" && (hasAnimeHints(request.names) || result.work?.anime)) {
         const enriched = await this.#identify({ ...request, names: [`${result.work.title} ${result.work.year}`], kindHint: result.work.kind });
         if (enriched.status === "identified" && enriched.work?.tmdbId === result.work.tmdbId) result = enriched;
@@ -52,7 +54,7 @@ export class AnimeMetadata {
   async #identify(request) {
     const answer = await this.#tmdb.identify(request);
     const hinted = hasAnimeHints(request.names);
-    if (!hinted && answer.status !== "not-found" && !answer.work?.anime) return answer;
+    if (!hinted && !["not-found", "undetermined", "unavailable"].includes(answer.status) && !answer.work?.anime) return answer;
     const readings = request.names.map(parseReleaseName);
     const years = [...new Set(readings.map(r => r.years?.from).filter(Number.isInteger))];
     if (answer.work?.year && !years.length) years.push(answer.work.year);
@@ -70,7 +72,7 @@ export class AnimeMetadata {
           const exact = names.some(name => normalizeTitle(name) === normalizeTitle(title) ||
             parseReleaseName(name).titles.some(alias => normalizeTitle(alias) === normalizeTitle(title)));
           const kind = media.format === "MOVIE" ? "movie" : "tv";
-          if (exact && Number.isInteger(media.id) && media.format && years.includes(media.startDate?.year) &&
+          if (exact && Number.isInteger(media.id) && media.format &&
             (!request.kindHint || request.kindHint === kind) && (!answer.work?.kind || answer.work.kind === kind)) matches.set(media.id, media);
         }
       }));
@@ -78,20 +80,21 @@ export class AnimeMetadata {
       if (error instanceof MetadataUnavailableError) return answer;
       throw error;
     }
+    const found = preferYearMatches([...matches.values()].map(media => ({ media, year: media.startDate?.year })), years).map(({ media }) => media);
     if (answer.status === "identified") {
-      const media = !incomplete && matches.size === 1 && [...matches.values()].find(m =>
+      const media = !incomplete && found.length === 1 && found.find(m =>
         Object.values(m.title ?? {}).some(n => n && [answer.work.title, answer.work.originalTitle].some(t => normalizeTitle(t) === normalizeTitle(n))));
       return media ? { ...answer, anilist: media } : answer;
     }
-    if (answer.status !== "not-found" || incomplete || matches.size !== 1) return answer;
-    const [media] = matches.values();
+    if (!["not-found", "undetermined", "unavailable"].includes(answer.status) || incomplete || found.length !== 1) return answer;
+    const [media] = found;
     const kind = media.format === "MOVIE" ? "movie" : "tv";
     const names = [media.title.english, media.title.romaji, media.title.native].filter(Boolean).slice(0, 3);
-    const mapped = await this.#tmdb.identify({ ...request, names: names.map(n => `${n} ${media.startDate.year}`), kindHint: kind });
+    const mapped = await this.#tmdb.identify({ ...request, names: names.map(n => [n, media.startDate?.year].filter(value => value != null).join(" ")), kindHint: kind });
     if (mapped.status === "identified") return { ...mapped, anilist: media };
     return { status: "identified", anilist: media, work: { source: "anilist", anilistId: media.id, anime: true, animeFormat: media.format,
       kind, title: media.title.english || media.title.romaji || media.title.native, originalTitle: media.title.native,
-      year: media.startDate.year, seasons: [], poster: null, backdrop: null } };
+      year: media.startDate?.year ?? null, seasons: [], poster: null, backdrop: null } };
   }
 
   async #search(title) {

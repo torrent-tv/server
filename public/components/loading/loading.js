@@ -3020,6 +3020,7 @@ export class Loading extends StateDerivedView {
     }
 
     this.setStatus(Loading.MESSAGES.selectingProxy);
+    const metadataSelection = this.#mediaSelection;
     this.#setPhaseProgress(0, 10); // phase 0 (download) — small floor before stats arrive
     // Cold-start timing (proxy-served flow): t0 = entry, filled through the
     // phases and logged once on a successful prebuffer.
@@ -3113,6 +3114,12 @@ export class Loading extends StateDerivedView {
     }
 
     this.#coldStart.t2 = performance.now();
+    this.#throwIfCancelled();
+    if (Number.isFinite(prepared.durationSeconds) && prepared.durationSeconds > 0) {
+      document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.PROBED, {
+        detail: { selection: metadataSelection, fileIndex, durationSeconds: prepared.durationSeconds }
+      }));
+    }
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 

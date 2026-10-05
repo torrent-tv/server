@@ -91,15 +91,15 @@ test("a remake with no year stated is ambiguous, and the year separates it", () 
   assert.equal(dated.candidates[0].tmdbId, 2);
 });
 
-test("a result with no date is never a candidate", () => {
+test("a missing catalogue date does not exclude an exact title", () => {
   const identity = decideIdentity({ searches: [search("tv", "The Continental", [[19069, "The Continental", null]])], statedYears: [] });
-  assert.equal(identity.status, "not-found");
+  assert.equal(identity.status, "identified");
 });
 
-test("a year one away agrees; two away does not", () => {
+test("a differing year does not exclude the only exact title", () => {
   const results = [[1, "Title", 2016]];
   assert.equal(decideIdentity({ searches: [search("movie", "Title", results)], statedYears: [2017] }).status, "identified");
-  assert.equal(decideIdentity({ searches: [search("movie", "Title", results)], statedYears: [2018] }).status, "not-found");
+  assert.equal(decideIdentity({ searches: [search("movie", "Title", results)], statedYears: [2018] }).status, "identified");
 });
 
 test("a film and a series of one title, with the kind unknown, are ambiguous", () => {
@@ -108,6 +108,15 @@ test("a film and a series of one title, with the kind unknown, are ambiguous", (
     statedYears: []
   });
   assert.equal(identity.status, "ambiguous");
+});
+
+test("latest-year policy is stable and never resolves an incomplete search", () => {
+  const results = [[9, "Title", 2026], [2, "Title", 2026], [1, "Title", 2000]];
+  const decide = status => decideIdentity({ searches: [search("movie", "Title", results, status)], statedYears: [], preferLatest: true });
+  assert.equal(decide("complete").candidates[0].tmdbId, 2);
+  assert.equal(decide("complete").selectionReason, "latest-year");
+  assert.notEqual(decide("failed").status, "identified");
+  assert.notEqual(decide("capped").status, "identified");
 });
 
 test("one candidate while another search failed is not identified", () => {

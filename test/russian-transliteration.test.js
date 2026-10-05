@@ -34,8 +34,8 @@ test("word discovery plus the Russian catalog title identifies Mononoke", async 
   assert.equal(answer.work.tmdbId, 128);
   assert.ok(calls.some(call => call[1] === "mononoke"));
 });
-test("wrong year, ambiguity and incomplete searches cannot identify", async () => {
-  assert.equal((await fixture({ year: 2007 }).service.identifyTransliterated(request)).status, "not-found");
+test("differing years allow transliteration while ambiguity and incomplete searches remain unresolved", async () => {
+  assert.equal((await fixture({ year: 2007 }).service.identifyTransliterated(request)).status, "identified");
   assert.equal((await fixture({ count: 2 }).service.identifyTransliterated(request)).status, "ambiguous");
   assert.equal((await fixture({ capped: true }).service.identifyTransliterated(request)).status, "undetermined");
   assert.equal((await fixture({ count: 6 }).service.identifyTransliterated(request)).status, "undetermined");
@@ -43,7 +43,7 @@ test("wrong year, ambiguity and incomplete searches cannot identify", async () =
 test("explicit subtitle evidence must agree", async () => {
   assert.equal((await fixture().service.identifyTransliterated({ ...request, subtitleEvidence: { titles: [RU], years: [1997] } })).status, "identified");
   assert.equal((await fixture().service.identifyTransliterated({ ...request, subtitleEvidence: { titles: ["Another movie"], years: [1997] } })).status, "not-found");
-  assert.equal((await fixture().service.identifyTransliterated({ ...request, subtitleEvidence: { titles: [], years: [2000] } })).status, "not-found");
+  assert.equal((await fixture().service.identifyTransliterated({ ...request, subtitleEvidence: { titles: [], years: [2000] } })).status, "identified");
 });
 test("a subtitle year can supply missing release evidence", async () => {
   const withoutYear = { ...request, names: ["Princessa.Mononoke.mkv"] };
@@ -92,14 +92,16 @@ test("subtitle evidence excludes dialogue, invalid values and generic series tit
 });
 
 
-test("the wrapper only expands a not-found answer", async () => {
+test("the wrapper expands unresolved answers but retains actual ambiguity and confirmed identities", async () => {
   const { AnimeMetadata } = await import("../services/metadata/AnimeMetadata.js");
   for (const status of ["identified", "ambiguous", "unavailable", "undetermined"]) {
     let expanded = false;
     const wrapper = new AnimeMetadata({ identify: async () => ({ status, work: status === "identified" ? { kind: "movie", title: "Film", year: 1997 } : undefined }),
-      identifyTransliterated: async () => { expanded = true; return { status: "not-found" }; } });
-    await wrapper.identify(request);
-    assert.equal(expanded, false, status);
+      identifyTransliterated: async () => { expanded = true; return { status: "not-found" }; } },
+      { fetch: async () => Response.json({ data: { Page: { pageInfo: { hasNextPage: false }, media: [] } } }), gate: { run: callback => callback() } });
+    const result = await wrapper.identify(request);
+    assert.equal(expanded, ["unavailable", "undetermined"].includes(status), status);
+    assert.equal(result.status, status);
   }
   let expanded = false;
   const wrapper = new AnimeMetadata({ identify: async () => ({ status: "not-found" }),

@@ -39,6 +39,9 @@ export class MediaInfoController {
   #subtitleEvidence = null;
   #subtitleRetried = false;
   #selection = 0;
+  #releaseSequence = 0;
+  #durations = new Map();
+  #durationRetried = false;
 
   /** @type {AbortController | null} */
   #abort = null;
@@ -78,6 +81,7 @@ export class MediaInfoController {
 
   constructor() {
     document.addEventListener(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, this.#onSubtitleEvidence);
+    document.addEventListener(MEDIA_INFO_EVENTS.PROBED, this.#onProbed);
     document.addEventListener(MEDIA_INFO_EVENTS.SELECTED, this.#onSelected);
     document.addEventListener(MEDIA_INFO_EVENTS.CONTENTS, this.#onContents);
     document.addEventListener(MEDIA_INFO_EVENTS.WANT_FILES, this.#onWantFiles);
@@ -115,6 +119,25 @@ export class MediaInfoController {
     if (this.#releaseStatus !== "not-found" || !this.#subtitleEvidence || this.#subtitleRetried) return;
     this.#subtitleRetried = true;
     void this.#identifyRelease(this.#selection, { ...this.#releaseRequest, subtitleEvidence: this.#subtitleEvidence });
+  }
+
+  #onProbed = event => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (detail?.selection !== this.#selection || !this.#filesByIndex.has(detail?.fileIndex) ||
+        !Number.isFinite(detail?.durationSeconds) || detail.durationSeconds <= 0) return;
+    this.#durations.set(detail.fileIndex, detail.durationSeconds);
+    this.#retryWithDuration();
+  };
+
+  #retryWithDuration() {
+    const heuristic = (this.#work?.sources?.tmdb ?? this.#work)?.identification === "latest-year";
+    if (!this.#releaseRequest || (this.#work && !heuristic) || this.#durationRetried || shapeOf(this.#contents) !== "single" ||
+        !(heuristic || ["ambiguous", "undetermined", "unavailable", "not-found"].includes(this.#releaseStatus))) return;
+    const [item] = this.#contents.items ?? [];
+    const durationSeconds = this.#durations.get(item?.fileIndex);
+    if (!durationSeconds || item?.episode) return;
+    this.#durationRetried = true;
+    void this.#identifyRelease(this.#selection, { ...this.#releaseRequest, durationSeconds });
   }
 
   #onContents = (event) => {
@@ -179,6 +202,9 @@ export class MediaInfoController {
     this.#releaseStatus = null;
     this.#subtitleEvidence = null;
     this.#subtitleRetried = false;
+    this.#releaseSequence += 1;
+    this.#durations = new Map();
+    this.#durationRetried = false;
     this.#contents = null;
     this.#filesByIndex = new Map();
     this.#itemsByIndex = new Map();
@@ -197,10 +223,12 @@ export class MediaInfoController {
    * @param {{ names: string[], kindHint: "tv" | "movie" | null }} request
    */
   async #identifyRelease(selection, request) {
+    const sequence = ++this.#releaseSequence;
     const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE });
-    if (selection !== this.#selection) return;
+    if (selection !== this.#selection || sequence !== this.#releaseSequence) return;
     this.#releaseStatus = answer?.status ?? null;
     if (answer?.status !== "identified") {
+      this.#retryWithDuration();
       this.#retryWithSubtitles();
       return;
     }
@@ -216,6 +244,7 @@ export class MediaInfoController {
     }
     this.#work = answer.work;
     this.#publish();
+    this.#retryWithDuration();
     for (const fileIndex of this.#wanted) {
       this.#askSeasonOf(fileIndex);
     }
