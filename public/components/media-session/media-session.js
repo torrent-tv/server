@@ -1,5 +1,5 @@
 import { APP_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
-import { IMAGE_SIZE, episodeLabel, imageUrl, workFor, workLine } from "../../domain/media-info.js";
+import { episodeLabel, systemArtwork, workFor, workLine } from "../../domain/media-info.js";
 
 /**
  * MediaSession integration.
@@ -26,6 +26,12 @@ export class MediaSessionBridge {
   #currentFileIndex = -1;
   /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
   #media = null;
+  /**
+   * The poster chosen for the file being played. `systemArtwork` picks one of
+   * several equally suitable posters at random, so it is asked once per file:
+   * a later answer from the metadata service does not swap it.
+   */
+  #artwork = null;
 
   constructor() {
     if (typeof navigator !== "object" || !("mediaSession" in navigator)) {
@@ -49,6 +55,8 @@ export class MediaSessionBridge {
   /** @param {Event} event */
   #onMediaInfo = (event) => {
     this.#media = event instanceof CustomEvent ? event.detail : null;
+    // `null` starts a new release; nothing chosen for the last one applies.
+    if (!this.#media) this.#artwork = null;
     this.#updateMetadata();
   };
 
@@ -78,7 +86,9 @@ export class MediaSessionBridge {
   #onSetActiveMediaFile = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const fileIndex = Number(detail?.fileIndex);
-    this.#currentFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
+    const next = Number.isInteger(fileIndex) ? fileIndex : -1;
+    if (next !== this.#currentFileIndex) this.#artwork = null;
+    this.#currentFileIndex = next;
     this.#updateMetadata();
     this.#updateTrackHandlers();
   };
@@ -86,6 +96,7 @@ export class MediaSessionBridge {
   #onReset = () => {
     this.#videoFiles = [];
     this.#currentFileIndex = -1;
+    this.#artwork = null;
     navigator.mediaSession.metadata = null;
     navigator.mediaSession.playbackState = "none";
     this.#updateTrackHandlers();
@@ -181,12 +192,13 @@ export class MediaSessionBridge {
     const work = workFor(this.#media, this.#currentFileIndex);
     const match = this.#media?.episodes?.[String(this.#currentFileIndex)] ?? null;
     const title = match ? episodeLabel(match, { withSeason: match.season }) : (workLine(work) ?? fileName);
-    const poster = imageUrl(IMAGE_SIZE.artwork, work?.poster);
+    this.#artwork ??= systemArtwork(this.#media, this.#currentFileIndex);
+    const poster = this.#artwork;
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
         title,
         artist: match ? (workLine(work) ?? MediaSessionBridge.APP_NAME) : MediaSessionBridge.APP_NAME,
-        artwork: poster ? [{ src: poster, sizes: "185x278", type: poster.endsWith(".png") ? "image/png" : "image/jpeg" }] : []
+        artwork: poster ? [{ src: poster.url, sizes: poster.sizes, type: poster.url.endsWith(".png") ? "image/png" : "image/jpeg" }] : []
       });
     } catch {
       // silent-ok: as above — the title shown by the operating system's media

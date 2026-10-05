@@ -412,8 +412,42 @@ export function pageTitle(state, index) {
   return parts.join(" | ");
 }
 
-/** Select an orientation and the smallest sufficient TMDB rendition. */
-export function playerArt(state, index, width, height, dpr = 1) {
+/** Width of the poster given to the operating system's media controls. */
+const SYSTEM_ARTWORK_WIDTH = 185;
+
+/**
+ * The poster for the operating system's media controls (lock screen, media
+ * window), served at `IMAGE_SIZE.artwork`. Every poster at least that wide is
+ * equally suitable, so one of them is taken at random; the work's main poster
+ * is the answer when the provider listed none.
+ *
+ * @param {MediaInfoState | null} state
+ * @param {number} index
+ * @param {() => number} [random] - A number in [0, 1), as `Math.random` gives.
+ * @returns {{ url: string, sizes: string } | null}
+ */
+export function systemArtwork(state, index, random = Math.random) {
+  const work = workFor(state, index);
+  const suitable = (work?.images ?? []).filter(i => (i.role ?? i.kind) === "poster" && i.width >= SYSTEM_ARTWORK_WIDTH);
+  const image = suitable[Math.floor(random() * suitable.length)];
+  const url = imageUrl(IMAGE_SIZE.artwork, image?.file ?? work?.poster);
+  if (!url) return null;
+  // The main poster's size is not listed; 278 is the 2:3 height declared for it before.
+  const height = image ? Math.round(SYSTEM_ARTWORK_WIDTH * image.height / image.width) : 278;
+  return { url, sizes: SYSTEM_ARTWORK_WIDTH + "x" + height };
+}
+
+/**
+ * Select an orientation and the smallest sufficient TMDB rendition.
+ *
+ * Images of the preferred orientation that are large enough for the player are
+ * equally suitable: language and rating do not distinguish them, so one of
+ * them is taken at random. Each call is a new choice; the caller asks once per
+ * load of a file.
+ *
+ * @param {() => number} [random] - A number in [0, 1), as `Math.random` gives.
+ */
+export function playerArt(state, index, width, height, dpr = 1, random = Math.random) {
   const work = workFor(state, index);
   const images = work?.images ?? [];
   const portrait = height > width;
@@ -426,7 +460,8 @@ export function playerArt(state, index, width, height, dpr = 1) {
     if (file) candidates.push({file, kind: file === work?.poster ? "poster" : "backdrop"});
   }
   const sufficient = i => i.width >= width * dpr && i.height >= height * dpr;
-  const image = preferred.find(sufficient) ?? preferred.reduce((best, i) => !best || i.width * i.height > best.width * best.height ? i : best, null) ?? candidates[0];
+  const suitable = preferred.filter(sufficient);
+  const image = suitable[Math.floor(random() * suitable.length)] ?? preferred.reduce((best, i) => !best || i.width * i.height > best.width * best.height ? i : best, null) ?? candidates[0];
   if (!image) return null;
   const need = image.width && image.height ? Math.max(width * dpr, height * dpr * image.width / image.height) : Infinity;
   const role = image.role ?? image.kind;

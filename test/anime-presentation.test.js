@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { AnimeMetadata, hasAnimeHints } from "../services/metadata/AnimeMetadata.js";
 import { normalizeWork } from "../services/metadata/normalize-work.js";
-import { pageTitle, playlistNaming, playerArt } from "../public/domain/media-info.js";
+import { pageTitle, playlistNaming, playerArt, systemArtwork } from "../public/domain/media-info.js";
 import { playlistRows } from "../public/domain/playlist-groups.js";
 
 const anime = { id: 1, title: { english: "Example", romaji: "Example", native: "例" }, synonyms: [], format: "TV", startDate: { year: 2026 } };
@@ -103,11 +103,51 @@ test("a single known season has a group even when all files are at the root", ()
   assert.deepEqual(rows[0].files.map(f=>f.label),["Episode 1","Episode 2"]);
 });
 
+test("artwork is chosen at random among images of the orientation and size needed", () => {
+  const state={work:normalizeWork({...tmdb,images:[
+    {kind:"backdrop",file:"backdropsmall.jpg",width:640,height:360},
+    {kind:"backdrop",file:"backdropfirst.jpg",width:1920,height:1080},
+    {kind:"poster",file:"poster1234.jpg",width:2000,height:3000},
+    {kind:"backdrop",file:"backdropsecond.jpg",width:3840,height:2160},
+    {kind:"backdrop",file:"backdropthird.jpg",width:1280,height:720}
+  ]})};
+  const chosen=random=>playerArt(state,0,800,450,1,random).url.split("/").pop();
+  // Only the three backdrops large enough for 800x450 take part, each with an
+  // equal share of the range, in the order the server sent them.
+  assert.equal(chosen(() => 0),"backdropfirst.jpg");
+  assert.equal(chosen(() => 0.34),"backdropsecond.jpg");
+  assert.equal(chosen(() => 0.99),"backdropthird.jpg");
+});
+
+test("the system media controls get a random poster at least as wide as their slot", () => {
+  const state={work:normalizeWork({...tmdb,poster:"mainposter.jpg",images:[
+    {kind:"poster",file:"postertiny.jpg",width:150,height:225},
+    {kind:"backdrop",file:"backdropwide.jpg",width:1920,height:1080},
+    {kind:"poster",file:"posterfirst.jpg",width:1000,height:1500},
+    {kind:"poster",file:"postersecond.jpg",width:680,height:1000}
+  ]})};
+  assert.deepEqual(systemArtwork(state,0,() => 0),{url:"/api/metadata/image/w185/posterfirst.jpg",sizes:"185x278"});
+  assert.deepEqual(systemArtwork(state,0,() => 0.99),{url:"/api/metadata/image/w185/postersecond.jpg",sizes:"185x272"});
+  // A work with no listed posters keeps its main one.
+  const plain={work:normalizeWork({...tmdb,poster:"mainposter.jpg"})};
+  assert.deepEqual(systemArtwork(plain,0,() => 0),{url:"/api/metadata/image/w185/mainposter.jpg",sizes:"185x278"});
+  assert.equal(systemArtwork(null,0),null);
+});
+
+test("without a large enough image the largest of the orientation is kept", () => {
+  const state={work:normalizeWork({...tmdb,images:[
+    {kind:"backdrop",file:"backdropsmall.jpg",width:640,height:360},
+    {kind:"backdrop",file:"backdroplarger.jpg",width:1280,height:720}
+  ]})};
+  assert.equal(playerArt(state,0,1920,1080,1,() => 0).url,"/api/metadata/image/original/backdroplarger.jpg");
+});
+
 test("artwork chooses orientation and the smallest sufficient size for density", () => {
   const state={work:normalizeWork({...tmdb,images:[{kind:"poster",file:"poster1234.jpg",width:1000,height:1500},{kind:"backdrop",file:"backdrop12.jpg",width:1920,height:1080}]})};
   assert.equal(playerArt(state,0,400,700,1).url,"/api/metadata/image/w500/poster1234.jpg");
   assert.equal(playerArt(state,0,800,450,1).url,"/api/metadata/image/w1280/backdrop12.jpg");
   assert.equal(playerArt(state,0,800,450,2).url,"/api/metadata/image/original/backdrop12.jpg");
+  assert.equal(playerArt(state,0,400,700,1,() => 0.99).url,"/api/metadata/image/w500/poster1234.jpg");
   assert.ok(hasAnimeHints(["Example OVA"]));
   assert.equal(hasAnimeHints(["Example S02E12"]),false);
 });

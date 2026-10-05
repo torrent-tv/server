@@ -139,6 +139,9 @@ export class Player extends StateDerivedView {
     if (belongsOnScreen) {
       this.#logEvt(`view=player shown state=${state}`);
     }
+    // The player has a size only once it is on screen, and the picture is
+    // chosen for that size.
+    if (belongsOnScreen && !this.onScreen) this.#applyPoster();
     // Whether the viewer is waiting is a property of the state. The text beside
     // the spinner is not — it is measured (peers, speed) and keeps arriving on
     // PLAYER:SET_BUFFERING.
@@ -512,16 +515,36 @@ export class Player extends StateDerivedView {
   /** The file being played or loaded, for its picture. */
   #activeFileIndex = -1;
 
+  /**
+   * The picture chosen for the current load of a file. `playerArt` picks one
+   * of several equally suitable images at random, so it is asked once per load:
+   * a later answer from the metadata service does not swap a picture the
+   * viewer is already looking at.
+   */
+  #loadArt = null;
+
   /** @param {CustomEvent} event */
   #onMediaInfo = (event) => {
     this.#media = event instanceof CustomEvent ? event.detail : null;
+    // `null` starts a new release; nothing chosen for the last one applies.
+    if (!this.#media) this.#loadArt = null;
     this.#applyPoster();
+  };
+
+  /** @param {CustomEvent} event */
+  #onFileChosenForPoster = (event) => {
+    // A new load of a file begins, so a new picture is chosen for it.
+    this.#loadArt = null;
+    this.#onActiveFileForPoster(event);
   };
 
   /** @param {CustomEvent} event */
   #onActiveFileForPoster = (event) => {
     const fileIndex = Number(event instanceof CustomEvent ? event.detail?.fileIndex : NaN);
-    this.#activeFileIndex = Number.isInteger(fileIndex) ? fileIndex : -1;
+    const next = Number.isInteger(fileIndex) ? fileIndex : -1;
+    // The same load confirmed once it is ready keeps its picture.
+    if (next !== this.#activeFileIndex) this.#loadArt = null;
+    this.#activeFileIndex = next;
     this.#applyPoster();
   };
 
@@ -533,7 +556,12 @@ export class Player extends StateDerivedView {
   #applyPoster() {
     const poster = document.querySelector("#player__poster");
     const rect = this.#video.getBoundingClientRect();
-    const art = playerArt(this.#media, this.#activeFileIndex, rect.width, rect.height, window.devicePixelRatio);
+    // Chosen only once the player has a size: a choice made off screen would
+    // fit no screen, and it is kept for the whole load.
+    if (!this.#loadArt && rect.width > 0 && rect.height > 0) {
+      this.#loadArt = playerArt(this.#media, this.#activeFileIndex, rect.width, rect.height, window.devicePixelRatio);
+    }
+    const art = this.#loadArt;
     if (!art?.url) { poster.hidden = true; poster.removeAttribute("src"); return; }
     const fit = () => {
       if (poster.getAttribute("src") !== art.url) return;
@@ -622,7 +650,7 @@ export class Player extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_SHARE_LINK, this.#onSetShareLink);
     document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfo);
-    document.addEventListener(LOADING_EVENTS.FILE_CHOSEN, this.#onActiveFileForPoster);
+    document.addEventListener(LOADING_EVENTS.FILE_CHOSEN, this.#onFileChosenForPoster);
     document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onActiveFileForPoster);
     this.#share.addEventListener("click", this.#onShareClick);
     this.#shareMenu.addEventListener("click", this.#onShareMenuClick);
