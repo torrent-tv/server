@@ -177,7 +177,11 @@ export const APP_EVENT = Object.freeze({
   FRAME_BLOCKED: "FRAME_BLOCKED",
   /** The wanted frame arrived. */
   FRAME_AVAILABLE: "FRAME_AVAILABLE",
-  /** The viewer stopped playback. Mirrors the media element, never decides it. */
+  /**
+   * The viewer stopped playback. Mirrors the media element, never decides it —
+   * and only a pause the viewer caused: not one of ours, and not the one the
+   * element makes when it fails.
+   */
   PAUSED_BY_VIEWER: "PAUSED_BY_VIEWER",
   /** The viewer started playback again. */
   RESUMED: "RESUMED",
@@ -212,9 +216,14 @@ export const APP_EVENT = Object.freeze({
  * Extended state — the variables transitions are allowed to consult. Everything
  * here was deliberately NOT made a state.
  *
- * `viewerWantsPlayback` mirrors the media element (`!video.paused`); the element owns
- * the fact and the machine only projects it, so there is one source of truth and
- * not two. It decides where a stream that has just become ready goes: a viewer
+ * `viewerWantsPlayback` is the viewer's last decision, recorded from the media
+ * element's `pause` and `playing` by whoever handles them, and only from a
+ * pause the viewer caused (`playback-intent.js`). It is NOT `!video.paused`:
+ * the element is also paused when we stop it and when it stops itself after
+ * failing, and read that way a picture rebuilt after a failure ended a stall in
+ * PAUSED with nobody to start it (2026-10-04). The machine only projects the
+ * fact, so there is one source of truth and not two. It decides where a stream
+ * that has just become ready, or a stall that has just ended, goes: a viewer
  * who paused during a rebuild must not have their pause overridden by the
  * rebuild finishing.
  *
@@ -229,7 +238,8 @@ export const APP_EVENT = Object.freeze({
  *
  * @typedef {object} StateContext
  * @property {boolean} [viewerWantsPlayback] - Whether the viewer wants the
- *   picture to move — `!video.paused`. Defaults to true.
+ *   picture to move — their own last decision, not `!video.paused`. Defaults
+ *   to true.
  */
 
 /**

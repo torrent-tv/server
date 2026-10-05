@@ -3,7 +3,15 @@ import { SeekPosition } from "../../domain/seek-position.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
-import { consumeOurPause, noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
+import {
+  consumePauseCause,
+  noteElementFailed,
+  noteElementRecovered,
+  noteViewerStopped,
+  PAUSE_CAUSE,
+  pauseWithoutIntent
+} from "../../domain/playback-intent.js";
+import { describeMediaFailure } from "../../domain/media-failure.js";
 import { measureLink, reportNow } from "../../domain/net-report.js";
 import { onProxyOutcome, outcomeBelongsTo } from "../../domain/proxy-outcome.js";
 import { VisiblePictureWatch } from "../../domain/visible-picture.js";
@@ -740,20 +748,30 @@ export class Loading extends StateDerivedView {
     for (const name of ["seeking", "seeked", "waiting", "playing", "pause", "ended", "stalled", "error"]) {
       videoElement.addEventListener(name, () => {
         log(name);
-        this.#onPlaybackEventForBuffering(name);
+        // Who caused a pause decides everything that follows it, so it is
+        // asked once, before anything reacts.
+        const pauseCause = name === "pause" ? consumePauseCause(videoElement) : null;
+        if (name === "error") {
+          this.#onMediaElementFailed(videoElement);
+        }
+        this.#onPlaybackEventForBuffering(name, pauseCause);
         // The viewer stopping or restarting playback is a state of the
         // application, not merely of the element. Mirrored, never decided here:
         // the element owns the fact and this reports it.
         if (name === "pause") {
-          // A pause we caused ourselves is not a decision by the viewer.
-          if (!consumeOurPause(videoElement)) {
+          // A pause we caused ourselves is not a decision by the viewer, and
+          // neither is the one the element makes when it fails.
+          if (pauseCause === PAUSE_CAUSE.VIEWER) {
             this.#viewerPaused = true;
             noteViewerStopped(videoElement, true);
             signalApp(APP_EVENT.PAUSED_BY_VIEWER, { viewerWantsPlayback: false });
+          } else if (pauseCause === PAUSE_CAUSE.ELEMENT) {
+            this.#logEvt("the element stopped itself after failing — not the viewer's pause");
           }
         } else if (name === "playing") {
           this.#viewerPaused = false;
           noteViewerStopped(videoElement, false);
+          noteElementRecovered(videoElement);
           signalApp(APP_EVENT.RESUMED, { viewerWantsPlayback: true });
         }
         this.#reportSeekIntent(name, videoElement);
@@ -915,6 +933,27 @@ export class Loading extends StateDerivedView {
       this.#seekEventPosition = null;
       return;
     }
+    // OUR OWN MOVE IS NOT SOMEBODY'S DECISION.
+    //
+    // hls.js moves `currentTime` when a fragment lands with a gap before it,
+    // and a rebuild of the media source puts the element back where it was;
+    // the element fires `seeking` exactly as it does for a person dragging the
+    // time bar. Reported as a seek, that moves the priority map and through it
+    // every encoder — for every viewer of that film, not only this one. Field
+    // 2026-09-06: eight seek requests against one action by a person, the
+    // other seven all following a jump over a hole this proxy had itself
+    // created. A rebuild reported as a seek would also stop the load that is
+    // putting the picture back.
+    //
+    // Asked now, while `currentTime` still names where the move goes: after
+    // the debounce a rebuilt picture may already be playing on from there.
+    // The position is still updated by the ordinary reports; what is withheld
+    // is the claim that somebody chose to go there.
+    const ownMove = this.#hlsPlayer?.wasOwnMove?.(videoElement.currentTime) ?? null;
+    if (ownMove !== null) {
+      this.#logEvt(`${ownMove} (${videoElement.currentTime.toFixed(1)}s) — not reported as a seek`);
+      return;
+    }
     if (this.#seekReportTimer !== null) {
       clearTimeout(this.#seekReportTimer);
     }
@@ -922,22 +961,6 @@ export class Loading extends StateDerivedView {
       this.#seekReportTimer = null;
       const position = videoElement.currentTime;
       if (!Number.isFinite(position)) {
-        return;
-      }
-      // OUR OWN JUMP IS NOT SOMEBODY'S DECISION.
-      //
-      // hls.js moves `currentTime` when a fragment lands with a gap before it,
-      // and the media element fires `seeking` exactly as it does for a person
-      // dragging the time bar. Reported as a seek, that moves the priority map
-      // and through it every encoder — for every viewer of that film, not only
-      // this one. Field 2026-09-06: eight seek requests against one action by a
-      // person, the other seven all following a jump over a hole this proxy had
-      // itself created.
-      //
-      // The position is still updated by the ordinary reports; what is withheld
-      // is the claim that somebody chose to go there.
-      if (this.#hlsPlayer?.wasOwnJump?.(position)) {
-        this.#logEvt(`jumped its own hole to ${position.toFixed(1)}s — not reported as a seek`);
         return;
       }
       // The control's explicit request already owns this position. Native
@@ -960,22 +983,31 @@ export class Loading extends StateDerivedView {
   /**
    * Map a raw <video> event to the mid-playback buffering notice. A stall or a
    * seek (`waiting`/`stalled`/`seeking`) schedules the notice after a short
-   * debounce; a resume or a stop (`playing`/`seeked`/`pause`/`ended`/`error`)
-   * clears it. `seeking` is included so a seek into not-yet-downloaded data
-   * shows the spinner even while paused (scrubbing on a paused player).
+   * debounce; a resume or a stop (`playing`/`seeked`/`pause`/`ended`) clears
+   * it. `seeking` is included so a seek into not-yet-downloaded data shows the
+   * spinner even while paused (scrubbing on a paused player). A failure of the
+   * element, and the pause it makes, clear nothing: the frame is still wanted.
    *
    * @param {string} name
+   * @param {string | null} [pauseCause] - Who caused a `pause` (`PAUSE_CAUSE`).
    * @returns {void}
    */
-  #onPlaybackEventForBuffering(name) {
+  #onPlaybackEventForBuffering(name, pauseCause = null) {
     if (name === "waiting" || name === "stalled" || name === "seeking") {
       this.#scheduleBufferingCheck();
       return;
     }
-    // `seeked` = the seek genuinely completed (data arrived); terminal states
-    // always clear.
-    if (name === "seeked" || name === "ended" || name === "error") {
+    // `seeked` = the seek genuinely completed (data arrived); `ended` is
+    // terminal. `error` is not: a failed element is either being rebuilt or
+    // handed to the restart, and whichever of the two runs decides what is
+    // shown (`#onMediaElementFailed`).
+    if (name === "seeked" || name === "ended") {
       this.#clearBuffering();
+      return;
+    }
+    // The pause a failing element makes is not the picture becoming
+    // available: the frame is still wanted and is not there.
+    if (name === "pause" && pauseCause === PAUSE_CAUSE.ELEMENT) {
       return;
     }
     // A pause/resume toggled WHILE a seek is still pending must NOT hide the
@@ -1278,9 +1310,12 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#bufferingSignalled = active;
-    const video = this.#videoElement;
+    // The viewer's own decision, not `!video.paused`: the element is also
+    // paused when we stopped it or when it stopped itself after failing, and
+    // read that way a picture rebuilt after a failure landed in PAUSED with
+    // nobody to start it.
     signalApp(active ? APP_EVENT.FRAME_BLOCKED : APP_EVENT.FRAME_AVAILABLE, {
-      viewerWantsPlayback: video instanceof HTMLVideoElement ? !video.paused : true
+      viewerWantsPlayback: this.#viewerWantsPlayback()
     });
   }
 
@@ -1570,9 +1605,11 @@ export class Loading extends StateDerivedView {
   #viewerPaused = false;
 
   /**
-   * Whether the viewer wants the picture to move — read from the element, which
-   * owns the fact. Sent with a stream that has just become usable so a rebuild
-   * finishing under a pause does not start playing at someone who stopped it.
+   * Whether the viewer wants the picture to move — their last decision, taken
+   * from the element's `pause` and `playing` events whose cause was the viewer.
+   * Sent with a stream that has just become usable, and with the end of a
+   * stall, so a rebuild finishing under a pause does not start playing at
+   * someone who stopped it, and one finishing after a failure does.
    *
    * @returns {boolean}
    */
@@ -5027,6 +5064,7 @@ export class Loading extends StateDerivedView {
             // no guard: a fault from an abandoned attempt's player would then be
             // able to kill the live one.
             onUnrecoverable: (details) => this.#onPlayerUnrecoverable(details, playerEpoch),
+            onMediaRebuild: () => this.#onMediaRebuild(playerEpoch),
             ...playOptions,
             attemptId: playerEpoch
           }),
@@ -5880,7 +5918,61 @@ export class Loading extends StateDerivedView {
     }
     this.#logEvt(`player cannot continue (${details}) — offering a restart`);
     const error = this.#armRetryableStall(this.#activeFileIndex, Loading.MESSAGES.playerCannotContinue);
+    if (epoch === this.#playbackEpoch) {
+      // A rebuild that came before this may have the waiting notice up and its
+      // poll running. Both end here, without telling the machine the picture
+      // is back: it is not, and the failure below is what it is told.
+      this.#playbackLive = false;
+      this.#clearBuffering();
+    }
     this.#failPlayback(epoch, { description: error.message, canRetry: true });
+  }
+
+  /**
+   * The media element failed, whoever owns its source.
+   *
+   * Its own code and message are the only statement of the cause there is, so
+   * they are written down first. Who acts on the failure depends on who feeds
+   * the element: an hls.js player rebuilds its media source at the position
+   * where it failed (`hls-player.js`, `onElementFailed`) and says so through
+   * `onMediaRebuild`; native HLS and a directly played file have nothing that
+   * could rebuild them, so the stream is restarted through the same offer as
+   * any player that cannot continue.
+   *
+   * @param {HTMLVideoElement} videoElement
+   * @returns {void}
+   */
+  #onMediaElementFailed(videoElement) {
+    const failure = describeMediaFailure(videoElement.error);
+    this.#logEvt(
+      `media element failed: ${failure.kind} (code ${failure.code ?? "-"}) "${failure.message}" ` +
+      `at ${videoElement.currentTime.toFixed(2)}s readyState=${videoElement.readyState} ` +
+      `networkState=${videoElement.networkState}`
+    );
+    // The pause the element makes next is its own, not the viewer's.
+    noteElementFailed(videoElement);
+    if (!this.#hlsPlayer.isActive()) {
+      this.#onPlayerUnrecoverable(`media element ${failure.kind} failure`, this.#playbackEpoch);
+    }
+  }
+
+  /**
+   * The player is rebuilding a failed element's source at the position where
+   * it failed. A frame is wanted and is not there, which is a stall: the
+   * waiting notice is shown and the machine goes to STALLED. When the picture
+   * is back, the ordinary end of a stall starts it again if the viewer had not
+   * stopped it — which is why that end carries the viewer's decision and not
+   * `!video.paused`.
+   *
+   * @param {number} epoch - The attempt the player belongs to.
+   * @returns {void}
+   */
+  #onMediaRebuild(epoch) {
+    if (epoch !== this.#playbackEpoch || !this.#playbackLive) {
+      return;
+    }
+    this.#logEvt("player rebuilding the failed element at its position");
+    void this.#showBuffering();
   }
 
   #noteEffectiveQuality(progress) {
