@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: The page no longer asks the browser for viewport and pixel density client hints. Nothing read them: the page measures the viewport itself, in every browser.
+
 ## 0.39.0
 
 - **New**: The page asks the browser for client hints of the viewport and pixel density (`Sec-CH-Viewport-Width`, `Sec-CH-Viewport-Height`, `Sec-CH-DPR`). Browsers that implement them state these on every later request; the others send nothing.

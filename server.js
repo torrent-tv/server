@@ -173,15 +173,8 @@ await app.register(fastifyStatic, {
   // @fastify/static v10 changed the setHeaders callback to receive the Fastify
   // reply (was the raw ServerResponse in v9), so use reply.header(), not
   // res.setHeader().
-  setHeaders: (reply, path) => {
+  setHeaders: (reply) => {
     reply.header("Cache-Control", "no-cache, must-revalidate");
-    // Asks the browser to state the viewport and its pixel density on every
-    // later request, so the server knows the size a picture is shown at. Only a
-    // document's answer is read for this; browsers that do not implement client
-    // hints send nothing, and the page measures the viewport itself.
-    if (path.endsWith(".html")) {
-      reply.header("Accept-CH", "Sec-CH-Viewport-Width, Sec-CH-Viewport-Height, Sec-CH-DPR");
-    }
   }
 });
 await app.register(fastifyStatic, {
