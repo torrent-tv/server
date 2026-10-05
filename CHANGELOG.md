@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Send canonical numeric IMDb IDs to OpenSubtitles to avoid redirects for older titles.
+
 ## 0.37.7
 
 - **Fix**: Discover movie subtitles by confirmed IMDb identities when provider records lack TMDB mappings.

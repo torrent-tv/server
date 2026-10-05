@@ -150,3 +150,14 @@ test("confirmed movie IMDb identities reach OpenSubtitles without reusing empty 
   assert.equal((await service.search(confirmed)).providers[0].items.length, 1);
   assert.deepEqual(addresses, ["?tmdb_id=1062722&type=movie", "?imdb_id=1312221&type=movie"]);
 });
+
+
+test("OpenSubtitles receives numeric IMDb IDs without redirect-producing leading zeros", async () => {
+  let address;
+  const provider = new OpenSubtitles({ key: "fake", fetch: async url => {
+    address = url;
+    return json({ total_pages: 1, data: [] });
+  } });
+  await provider.search({ kind: "movie", tmdbId: 1368, imdbId: "tt0083944" });
+  assert.equal(address.search, "?imdb_id=83944&type=movie");
+});
