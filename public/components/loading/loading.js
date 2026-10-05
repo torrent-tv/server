@@ -2066,10 +2066,7 @@ export class Loading extends StateDerivedView {
         parsed.isMultiFile = files.length > 1;
       }
       this.#announceMediaContents(mediaSelection, contents, parsed.files);
-      window.__ttvClientLogger?.setFilm?.({
-        name: typeof parsed.name === "string" ? parsed.name : "",
-        infoHash: typeof parsed.infoHashHex === "string" ? parsed.infoHashHex : ""
-      });
+      this.#nameTheFilmInTheLog(parsed.name, parsed.infoHashHex);
       const mediaFiles = mediaFilesFrom(parsed.files, contents?.items);
       this.#subtitlePlayback.setTorrentSubtitleFiles(mediaFiles.subtitles);
       const debugState = getDebugState();
@@ -2208,6 +2205,25 @@ export class Loading extends StateDerivedView {
       })
     );
     return this.#mediaSelection;
+  }
+
+  /**
+   * Tell this page's log which torrent is being watched, so the log file the
+   * proxy keeps is named after it.
+   *
+   * Called by both ways a torrent arrives. Only the `.torrent` file path used
+   * to call it, so every viewing opened from a magnet link — the demo film and
+   * every shared link — left a file named `no-torrent-yet` on the proxy.
+   *
+   * @param {unknown} name
+   * @param {unknown} infoHash
+   * @returns {void}
+   */
+  #nameTheFilmInTheLog(name, infoHash) {
+    window.__ttvClientLogger?.setFilm?.({
+      name: typeof name === "string" ? name : "",
+      infoHash: typeof infoHash === "string" ? infoHash : ""
+    });
   }
 
   /**
@@ -2411,6 +2427,7 @@ export class Loading extends StateDerivedView {
       current.isMultiFile = files.length > 1;
       this.setFileName(name);
       this.#announceMediaContents(mediaSelection, contents, files);
+      this.#nameTheFilmInTheLog(name, contents?.infoHash);
 
       const mediaFiles = mediaFilesFrom(files, contents?.items);
       this.#subtitlePlayback.setTorrentSubtitleFiles(mediaFiles.subtitles);

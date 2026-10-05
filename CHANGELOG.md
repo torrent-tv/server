@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: A viewing opened from a magnet link — the demo film and every shared link — now tells the proxy which torrent it is watching, so the browser log file the proxy keeps is named after that torrent. Only a viewing opened from a `.torrent` file did, and on the addon host on 2026-10-05 146 of 147 files ended in `-no-torrent-yet` (torrent-tv/meta#123).
+
 ## 0.39.4
 
 - **Fix**: The image takes node from Alpine's own `nodejs` package, as the add-on does, instead of copying the official image's binary: one way of getting node, and 135 MB instead of 197 MB on the HA host. The binary was chosen for being three patch releases newer, and none of those three is a security release; 24.18.1, which Alpine ships, is the last one (torrent-tv/meta#98).
