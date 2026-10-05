@@ -13,19 +13,22 @@
  * `Windows/Chrome`) and a short per-page session id so logs from different
  * clients are distinguishable in the shared server log.
  *
- * Strictly best-effort: never throws, never blocks, caps its buffer, and uses
+ * Strictly best-effort: never throws, never blocks, caps its queue, and uses
  * the ORIGINAL console methods for its own internal errors so a failed POST
- * can never re-enter the patched console and loop.
+ * can never re-enter the patched console and loop. A batch nobody accepted goes
+ * back into the queue, and what was lost is written into the log itself
+ * (`log-queue.js`).
  */
+
+import { LogQueue, MAX_BATCH_BYTES } from "./log-queue.js";
 
 const ENDPOINT = "/api/client-logs";
 const FLUSH_INTERVAL_MS = 2000;
-const MAX_BUFFER = 500; // ring buffer cap; oldest dropped past this
-const MAX_BATCH = 50; // lines per POST
+const MAX_BUFFER = 500; // queue cap; oldest dropped past this, and counted
 const MAX_MSG_LEN = 2000; // per-line cap (server also caps)
 
 // Keep original references so internal failures never re-enter the patched
-// console (which would loop back into the buffer / POST).
+// console (which would loop back into the queue / POST).
 const original = {
   log: console.log.bind(console),
   info: console.info.bind(console),
@@ -33,9 +36,6 @@ const original = {
   warn: console.warn.bind(console),
   error: console.error.bind(console)
 };
-
-/** @type {Array<{ level: string, ts: string, msg: string }>} */
-const buffer = [];
 
 /**
  * The WebRTC signalling session id the page is currently using, as assigned by
@@ -134,7 +134,31 @@ function renderArg(arg) {
 }
 
 /**
- * Append a formatted line to the ring buffer.
+ * The lines not yet delivered. A batch's body carries `seq`, the number of the
+ * send it went out in, which both receivers print: a number missing on both
+ * sides is a batch nobody took, and one present on both is a batch the proxy
+ * took but could not acknowledge, sent to the server as well.
+ */
+const queue = new LogQueue({
+  capacity: MAX_BUFFER,
+  frame: (lines, seq) => JSON.stringify({
+    sessionId, tag, userAgent, signalSessionId: currentSignalSession, seq, lines,
+    startedAt, torrentName: film.name, infoHash: film.infoHash
+  })
+});
+
+/**
+ * Bytes of `keepalive` bodies this page has in flight. The browser refuses a
+ * `keepalive` request that would take the page past 64 KiB of them, so a batch
+ * that would is sent as an ordinary request instead: it then does not outlive
+ * the page, which only the unload path needs, and that path has `sendBeacon`.
+ * The page's other `keepalive` requests share the browser's quota and are not
+ * counted here; a refusal they cause is counted as a failure and retried.
+ */
+let keepaliveBytesInFlight = 0;
+
+/**
+ * Append a formatted line to the queue.
  *
  * @param {string} level
  * @param {unknown[]} args
@@ -146,10 +170,7 @@ function record(level, args) {
     if (msg.length > MAX_MSG_LEN) {
       msg = `${msg.slice(0, MAX_MSG_LEN)}…`;
     }
-    buffer.push({ level, ts: new Date().toISOString().slice(11, 23), msg });
-    if (buffer.length > MAX_BUFFER) {
-      buffer.splice(0, buffer.length - MAX_BUFFER);
-    }
+    queue.push({ level, ts: new Date().toISOString().slice(11, 23), msg });
   } catch {
     // silent-ok: capturing a line must never break the app it is describing,
     // and there is nowhere to report a failure of the reporting itself —
@@ -158,64 +179,108 @@ function record(level, args) {
 }
 
 /**
- * Send up to one batch of buffered lines to the server.
+ * Send every queued line, in batches the receivers and the browser accept.
  *
- * @param {boolean} [useBeacon] - Use `sendBeacon` (for page unload).
+ * @param {boolean} [useBeacon] - Use `sendBeacon` (the page is being hidden or
+ *   left).
  * @returns {void}
  */
 function flush(useBeacon = false) {
-  if (buffer.length === 0) {
-    return;
-  }
-  const lines = buffer.splice(0, MAX_BATCH);
-  const body = JSON.stringify({
-    sessionId, tag, userAgent, signalSessionId: currentSignalSession, lines,
-    startedAt, torrentName: film.name, infoHash: film.infoHash
-  });
   try {
-    if (useBeacon && typeof navigator.sendBeacon === "function") {
-      // Unload: only the server can be reached this way. A data channel cannot
-      // be used from a page that is going away.
-      navigator.sendBeacon(ENDPOINT, new Blob([body], { type: "application/json" }));
-      return;
+    queue.reportLosses();
+    const beacon = useBeacon && typeof navigator.sendBeacon === "function";
+    for (let batch = queue.take(); batch !== null; batch = queue.take()) {
+      if (beacon) {
+        // A data channel cannot be used from a page that is going away, so
+        // this reaches the server only. A refusal leaves the lines queued for a
+        // page that turns out to stay, and stops here: everything after it
+        // would be refused by the same quota.
+        if (!navigator.sendBeacon(ENDPOINT, new Blob([batch.body], { type: "application/json" }))) {
+          queue.noteFailure("beacon", "refused by the browser");
+          queue.giveBack(batch);
+          return;
+        }
+        queue.delivered(batch);
+        continue;
+      }
+      if (proxySink) {
+        sendToProxy(proxySink, batch);
+      } else {
+        sendToServer(batch);
+      }
     }
-    if (proxySink) {
-      // A batch that cannot reach the proxy goes to the server rather than
-      // being dropped: the moments when the proxy is unreachable are exactly
-      // the ones worth having.
-      void Promise.resolve(proxySink(body)).catch(() => sendToServer(body));
-      return;
-    }
-    sendToServer(body);
   } catch {
-    // silent-ok: same as above — this IS the forwarder, so it has no channel of
-    // its own to complain through.
+    // silent-ok: this IS the forwarder, so it has no channel of its own to
+    // complain through; the lines of a batch that never left are lost with it.
   }
+}
+
+/**
+ * The proxy, which keeps the lines beside its own. A batch it refuses or never
+ * answers goes to the server: the moments when the proxy cannot be reached are
+ * exactly the ones worth having. A wedged connection still carries the batch
+ * TO the proxy and only loses the answer, so after its timeout such a batch is
+ * on both sides under the same `seq`.
+ *
+ * @param {(body: string) => Promise<unknown>} sink
+ * @param {import("./log-queue.js").LogBatch} batch
+ * @returns {void}
+ */
+function sendToProxy(sink, batch) {
+  void Promise.resolve()
+    .then(() => sink(batch.body))
+    .then((response) => {
+      if (response && typeof response === "object" && "ok" in response && !response.ok) {
+        throw new Error(`HTTP ${/** @type {{ status?: number }} */ (response).status ?? "?"}`);
+      }
+      queue.delivered(batch);
+    })
+    .catch((error) => {
+      queue.noteFailure("proxy", error);
+      sendToServer(batch);
+    });
 }
 
 /**
  * The registry server: where a page with no proxy, or a failed proxy, is heard.
+ * A batch it does not accept goes back into the queue.
  *
- * @param {string} body
+ * @param {import("./log-queue.js").LogBatch} batch
  * @returns {void}
  */
-function sendToServer(body) {
-  try {
-    void fetch(ENDPOINT, {
+function sendToServer(batch) {
+  const keepalive = keepaliveBytesInFlight + batch.bytes <= MAX_BATCH_BYTES;
+  if (keepalive) {
+    keepaliveBytesInFlight += batch.bytes;
+  }
+  void Promise.resolve()
+    .then(() => fetch(ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body,
-      keepalive: true
-    }).catch(() => {
-      // Best-effort: drop on failure (do NOT console.* here — would loop).
+      body: batch.body,
+      keepalive
+    }))
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      queue.delivered(batch);
+    })
+    .catch((error) => {
+      // Not console.* here: that would queue a line about this very failure
+      // for ever. The count goes into the next report instead.
+      queue.noteFailure("server", error);
+      queue.giveBack(batch);
+    })
+    .finally(() => {
+      if (keepalive) {
+        keepaliveBytesInFlight -= batch.bytes;
+      }
     });
-  } catch {
-    // silent-ok: nothing here may throw into the code being logged.
-  }
 }
 
 /**
- * Patch a console method so it still logs locally and also buffers the line.
+ * Patch a console method so it still logs locally and also queues the line.
  *
  * @param {"log"|"info"|"debug"|"warn"|"error"} level
  * @returns {void}

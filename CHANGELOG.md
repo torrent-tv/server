@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The page's log no longer loses lines when a send fails. A batch nobody accepted goes back into the queue and leaves with the next send; a batch is kept under the 64 KiB the browser allows a `keepalive` request and `sendBeacon`, which a batch of long lines exceeded and the browser refused; the whole queue is sent each time rather than 50 lines every two seconds; and what was lost and every refused send, by route and cause, are written into the log as one `[client-logger] since …` line. Each line the server prints names the page's send as `batch=<n>`, the same number the proxy prints (torrent-tv/meta#77).
+
 ## 0.39.1
 
 - **Chore**: The page no longer asks the browser for viewport and pixel density client hints. Nothing read them: the page measures the viewport itself, in every browser.
