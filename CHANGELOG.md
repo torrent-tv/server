@@ -1,4 +1,4 @@
-## Unreleased
+## 0.37.9
 
 - **Fix**: An hls.js error caused by a failed media element is handled by the element's recovery. When hls.js noticed the failure first — a `SourceBuffer` refusing an append to an ended source — the page offered a restart at once instead of rebuilding the source at the position, so one failure had two different answers depending on which side reported it.
 
