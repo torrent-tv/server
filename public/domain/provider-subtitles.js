@@ -6,7 +6,10 @@ export function providerSubtitleQuery(state, fileIndex) {
   const tmdbId = work.sources?.tmdb?.tmdbId ?? normalized.tmdbId ?? null;
   const anilistId = work.sources?.anilist?.id ?? normalized.anilistId ?? null;
   if (!tmdbId && !anilistId) return null;
-  if (normalized.kind === "movie") return { kind: "movie", tmdbId, anilistId };
+  if (normalized.kind === "movie") {
+    const imdbId = work.sources?.tmdb?.imdbId ?? normalized.imdbId;
+    return { kind: "movie", tmdbId, anilistId, ...(/^tt\d{1,12}$/u.test(imdbId ?? "") ? { imdbId } : {}) };
+  }
   const match = state.episodes?.[fileIndex];
   const query = { kind: "series", tmdbId: null, anilistId: null };
   if (tmdbId && match?.episodes?.length === 1 && match.part == null) {

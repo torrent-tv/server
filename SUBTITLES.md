@@ -72,3 +72,5 @@ Task: [meta#103](https://github.com/torrent-tv/meta/issues/103).
 No blanket redistribution licence or unlimited provider retention is assumed.
 The application keeps a bounded cache of selected text files; provider account
 terms and any later retention requirements still apply.
+
+Movie queries may carry the confirmed TMDB work's `imdbId` (`tt` followed by digits). OpenSubtitles prefers this IMDb identity because its records can lack TMDB mappings. Series keep parent TMDB IDs and episode coordinates. The search cache includes the IMDb identity, so earlier empty TMDB results cannot hide IMDb results.

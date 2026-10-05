@@ -129,3 +129,24 @@ test("SRT and declared ASS columns preserve timestamps, line breaks and literal 
   assert.match(ass, /Hello\nWorld, yes/u);
   assert.throws(() => subtitleVtt(Buffer.from("not a subtitle"), "a.srt"));
 });
+
+
+test("confirmed movie IMDb identities reach OpenSubtitles without reusing empty TMDB results", async () => {
+  const addresses = [];
+  const provider = new OpenSubtitles({ key: "fake", fetch: async url => {
+    addresses.push(url.search);
+    return json({ total_pages: 1, data: url.searchParams.has("imdb_id") ? [{ attributes: {
+      language: "en", feature_details: { imdb_id: 1312221, tmdb_id: null }, files: [{ file_id: 7, file_name: "film.srt" }]
+    } }] : [] });
+  } });
+  const state = { work: { normalized: { kind: "movie" }, sources: { tmdb: { tmdbId: 1062722, imdbId: "tt1312221" } } } };
+  const confirmed = providerSubtitleQuery(state, 0);
+  assert.equal(confirmed.imdbId, "tt1312221");
+  assert.deepEqual(validateSubtitleQuery(confirmed), confirmed);
+  assert.equal(validateSubtitleQuery({ ...confirmed, imdbId: "https://example.com" }), null);
+  const service = new SubtitleService({ cache: cache(), providers: [provider] });
+  assert.equal((await service.search({ ...query, tmdbId: 1062722 })).providers[0].items.length, 0);
+  assert.equal((await service.search(confirmed)).providers[0].items.length, 1);
+  assert.equal((await service.search(confirmed)).providers[0].items.length, 1);
+  assert.deepEqual(addresses, ["?tmdb_id=1062722&type=movie", "?imdb_id=1312221&type=movie"]);
+});
