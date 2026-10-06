@@ -1,4 +1,4 @@
-## Unreleased
+## 0.42.0
 
 - **New**: The player's poster fades in over 0.3 s once its image has loaded and fades out when the first frame is decoded, instead of appearing and disappearing at once. It no longer returns over the film when the window is resized during a seek, and the fade is skipped under `prefers-reduced-motion` (torrent-tv/meta#138).
 
