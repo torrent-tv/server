@@ -7,7 +7,7 @@
  * asks the primary sources again with the names AniList states.
  */
 
-import { EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.js";
+import { CATEGORY, EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.js";
 import { parseReleaseName } from "./release-name.js";
 import { normalizeTitle } from "./title.js";
 import { RequestGate, MetadataUnavailableError } from "./RequestGate.js";
@@ -55,7 +55,7 @@ export class AniListProvider extends MetadataProvider {
   #pending = new Map();
 
   constructor({ fetch = globalThis.fetch, gate = new RequestGate({ concurrency: 1, perSecond: 0.45, queueLimit: 8 }), cache } = {}) {
-    super({ name: "anilist", stage: STAGE.supplement, takes: [EVIDENCE.names] });
+    super({ name: "anilist", stage: STAGE.supplement, takes: [EVIDENCE.names], category: CATEGORY.general });
     this.#fetch = fetch;
     this.#gate = gate;
     if (cache) this.#cache = cache;

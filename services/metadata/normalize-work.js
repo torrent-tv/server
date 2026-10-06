@@ -18,12 +18,15 @@ import { tmdbFields } from "./TmdbProvider.js";
  * title that is only a release name is not stated at all.
  */
 export const FIELD_PRIORITY = Object.freeze({
-  kind: ["tmdb", "anilist", "container"],
-  title: ["tmdb", "anilist", "container"],
+  kind: ["tmdb", "anilist", "theporndb", "stashdb", "container"],
+  title: ["tmdb", "anilist", "theporndb", "stashdb", "container"],
   originalTitle: ["tmdb", "anilist", "container"],
-  year: ["tmdb", "anilist", "container"],
+  year: ["tmdb", "anilist", "theporndb", "stashdb", "container"],
   isAnime: ["anilist", "tmdb"],
-  overview: ["tmdb"],
+  overview: ["tmdb", "theporndb", "stashdb"],
+  studio: ["theporndb", "stashdb"],
+  performers: ["theporndb", "stashdb"],
+  adult: ["theporndb", "stashdb"],
   poster: ["tmdb"],
   backdrop: ["tmdb"],
   images: ["tmdb"],
@@ -33,7 +36,7 @@ export const FIELD_PRIORITY = Object.freeze({
 /** What a field holds when no source states it. */
 const ABSENT = Object.freeze({
   kind: "series", title: null, originalTitle: null, year: null, isAnime: null,
-  overview: null, poster: null, backdrop: null, images: [], seasons: []
+  overview: null, studio: null, performers: [], adult: false, poster: null, backdrop: null, images: [], seasons: []
 });
 
 /**

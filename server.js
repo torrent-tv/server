@@ -74,7 +74,9 @@ const diskCache = process.env.SERVER_CACHE_DIR
 const subtitleCache = diskCache?.namespace("subtitles") ?? new MetadataCache({ budgetBytes: 8 * 1024 ** 2, maxEntryBytes: 4 * 1024 ** 2 });
 const subtitles = createSubtitles(subtitleCache);
 const { service: metadata, images: metadataImages } = createMetadata({
-  tokenFile: process.env.TMDB_READ_TOKEN_FILE,
+  token: process.env.TMDB_READ_TOKEN?.trim() || null,
+  theporndbKey: process.env.THEPORNDB_API_KEY?.trim() || null,
+  stashdbKey: process.env.STASHDB_API_KEY?.trim() || null,
   cache: diskCache?.namespace("tmdb"),
   animeCache: diskCache?.namespace("anilist")
 });

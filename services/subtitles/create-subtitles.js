@@ -1,14 +1,9 @@
-import { readFileSync } from "node:fs";
 import { OpenSubtitles } from "./OpenSubtitles.js";
 import { Jimaku } from "./Jimaku.js";
 import { SubtitleService } from "./SubtitleService.js";
 
 function readKey(name) {
-  if (process.env[name]) return process.env[name].trim();
-  const file = process.env[`${name}_FILE`];
-  if (!file) return null;
-  try { return readFileSync(file, "utf8").trim() || null; }
-  catch (error) { console.warn(`[subtitles] ${name} unavailable: ${error.code}`); return null; }
+  return process.env[name]?.trim() || null;
 }
 
 export function createSubtitles(cache) {

@@ -7,7 +7,6 @@
  * browsers send.
  */
 
-import { readFileSync } from "node:fs";
 import { AniListProvider } from "./AniListProvider.js";
 import { ContainerMetadata } from "./ContainerMetadata.js";
 import { ImageFetcher } from "./ImageFetcher.js";
@@ -16,41 +15,17 @@ import { MetadataRegistry } from "./MetadataRegistry.js";
 import { MetadataService } from "./MetadataService.js";
 import { RequestGate } from "./RequestGate.js";
 import { SharedFetches } from "./SharedFetches.js";
+import { StashDbProvider } from "./StashDbProvider.js";
+import { ThePornDbProvider } from "./ThePornDbProvider.js";
 import { TmdbProvider } from "./TmdbProvider.js";
 import { TmdbSource } from "./TmdbSource.js";
 
 /**
- * The TMDB token from its file, or `null` with the reason logged. The token
- * itself is never logged.
- *
- * @param {string | undefined} path
- * @returns {string | null}
- */
-function readToken(path) {
-  if (!path) {
-    console.log("[metadata] TMDB_READ_TOKEN_FILE is not set; film metadata is off");
-    return null;
-  }
-  try {
-    const token = readFileSync(path, "utf8").trim();
-    if (token.length === 0) {
-      console.log(`[metadata] ${path} is empty; film metadata is off`);
-      return null;
-    }
-    console.log("[metadata] TMDB token loaded; film metadata is on");
-    return token;
-  } catch (error) {
-    console.log(`[metadata] ${path} cannot be read (${error?.code ?? error?.message}); film metadata is off`);
-    return null;
-  }
-}
-
-/**
- * @param {{ tokenFile?: string }} params
+ * @param {{ token?: string | null }} params
  * @returns {{ service: MetadataRegistry, images: ImageFetcher }}
  */
-export function createMetadata({ tokenFile, cache, animeCache }) {
-  const token = readToken(tokenFile);
+export function createMetadata({ token = null, theporndbKey = null, stashdbKey = null, cache, animeCache }) {
+  console.log(token ? "[metadata] TMDB token present; film metadata is on" : "[metadata] TMDB_READ_TOKEN is not set; film metadata is off");
   const apiGate = new RequestGate({ concurrency: 4, perSecond: 10, queueLimit: 32 });
   const source = token ? new TmdbSource({ token, gate: apiGate }) : null;
   const service = new MetadataService({
@@ -66,6 +41,13 @@ export function createMetadata({ tokenFile, cache, animeCache }) {
   // Images do not count against the API's rate: they come from TMDB's image
   // host, which states no such limit. Concurrency and the queue still bound them.
   const images = new ImageFetcher({ gate: new RequestGate({ concurrency: 4, perSecond: Infinity, queueLimit: 32 }) });
-  const providers = [new TmdbProvider(service), new AniListProvider({ cache: animeCache }), new ContainerMetadata()];
+  // The adult databases are asked only when a request states the category adult
+  // (CATEGORY in MetadataProvider.js); the general ones are not asked then.
+  const adult = [
+    theporndbKey ? new ThePornDbProvider({ key: theporndbKey }) : null,
+    stashdbKey ? new StashDbProvider({ key: stashdbKey }) : null
+  ].filter(Boolean);
+  console.log(`[metadata] adult databases: ${adult.map(provider => provider.name).join(", ") || "none"}`);
+  const providers = [...adult, new TmdbProvider(service), new AniListProvider({ cache: animeCache }), new ContainerMetadata()];
   return { service: new MetadataRegistry({ providers }), images };
 }
