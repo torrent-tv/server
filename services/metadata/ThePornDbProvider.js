@@ -27,6 +27,7 @@ export function theporndbFields(scene) {
     title: scene.title || undefined,
     year: yearOf(scene.date),
     overview: scene.description || undefined,
+    poster: scene.image || scene.poster ? `/api/metadata/cover/theporndb/${scene.id}` : undefined,
     studio: scene.site?.name || scene.site?.parent?.name || undefined,
     performers: (scene.performers ?? []).map(performer => performer?.name).filter(Boolean).slice(0, 20),
     adult: true
@@ -72,6 +73,25 @@ export class ThePornDbProvider extends MetadataProvider {
       return { status: found.size > 1 ? "ambiguous" : "not-found" };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) { providerFailure("theporndb", "identify", error); return { status: "unavailable" }; }
+      throw error;
+    }
+  }
+
+  /**
+   * The address of the cover image of a scene, asked of the database.
+   *
+   * @param {string} id
+   * @returns {Promise<string | null>}
+   */
+  async coverUrl(id) {
+    try {
+      const body = await requestJson({
+        fetch: this.#fetch, gate: this.#gate, label: "ThePornDB", url: `${BASE}/scenes/${id}`,
+        init: { headers: { Authorization: `Bearer ${this.#key}`, Accept: "application/json" } }
+      });
+      return body?.data?.image || body?.data?.poster || null;
+    } catch (error) {
+      if (error instanceof MetadataUnavailableError) { providerFailure("theporndb", "cover", error); return null; }
       throw error;
     }
   }

@@ -40,6 +40,7 @@ import {
   handleApiMetadataEpisodesPost
 } from "./routes/api/metadata/episodes/post.js";
 import { handleApiMetadataImageGet } from "./routes/api/metadata/image/get.js";
+import { handleApiMetadataCoverGet } from "./routes/api/metadata/cover/get.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,7 +74,7 @@ const diskCache = process.env.SERVER_CACHE_DIR
   : null;
 const subtitleCache = diskCache?.namespace("subtitles") ?? new MetadataCache({ budgetBytes: 8 * 1024 ** 2, maxEntryBytes: 4 * 1024 ** 2 });
 const subtitles = createSubtitles(subtitleCache);
-const { service: metadata, images: metadataImages } = createMetadata({
+const { service: metadata, images: metadataImages, covers: adultCovers } = createMetadata({
   token: process.env.TMDB_READ_TOKEN?.trim() || null,
   theporndbKey: process.env.THEPORNDB_API_KEY?.trim() || null,
   stashdbKey: process.env.STASHDB_API_KEY?.trim() || null,
@@ -217,6 +218,9 @@ app.post("/api/metadata/episodes", { bodyLimit: EPISODES_BODY_LIMIT }, async (re
 );
 app.get("/api/metadata/image/:size/:file", async (req, reply) =>
   handleApiMetadataImageGet(req, reply, { images: metadataImages })
+);
+app.get("/api/metadata/cover/:source/:id", async (req, reply) =>
+  handleApiMetadataCoverGet(req, reply, { covers: adultCovers })
 );
 app.post("/api/subtitles/search", { bodyLimit: 4096 }, async (req, reply) => handleApiSubtitlesSearchPost(req, reply, { subtitles }));
 app.post("/api/subtitles/file", { bodyLimit: 8192 }, async (req, reply) => handleApiSubtitlesFilePost(req, reply, { subtitles }));

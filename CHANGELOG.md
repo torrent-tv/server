@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: A work from ThePornDB or StashDB carries its cover as `poster`, served by `GET /api/metadata/cover/:source/:id`. The route asks the database for the address of the image and fetches it only from `stashdb.org` and `theporndb.net`, over https, as an image of at most 8 MB; the page never supplies an address (torrent-tv/meta#135).
+
 ## 0.46.0
 
 - **New**: The page tells the metadata service what a torrent states and what the proxy measured. A `.torrent` from an adult-only tracker (its `comment` or its trackers; `pornolab.net`) sends `category: "adult"` with every identification request; for the open file the page asks the proxy for the OpenSubtitles hash (`/api/sources/:key/files/:i/fingerprint`) and, when the release is still not identified, asks again once with it as `fingerprint`. A proxy that does not know the route answers `404` and nothing is sent (torrent-tv/meta#135).

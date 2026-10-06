@@ -36,6 +36,11 @@ export const IMAGE_SIZE = { poster: "w342", still: "w780", artwork: "w185" };
  * @returns {string | null}
  */
 export function imageUrl(size, file) {
+  // A cover of an adult scene is already the address of this server's own route.
+  const cover = typeof file === "string" ? file.split("/") : [];
+  if (cover.length === 6 && cover[1] === "api" && cover[2] === "metadata" && cover[3] === "cover" && ["theporndb", "stashdb"].includes(cover[4]) && /^[0-9a-f-]{36}$/.test(cover[5])) {
+    return file;
+  }
   return typeof file === "string" && /^[A-Za-z0-9]{8,64}\.(?:jpg|png)$/.test(file)
     ? `/api/metadata/image/${size}/${file}`
     : null;
