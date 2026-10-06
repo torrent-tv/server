@@ -1,4 +1,4 @@
-## Unreleased
+## 0.47.0
 
 - **New**: A work from ThePornDB or StashDB carries its cover as `poster`, served by `GET /api/metadata/cover/:source/:id`. The route asks the database for the address of the image and fetches it only from `stashdb.org` and `theporndb.net`, over https, as an image of at most 8 MB; the page never supplies an address (torrent-tv/meta#135).
 
