@@ -5272,9 +5272,6 @@ export class Loading extends StateDerivedView {
     if (!progress || typeof progress !== "object") {
       return;
     }
-    const warmupPercent =
-      typeof progress.warmupPercent === "number" ? progress.warmupPercent : NaN;
-
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
       playbackReadiness: progress.playbackReadiness
@@ -5282,15 +5279,9 @@ export class Loading extends StateDerivedView {
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
     this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
 
-    // Before ffmpeg has produced anything there is no cushion to report, so name
-    // what IS happening — the transcoder starting — rather than leaving the
-    // screen silent about it. The STEP only: the rest of the block renders
-    // itself, and feeding its rendered output back in here is what grew the
-    // line by two rows a pass until it ran off the screen. Third occurrence of
-    // that fault, so the render now returns nothing and there cannot be a
-    // fourth.
-    if (Number.isFinite(warmupPercent) && (unified.cushionPercent ?? 0) <= 0) {
-      this.setStatus(`Starting transcoder... ${Math.round(warmupPercent)}%`);
+    // Proxy preparation does not measure the browser's playback buffer.
+    if ((unified.cushionPercent ?? 0) <= 0) {
+      this.setStatus("Preparing playback...");
     }
     document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
       detail: {
