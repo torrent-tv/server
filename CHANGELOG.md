@@ -1,4 +1,4 @@
-## Unreleased
+## 0.46.0
 
 - **New**: The page tells the metadata service what a torrent states and what the proxy measured. A `.torrent` from an adult-only tracker (its `comment` or its trackers; `pornolab.net`) sends `category: "adult"` with every identification request; for the open file the page asks the proxy for the OpenSubtitles hash (`/api/sources/:key/files/:i/fingerprint`) and, when the release is still not identified, asks again once with it as `fingerprint`. A proxy that does not know the route answers `404` and nothing is sent (torrent-tv/meta#135).
 
