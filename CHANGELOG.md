@@ -1,4 +1,4 @@
-## Unreleased
+## 0.43.2
 
 - **Fix**: Playback preparation no longer displays the proxy's warmup percentage as completed browser buffering. An empty browser buffer shows that preparation is still pending.
 
