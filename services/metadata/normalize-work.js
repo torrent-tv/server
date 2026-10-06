@@ -27,7 +27,7 @@ export const FIELD_PRIORITY = Object.freeze({
   studio: ["theporndb", "stashdb"],
   performers: ["theporndb", "stashdb"],
   adult: ["theporndb", "stashdb"],
-  poster: ["tmdb"],
+  poster: ["tmdb", "theporndb", "stashdb"],
   backdrop: ["tmdb"],
   images: ["tmdb"],
   seasons: ["tmdb"]

@@ -146,3 +146,11 @@ test("the page takes a cover route as an image and nothing else of that shape", 
   assert.equal(imageUrl("w500", `/api/metadata/cover/stashdb/${sceneId}/../x`), null);
   assert.equal(imageUrl("w500", "abcdefgh12.jpg"), "/api/metadata/image/w500/abcdefgh12.jpg");
 });
+
+test("the cover of the scene that was found becomes the poster of the work", async () => {
+  const scene = { ...stashScene, id: sceneId, images: [{ url: "https://stashdb.org/images/x" }] };
+  const stash = new StashDbProvider({ key: "k", gate, fetch: fakeFetch([{ data: { findScenesBySceneFingerprints: [[scene]] } }]) });
+  const answer = await new MetadataRegistry({ providers: [stash] }).identify({ names: ["x"], fingerprint: { hash, size: 1 } });
+  assert.equal(answer.work.normalized.poster, `/api/metadata/cover/stashdb/${sceneId}`);
+  assert.equal(answer.work.normalized.provenance.poster, "stashdb");
+});
