@@ -1,4 +1,4 @@
-## Unreleased
+## 0.42.1
 
 - **Chore**: The sources of film metadata share one interface, `MetadataProvider`, like the sources of subtitles: TMDB, AniList and the media container are providers held by `MetadataRegistry`, which replaces `AnimeMetadata`. A source states what evidence it takes, preference between sources is stated per field in `normalize-work.js`, and the media container is both a source of fields and evidence for the others. The answers of the metadata routes do not change (torrent-tv/meta#137).
 
