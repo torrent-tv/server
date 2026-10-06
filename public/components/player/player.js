@@ -508,8 +508,8 @@ export class Player extends StateDerivedView {
   /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
   #media = null;
 
-  /** Whether the current source has decoded its first frame; see #applyPoster. */
-  #firstFrame = false;
+  /** Whether the current source has started playing; see #applyPoster. */
+  #playbackStarted = false;
 
   /** The file being played or loaded, for its picture. */
   #activeFileIndex = -1;
@@ -568,10 +568,12 @@ export class Player extends StateDerivedView {
       poster.style.inlineSize = enough ? "100%" : poster.naturalWidth / dpr / rem + "rem";
       poster.style.blockSize = enough ? "100%" : poster.naturalHeight / dpr / rem + "rem";
       poster.style.objectFit = enough ? "cover" : "contain";
-      // Once the first frame of this source has been decoded the poster never
-      // returns: `readyState` falls again during a seek, and a resize then
+      // The poster stays until playback has started, as a `<video poster>`
+      // does: a first decoded frame (`loadeddata`) with the viewer still
+      // waiting for the buffer is not yet a picture to watch. Once playing, it
+      // never returns: `readyState` falls again during a seek, and a resize
       // would otherwise fade it back in over the film.
-      showPoster(!this.#firstFrame && this.#video.readyState < 2);
+      showPoster(!this.#playbackStarted);
     };
     poster.onload = fit;
     poster.onerror = () => showPoster(false);
@@ -608,11 +610,11 @@ export class Player extends StateDerivedView {
       // position is compared against the old one across the flush.
       this.#video.addEventListener("seeking", this.#onSeeking);
       this.#video.addEventListener("play", this.#onPlayAttempt);
-      this.#video.addEventListener("loadeddata", () => {
-        this.#firstFrame = true;
+      this.#video.addEventListener("playing", () => {
+        this.#playbackStarted = true;
         document.querySelector("#player__poster").classList.remove("player__poster--shown");
       });
-      this.#video.addEventListener("emptied", () => { this.#firstFrame = false; this.#applyPoster(); });
+      this.#video.addEventListener("emptied", () => { this.#playbackStarted = false; this.#applyPoster(); });
       new ResizeObserver(() => this.#applyPoster()).observe(this.#video);
       window.addEventListener("resize", () => this.#applyPoster());
     }
