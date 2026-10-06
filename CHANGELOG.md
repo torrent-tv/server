@@ -1,4 +1,4 @@
-## Unreleased
+## 0.41.1
 
 - **Fix**: With two slots, the slot that starts to serve removes only its own earlier copies of the page. It removed every copy but its own and the one served before, so when both slots started together the first to serve deleted the copy the other was still writing, and once that one took over nginx's `current` pointed at nothing; the site answered only because the server serves the page itself when nginx finds no file (field 2026-10-05, the first start of both slots). The new link is also made inside `releases/`, which the other slot's start does not empty (torrent-tv/meta#94).
 
