@@ -240,4 +240,6 @@
   100%   { transform: scaleY(-1) rotate(-135deg); }
 }
 
-#player__poster { position: absolute; inset: 0; margin: auto; max-inline-size: 100%; max-block-size: 100%; pointer-events: none; object-position: center; }
+#player__poster { position: absolute; inset: 0; margin: auto; max-inline-size: 100%; max-block-size: 100%; pointer-events: none; object-position: center; opacity: 0; transition: opacity 0.3s; }
+#player__poster.player__poster--shown { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { #player__poster { transition: none; } }

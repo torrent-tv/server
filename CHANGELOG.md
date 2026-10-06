@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: The player's poster fades in over 0.3 s once its image has loaded and fades out when the first frame is decoded, instead of appearing and disappearing at once. It no longer returns over the film when the window is resized during a seek, and the fade is skipped under `prefers-reduced-motion` (torrent-tv/meta#138).
+
 ## 0.41.1
 
 - **Fix**: With two slots, the slot that starts to serve removes only its own earlier copies of the page. It removed every copy but its own and the one served before, so when both slots started together the first to serve deleted the copy the other was still writing, and once that one took over nginx's `current` pointed at nothing; the site answered only because the server serves the page itself when nginx finds no file (field 2026-10-05, the first start of both slots). The new link is also made inside `releases/`, which the other slot's start does not empty (torrent-tv/meta#94).
