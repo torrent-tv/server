@@ -509,6 +509,9 @@ export class Player extends StateDerivedView {
   /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
   #media = null;
 
+  /** Whether the current source has decoded its first frame; see #applyPoster. */
+  #firstFrame = false;
+
   /** The file being played or loaded, for its picture. */
   #activeFileIndex = -1;
 
@@ -552,11 +555,12 @@ export class Player extends StateDerivedView {
    */
   #applyPoster() {
     const poster = document.querySelector("#player__poster");
+    const showPoster = (shown) => poster.classList.toggle("player__poster--shown", shown);
     // The picture fills the video, and the video is the whole viewport
     // (`#player__controller` is 100dvw x 100dvh), so the viewport is its size.
     this.#loadArt ??= playerArt(this.#media, this.#activeFileIndex, window.innerWidth, window.innerHeight, window.devicePixelRatio);
     const art = this.#loadArt;
-    if (!art?.url) { poster.hidden = true; poster.removeAttribute("src"); return; }
+    if (!art?.url) { showPoster(false); poster.removeAttribute("src"); return; }
     const fit = () => {
       if (poster.getAttribute("src") !== art.url) return;
       const dpr = window.devicePixelRatio || 1;
@@ -565,11 +569,16 @@ export class Player extends StateDerivedView {
       poster.style.inlineSize = enough ? "100%" : poster.naturalWidth / dpr / rem + "rem";
       poster.style.blockSize = enough ? "100%" : poster.naturalHeight / dpr / rem + "rem";
       poster.style.objectFit = enough ? "cover" : "contain";
-      poster.hidden = this.#video.readyState >= 2;
+      // Once the first frame of this source has been decoded the poster never
+      // returns: `readyState` falls again during a seek, and a resize then
+      // would otherwise fade it back in over the film.
+      showPoster(!this.#firstFrame && this.#video.readyState < 2);
     };
     poster.onload = fit;
-    poster.onerror = () => { poster.hidden = true; };
-    if (poster.getAttribute("src") !== art.url) { poster.hidden = true; poster.src = art.url; }
+    poster.onerror = () => showPoster(false);
+    // A shown poster keeps its class while another picture loads: the old
+    // image stays until the new one is decoded, so the swap does not flicker.
+    if (poster.getAttribute("src") !== art.url) poster.src = art.url;
     else if (poster.complete) fit();
   }
 
@@ -600,8 +609,11 @@ export class Player extends StateDerivedView {
       // position is compared against the old one across the flush.
       this.#video.addEventListener("seeking", this.#onSeeking);
       this.#video.addEventListener("play", this.#onPlayAttempt);
-      this.#video.addEventListener("loadeddata", () => { document.querySelector("#player__poster").hidden = true; });
-      this.#video.addEventListener("emptied", () => this.#applyPoster());
+      this.#video.addEventListener("loadeddata", () => {
+        this.#firstFrame = true;
+        document.querySelector("#player__poster").classList.remove("player__poster--shown");
+      });
+      this.#video.addEventListener("emptied", () => { this.#firstFrame = false; this.#applyPoster(); });
       new ResizeObserver(() => this.#applyPoster()).observe(this.#video);
       window.addEventListener("resize", () => this.#applyPoster());
     }
