@@ -44,6 +44,15 @@ export class MediaInfoController {
   #durations = new Map();
   #durationRetried = false;
 
+  /** What the torrent says it is (`"adult"`), or `null`. */
+  #category = null;
+
+  /** The OpenSubtitles hash of each file the proxy has answered for. @type {Map<number, { hash: string, size: number }>} */
+  #fingerprints = new Map();
+
+  /** Files whose identification was asked again once their hash arrived. @type {Set<number>} */
+  #fingerprintRetried = new Set();
+
   /** @type {AbortController | null} */
   #abort = null;
 
@@ -83,6 +92,7 @@ export class MediaInfoController {
   constructor() {
     document.addEventListener(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, this.#onSubtitleEvidence);
     document.addEventListener(MEDIA_INFO_EVENTS.PROBED, this.#onProbed);
+    document.addEventListener(MEDIA_INFO_EVENTS.FINGERPRINT, this.#onFingerprint);
     document.addEventListener(MEDIA_INFO_EVENTS.SELECTED, this.#onSelected);
     document.addEventListener(MEDIA_INFO_EVENTS.CONTENTS, this.#onContents);
     document.addEventListener(MEDIA_INFO_EVENTS.WANT_FILES, this.#onWantFiles);
@@ -94,10 +104,11 @@ export class MediaInfoController {
   #onSelected = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     this.#begin(Number(detail?.selection));
+    this.#category = detail?.category === "adult" ? "adult" : null;
     const names = boundedNames(Array.isArray(detail?.names) ? detail.names : []);
     if (names.length > 0) {
       // Preparation only; see the class comment.
-      void this.#post("/api/metadata/identify", { names, kindHint: null, language: METADATA_LANGUAGE });
+      void this.#post("/api/metadata/identify", { names, kindHint: null, language: METADATA_LANGUAGE, ...this.#evidence() });
     }
     this.#selectionNames = names;
   };
@@ -128,6 +139,36 @@ export class MediaInfoController {
         !Number.isFinite(detail?.durationSeconds) || detail.durationSeconds <= 0) return;
     this.#durations.set(detail.fileIndex, detail.durationSeconds);
     this.#retryWithDuration();
+  };
+
+  /**
+   * What identification is told besides names: the category the torrent states
+   * and, for one file, its hash. Both are optional and absent unless known.
+   *
+   * @param {number} [fileIndex]
+   */
+  #evidence(fileIndex) {
+    const fingerprint = fileIndex === undefined ? undefined : this.#fingerprints.get(fileIndex);
+    return { ...(this.#category ? { category: this.#category } : {}), ...(fingerprint ? { fingerprint } : {}) };
+  }
+
+  /** The hash of a file arrived: ask again for a release or picture that is still not identified. */
+  #onFingerprint = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const fileIndex = detail?.fileIndex;
+    if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !this.#filesByIndex.has(fileIndex)) return;
+    this.#fingerprints.set(fileIndex, detail.fingerprint);
+    if (this.#fingerprintRetried.has(fileIndex)) return;
+    this.#fingerprintRetried.add(fileIndex);
+    if (shapeOf(this.#contents) === "undetermined") {
+      if (this.#pictures[String(fileIndex)]) return;
+      this.#askedPictures.delete(fileIndex);
+      void this.#identifyPicture(this.#selection, fileIndex);
+      return;
+    }
+    const [item] = this.#contents?.items ?? [];
+    if (!this.#releaseRequest || this.#work || item?.fileIndex !== fileIndex) return;
+    void this.#identifyRelease(this.#selection, this.#releaseRequest);
   };
 
   #retryWithDuration() {
@@ -206,6 +247,9 @@ export class MediaInfoController {
     this.#releaseSequence += 1;
     this.#durations = new Map();
     this.#durationRetried = false;
+    this.#category = null;
+    this.#fingerprints = new Map();
+    this.#fingerprintRetried = new Set();
     this.#contents = null;
     this.#filesByIndex = new Map();
     this.#itemsByIndex = new Map();
@@ -225,7 +269,9 @@ export class MediaInfoController {
    */
   async #identifyRelease(selection, request) {
     const sequence = ++this.#releaseSequence;
-    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE });
+    const [firstItem] = this.#contents?.items ?? [];
+    const single = shapeOf(this.#contents) === "single" ? firstItem?.fileIndex : undefined;
+    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(single) });
     if (selection !== this.#selection || sequence !== this.#releaseSequence) return;
     this.#releaseStatus = answer?.status ?? null;
     if (answer?.status !== "identified") {
@@ -264,7 +310,7 @@ export class MediaInfoController {
     if (request.names.length === 0) {
       return;
     }
-    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE });
+    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(fileIndex) });
     if (selection !== this.#selection || answer?.status !== "identified") {
       return;
     }
