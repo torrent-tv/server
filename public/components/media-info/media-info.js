@@ -4,6 +4,8 @@ import { requestHeaders } from "../../shared/request-headers.js";
 import {
   METADATA_LANGUAGE,
   boundedNames,
+  containerEpisode,
+  containerEvidence,
   pictureIdentification,
   releaseIdentification,
   seasonFiles,
@@ -27,6 +29,12 @@ import {
  *    keeps showing the last release's poster over the next one;
  *  - **nothing waits for it.** Every request is fire-and-forget from the
  *    pipeline's side; a failure or no answer leaves the release's own names;
+ *  - **what a file states about its work only adds** (meta#139). The proxy
+ *    reads it from the opened file's edges, typically a minute after the name
+ *    was shown. It fills what is empty — an episode title, a year, a
+ *    description, a cover where there is no poster — and asks again only when
+ *    the names did not establish the work. A title, an episode title or a
+ *    picture already shown is never replaced; a contradiction is logged;
  *  - **the first answer is only a preparation.** What is known when a release
  *    is chosen — the `.torrent` file's name, a magnet's `dn` — is sent at once,
  *    so the service has searched by the time the proxy says what is in the
@@ -52,6 +60,15 @@ export class MediaInfoController {
 
   /** Files whose identification was asked again once their hash arrived. @type {Set<number>} */
   #fingerprintRetried = new Set();
+
+  /** What each file states about its work, from the proxy or kept by the server. @type {Map<number, object>} */
+  #containers = new Map();
+
+  /** The `blob:` address of each file's own cover, revoked with the choice. @type {Map<number, { url: string, type: string }>} */
+  #covers = new Map();
+
+  /** Files whose identification was asked again once their container metadata arrived. @type {Set<number>} */
+  #containerRetried = new Set();
 
   /** @type {AbortController | null} */
   #abort = null;
@@ -93,6 +110,8 @@ export class MediaInfoController {
     document.addEventListener(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, this.#onSubtitleEvidence);
     document.addEventListener(MEDIA_INFO_EVENTS.PROBED, this.#onProbed);
     document.addEventListener(MEDIA_INFO_EVENTS.FINGERPRINT, this.#onFingerprint);
+    document.addEventListener(MEDIA_INFO_EVENTS.CONTAINER, this.#onContainer);
+    document.addEventListener(MEDIA_INFO_EVENTS.CONTAINER_COVER, this.#onContainerCover);
     document.addEventListener(MEDIA_INFO_EVENTS.SELECTED, this.#onSelected);
     document.addEventListener(MEDIA_INFO_EVENTS.CONTENTS, this.#onContents);
     document.addEventListener(MEDIA_INFO_EVENTS.WANT_FILES, this.#onWantFiles);
@@ -143,13 +162,90 @@ export class MediaInfoController {
 
   /**
    * What identification is told besides names: the category the torrent states
-   * and, for one file, its hash. Both are optional and absent unless known.
+   * and, for one file, its hash, what it states about its work, and which file
+   * it is — by which the server keeps what the file states for the next viewer.
+   * All are optional and absent unless known.
    *
    * @param {number} [fileIndex]
    */
   #evidence(fileIndex) {
     const fingerprint = fileIndex === undefined ? undefined : this.#fingerprints.get(fileIndex);
-    return { ...(this.#category ? { category: this.#category } : {}), ...(fingerprint ? { fingerprint } : {}) };
+    const container = fileIndex === undefined ? null : containerEvidence(this.#containers.get(fileIndex));
+    const infoHash = typeof this.#contents?.infoHash === "string" ? this.#contents.infoHash.toLowerCase() : "";
+    const source = fileIndex !== undefined && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(infoHash) ? { infoHash, fileIndex } : null;
+    return {
+      ...(this.#category ? { category: this.#category } : {}),
+      ...(fingerprint ? { fingerprint } : {}),
+      ...(container ? { container } : {}),
+      ...(source ? { source } : {})
+    };
+  }
+
+  /** What the opened file states about its work arrived from the proxy. */
+  #onContainer = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const fileIndex = detail?.fileIndex;
+    if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !this.#filesByIndex.has(fileIndex) ||
+        !detail.container || typeof detail.container !== "object") return;
+    this.#keepContainer(fileIndex, detail.container);
+    if (this.#containerRetried.has(fileIndex)) return;
+    this.#containerRetried.add(fileIndex);
+    // Asked again only where the names did not establish the work; asked with
+    // what the file states, the server also keeps it for the next viewer.
+    if (shapeOf(this.#contents) === "undetermined") {
+      if (this.#pictures[String(fileIndex)]) return;
+      this.#askedPictures.delete(fileIndex);
+      void this.#identifyPicture(this.#selection, fileIndex);
+      return;
+    }
+    if (!this.#releaseRequest || this.#work || !this.#itemsByIndex.has(fileIndex)) return;
+    void this.#identifyRelease(this.#selection, this.#releaseRequest);
+  };
+
+  /** The cover a file carries arrived: it is shown only where no poster is. */
+  #onContainerCover = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const fileIndex = detail?.fileIndex;
+    if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !(detail.cover instanceof Blob) || this.#covers.has(fileIndex)) return;
+    this.#covers.set(fileIndex, { url: URL.createObjectURL(detail.cover), type: detail.cover.type || "image/jpeg" });
+    this.#publish();
+  };
+
+  /**
+   * Keep what a file states about its work, fill its episode title where no
+   * provider named the episode, and log where it contradicts what is shown.
+   *
+   * @param {number} fileIndex
+   * @param {object} container
+   */
+  #keepContainer(fileIndex, container) {
+    this.#containers.set(fileIndex, container);
+    const key = String(fileIndex);
+    const stated = containerEpisode(container, this.#itemsByIndex.get(fileIndex)?.episode);
+    const shown = this.#episodes[key];
+    if (stated && !shown) this.#episodes[key] = stated;
+    else if (stated && shown) this.#noteContradiction(fileIndex, shown, stated);
+    const work = this.#work?.normalized ?? this.#work;
+    if (work && Number.isInteger(work.year) && Number.isInteger(container.year) && work.year !== container.year) {
+      console.info(`[media-info] file ${fileIndex} states the year ${container.year}, the work shown has ${work.year}`);
+    }
+    this.#publish();
+  }
+
+  /**
+   * Two statements of one file's episode that disagree: the one shown stays.
+   *
+   * @param {number} fileIndex
+   * @param {{ source?: string, episodes: Array<{ number: number, name: string }> }} shown
+   * @param {{ source?: string, episodes: Array<{ number: number, name: string }> }} other
+   */
+  #noteContradiction(fileIndex, shown, other) {
+    const number = (match) => match.episodes.map((episode) => episode.number).join("-");
+    const name = (match) => match.episodes.map((episode) => episode.name).join(" / ").trim().toLowerCase();
+    const fields = [number(shown) !== number(other) ? "number" : null, name(shown) !== name(other) ? "title" : null].filter(Boolean);
+    if (fields.length > 0) {
+      console.info(`[media-info] file ${fileIndex}: ${other.source ?? "provider"} states another episode ${fields.join(" and ")} than the ${shown.source ?? "provider"}'s shown`);
+    }
   }
 
   /** The hash of a file arrived: ask again for a release or picture that is still not identified. */
@@ -250,6 +346,10 @@ export class MediaInfoController {
     this.#category = null;
     this.#fingerprints = new Map();
     this.#fingerprintRetried = new Set();
+    this.#containers = new Map();
+    for (const { url } of this.#covers.values()) URL.revokeObjectURL(url);
+    this.#covers = new Map();
+    this.#containerRetried = new Set();
     this.#contents = null;
     this.#filesByIndex = new Map();
     this.#itemsByIndex = new Map();
@@ -271,8 +371,12 @@ export class MediaInfoController {
     const sequence = ++this.#releaseSequence;
     const [firstItem] = this.#contents?.items ?? [];
     const single = shapeOf(this.#contents) === "single" ? firstItem?.fileIndex : undefined;
-    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(single) });
+    // A series is one work: what any of its episodes states (the series' own
+    // title, its season) is evidence for all of them.
+    const stating = single ?? [...this.#containers.keys()].find((index) => this.#itemsByIndex.has(index)) ?? firstItem?.fileIndex;
+    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(stating) });
     if (selection !== this.#selection || sequence !== this.#releaseSequence) return;
+    this.#takeKept(stating, answer);
     this.#releaseStatus = answer?.status ?? null;
     if (answer?.status !== "identified") {
       this.#retryWithDuration();
@@ -298,6 +402,19 @@ export class MediaInfoController {
   }
 
   /**
+   * What the server kept from an earlier reading of a file, when this page has
+   * none of its own yet: a pack's file is identified with what an earlier
+   * viewer's proxy read from it, and its episode title fills in the same way.
+   *
+   * @param {number | undefined} fileIndex
+   * @param {{ container?: object | null } | null} answer
+   */
+  #takeKept(fileIndex, answer) {
+    if (!Number.isInteger(fileIndex) || !answer?.container || this.#containers.has(fileIndex)) return;
+    this.#keepContainer(fileIndex, answer.container);
+  }
+
+  /**
    * @param {number} selection
    * @param {number} fileIndex
    */
@@ -311,7 +428,9 @@ export class MediaInfoController {
       return;
     }
     const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(fileIndex) });
-    if (selection !== this.#selection || answer?.status !== "identified") {
+    if (selection !== this.#selection) return;
+    this.#takeKept(fileIndex, answer);
+    if (answer?.status !== "identified") {
       return;
     }
     this.#pictures[String(fileIndex)] = answer.work;
@@ -375,7 +494,10 @@ export class MediaInfoController {
     this.#seasons[String(season)] = answer.season?.name ?? "";
     for (const match of answer.files ?? []) {
       if (match.status === "matched") {
-        this.#episodes[match.key] = { source: "tmdb", season, episodes: match.episodes, part: match.part ?? null };
+        const found = { source: "tmdb", season, episodes: match.episodes, part: match.part ?? null };
+        // An episode title the file stated and the page already shows stays.
+        if (this.#episodes[match.key]?.source === "container") this.#noteContradiction(Number(match.key), this.#episodes[match.key], found);
+        else this.#episodes[match.key] = found;
       }
     }
     this.#publish();
@@ -390,6 +512,10 @@ export class MediaInfoController {
           seasons: { ...this.#seasons },
           episodes: { ...this.#episodes },
           pictures: { ...this.#pictures },
+          containers: Object.fromEntries([...new Set([...this.#containers.keys(), ...this.#covers.keys()])].map((index) => [index, {
+            ...(this.#containers.get(index) ?? {}),
+            ...(this.#covers.has(index) ? { coverUrl: this.#covers.get(index).url, coverType: this.#covers.get(index).type } : {})
+          }])),
           markers: Object.fromEntries([...this.#itemsByIndex].map(([index, item]) => [index, item.episode])),
           files: Object.fromEntries(this.#filesByIndex),
           releaseName: this.#contents?.name ?? this.#selectionNames[0] ?? ""

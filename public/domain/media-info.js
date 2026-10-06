@@ -291,7 +291,57 @@ export function episodeLabel(match, { withSeason = null, releaseNumbers = null }
  *   File index → the episode it was matched to. Only matches are here.
  * @property {Record<string, object>} pictures - File index → the work that one
  *   picture is, for a release whose pictures are not known to be one work.
+ * @property {Record<string, object>} [containers] - File index → what that file
+ *   states about its work, read by the proxy, with `coverUrl` and `coverType`
+ *   when it carries a cover.
  */
+
+/** The fields of what a file states that identification reads (server `ContainerMetadata.js`). */
+const CONTAINER_FIELDS = ["title", "otherTitles", "seriesTitle", "segmentTitle", "year", "itemYear", "season", "episode",
+  "episodeTitle", "description", "externalIds", "genres"];
+
+/**
+ * What a file states about its work, cut to what identification reads — the
+ * track and chapter titles and the cover stay on the page.
+ *
+ * @param {object | null | undefined} container
+ * @returns {object | null}
+ */
+export function containerEvidence(container) {
+  if (!container || typeof container !== "object") return null;
+  const out = {};
+  for (const field of CONTAINER_FIELDS) if (container[field] !== undefined && container[field] !== null) out[field] = container[field];
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * What one file states about its work, as the page keeps it, with the address
+ * of its cover when it carries one.
+ *
+ * @param {MediaInfoState | null} state
+ * @param {number} fileIndex
+ * @returns {object | null}
+ */
+export function containerFor(state, fileIndex) {
+  return state?.containers?.[String(fileIndex)] ?? null;
+}
+
+/**
+ * The episode a file states about itself, in the shape of a provider's match,
+ * or `null` when it does not state both its number and its title. The number
+ * the file states comes first; the one its name carries is used when the file
+ * states only a title.
+ *
+ * @param {object | null} container
+ * @param {{ season?: number | null, episodes?: number[] } | null | undefined} marker
+ * @returns {{ source: "container", season: number | null, episodes: Array<{ number: number, name: string, still: null }>, part: null } | null}
+ */
+export function containerEpisode(container, marker) {
+  const number = Number.isInteger(container?.episode) ? container.episode : marker?.episodes?.[0];
+  if (typeof container?.episodeTitle !== "string" || container.episodeTitle.length === 0 || !Number.isInteger(number)) return null;
+  const season = Number.isInteger(container.season) ? container.season : Number.isInteger(marker?.season) ? marker.season : null;
+  return { source: "container", season, episodes: [{ number, name: container.episodeTitle, still: null }], part: null };
+}
 
 /**
  * The picture to show while a file loads: the episode's own frame, else the
@@ -311,12 +361,16 @@ export function artFor(state, fileIndex) {
   return (
     imageUrl(IMAGE_SIZE.still, still) ??
     imageUrl(IMAGE_SIZE.still, (work?.normalized ?? work)?.backdrop) ??
-    imageUrl(IMAGE_SIZE.poster, (work?.normalized ?? work)?.poster)
+    imageUrl(IMAGE_SIZE.poster, (work?.normalized ?? work)?.poster) ??
+    containerFor(state, fileIndex)?.coverUrl ??
+    null
   );
 }
 
 /**
- * The work a file belongs to, when one is known.
+ * The work a file belongs to, when one is known. A year or a description the
+ * work lacks is filled from what the file states; nothing the work states is
+ * replaced (meta#139).
  *
  * @param {MediaInfoState | null} state
  * @param {number} fileIndex
@@ -326,8 +380,14 @@ export function workFor(state, fileIndex) {
   if (!state) {
     return null;
   }
-  const work = state.pictures?.[String(fileIndex)] ?? state.work ?? null;
-  return work?.normalized ?? work;
+  const raw = state.pictures?.[String(fileIndex)] ?? state.work ?? null;
+  const work = raw?.normalized ?? raw;
+  const container = containerFor(state, fileIndex);
+  if (!work || !container) return work;
+  const filled = {};
+  if (!Number.isInteger(work.year) && Number.isInteger(container.year)) filled.year = container.year;
+  if (!work.overview && typeof container.description === "string" && container.description.length > 0) filled.overview = container.description;
+  return Object.keys(filled).length > 0 ? { ...work, ...filled } : work;
 }
 
 /**
@@ -443,7 +503,10 @@ export function systemArtwork(state, index, random = Math.random) {
   if (!image) {
     // The main poster's size is not listed; 278 is the 2:3 height declared for it before.
     const src = imageUrl(IMAGE_SIZE.artwork, work?.poster);
-    return src ? [{ src, sizes: smallest + "x278" }] : [];
+    if (src) return [{ src, sizes: smallest + "x278" }];
+    // The cover the file carries: its size is the image's own, so none is declared.
+    const cover = containerFor(state, index);
+    return cover?.coverUrl ? [{ src: cover.coverUrl, sizes: "", type: cover.coverType }] : [];
   }
   return SYSTEM_ARTWORK_WIDTHS.filter(width => width <= image.width).map(width => ({
     src: imageUrl("w" + width, image.file),
@@ -476,7 +539,11 @@ export function playerArt(state, index, width, height, dpr = 1, random = Math.ra
   const sufficient = i => i.width >= width * dpr && i.height >= height * dpr;
   const suitable = preferred.filter(sufficient);
   const image = suitable[Math.floor(random() * suitable.length)] ?? preferred.reduce((best, i) => !best || i.width * i.height > best.width * best.height ? i : best, null) ?? candidates[0];
-  if (!image) return null;
+  if (!image) {
+    // The cover the file carries, shown at its own size.
+    const cover = containerFor(state, index)?.coverUrl;
+    return cover ? { url: cover, width: null, height: null } : null;
+  }
   const need = image.width && image.height ? Math.max(width * dpr, height * dpr * image.width / image.height) : Infinity;
   const role = image.role ?? image.kind;
   const sizes = role === "poster" ? [342, 500, 780] : role === "still" ? [300] : [300, 780, 1280];

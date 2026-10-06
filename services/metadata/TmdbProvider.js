@@ -40,12 +40,17 @@ export class TmdbProvider extends MetadataProvider {
 
   /** @param {import("./MetadataService.js").MetadataService} service */
   constructor(service) {
-    super({ name: "tmdb", stage: STAGE.primary, takes: [EVIDENCE.names], category: CATEGORY.general });
+    super({ name: "tmdb", stage: STAGE.primary, takes: [EVIDENCE.names, EVIDENCE.externalIds], category: CATEGORY.general });
     this.#service = service;
   }
 
   async identify(request) {
     return withRecords(await this.#service.identify(request));
+  }
+
+  async identifyById(request) {
+    if (!this.#service.identifyById) return null;
+    return withRecords(await this.#service.identifyById(request));
   }
 
   async lastResort(request) {

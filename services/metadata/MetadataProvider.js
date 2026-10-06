@@ -120,6 +120,18 @@ export class MetadataProvider {
   }
 
   /**
+   * Identify the work by its id in another database (`request.externalIds`):
+   * a lookup, not a search. `null` when this source cannot look one up, or the
+   * request holds no id it reads.
+   *
+   * @param {object} _request
+   * @returns {Promise<{ status: string, records?: Record<string, object> } | null>}
+   */
+  async identifyById(_request) {
+    return null;
+  }
+
+  /**
    * One last bounded attempt when every source found nothing. `null` when this
    * source has none.
    *
@@ -147,7 +159,9 @@ export class MetadataProvider {
 
   /**
    * Evidence this source derives from the request for the other sources:
-   * `names`, `externalIds`, `season`, `episode`, `episodeTitle`. `null` for none.
+   * `names`, `externalIds`, `season`, `episode`, `episodeTitle`, `kindHint`,
+   * and — only where the request states none — `episodeEvidence`. `null` for
+   * none.
    *
    * @param {object} _request
    * @returns {object | null}

@@ -204,6 +204,24 @@ export class TmdbSource {
   }
 
   /**
+   * The works an id in another database names (TMDB "Find by ID"): films,
+   * series, and the series an episode or season belongs to.
+   *
+   * @param {string} externalId - `tt…` for IMDb, a number for TVDB.
+   * @param {"imdb_id" | "tvdb_id"} externalSource
+   * @param {{ deadlineAt: number }} options
+   * @returns {Promise<{ movie: number[], tv: number[] }>}
+   */
+  async find(externalId, externalSource, options) {
+    const body = await this.#get(`/find/${encodeURIComponent(externalId)}`, { external_source: externalSource }, MAX_WORK_BYTES, options);
+    const ids = (list, key = "id") => (Array.isArray(list) ? list : []).map((entry) => entry?.[key]).filter(Number.isInteger);
+    return {
+      movie: [...new Set(ids(body?.movie_results))],
+      tv: [...new Set([...ids(body?.tv_results), ...ids(body?.tv_episode_results, "show_id"), ...ids(body?.tv_season_results, "show_id")])]
+    };
+  }
+
+  /**
    * One season of a series, reduced to its episodes.
    *
    * @param {number} id

@@ -204,7 +204,7 @@ export class MediaSessionBridge {
       navigator.mediaSession.metadata = new MediaMetadata({
         title,
         artist: match ? (workLine(work) ?? MediaSessionBridge.APP_NAME) : MediaSessionBridge.APP_NAME,
-        artwork: this.#artwork.map(({ src, sizes }) => ({ src, sizes, type: src.endsWith(".png") ? "image/png" : "image/jpeg" }))
+        artwork: this.#artwork.map(({ src, sizes, type }) => ({ src, sizes, type: type ?? (src.endsWith(".png") ? "image/png" : "image/jpeg") }))
       });
     } catch {
       // silent-ok: as above — the title shown by the operating system's media

@@ -74,12 +74,13 @@ const diskCache = process.env.SERVER_CACHE_DIR
   : null;
 const subtitleCache = diskCache?.namespace("subtitles") ?? new MetadataCache({ budgetBytes: 8 * 1024 ** 2, maxEntryBytes: 4 * 1024 ** 2 });
 const subtitles = createSubtitles(subtitleCache);
-const { service: metadata, images: metadataImages, covers: adultCovers } = createMetadata({
+const { service: metadata, images: metadataImages, covers: adultCovers, containers: containerRecords } = createMetadata({
   token: process.env.TMDB_READ_TOKEN?.trim() || null,
   theporndbKey: process.env.THEPORNDB_API_KEY?.trim() || null,
   stashdbKey: process.env.STASHDB_API_KEY?.trim() || null,
   cache: diskCache?.namespace("tmdb"),
-  animeCache: diskCache?.namespace("anilist")
+  animeCache: diskCache?.namespace("anilist"),
+  containerCache: diskCache?.namespace("container")
 });
 app.addHook("onClose", async () => { await diskCache?.stop(); });
 
@@ -165,7 +166,9 @@ await app.register(fastifyHelmet, {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "'unsafe-inline'", "'unsafe-eval'"],
-      imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net"],
+      // `blob:` for the cover a video file carries inside it, which the page
+      // receives from its proxy and shows from memory (meta#139).
+      imgSrc: ["'self'", "data:", "blob:", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       fontSrc: ["'self'", "data:"],
       workerSrc: ["'self'", "blob:"],
@@ -211,7 +214,7 @@ app.post("/api/client-logs", async (req, reply) => handleApiClientLogsPost(req, 
 // server so that the browser never talks to a third party and the token stays
 // here. Never on the playback path: every answer may be late, absent or refused.
 app.post("/api/metadata/identify", { bodyLimit: IDENTIFY_BODY_LIMIT }, async (req, reply) =>
-  handleApiMetadataIdentifyPost(req, reply, { metadata })
+  handleApiMetadataIdentifyPost(req, reply, { metadata, containerRecords })
 );
 app.post("/api/metadata/episodes", { bodyLimit: EPISODES_BODY_LIMIT }, async (req, reply) =>
   handleApiMetadataEpisodesPost(req, reply, { metadata })

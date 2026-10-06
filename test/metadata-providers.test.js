@@ -41,32 +41,77 @@ test("each field has its own order of sources", () => {
 test("a container title that is only a release name is not a title", () => {
   assert.equal(isPlainTitle("Spirited Away"), true);
   assert.equal(isPlainTitle("Spirited.Away.2001.1080p.BluRay.x264-GRP"), false);
-  const fields = new ContainerMetadata().fields({ title: "Spirited.Away.2001.1080p.BluRay.x264-GRP", originalTitle: "千と千尋の神隠し", year: 2001 });
-  assert.equal(fields.title, undefined);
-  assert.equal(fields.originalTitle, "千と千尋の神隠し");
+  const fields = new ContainerMetadata().fields({ title: "Spirited.Away.2001.1080p.BluRay.x264-GRP", otherTitles: ["千と千尋の神隠し"], year: 2001, description: "A girl." });
+  assert.equal(fields.title, "千と千尋の神隠し");
   assert.equal(fields.year, 2001);
+  assert.equal(fields.overview, "A girl.");
+  assert.equal(fields.kind, undefined);
+  assert.equal(new ContainerMetadata().fields({ season: 1 }).kind, "series");
 });
 
 test("what a container states is checked and bounded before it is used", () => {
-  const facts = readContainerFacts({ title: "  A  ", year: 3000, season: -1, episode: 3, externalIds: { imdb: "tt123", tmdb: "5", anilist: 9 }, genres: ["Drama", 4, "Comedy"] });
+  const facts = readContainerFacts({ title: "  A  ", year: 3000, season: -1, episode: 3,
+    externalIds: { imdb: "tt0123456", tmdb: { kind: "tv", id: 5 }, tvdb: 81189 }, genres: ["Drama", 4, "Comedy"] });
   assert.equal(facts.title, "A");
   assert.equal(facts.year, undefined);
   assert.equal(facts.season, undefined);
   assert.equal(facts.episode, 3);
-  assert.deepEqual(facts.externalIds, { imdb: "tt123", anilist: 9 });
+  assert.deepEqual(facts.externalIds, { imdb: "tt0123456", tmdb: { kind: "tv", id: 5 }, tvdb: 81189 });
   assert.deepEqual(facts.genres, ["Drama", "Comedy"]);
+  assert.deepEqual(readContainerFacts({ externalIds: { imdb: "tt123", tmdb: "movie/5", tvdb: "x" } }).externalIds, {});
   assert.equal(readContainerFacts("text"), null);
+  assert.equal(readContainerFacts([]), null);
   assert.equal(readContainerFacts({ title: "x".repeat(1000) }).title.length, 300);
+  assert.equal(readContainerFacts({ description: "x".repeat(5000) }).description.length, 2000);
 });
 
-test("the container is evidence for the others: its names and ids reach the search", async () => {
+test("the container is evidence for the others: its names, numbers and ids reach the search", async () => {
   const seen = [];
-  const answer = await registry({ seen }).identify({ names: ["Release.Name.1080p"],
-    container: { title: "Release.Name.1080p.WEB-DL", originalTitle: "Original Name", season: 2, episode: 5, episodeTitle: "Pilot", externalIds: { imdb: "tt0000001" } } });
+  const answer = await registry({ seen }).identify({ names: ["Release.Name.1080p"], kindHint: null,
+    container: { title: "Сериал", seriesTitle: "Сериал", segmentTitle: "Release.Name.2021.1080p.WEB-DL", season: 2, episode: 5, episodeTitle: "Pilot",
+      externalIds: { imdb: "tt0000001" } } });
   assert.equal(answer.status, "identified");
-  assert.deepEqual(seen[0].names, ["Release.Name.1080p", "Original Name"]);
+  // A release name the container states is a name too: it adds the year the file name lacks.
+  assert.deepEqual(seen[0].names, ["Release.Name.1080p", "Сериал", "Release.Name.2021.1080p.WEB-DL"]);
   assert.deepEqual([seen[0].season, seen[0].episode, seen[0].episodeTitle], [2, 5, "Pilot"]);
   assert.deepEqual(seen[0].externalIds, { imdb: "tt0000001" });
+  assert.equal(seen[0].kindHint, "tv", "a season the file states says the work is a series");
+  assert.deepEqual(seen[0].episodeEvidence, { season: 2, titles: ["Pilot"] });
+});
+
+test("the release's own season of titles is kept over the one title a container states", async () => {
+  const seen = [];
+  const episodeEvidence = { season: 2, titles: ["One", "Two"] };
+  await registry({ seen }).identify({ names: ["Show"], kindHint: "tv", episodeEvidence, container: { season: 2, episode: 1, episodeTitle: "Pilot" } });
+  assert.deepEqual(seen[0].episodeEvidence, episodeEvidence);
+});
+
+test("an id the container states is looked up before any search, and replaces it", async () => {
+  const searched = [];
+  const looked = [];
+  const tmdb = new TmdbProvider({
+    identify: async (request) => { searched.push(request); return { status: "not-found" }; },
+    identifyById: async (request) => { looked.push(request.externalIds); return { status: "identified", work }; },
+    episodes: async () => ({ status: "ok" })
+  });
+  const answer = await new MetadataRegistry({ providers: [new ContainerMetadata(), tmdb] })
+    .identify({ names: ["Anything"], container: { externalIds: { tmdb: { kind: "tv", id: 7 } } } });
+  assert.equal(answer.status, "identified");
+  assert.deepEqual(looked, [{ tmdb: { kind: "tv", id: 7 } }]);
+  assert.equal(searched.length, 0);
+});
+
+test("an id that names nothing leaves the search by name to decide", async () => {
+  const searched = [];
+  const tmdb = new TmdbProvider({
+    identify: async (request) => { searched.push(request); return { status: "identified", work }; },
+    identifyById: async () => ({ status: "not-found" }),
+    episodes: async () => ({ status: "ok" })
+  });
+  const answer = await new MetadataRegistry({ providers: [new ContainerMetadata(), tmdb] })
+    .identify({ names: ["Example"], container: { externalIds: { imdb: "tt0000001" } } });
+  assert.equal(answer.status, "identified");
+  assert.equal(searched.length, 1);
 });
 
 test("the container is also a source: it fills a field the databases leave empty", async () => {

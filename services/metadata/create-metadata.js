@@ -10,6 +10,7 @@
 import { AniListProvider } from "./AniListProvider.js";
 import { AdultCovers } from "./AdultCovers.js";
 import { ContainerMetadata } from "./ContainerMetadata.js";
+import { ContainerRecords } from "./ContainerRecords.js";
 import { ImageFetcher } from "./ImageFetcher.js";
 import { MetadataCache } from "./MetadataCache.js";
 import { MetadataRegistry } from "./MetadataRegistry.js";
@@ -23,9 +24,9 @@ import { TmdbSource } from "./TmdbSource.js";
 
 /**
  * @param {{ token?: string | null }} params
- * @returns {{ service: MetadataRegistry, images: ImageFetcher }}
+ * @returns {{ service: MetadataRegistry, images: ImageFetcher, covers: AdultCovers, containers: ContainerRecords }}
  */
-export function createMetadata({ token = null, theporndbKey = null, stashdbKey = null, cache, animeCache }) {
+export function createMetadata({ token = null, theporndbKey = null, stashdbKey = null, cache, animeCache, containerCache }) {
   console.log(token ? "[metadata] TMDB token present; film metadata is on" : "[metadata] TMDB_READ_TOKEN is not set; film metadata is off");
   const apiGate = new RequestGate({ concurrency: 4, perSecond: 10, queueLimit: 32 });
   const source = token ? new TmdbSource({ token, gate: apiGate }) : null;
@@ -50,5 +51,8 @@ export function createMetadata({ token = null, theporndbKey = null, stashdbKey =
   ].filter(Boolean);
   console.log(`[metadata] adult databases: ${adult.map(provider => provider.name).join(", ") || "none"}`);
   const providers = [...adult, new TmdbProvider(service), new AniListProvider({ cache: animeCache }), new ContainerMetadata()];
-  return { service: new MetadataRegistry({ providers }), images, covers: new AdultCovers({ providers: adult }) };
+  // What files state about their work, by infohash and file index. 2 MB of
+  // serialized records when there is no disk cache: a record is under 4 KB.
+  const containers = new ContainerRecords({ cache: containerCache ?? new MetadataCache({ budgetBytes: 2 * 1024 * 1024, maxEntryBytes: 16 * 1024 }) });
+  return { service: new MetadataRegistry({ providers }), images, covers: new AdultCovers({ providers: adult }), containers };
 }
