@@ -1,4 +1,4 @@
-## Unreleased
+## 0.43.1
 
 - **Fix**: The player's poster stays until playback has started instead of going when the first frame is decoded. A viewer whose playback was still preparing (or never started) lost the poster as soon as the first segments arrived and saw a first frame or black with a waiting indicator (field 2026-10-06, torrent-tv/meta#144).
 
