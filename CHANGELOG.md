@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The cover of an identified adult scene reaches the work as its `poster`; the order of sources for that field named TMDB only, so a scene found by ThePornDB or StashDB had no poster (torrent-tv/meta#135).
+
 ## 0.47.1
 
 - **Fix**: The hash of a release's only picture is asked of the proxy as soon as the proxy has said what is in the release, not when the plan of playback is ready; on a cold torrent that took minutes, and identification by the hash came after the viewer had stopped waiting (torrent-tv/meta#135).
