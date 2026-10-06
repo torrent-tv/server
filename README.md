@@ -99,6 +99,12 @@ token read from `TMDB_READ_TOKEN` (see `infra/README.md`,
 `research/metadata-enrichment-2026-09-30.md` in the parent folder. Nothing on the
 playback path waits for these routes.
 
+Order of questions (`services/metadata/MetadataRegistry.js`): the hash of the file
+first; then the names in the databases of the kind the request states; the other
+kind (adult after film and anime, or the reverse for `category: "adult"`) only when
+nothing at all was found. Adult databases need `STASHDB_API_KEY` and
+`THEPORNDB_API_KEY`.
+
 The provider-separated response format, anime routing and artwork selection are described in [METADATA.md](METADATA.md).
 
 ### Proxy Tunnel (`/ws/proxy-tunnel`)

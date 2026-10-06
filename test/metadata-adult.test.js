@@ -18,15 +18,6 @@ function fakeFetch(answers, seen = []) {
 const tpdbScene = { id: "abc", title: "Geography Test", date: "2007-03-30", description: "text", site: { name: "Oldje" }, performers: [{ name: "A" }, { name: "B" }] };
 const stashScene = { id: "s1", title: "Brazzers Beach", details: null, release_date: "2025-07-15", studio: { name: "Brazzers Exxtra" }, performers: [{ performer: { name: "Angela" } }] };
 
-test("an adult source is asked only for the category adult, and the general ones are not asked then", () => {
-  const tpdb = new ThePornDbProvider({ key: "k", fetch: fakeFetch([]), gate });
-  const tmdb = new TmdbProvider({});
-  assert.equal(tpdb.accepts({ names: ["x"] }), false);
-  assert.equal(tpdb.accepts({ names: ["x"], category: "adult" }), true);
-  assert.equal(tmdb.accepts({ names: ["x"] }), true);
-  assert.equal(tmdb.accepts({ names: ["x"], category: "adult" }), false);
-});
-
 test("ThePornDB identifies by the file hash first and reduces the scene to the common fields", async () => {
   const seen = [];
   const provider = new ThePornDbProvider({ key: "secret-key", fetch: fakeFetch([{ data: [tpdbScene] }], seen), gate });
@@ -67,15 +58,54 @@ test("StashDB takes a name only when exactly one title is in it and the years ag
   assert.equal((await search([stashScene, { ...stashScene, id: "s2", title: "Brazzers" }]).identify({ names: ["Brazzers.Beach.2025"] })).status, "ambiguous");
 });
 
-test("the registry reports an adult work with studio and performers, without asking TMDB", async () => {
-  let tmdbAsked = false;
-  const tmdb = new TmdbProvider({ identify: async () => { tmdbAsked = true; return { status: "not-found" }; } });
-  const stash = new StashDbProvider({ key: "k", fetch: fakeFetch([{ data: { findScenesBySceneFingerprints: [[stashScene]] } }]), gate });
-  const answer = await new MetadataRegistry({ providers: [stash, tmdb] }).identify({ names: ["x"], category: "adult", fingerprint: { hash, size: 1 } });
-  assert.equal(answer.status, "identified");
-  assert.equal(tmdbAsked, false);
+/** A registry over a fake general source and a fake adult one, recording who was asked and with what. */
+function ordered({ general, adult }) {
+  const asked = [];
+  const tmdb = new TmdbProvider({ identify: async request => { asked.push(["general", request.names]); return general; } });
+  const stash = new StashDbProvider({ key: "k", gate, fetch: async (url, init) => {
+    const { variables } = JSON.parse(init.body);
+    asked.push(["adult", variables.f ? "hash" : "name"]);
+    return json(variables.f ? { data: { findScenesBySceneFingerprints: [adult.hash ?? []] } } : { data: { searchScene: adult.name ?? [] } });
+  } });
+  return { asked, registry: new MetadataRegistry({ providers: [stash, tmdb] }) };
+}
+
+const film = { status: "identified", work: { tmdbId: 7, kind: "movie", title: "A Film", year: 2001, seasons: [], images: [] } };
+
+test("the hash is asked first, whatever the category, and an exact match ends the questions", async () => {
+  const { asked, registry } = ordered({ general: film, adult: { hash: [stashScene] } });
+  const answer = await registry.identify({ names: ["A Film 2001"], fingerprint: { hash, size: 1 } });
   assert.equal(answer.work.normalized.title, "Brazzers Beach");
+  assert.deepEqual(asked, [["adult", "hash"]]);
+});
+
+test("without a stated category the general databases come first and the adult ones are left alone when they know the name", async () => {
+  const { asked, registry } = ordered({ general: film, adult: {} });
+  const answer = await registry.identify({ names: ["A Film 2001"] });
+  assert.equal(answer.work.normalized.title, "A Film");
+  assert.deepEqual(asked.map(([kind]) => kind), ["general"]);
+});
+
+test("when the film and anime databases find nothing, the adult ones are asked even without a category", async () => {
+  const { asked, registry } = ordered({ general: { status: "not-found" }, adult: { name: [stashScene] } });
+  const answer = await registry.identify({ names: ["Brazzers.Beach.2025.1080p.mp4"] });
+  assert.equal(answer.status, "identified");
   assert.equal(answer.work.normalized.studio, "Brazzers Exxtra");
-  assert.equal(answer.work.normalized.adult, true);
-  assert.equal(answer.work.normalized.provenance.studio, "stashdb");
+  assert.deepEqual(asked.map(([kind]) => kind), ["general", "adult"]);
+});
+
+test("several candidates in the general databases are an answer: the adult ones are not asked then", async () => {
+  const { asked, registry } = ordered({ general: { status: "ambiguous", candidates: [] }, adult: { name: [stashScene] } });
+  const answer = await registry.identify({ names: ["Brazzers.Beach.2025"] });
+  assert.equal(answer.status, "ambiguous");
+  assert.deepEqual(asked.map(([kind]) => kind), ["general"]);
+});
+
+test("a stated adult category asks the adult databases first and the general ones only when they found nothing", async () => {
+  const hit = ordered({ general: film, adult: { name: [stashScene] } });
+  assert.equal((await hit.registry.identify({ names: ["Brazzers.Beach.2025"], category: "adult" })).work.normalized.title, "Brazzers Beach");
+  assert.deepEqual(hit.asked.map(([kind]) => kind), ["adult"]);
+  const miss = ordered({ general: film, adult: {} });
+  assert.equal((await miss.registry.identify({ names: ["A Film 2001"], category: "adult" })).work.normalized.title, "A Film");
+  assert.deepEqual(miss.asked.map(([kind]) => kind), ["adult", "general"]);
 });

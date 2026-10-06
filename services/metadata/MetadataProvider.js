@@ -32,17 +32,19 @@ export const EVIDENCE = Object.freeze({
 });
 
 /**
- * Which requests a source is asked about. The category of a request is stated by
- * the page from what the torrent says about itself; an adult database is asked
- * only when that is `adult`, and the general databases are not asked then, so a
- * release is never matched against the wrong kind of database.
+ * What kind of database a source is. It decides the order of questions by name
+ * (see `MetadataRegistry`): the kind a request states comes first, the other
+ * kind is asked only when nothing was found. It never stops a source being
+ * asked: an exact question (the hash of the file) is asked of every source that
+ * takes it, and a name that the general databases cannot place may still be a
+ * scene in an adult one.
  */
 export const CATEGORY = Object.freeze({
-  /** Asked whatever the category. */
+  /** The media container: evidence for the others, asked of nobody. */
   any: "any",
-  /** Asked only while the category is not adult. */
+  /** Films, series and anime. */
   general: "general",
-  /** Asked only when the category is adult. */
+  /** Adult scenes and films. */
   adult: "adult"
 });
 
@@ -101,9 +103,6 @@ export class MetadataProvider {
 
   /** Whether the request holds evidence that this source takes. */
   accepts(request) {
-    const adult = request?.category === "adult";
-    if (this.category === CATEGORY.adult && !adult) return false;
-    if (this.category === CATEGORY.general && adult) return false;
     const present = evidenceOf(request);
     return [...this.takes].some((kind) => present.has(kind));
   }
