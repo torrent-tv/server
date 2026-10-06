@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Opening failures remain attached to the current playback attempt. Resetting source preferences no longer makes an active failure appear stale and leave the loading screen waiting indefinitely; cancelled and replaced attempts still cannot report an error for the new source.
+
 ## 0.44.0
 
 - **New**: Adult releases can be identified. `POST /api/metadata/identify` takes `category: "adult"` and `fingerprint: { hash, size }` (the OpenSubtitles hash of the file); for that category ThePornDB and StashDB are asked, first by the hash, then by the release name, and a scene is reported only when exactly one fits. The general databases (TMDB, AniList) are not asked for that category, and the adult ones are not asked for any other. The work carries `studio`, `performers` and `adult`. Artwork is not shown yet (torrent-tv/meta#135).

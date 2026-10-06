@@ -1596,7 +1596,6 @@ export class Loading extends StateDerivedView {
 
   /** Forget source preferences and publish empty source facts to their owners. */
   #resetSourceState() {
-    this.#playbackEpoch += 1;
     this.#audioMetadataRefreshSeq += 1;
     this.#activeFileIndex = -1;
     this.#resumeState = null;
