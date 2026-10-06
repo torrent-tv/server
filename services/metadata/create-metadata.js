@@ -8,6 +8,7 @@
  */
 
 import { AniListProvider } from "./AniListProvider.js";
+import { AdultCovers } from "./AdultCovers.js";
 import { ContainerMetadata } from "./ContainerMetadata.js";
 import { ImageFetcher } from "./ImageFetcher.js";
 import { MetadataCache } from "./MetadataCache.js";
@@ -49,5 +50,5 @@ export function createMetadata({ token = null, theporndbKey = null, stashdbKey =
   ].filter(Boolean);
   console.log(`[metadata] adult databases: ${adult.map(provider => provider.name).join(", ") || "none"}`);
   const providers = [...adult, new TmdbProvider(service), new AniListProvider({ cache: animeCache }), new ContainerMetadata()];
-  return { service: new MetadataRegistry({ providers }), images };
+  return { service: new MetadataRegistry({ providers }), images, covers: new AdultCovers({ providers: adult }) };
 }

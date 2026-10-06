@@ -4,6 +4,7 @@ import { MetadataRegistry } from "../services/metadata/MetadataRegistry.js";
 import { TmdbProvider } from "../services/metadata/TmdbProvider.js";
 import { ThePornDbProvider } from "../services/metadata/ThePornDbProvider.js";
 import { StashDbProvider } from "../services/metadata/StashDbProvider.js";
+import { AdultCovers } from "../services/metadata/AdultCovers.js";
 
 const gate = { run: task => task(), pause() {} };
 const hash = "8e245d9679d31e12";
@@ -25,7 +26,7 @@ test("ThePornDB identifies by the file hash first and reduces the scene to the c
   assert.equal(answer.status, "identified");
   assert.match(seen[0].url, /hash=8e245d9679d31e12&hashType=OSHASH/);
   assert.equal(seen[0].init.headers.Authorization, "Bearer secret-key");
-  assert.deepEqual(provider.fields(answer.records.theporndb), { kind: "movie", title: "Geography Test", year: 2007, overview: "text", studio: "Oldje", performers: ["A", "B"], adult: true });
+  assert.deepEqual(provider.fields(answer.records.theporndb), { kind: "movie", title: "Geography Test", year: 2007, overview: "text", poster: undefined, studio: "Oldje", performers: ["A", "B"], adult: true });
 });
 
 test("ThePornDB does not show a name that fits several scenes or none", async () => {
@@ -108,4 +109,40 @@ test("a stated adult category asks the adult databases first and the general one
   const miss = ordered({ general: film, adult: {} });
   assert.equal((await miss.registry.identify({ names: ["A Film 2001"], category: "adult" })).work.normalized.title, "A Film");
   assert.deepEqual(miss.asked.map(([kind]) => kind), ["adult", "general"]);
+});
+
+const sceneId = "1703a150-ceec-4953-ac10-d7ebc7d0974f";
+const png = () => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "content-type": "image/png" } });
+
+test("a scene with an image states its cover as this server's own route", () => {
+  assert.equal(new StashDbProvider({ key: "k", gate }).fields({ ...stashScene, id: sceneId, images: [{ url: "x" }] }).poster, `/api/metadata/cover/stashdb/${sceneId}`);
+  assert.equal(new StashDbProvider({ key: "k", gate }).fields(stashScene).poster, undefined);
+  assert.equal(new ThePornDbProvider({ key: "k", gate }).fields({ ...tpdbScene, id: sceneId, image: "https://x/y.jpg" }).poster, `/api/metadata/cover/theporndb/${sceneId}`);
+});
+
+test("the cover is fetched from the database's own hosts only, as an image, and refuses anything else", async () => {
+  const asked = [];
+  const make = (url, image = png) => new AdultCovers({
+    providers: [{ name: "stashdb", coverUrl: async () => url }],
+    fetch: async (address) => { asked.push(String(address)); return image(); }
+  });
+  const ok = await make("https://stashdb.org/images/abc").fetch("stashdb", sceneId);
+  assert.equal(ok.headers["content-type"], "image/png");
+  assert.match(ok.headers["cache-control"], /max-age=86400/);
+  assert.deepEqual(asked, ["https://stashdb.org/images/abc"]);
+  assert.equal(await make("https://evil.example/x.png").fetch("stashdb", sceneId), null);
+  assert.equal(await make("http://stashdb.org/images/abc").fetch("stashdb", sceneId), null);
+  assert.equal(await make("https://stashdb.org.evil.example/a").fetch("stashdb", sceneId), null);
+  assert.equal(await make("https://thumb.theporndb.net/a.webp").fetch("unknown", sceneId), null);
+  assert.equal(await make("https://thumb.theporndb.net/a.webp").fetch("stashdb", "../etc/passwd"), null);
+  await assert.rejects(make("https://stashdb.org/images/abc", () => new Response("<html>", { headers: { "content-type": "text/html" } })).fetch("stashdb", sceneId), /not an image/);
+  assert.equal(asked.length, 2, "only the two allowed addresses were requested");
+});
+
+test("the page takes a cover route as an image and nothing else of that shape", async () => {
+  const { imageUrl } = await import("../public/domain/media-info.js");
+  assert.equal(imageUrl("w500", `/api/metadata/cover/stashdb/${sceneId}`), `/api/metadata/cover/stashdb/${sceneId}`);
+  assert.equal(imageUrl("w500", "/api/metadata/cover/evil/abc"), null);
+  assert.equal(imageUrl("w500", `/api/metadata/cover/stashdb/${sceneId}/../x`), null);
+  assert.equal(imageUrl("w500", "abcdefgh12.jpg"), "/api/metadata/image/w500/abcdefgh12.jpg");
 });

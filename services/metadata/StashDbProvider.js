@@ -17,7 +17,7 @@ import { requestJson, wordsOf, yearOf } from "./adult-http.js";
 
 const ENDPOINT = "https://stashdb.org/graphql";
 
-const SCENE = "id title details release_date studio { name } performers { performer { name } }";
+const SCENE = "id title details release_date images { url } studio { name } performers { performer { name } }";
 
 const BY_FINGERPRINT = `query($f:[[FingerprintQueryInput!]!]!){ findScenesBySceneFingerprints(fingerprints:$f){ ${SCENE} } }`;
 const BY_TERM = `query($t:String!){ searchScene(term:$t, limit:5){ ${SCENE} } }`;
@@ -34,6 +34,7 @@ export function stashdbFields(scene) {
     title: scene.title || undefined,
     year: yearOf(scene.release_date),
     overview: scene.details || undefined,
+    poster: scene.images?.length ? `/api/metadata/cover/stashdb/${scene.id}` : undefined,
     studio: scene.studio?.name || undefined,
     performers: (scene.performers ?? []).map(entry => entry?.performer?.name).filter(Boolean).slice(0, 20),
     adult: true
@@ -90,6 +91,24 @@ export class StashDbProvider extends MetadataProvider {
       return { status: found.size > 1 ? "ambiguous" : "not-found" };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) { providerFailure("stashdb", "identify", error); return { status: "unavailable" }; }
+      throw error;
+    }
+  }
+
+  /**
+   * The address of the cover image of a scene, asked of the database.
+   *
+   * @param {string} id
+   * @returns {Promise<string | null>}
+   */
+  async coverUrl(id) {
+    try {
+      const data = await this.#query("query($id:ID!){ findScene(id:$id){ images { url width height } } }", { id });
+      const images = data?.findScene?.images ?? [];
+      const widest = images.reduce((best, image) => ((image?.width ?? 0) > (best?.width ?? 0) ? image : best), images[0]);
+      return widest?.url ?? null;
+    } catch (error) {
+      if (error instanceof MetadataUnavailableError) { providerFailure("stashdb", "cover", error); return null; }
       throw error;
     }
   }
