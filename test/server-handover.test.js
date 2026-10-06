@@ -18,7 +18,9 @@ import { WebSocket } from "ws";
 
 const serverEntry = fileURLToPath(new URL("../server.js", import.meta.url));
 
-async function waitFor(until, what, limit = 20_000) {
+// The limit only turns a hang into a failure: two server processes started on a
+// cold machine have taken over 20 s to listen, so it is far above that.
+async function waitFor(until, what, limit = 120_000) {
   const deadline = Date.now() + limit;
   while (!(await until())) {
     if (Date.now() > deadline) {

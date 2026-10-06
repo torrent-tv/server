@@ -1,6 +1,6 @@
 /**
  * @file The page nginx serves is switched in one step to the release of the
- * instance that starts to serve, and the one before it is kept.
+ * instance that starts to serve, and nothing the other slot holds is removed.
  */
 
 import assert from "node:assert/strict";
@@ -9,9 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishRelease } from "../services/static-release.js";
+import { publishRelease, slotOfRelease } from "../services/static-release.js";
 
-/** Whether this machine lets a process create a directory link. */
+/** Whether this machine lets a process create a symbolic link. */
 async function canLink(dir) {
   try {
     await symlink("nowhere", join(dir, "probe"));
@@ -27,7 +27,13 @@ async function addRelease(volume, name) {
   await writeFile(join(volume, "releases", name, "index.html"), name);
 }
 
-test("current follows the serving release and keeps one before it", async (t) => {
+test("a release directory names its slot", () => {
+  assert.equal(slotOfRelease("0.41.0-a-1791238601"), "a");
+  assert.equal(slotOfRelease("0.41.0-b-1791238600"), "b");
+  assert.equal(slotOfRelease("something-else"), null);
+});
+
+test("current follows the serving release; only the slot's own older copies go", async (t) => {
   const volume = await mkdtemp(join(tmpdir(), "static-release-"));
   t.after(() => rm(volume, { recursive: true, force: true }));
   if (!(await canLink(volume))) {
@@ -35,21 +41,21 @@ test("current follows the serving release and keeps one before it", async (t) =>
     return;
   }
   const log = () => {};
-  await addRelease(volume, "0.39.5-a-1");
-  await addRelease(volume, "0.40.0-b-2");
+  const list = async () => (await readdir(join(volume, "releases"))).sort();
 
-  await publishRelease({ volumeDir: volume, release: "0.39.5-a-1", log });
-  assert.equal(await readFile(join(volume, "current", "index.html"), "utf8"), "0.39.5-a-1");
-  // Nothing was served before it, so nothing else is kept.
-  assert.deepEqual(await readdir(join(volume, "releases")), ["0.39.5-a-1"]);
-
-  await addRelease(volume, "0.40.0-b-2");
-  await publishRelease({ volumeDir: volume, release: "0.40.0-b-2", log });
-  assert.equal(await readFile(join(volume, "current", "index.html"), "utf8"), "0.40.0-b-2");
-  assert.deepEqual((await readdir(join(volume, "releases"))).sort(), ["0.39.5-a-1", "0.40.0-b-2"]);
-
+  // Both slots start together: b serves first while a is still writing its copy.
+  await addRelease(volume, "0.41.0-b-2");
   await addRelease(volume, "0.41.0-a-3");
+  await publishRelease({ volumeDir: volume, release: "0.41.0-b-2", log });
+  assert.deepEqual(await list(), ["0.41.0-a-3", "0.41.0-b-2"]);
+  // a takes over: the copy it wrote is there to be served.
   await publishRelease({ volumeDir: volume, release: "0.41.0-a-3", log });
-  assert.deepEqual((await readdir(join(volume, "releases"))).sort(), ["0.40.0-b-2", "0.41.0-a-3"]);
+  assert.equal(await readFile(join(volume, "current", "index.html"), "utf8"), "0.41.0-a-3");
+
+  // A release into b: b's older copy goes, a's stays for pages loaded before.
+  await addRelease(volume, "0.42.0-b-4");
+  await publishRelease({ volumeDir: volume, release: "0.42.0-b-4", log });
+  assert.equal(await readFile(join(volume, "current", "index.html"), "utf8"), "0.42.0-b-4");
+  assert.deepEqual(await list(), ["0.41.0-a-3", "0.42.0-b-4"]);
   assert.deepEqual((await readdir(volume)).sort(), ["current", "releases"]);
 });
