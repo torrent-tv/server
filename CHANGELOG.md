@@ -1,4 +1,4 @@
-## Unreleased
+## 0.43.0
 
 - **Fix**: Shared torrent links wait for module initialization before announcing their source, so a first page load cannot lose the playback request while another component is still loading.
 
