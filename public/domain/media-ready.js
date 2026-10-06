@@ -11,7 +11,8 @@ export function waitForMediaReady(media, { signal, requirePicture = true, unsupp
       if (error) reject(error);
       else resolve();
     };
-    const abort = () => finish(new DOMException("Media preparation cancelled", "AbortError"));
+    const abort = () => finish(signal?.reason instanceof Error ? signal.reason :
+      new DOMException("Media preparation cancelled", "AbortError"));
     const check = () => {
       if (signal?.aborted) return abort();
       if (media.error) {
