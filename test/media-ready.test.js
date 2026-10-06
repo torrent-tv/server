@@ -27,6 +27,14 @@ test("cancellation releases a pending metadata wait", async () => {
   await assert.rejects(pending, { name: "AbortError" });
 });
 
+test("a proxy preparation failure releases the metadata wait with its original cause", async () => {
+  const controller = new AbortController();
+  const pending = waitForMediaReady(media(), { signal: controller.signal });
+  const failure = new Error("source-input-exceeds-memory-capacity");
+  controller.abort(failure);
+  await assert.rejects(pending, error => error === failure);
+});
+
 test("an actual media error reports unsupported media", async () => {
   const video = media();
   const pending = waitForMediaReady(video, { unsupportedMessage: "Unsupported source" });

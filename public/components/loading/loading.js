@@ -5091,9 +5091,11 @@ export class Loading extends StateDerivedView {
     // player is ready.
     // Phase 1 — first segment production: the progress poll writes the loading
     // status ("Preparing first segment… / ETA").
-    const stopProgressPoll = this.#startTranscodeProgressPoll();
+    const preparation = new AbortController();
+    const stopProgressPoll = this.#startTranscodeProgressPoll(error => preparation.abort(error));
     try {
-      await this.#ensureVideoReady({ requireDecodedFrame: false });
+      await this.#ensureVideoReady({ requireDecodedFrame: false,
+        signal: AbortSignal.any([this.#session.abortController.signal, preparation.signal]) });
     } finally {
       // Stop the poll BEFORE pre-buffering, so only #waitForPrebuffer writes the
       // status during the cushion fill. Otherwise both write it (poll every ~1 s,
@@ -5170,6 +5172,7 @@ export class Loading extends StateDerivedView {
         }
       }
       this.#throwIfCancelled(epoch);
+      this.#assertTranscodeProgress(cachedProgress);
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
       const unified = this.#waitingModel.update({
@@ -5279,9 +5282,10 @@ export class Loading extends StateDerivedView {
    * moving while the first segment is produced/buffered after the playlist is
    * already available.
    *
+   * @param {(error: Error) => void} onFailure
    * @returns {() => void} Stop function.
    */
-  #startTranscodeProgressPoll() {
+  #startTranscodeProgressPoll(onFailure) {
     let stopped = false;
     const tick = async () => {
       while (!stopped) {
@@ -5291,6 +5295,10 @@ export class Loading extends StateDerivedView {
             this.#renderTranscodeProgress(progress);
           }
         } catch (error) {
+          if (error?.outcome === "output-failed") {
+            onFailure(error);
+            return;
+          }
           // Same readings, the other poll. Reported once per run of the
           // condition for the same reason.
           if (!this.#progressPollFailing) {
@@ -5324,6 +5332,7 @@ export class Loading extends StateDerivedView {
     if (!progress || typeof progress !== "object") {
       return;
     }
+    this.#assertTranscodeProgress(progress);
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
       playbackReadiness: progress.playbackReadiness
@@ -5345,8 +5354,13 @@ export class Loading extends StateDerivedView {
   }
 
 
+  #assertTranscodeProgress(progress) {
+    if (progress?.state !== "failed") return;
+    throw Object.assign(new Error(progress.error || "The proxy could not prepare playback."), { outcome: "output-failed" });
+  }
+
   /**
-   * @param {{ requireDecodedFrame?: boolean }} [options]
+   * @param {{ requireDecodedFrame?: boolean, signal?: AbortSignal }} [options]
    *   When `requireDecodedFrame` is false, readiness is satisfied once metadata
    *   and non-zero dimensions are known, without waiting for a *presented*
    *   video frame. This is required for the HLS/transcode path on iOS: the
@@ -5364,7 +5378,7 @@ export class Loading extends StateDerivedView {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
     await waitForMediaReady(videoElement, {
-      signal: this.#session.abortController.signal,
+      signal: options.signal ?? this.#session.abortController.signal,
       requirePicture: options?.requireDecodedFrame !== false,
       unsupportedMessage: Loading.MESSAGES.selectedFileUnsupported
     });
