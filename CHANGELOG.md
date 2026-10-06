@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The hash of a release's only picture is asked of the proxy as soon as the proxy has said what is in the release, not when the plan of playback is ready; on a cold torrent that took minutes, and identification by the hash came after the viewer had stopped waiting (torrent-tv/meta#135).
+
 ## 0.47.0
 
 - **New**: A work from ThePornDB or StashDB carries its cover as `poster`, served by `GET /api/metadata/cover/:source/:id`. The route asks the database for the address of the image and fetches it only from `stashdb.org` and `theporndb.net`, over https, as an image of at most 8 MB; the page never supplies an address (torrent-tv/meta#135).
