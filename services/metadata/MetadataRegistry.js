@@ -7,7 +7,14 @@
  *
  *  1. every source that derives evidence from the request (the container)
  *     adds its names, ids and episode numbers to the request;
- *  2. the primary sources are asked from the request alone;
+ *  2. the primary sources are asked from the request alone, in this order:
+ *     1. the exact question first — the hash of the file, asked of every source
+ *        that takes it, whatever the category: a match is not a guess;
+ *     2. then the names, the kind of database the request states first (adult
+ *        when the page states the category adult, general otherwise);
+ *     3. the other kind is asked by name only after the supplementary sources
+ *        (anime) as well, and only when nothing was found at all — not when
+ *        there were several candidates, which is an answer;
  *  3. the supplementary sources are asked with the answer so far in hand;
  *  4. when nothing was found, the primary sources get one last bounded attempt,
  *     and a work found by it is looked at again by the sources interested in it.
@@ -16,7 +23,7 @@
  * chosen per field by `mergeRecords`.
  */
 
-import { STAGE } from "./MetadataProvider.js";
+import { CATEGORY, EVIDENCE, STAGE } from "./MetadataProvider.js";
 import { mergeRecords } from "./normalize-work.js";
 
 /** The statuses of an answer that mean no work was found yet. */
@@ -72,16 +79,45 @@ export class MetadataRegistry {
     return provider ? provider.episodes(request) : { status: "unavailable" };
   }
 
-  /** The best answer of the primary sources. */
+  /** The best answer of the primary sources, in the order stated above. */
   async #primary(request) {
+    const sources = this.#at(STAGE.primary);
+    const hasNames = Array.isArray(request.names) && request.names.length > 0;
+    const first = request.category === "adult" ? CATEGORY.adult : CATEGORY.general;
     let result = null;
-    for (const provider of this.#at(STAGE.primary)) {
-      if (!provider.accepts(request)) continue;
-      const answer = await provider.identify(request);
+    const consider = (answer) => {
       if (!result || RANK[answer.status] > RANK[result.status]) result = answer;
-      if (result.status === "identified") break;
+      return result.status === "identified";
+    };
+    if (request.fingerprint) {
+      for (const provider of sources.filter((candidate) => candidate.takes.has(EVIDENCE.fingerprint))) {
+        if (consider(await provider.identify({ ...request, names: [] }))) return result;
+      }
+    }
+    if (!hasNames) return result ?? { status: "not-found" };
+    const byName = { ...request, fingerprint: undefined };
+    const named = (kind) => sources.filter((candidate) => candidate.category === kind && candidate.takes.has(EVIDENCE.names) && candidate.accepts(byName));
+    for (const provider of named(first)) {
+      if (consider(await provider.identify(byName))) return result;
     }
     return result ?? { status: "not-found" };
+  }
+
+  /**
+   * The databases of the other kind, by name. Asked after the supplementary
+   * sources (anime), and only when nothing was found at all.
+   */
+  async #otherKind(request, prior) {
+    if (!["not-found", "undetermined", "unavailable"].includes(prior.status) || !request.names?.length) return prior;
+    const byName = { ...request, fingerprint: undefined };
+    const other = request.category === "adult" ? CATEGORY.general : CATEGORY.adult;
+    let result = prior;
+    for (const provider of this.#at(STAGE.primary).filter((candidate) => candidate.category === other && candidate.takes.has(EVIDENCE.names) && candidate.accepts(byName))) {
+      const answer = await provider.identify(byName);
+      if (RANK[answer.status] > RANK[result.status]) result = answer;
+      if (result.status === "identified") break;
+    }
+    return result;
   }
 
   /** The primary sources, then the supplementary ones with the answer so far. */
@@ -91,7 +127,7 @@ export class MetadataRegistry {
       if (!provider.accepts(request)) continue;
       result = await provider.identify(request, { prior: result, again: (next) => this.#primary(next) });
     }
-    return result;
+    return this.#otherKind(request, result);
   }
 
   /** The request with what the sources derive from it added. */

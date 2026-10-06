@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Change**: The order of questions to the metadata databases is stated in `MetadataRegistry`. The hash of the file (`fingerprint`) is asked first, of every source that takes it. Then the names, in the databases of the kind the request states (`category: "adult"` asks the adult ones first, otherwise the film and anime ones). The other kind is asked by name only after the anime source too, and only when nothing was found at all; so a release the film and anime databases do not know is looked up in ThePornDB and StashDB without any category, and several candidates are an answer that does not lead to the other kind (torrent-tv/meta#135).
+
 ## 0.44.1
 
 - **Fix**: Opening failures remain attached to the current playback attempt. Resetting source preferences no longer makes an active failure appear stale and leave the loading screen waiting indefinitely; cancelled and replaced attempts still cannot report an error for the new source.
