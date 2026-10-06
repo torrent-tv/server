@@ -1,6 +1,9 @@
-## 0.45.0
+## Unreleased
 
 - **New**: The page tells the metadata service what a torrent states and what the proxy measured. A `.torrent` from an adult-only tracker (its `comment` or its trackers; `pornolab.net`) sends `category: "adult"` with every identification request; for the open file the page asks the proxy for the OpenSubtitles hash (`/api/sources/:key/files/:i/fingerprint`) and, when the release is still not identified, asks again once with it as `fingerprint`. A proxy that does not know the route answers `404` and nothing is sent (torrent-tv/meta#135).
+
+## 0.45.0
+
 - **Change**: The order of questions to the metadata databases is stated in `MetadataRegistry`. The hash of the file (`fingerprint`) is asked first, of every source that takes it. Then the names, in the databases of the kind the request states (`category: "adult"` asks the adult ones first, otherwise the film and anime ones). The other kind is asked by name only after the anime source too, and only when nothing was found at all; so a release the film and anime databases do not know is looked up in ThePornDB and StashDB without any category, and several candidates are an answer that does not lead to the other kind (torrent-tv/meta#135).
 
 ## 0.44.1
