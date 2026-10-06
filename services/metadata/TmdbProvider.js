@@ -6,7 +6,7 @@
  * works with, and reduces a TMDB work to the common fields.
  */
 
-import { EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.js";
+import { CATEGORY, EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.js";
 
 /**
  * A TMDB work reduced to the common fields. A field TMDB does not state is
@@ -40,7 +40,7 @@ export class TmdbProvider extends MetadataProvider {
 
   /** @param {import("./MetadataService.js").MetadataService} service */
   constructor(service) {
-    super({ name: "tmdb", stage: STAGE.primary, takes: [EVIDENCE.names] });
+    super({ name: "tmdb", stage: STAGE.primary, takes: [EVIDENCE.names], category: CATEGORY.general });
     this.#service = service;
   }
 

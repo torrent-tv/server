@@ -3,7 +3,8 @@
  *
  * POST /api/metadata/identify
  * body: { names: string[], kindHint: "tv" | "movie" | null, requireYear?: boolean,
- *         episodeEvidence?: { season: number, titles: string[] }, language: string }
+ *         episodeEvidence?: { season: number, titles: string[] }, language: string,
+ *         category?: "adult" | null, fingerprint?: { hash: string, size: number } }
  *
  * Answers `{ status, work?, candidates? }`. Only `identified` carries a work;
  * every other status tells the page to keep showing the release's own names.
@@ -79,6 +80,15 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
       subtitleEvidence.years.every(year => Number.isInteger(year) && year >= 1888 && year <= 2100))) {
     return reply.code(400).send({ error: "subtitleEvidence must contain at most four titles and years." });
   }
+  const category = body.category ?? null;
+  if (category !== null && category !== "adult") {
+    return reply.code(400).send({ error: "category must be adult or null." });
+  }
+  const fingerprint = body.fingerprint ?? null;
+  if (fingerprint !== null && !(typeof fingerprint?.hash === "string" && /^[0-9a-f]{16}$/u.test(fingerprint.hash) &&
+      Number.isInteger(fingerprint.size) && fingerprint.size > 0)) {
+    return reply.code(400).send({ error: "fingerprint must be { hash: 16 hex digits, size: bytes }." });
+  }
   const started = Date.now();
   const durationSeconds = body.durationSeconds ?? null;
   if (durationSeconds !== null && !(typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= 86_400)) {
@@ -91,6 +101,8 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
     requireYear: body.requireYear === true,
     episodeEvidence: evidence,
     subtitleEvidence,
+    category,
+    fingerprint: fingerprint ? { hash: fingerprint.hash, size: fingerprint.size } : undefined,
     language: body.language,
     signal: signalOfRequest(reply)
   }));

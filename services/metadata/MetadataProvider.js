@@ -31,6 +31,21 @@ export const EVIDENCE = Object.freeze({
   externalIds: "externalIds"
 });
 
+/**
+ * Which requests a source is asked about. The category of a request is stated by
+ * the page from what the torrent says about itself; an adult database is asked
+ * only when that is `adult`, and the general databases are not asked then, so a
+ * release is never matched against the wrong kind of database.
+ */
+export const CATEGORY = Object.freeze({
+  /** Asked whatever the category. */
+  any: "any",
+  /** Asked only while the category is not adult. */
+  general: "general",
+  /** Asked only when the category is adult. */
+  adult: "adult"
+});
+
 /** Which stage of the registry a source answers in. */
 export const STAGE = Object.freeze({
   /** Asked first, from the request alone. */
@@ -67,20 +82,28 @@ export class MetadataProvider {
   /** @type {ReadonlySet<string>} */
   takes;
 
+  /** @type {string} */
+  category;
+
   /**
    * @param {object} params
    * @param {string} params.name - The key of the records of this source.
    * @param {number} params.stage - One of {@link STAGE}.
    * @param {string[]} params.takes - Kinds of {@link EVIDENCE} this source accepts.
+   * @param {string} [params.category] - One of {@link CATEGORY}.
    */
-  constructor({ name, stage, takes }) {
+  constructor({ name, stage, takes, category = CATEGORY.any }) {
     this.name = name;
     this.stage = stage;
     this.takes = new Set(takes);
+    this.category = category;
   }
 
   /** Whether the request holds evidence that this source takes. */
   accepts(request) {
+    const adult = request?.category === "adult";
+    if (this.category === CATEGORY.adult && !adult) return false;
+    if (this.category === CATEGORY.general && adult) return false;
     const present = evidenceOf(request);
     return [...this.takes].some((kind) => present.has(kind));
   }

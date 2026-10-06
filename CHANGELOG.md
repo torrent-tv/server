@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Adult releases can be identified. `POST /api/metadata/identify` takes `category: "adult"` and `fingerprint: { hash, size }` (the OpenSubtitles hash of the file); for that category ThePornDB and StashDB are asked, first by the hash, then by the release name, and a scene is reported only when exactly one fits. The general databases (TMDB, AniList) are not asked for that category, and the adult ones are not asked for any other. The work carries `studio`, `performers` and `adult`. Artwork is not shown yet (torrent-tv/meta#135).
+- **Chore**: Secrets are read from environment variables only: `TMDB_READ_TOKEN`, `OPENSUBTITLES_API_KEY`, `JIMAKU_API_KEY`, `STASHDB_API_KEY`, `THEPORNDB_API_KEY`. The `*_FILE` variables are gone; the pipeline delivers the GitHub secrets to the environment (torrent-tv/meta#143).
 ## 0.43.2
 
 - **Fix**: Playback preparation no longer displays the proxy's warmup percentage as completed browser buffering. An empty browser buffer shows that preparation is still pending.

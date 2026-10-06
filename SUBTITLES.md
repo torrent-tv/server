@@ -51,11 +51,11 @@ Task: [meta#103](https://github.com/torrent-tv/meta/issues/103).
    on access or the next write. Errors and incomplete failed requests are not
    cached as an absence. This is a cache, not a permanent mirror of a provider.
 9. Without `SERVER_CACHE_DIR`, local development uses bounded memory caches.
-   Runtime keys come from `OPENSUBTITLES_API_KEY` / `JIMAKU_API_KEY` or their
-   `_FILE` counterparts. Production uses files in the existing host secrets
-   directory. Missing keys disable only the affected provider. GitHub repository
-   secrets do not automatically become container environment variables and are
-   not embedded in images.
+   Runtime keys come from the environment variables `OPENSUBTITLES_API_KEY` and
+   `JIMAKU_API_KEY`. In production they are GitHub secrets that the deploy
+   pipeline delivers to the container's environment (`infra/README.md`,
+   "Secrets"); they are not embedded in images. Missing keys disable only the
+   affected provider.
 
 ## Provider references
 

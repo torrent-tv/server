@@ -94,7 +94,7 @@ GET  /healthz                         Kubernetes liveness probe
 Movie identification checks alternate titles and transliterations even when release years are absent or differ. A probed file duration ranks otherwise matching records by the smallest difference within `METADATA_RUNTIME_TOLERANCE_SECONDS` (default `900`, the chosen 15-minute allowance for cuts and advertising). Duration does not confirm a record outside that allowance. Complete, equally matching results prefer the latest year, then the smallest TMDB ID; the returned TMDB source records whether selection used title, duration, or the latest-year policy. Incomplete or failed discovery never invokes this policy. Duration-assisted discovery reads at most 20 search pages and checks at most 60 exact-title records within 15 seconds, through the shared TMDB request gate. Playback never waits for identification.
 
 The browser asks this server what a release is; the server asks TMDB with a
-token read from the file named by `TMDB_READ_TOKEN_FILE` (see `infra/README.md`,
+token read from `TMDB_READ_TOKEN` (see `infra/README.md`,
 "Secrets") and without it answers `unavailable`. Rules, limits and measurements:
 `research/metadata-enrichment-2026-09-30.md` in the parent folder. Nothing on the
 playback path waits for these routes.
