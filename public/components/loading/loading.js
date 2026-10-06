@@ -320,6 +320,9 @@ export class Loading extends StateDerivedView {
    * are dropped when they arrive for a choice that has been replaced.
    */
   #mediaSelection = 0;
+
+  /** `selection:fileIndex` of the files whose hash was asked of the proxy. @type {Set<string>} */
+  #fingerprintsAsked = new Set();
   #actionButton;
   #videoElement = null;
   #session;
@@ -2016,7 +2019,7 @@ export class Loading extends StateDerivedView {
         parsed.files = files;
         parsed.isMultiFile = files.length > 1;
       }
-      this.#announceMediaContents(mediaSelection, contents, parsed.files);
+      this.#announceMediaContents(mediaSelection, contents, parsed.files, transport, sourceKey);
       this.#nameTheFilmInTheLog(parsed.name, parsed.infoHashHex);
       const mediaFiles = mediaFilesFrom(parsed.files, contents?.items);
       this.#subtitlePlayback.setTorrentSubtitleFiles(mediaFiles.subtitles);
@@ -2192,6 +2195,9 @@ export class Loading extends StateDerivedView {
    */
   async #announceFingerprint(selection, fileIndex, transport, sourceKey) {
     if (!sourceKey || !Number.isInteger(fileIndex)) return;
+    const asked = `${selection}:${fileIndex}`;
+    if (this.#fingerprintsAsked.has(asked)) return;
+    this.#fingerprintsAsked.add(asked);
     try {
       for (;;) {
         if (selection !== this.#mediaSelection) return;
@@ -2224,12 +2230,17 @@ export class Loading extends StateDerivedView {
    * @param {object} contents - The proxy's answer.
    * @param {object[]} files - The same list as the rest of this page reads it.
    */
-  #announceMediaContents(selection, contents, files) {
+  #announceMediaContents(selection, contents, files, transport, sourceKey) {
     document.dispatchEvent(
       new CustomEvent(MEDIA_INFO_EVENTS.CONTENTS, {
         detail: { selection, contents, files }
       })
     );
+    // A release of one picture is that picture: its hash is wanted now, not when
+    // the plan of playback is ready, which on a cold torrent takes minutes. A
+    // pack's file is asked when it is opened.
+    const items = Array.isArray(contents?.items) ? contents.items : [];
+    if (items.length === 1) void this.#announceFingerprint(selection, items[0].fileIndex, transport, sourceKey);
   }
 
   /**
@@ -2400,7 +2411,7 @@ export class Loading extends StateDerivedView {
       current.files = files;
       current.isMultiFile = files.length > 1;
       this.setFileName(name);
-      this.#announceMediaContents(mediaSelection, contents, files);
+      this.#announceMediaContents(mediaSelection, contents, files, transport, sourceKey);
       this.#nameTheFilmInTheLog(name, contents?.infoHash);
 
       const mediaFiles = mediaFilesFrom(files, contents?.items);
