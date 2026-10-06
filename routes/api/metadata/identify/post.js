@@ -36,7 +36,7 @@ export const IDENTIFY_BODY_LIMIT = 64 * 1024;
 /**
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
- * @param {{ metadata: import("../../../../services/metadata/MetadataService.js").MetadataService }} deps
+ * @param {{ metadata: import("../../../../services/metadata/MetadataRegistry.js").MetadataRegistry }} deps
  * @returns {Promise<void>}
  */
 export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {

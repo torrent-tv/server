@@ -1,4 +1,3 @@
-import { AnimeMetadata } from "./AnimeMetadata.js";
 /**
  * @file The metadata components, built once at startup.
  *
@@ -9,11 +8,15 @@ import { AnimeMetadata } from "./AnimeMetadata.js";
  */
 
 import { readFileSync } from "node:fs";
+import { AniListProvider } from "./AniListProvider.js";
+import { ContainerMetadata } from "./ContainerMetadata.js";
 import { ImageFetcher } from "./ImageFetcher.js";
 import { MetadataCache } from "./MetadataCache.js";
+import { MetadataRegistry } from "./MetadataRegistry.js";
 import { MetadataService } from "./MetadataService.js";
 import { RequestGate } from "./RequestGate.js";
 import { SharedFetches } from "./SharedFetches.js";
+import { TmdbProvider } from "./TmdbProvider.js";
 import { TmdbSource } from "./TmdbSource.js";
 
 /**
@@ -44,7 +47,7 @@ function readToken(path) {
 
 /**
  * @param {{ tokenFile?: string }} params
- * @returns {{ service: MetadataService, images: ImageFetcher }}
+ * @returns {{ service: MetadataRegistry, images: ImageFetcher }}
  */
 export function createMetadata({ tokenFile, cache, animeCache }) {
   const token = readToken(tokenFile);
@@ -63,5 +66,6 @@ export function createMetadata({ tokenFile, cache, animeCache }) {
   // Images do not count against the API's rate: they come from TMDB's image
   // host, which states no such limit. Concurrency and the queue still bound them.
   const images = new ImageFetcher({ gate: new RequestGate({ concurrency: 4, perSecond: Infinity, queueLimit: 32 }) });
-  return { service: new AnimeMetadata(service, { cache: animeCache }), images };
+  const providers = [new TmdbProvider(service), new AniListProvider({ cache: animeCache }), new ContainerMetadata()];
+  return { service: new MetadataRegistry({ providers }), images };
 }

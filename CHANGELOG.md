@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: The sources of film metadata share one interface, `MetadataProvider`, like the sources of subtitles: TMDB, AniList and the media container are providers held by `MetadataRegistry`, which replaces `AnimeMetadata`. A source states what evidence it takes, preference between sources is stated per field in `normalize-work.js`, and the media container is both a source of fields and evidence for the others. The answers of the metadata routes do not change (torrent-tv/meta#137).
+
 ## 0.42.0
 
 - **New**: The player's poster fades in over 0.3 s once its image has loaded and fades out when the first frame is decoded, instead of appearing and disappearing at once. It no longer returns over the film when the window is resized during a seek, and the fade is skipped under `prefers-reduced-motion` (torrent-tv/meta#138).
