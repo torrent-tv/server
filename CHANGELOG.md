@@ -1,4 +1,4 @@
-## Unreleased
+## 0.47.2
 
 - **Fix**: The cover of an identified adult scene reaches the work as its `poster`; the order of sources for that field named TMDB only, so a scene found by ThePornDB or StashDB had no poster (torrent-tv/meta#135).
 
