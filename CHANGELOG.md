@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: A scene found by ThePornDB showed no cover: the cover was taken from the scene's `image`, the address of the studio's own site, which the cover route does not fetch from. It is now the scene's background or poster on the database's own hosts (torrent-tv/meta#135).
+
 ## 0.47.3
 
 - **Fix**: A terminal proxy output failure ends playback preparation with its reported cause, including before media metadata has arrived. The page no longer keeps waiting for an output that cannot be produced.

@@ -16,6 +16,18 @@ import { requestJson, yearOf } from "./adult-http.js";
 const BASE = "https://api.theporndb.net";
 
 /**
+ * The address of the cover of a scene on the database's own hosts. Not `image`:
+ * that is the page of the studio, which this server does not fetch from. The
+ * wide background suits the player; the poster is the fallback.
+ *
+ * @param {object | undefined} scene
+ * @returns {string | null}
+ */
+function coverOf(scene) {
+  return scene?.background?.large || scene?.background?.full || scene?.posters?.large || scene?.poster || null;
+}
+
+/**
  * A ThePornDB scene reduced to the common fields.
  *
  * @param {object} scene
@@ -27,7 +39,7 @@ export function theporndbFields(scene) {
     title: scene.title || undefined,
     year: yearOf(scene.date),
     overview: scene.description || undefined,
-    poster: scene.image || scene.poster ? `/api/metadata/cover/theporndb/${scene.id}` : undefined,
+    poster: coverOf(scene) ? `/api/metadata/cover/theporndb/${scene.id}` : undefined,
     studio: scene.site?.name || scene.site?.parent?.name || undefined,
     performers: (scene.performers ?? []).map(performer => performer?.name).filter(Boolean).slice(0, 20),
     adult: true
@@ -89,7 +101,7 @@ export class ThePornDbProvider extends MetadataProvider {
         fetch: this.#fetch, gate: this.#gate, label: "ThePornDB", url: `${BASE}/scenes/${id}`,
         init: { headers: { Authorization: `Bearer ${this.#key}`, Accept: "application/json" } }
       });
-      return body?.data?.image || body?.data?.poster || null;
+      return coverOf(body?.data);
     } catch (error) {
       if (error instanceof MetadataUnavailableError) { providerFailure("theporndb", "cover", error); return null; }
       throw error;
