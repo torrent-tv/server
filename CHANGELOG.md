@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: With two slots, the slot that starts to serve removes only its own earlier copies of the page. It removed every copy but its own and the one served before, so when both slots started together the first to serve deleted the copy the other was still writing, and once that one took over nginx's `current` pointed at nothing; the site answered only because the server serves the page itself when nginx finds no file (field 2026-10-05, the first start of both slots). The new link is also made inside `releases/`, which the other slot's start does not empty (torrent-tv/meta#94).
+
 ## 0.41.0
 
 - **New**: The server can run in two slots and hand over at a release, so a page that opens or connects to a proxy during a release finds a server and the full list of proxies. The new instance (`SERVER_SLOT`, its peer named by `SERVER_PEER`) asks the serving one to hand over; the serving one stops accepting tunnels and asks every proxy that follows moves to open a second connection, which nginx sends to the new instance; when each of them has arrived, the new instance serves and the old one stops accepting pages, finishes the signalling already under way — until its newest signalling socket is as old as the page's connect deadline — and stands by. An instance that does not serve answers 503 so nginx uses the other slot; `/healthz` names the slot and its state. Without `SERVER_PEER` the server serves alone, as before (torrent-tv/meta#94).
