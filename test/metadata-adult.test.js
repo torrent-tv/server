@@ -117,7 +117,8 @@ const png = () => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200,
 test("a scene with an image states its cover as this server's own route", () => {
   assert.equal(new StashDbProvider({ key: "k", gate }).fields({ ...stashScene, id: sceneId, images: [{ url: "x" }] }).poster, `/api/metadata/cover/stashdb/${sceneId}`);
   assert.equal(new StashDbProvider({ key: "k", gate }).fields(stashScene).poster, undefined);
-  assert.equal(new ThePornDbProvider({ key: "k", gate }).fields({ ...tpdbScene, id: sceneId, image: "https://x/y.jpg" }).poster, `/api/metadata/cover/theporndb/${sceneId}`);
+  assert.equal(new ThePornDbProvider({ key: "k", gate }).fields({ ...tpdbScene, id: sceneId, image: "https://studio.example/y.jpg" }).poster, undefined, "the studio page is not a cover");
+  assert.equal(new ThePornDbProvider({ key: "k", gate }).fields({ ...tpdbScene, id: sceneId, image: "https://studio.example/y.jpg", background: { large: "https://cdn.theporndb.net/a.jpg" } }).poster, `/api/metadata/cover/theporndb/${sceneId}`);
 });
 
 test("the cover is fetched from the database's own hosts only, as an image, and refuses anything else", async () => {
@@ -153,4 +154,11 @@ test("the cover of the scene that was found becomes the poster of the work", asy
   const answer = await new MetadataRegistry({ providers: [stash] }).identify({ names: ["x"], fingerprint: { hash, size: 1 } });
   assert.equal(answer.work.normalized.poster, `/api/metadata/cover/stashdb/${sceneId}`);
   assert.equal(answer.work.normalized.provenance.poster, "stashdb");
+});
+
+test("ThePornDB's cover is the background or the poster on its own hosts, never the studio's page", async () => {
+  const answer = (data) => new ThePornDbProvider({ key: "k", gate, fetch: fakeFetch([{ data }]) }).coverUrl(sceneId);
+  assert.equal(await answer({ image: "https://studio.example/a.jpg", background: { large: "https://cdn.theporndb.net/b.jpg", full: "https://cdn.theporndb.net/c.jpg" }, poster: "https://thumb.theporndb.net/p.jpg" }), "https://cdn.theporndb.net/b.jpg");
+  assert.equal(await answer({ image: "https://studio.example/a.jpg", poster: "https://thumb.theporndb.net/p.jpg" }), "https://thumb.theporndb.net/p.jpg");
+  assert.equal(await answer({ image: "https://studio.example/a.jpg" }), null);
 });
