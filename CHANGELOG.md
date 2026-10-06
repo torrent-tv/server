@@ -1,4 +1,4 @@
-## Unreleased
+## 0.47.4
 
 - **Fix**: A scene found by ThePornDB showed no cover: the cover was taken from the scene's `image`, the address of the studio's own site, which the cover route does not fetch from. It is now the scene's background or poster on the database's own hosts (torrent-tv/meta#135).
 
