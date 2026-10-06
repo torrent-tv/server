@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.0
 
 - **New**: What an opened file states about its work — read by the proxy from the file's own tags — is used in identification: its titles are further names to search, a stated season or episode makes the release a series, a stated episode title is matched against the series' episodes, and an `IMDB`, `TMDB` or `TVDB` id replaces the search with a lookup. It fills an empty episode title, year and description, and the file's own cover is shown where there is no poster; nothing already shown is replaced (torrent-tv/meta#139).
 - **New**: The server keeps what a file states by the torrent's infohash and the file's index, so the next viewer of the same file is identified with it from the first request (torrent-tv/meta#139).
