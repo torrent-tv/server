@@ -4,7 +4,13 @@
  * POST /api/metadata/identify
  * body: { names: string[], kindHint: "tv" | "movie" | null, requireYear?: boolean,
  *         episodeEvidence?: { season: number, titles: string[] }, language: string,
- *         category?: "adult" | null, fingerprint?: { hash: string, size: number } }
+ *         category?: "adult" | null, fingerprint?: { hash: string, size: number },
+ *         container?: object | null, source?: { infoHash: string, fileIndex: number } | null }
+ *
+ * `container` is what the file states about its work, read by the proxy
+ * (`ContainerMetadata.js`); `source` names that file. With both, what the file
+ * states is kept by the file; with `source` alone, what was kept is used, so a
+ * later viewer of the same file is identified with it at once.
  *
  * Answers `{ status, work?, candidates? }`. Only `identified` carries a work;
  * every other status tells the page to keep showing the release's own names.
@@ -14,6 +20,8 @@
 
 import { LANGUAGE, signalOfRequest } from "../request-signal.js";
 import { parseReleaseName } from "../../../../services/metadata/release-name.js";
+import { fileOf } from "../../../../services/metadata/ContainerRecords.js";
+import { readContainerFacts } from "../../../../services/metadata/ContainerMetadata.js";
 import { withProviderContext, providerOutcome } from "../../../../services/metadata/provider-diagnostics.js";
 
 /** Most names one request may carry. */
@@ -29,18 +37,23 @@ export const MAX_EVIDENCE_TITLES = 50;
 export const MAX_EVIDENCE_TITLE_LENGTH = 160;
 
 /**
- * Largest body, in bytes: 24 names of 300 characters and 50 titles of 160, each
- * character up to four bytes of UTF-8, with room for the JSON around them.
+ * Largest body, in bytes: 24 names of 300 characters and 50 titles of 160, and
+ * what a container states (nine texts of 300 characters and a description of
+ * 2000), each character up to four bytes of UTF-8, with room for the JSON
+ * around them.
  */
-export const IDENTIFY_BODY_LIMIT = 64 * 1024;
+export const IDENTIFY_BODY_LIMIT = 128 * 1024;
 
 /**
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
- * @param {{ metadata: import("../../../../services/metadata/MetadataRegistry.js").MetadataRegistry }} deps
+ * @param {{
+ *   metadata: import("../../../../services/metadata/MetadataRegistry.js").MetadataRegistry,
+ *   containerRecords?: import("../../../../services/metadata/ContainerRecords.js").ContainerRecords
+ * }} deps
  * @returns {Promise<void>}
  */
-export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
+export async function handleApiMetadataIdentifyPost(req, reply, { metadata, containerRecords }) {
   const body = req.body ?? {};
   const names = Array.isArray(body.names) ? body.names : null;
   if (!names || names.length === 0 || names.length > MAX_NAMES) {
@@ -89,6 +102,19 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
       Number.isInteger(fingerprint.size) && fingerprint.size > 0)) {
     return reply.code(400).send({ error: "fingerprint must be { hash: 16 hex digits, size: bytes }." });
   }
+  const statedContainer = body.container ?? null;
+  if (statedContainer !== null && (typeof statedContainer !== "object" || Array.isArray(statedContainer))) {
+    return reply.code(400).send({ error: "container must be an object or null." });
+  }
+  const file = fileOf(body.source);
+  if (body.source != null && !file) {
+    return reply.code(400).send({ error: "source must be { infoHash: 40 or 64 hex digits, fileIndex }." });
+  }
+  let container = statedContainer;
+  if (file && containerRecords) {
+    if (statedContainer) await containerRecords.set(file, statedContainer);
+    else container = (await containerRecords.get(file)) ?? null;
+  }
   const started = Date.now();
   const durationSeconds = body.durationSeconds ?? null;
   if (durationSeconds !== null && !(typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= 86_400)) {
@@ -103,12 +129,17 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata }) {
     subtitleEvidence,
     category,
     fingerprint: fingerprint ? { hash: fingerprint.hash, size: fingerprint.size } : undefined,
+    container: container ?? undefined,
     language: body.language,
     signal: signalOfRequest(reply)
   }));
   // Counts and the outcome only: the names themselves are not logged.
   withProviderContext(req, () => providerOutcome("metadata", "identify", { status: answer.status, names: names.length,
+    container: statedContainer ? "stated" : container ? "kept" : null,
     elapsedMs: Date.now() - started, durationSeconds, tmdbId: answer.work?.sources?.tmdb?.tmdbId ?? answer.work?.tmdbId ?? null,
     selectionReason: answer.work?.sources?.tmdb?.identification ?? answer.work?.identification ?? null }));
-  return reply.send({ ...answer, releaseEvidence: names.map(name => parseReleaseName(name)) });
+  // What the file states goes back as checked, whatever the answer: the page
+  // fills its own empty fields from it, and a kept record reaches a page whose
+  // proxy has not read the file yet.
+  return reply.send({ ...answer, releaseEvidence: names.map(name => parseReleaseName(name)), container: readContainerFacts(container) });
 }

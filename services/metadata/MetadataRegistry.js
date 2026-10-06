@@ -8,8 +8,10 @@
  *  1. every source that derives evidence from the request (the container)
  *     adds its names, ids and episode numbers to the request;
  *  2. the primary sources are asked from the request alone, in this order:
- *     1. the exact question first — the hash of the file, asked of every source
- *        that takes it, whatever the category: a match is not a guess;
+ *     1. the exact questions first, whatever the category, because a match is
+ *        not a guess: an id of the work in another database (an `IMDB`, `TMDB`
+ *        or `TVDB` id the container states), which replaces a search with a
+ *        lookup, then the hash of the file;
  *     2. then the names, the kind of database the request states first (adult
  *        when the page states the category adult, general otherwise);
  *     3. the other kind is asked by name only after the supplementary sources
@@ -89,6 +91,12 @@ export class MetadataRegistry {
       if (!result || RANK[answer.status] > RANK[result.status]) result = answer;
       return result.status === "identified";
     };
+    if (request.externalIds && Object.keys(request.externalIds).length > 0) {
+      for (const provider of sources.filter((candidate) => candidate.takes.has(EVIDENCE.externalIds))) {
+        const answer = await provider.identifyById(request);
+        if (answer && consider(answer)) return result;
+      }
+    }
     if (request.fingerprint) {
       for (const provider of sources.filter((candidate) => candidate.takes.has(EVIDENCE.fingerprint))) {
         if (consider(await provider.identify({ ...request, names: [] }))) return result;
@@ -140,7 +148,12 @@ export class MetadataRegistry {
       const added = {};
       if (evidence.names?.length) added.names = [...new Set([...(next.names ?? []), ...evidence.names])];
       if (evidence.externalIds && Object.keys(evidence.externalIds).length > 0) added.externalIds = { ...next.externalIds, ...evidence.externalIds };
-      for (const key of ["season", "episode", "episodeTitle"]) if (evidence[key] !== undefined) added[key] = evidence[key];
+      // A season or episode the file states is typed, so it outranks a kind read
+      // from names (meta#136: trust per field).
+      for (const key of ["season", "episode", "episodeTitle", "kindHint"]) if (evidence[key] !== undefined) added[key] = evidence[key];
+      // The release's own files are a whole season of titles, a container one
+      // episode's: the page's evidence wins where it states some.
+      if (evidence.episodeEvidence !== undefined && !next.episodeEvidence) added.episodeEvidence = evidence.episodeEvidence;
       next = { ...next, ...added };
     }
     return next;

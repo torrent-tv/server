@@ -32,16 +32,37 @@ The registry never asks a source about evidence it does not take.
 2. Preference is stated per field in `FIELD_PRIORITY`, not per source, and the
    `provenance` of the answer names the source of each field.
 3. The media container (`ContainerMetadata`) is a source and evidence at once.
-   Its title, original title and year enter normalization after the databases.
-   Its names, season, episode, episode title and `IMDB`/`TMDB`/`AniList` ids are
-   added to the request that the other sources are asked with. A container
-   title that is only a release name is not stated (so is one that ends in a
-   year, such as `Blade Runner 2049`: the databases supply it), and genres are kept in its
-   record and are not a field of the common format. Everything it states is
-   checked and bounded first, because it comes from a proxy.
-4. The request does not carry `container`, `fingerprint` or `externalIds` yet:
-   the sources and the registry accept them, and the routes and the proxy
-   answer that fills them follow (torrent-tv/meta#135, #139).
+   The proxy reads it from the opened file — Matroska `Tags`, `Info/Title`,
+   chapters and the `cover.*` attachment, the MP4 iTunes item list and
+   QuickTime keys, AVI `LIST INFO` — only from the first and last piece of the
+   file, which opening it fetches anyway (proxy
+   `GET /api/sources/:key/files/:i/container-metadata`). The proxy is trusted;
+   the shape of every value is still checked and bounded, because the bytes of
+   a file are not.
+   1. As a source: its title (when it is not a release name), year and
+      description enter normalization after the databases. Genres stay in its
+      record: LostFilm states `Drama` for nearly every work.
+   2. As evidence: every title it states is another name to search — a release
+      name is read like one, which is how it adds a year the file name lacks; a
+      stated season or episode makes the request a series (`kindHint: "tv"`),
+      and a stated episode title is matched against the series' episodes when
+      the release itself states none.
+   3. An `IMDB`, `TMDB` (`movie/<id>`, `tv/<id>`) or `TVDB` id replaces the
+      search with a lookup: TMDB's work for a TMDB id, TMDB "Find by ID" for the
+      others (`MetadataService.identifyById`). An id that names no work or more
+      than one leaves the search by name to decide.
+4. What a file states is kept by the torrent's infohash and the file's index
+   (`ContainerRecords`, the disk cache's `container` namespace). The page sends
+   `source: { infoHash, fileIndex }` with every identification of one file; with
+   `container` the record is kept, without it the kept record is used and
+   returned as `container`. Reading it costs the first viewer about a minute; the
+   next viewer of the file, on any proxy, has it from the first request.
+5. On the page (`media-info.js`) it only adds: the name's reading is shown at
+   once; what the file states fills an empty episode title, year, description
+   and — where no poster is — the cover the file carries (a `blob:` address of
+   bytes from the proxy, never stored); identification is asked again only when
+   the names did not establish the work; a title, an episode title or a picture
+   already shown is never replaced, and a contradiction is logged.
 
 ## Provider selection
 

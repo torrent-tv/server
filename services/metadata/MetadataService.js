@@ -182,6 +182,40 @@ export class MetadataService {
     }
   }
 
+  /**
+   * Which work an id in another database names: a lookup, not a search. A
+   * `TMDB` id is the work itself; an `IMDB` or `TVDB` id is found through
+   * TMDB's "Find by ID". An id that names no work, or more than one, is
+   * `not-found` and the search by name decides.
+   *
+   * @param {{ externalIds?: { imdb?: string, tmdb?: { kind: "movie" | "tv", id: number }, tvdb?: number }, language: string, signal?: AbortSignal }} request
+   * @returns {Promise<{ status: string, work?: object }>}
+   */
+  async identifyById({ externalIds = {}, language, signal }) {
+    if (!this.#source) return { status: "unavailable" };
+    const wait = { deadlineAt: this.#now() + REQUEST_BUDGET_MS, signal };
+    try {
+      let chosen = externalIds.tmdb ? { kind: externalIds.tmdb.kind, id: externalIds.tmdb.id } : null;
+      for (const [source, id] of [["imdb_id", externalIds.imdb], ["tvdb_id", externalIds.tvdb]]) {
+        if (chosen || id === undefined) continue;
+        const found = await this.#cached(`find|${source}|${id}`, (value) => (value.movie.length + value.tv.length > 0 ? FOUND_TTL_MS : NOTHING_TTL_MS),
+          (deadlineAt) => this.#source.find(String(id), source, { deadlineAt }), wait);
+        const all = [...found.movie.map((one) => ({ kind: "movie", id: one })), ...found.tv.map((one) => ({ kind: "tv", id: one }))];
+        if (all.length === 1) chosen = all[0];
+      }
+      if (!chosen) return { status: "not-found" };
+      const work = await this.#cached(`work|v2|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
+        (deadlineAt) => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
+      return { status: "identified", work: { ...work, identification: "external-id" } };
+    } catch (error) {
+      if (error instanceof MetadataUnavailableError) {
+        // A TMDB id that does not exist is an answer about the id, not a refusal.
+        return / 404$/u.test(error.reason ?? error.message ?? "") ? { status: "not-found" } : { status: "unavailable" };
+      }
+      throw error;
+    }
+  }
+
   async identify({ names, kindHint, episodeEvidence = null, durationSeconds = null, language, signal }) {
     if (episodeEvidence) {
       episodeEvidence = { ...episodeEvidence, titles: episodeEvidence.titles.filter(title => parseReleaseName(title).titles.length > 0) };

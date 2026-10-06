@@ -323,6 +323,9 @@ export class Loading extends StateDerivedView {
 
   /** `selection:fileIndex` of the files whose hash was asked of the proxy. @type {Set<string>} */
   #fingerprintsAsked = new Set();
+
+  /** Files whose container metadata was asked for, by `selection:fileIndex`. */
+  #containerAsked = new Set();
   #actionButton;
   #videoElement = null;
   #session;
@@ -2224,6 +2227,51 @@ export class Loading extends StateDerivedView {
   }
 
   /**
+   * Ask the proxy what a file states about its work — and, when it carries a
+   * cover inside it, for the cover — and pass both on. The proxy reads them
+   * only from the edges of the file, which opening it fetches anyway, so this
+   * asks the swarm for nothing; it answers `202` until those edges are here,
+   * and `404` from a file that states nothing or a proxy that does not know the
+   * route. Nothing waits for it. Only the opened file is asked about: the heads
+   * of a pack's other files are not fetched for the picker.
+   *
+   * @param {number} selection
+   * @param {number} fileIndex
+   * @param {object} transport
+   * @param {string | null} sourceKey
+   */
+  async #announceContainerMetadata(selection, fileIndex, transport, sourceKey) {
+    if (!sourceKey || !Number.isInteger(fileIndex)) return;
+    const asked = `${selection}:${fileIndex}`;
+    if (this.#containerAsked.has(asked)) return;
+    this.#containerAsked.add(asked);
+    const ask = async (path) => {
+      for (;;) {
+        if (selection !== this.#mediaSelection) return null;
+        const response = await transport.fetch(`/api/sources/${encodeURIComponent(sourceKey)}/files/${fileIndex}/${path}`,
+          { signal: this.#session.abortController.signal, timeoutMs: 0 });
+        if (selection !== this.#mediaSelection) return null;
+        if (response.status !== 202) return response.status === 200 ? response : null;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    };
+    try {
+      const response = await ask("container-metadata");
+      const container = response ? await response.json() : null;
+      if (!container || typeof container !== "object") return;
+      document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CONTAINER, { detail: { selection, fileIndex, container } }));
+      if (!container.cover) return;
+      const image = await ask("cover");
+      if (!image) return;
+      const type = image.headers.get("content-type") ?? container.cover.type ?? "image/jpeg";
+      const cover = new Blob([await image.arrayBuffer()], { type });
+      document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CONTAINER_COVER, { detail: { selection, fileIndex, cover } }));
+    } catch (error) {
+      if (!this.#isAbortError(error)) this.#logEvt(`container metadata unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * The proxy said what is in the release: pass it on for identification.
    *
    * @param {number} selection
@@ -2240,7 +2288,10 @@ export class Loading extends StateDerivedView {
     // the plan of playback is ready, which on a cold torrent takes minutes. A
     // pack's file is asked when it is opened.
     const items = Array.isArray(contents?.items) ? contents.items : [];
-    if (items.length === 1) void this.#announceFingerprint(selection, items[0].fileIndex, transport, sourceKey);
+    if (items.length === 1) {
+      void this.#announceFingerprint(selection, items[0].fileIndex, transport, sourceKey);
+      void this.#announceContainerMetadata(selection, items[0].fileIndex, transport, sourceKey);
+    }
   }
 
   /**
@@ -3146,6 +3197,7 @@ export class Loading extends StateDerivedView {
       }));
     }
     void this.#announceFingerprint(metadataSelection, fileIndex, transport, earlySourceKey);
+    void this.#announceContainerMetadata(metadataSelection, fileIndex, transport, earlySourceKey);
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 
