@@ -47,6 +47,7 @@ import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-me
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
 import { mediaInfoHintFromFilename } from "../../domain/release-hints.js";
+import { categoryOfTorrent } from "../../domain/torrent-category.js";
 
 /**
  * One attempt to connect a proxy, and everyone waiting on it.
@@ -1975,7 +1976,7 @@ export class Loading extends StateDerivedView {
         meta
       });
       this.#recordSourceIntent();
-      const mediaSelection = this.#announceMediaSelection([file.name, parsed.name]);
+      const mediaSelection = this.#announceMediaSelection([file.name, parsed.name], categoryOfTorrent(meta));
 
       this.visible = true;
       this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
@@ -2145,13 +2146,14 @@ export class Loading extends StateDerivedView {
    *
    * @param {string[]} names - The `.torrent` file's name and the torrent's own,
    *   or a magnet's `dn`.
+   * @param {"adult" | null} [category] - What the torrent says it is, when it says.
    * @returns {number} This choice's number, for the contents that follow.
    */
-  #announceMediaSelection(names) {
+  #announceMediaSelection(names, category = null) {
     this.#mediaSelection += 1;
     document.dispatchEvent(
       new CustomEvent(MEDIA_INFO_EVENTS.SELECTED, {
-        detail: { selection: this.#mediaSelection, names }
+        detail: { selection: this.#mediaSelection, names, category }
       })
     );
     return this.#mediaSelection;
@@ -2174,6 +2176,45 @@ export class Loading extends StateDerivedView {
       name: typeof name === "string" ? name : "",
       infoHash: typeof infoHash === "string" ? infoHash : ""
     });
+  }
+
+  /**
+   * Ask the proxy for the OpenSubtitles hash of a file and pass it on: release
+   * databases name an exact release by it. Asked again while the two edges of
+   * the file have not arrived (`202`); it ends when they have, when the file has
+   * none (`404`, or a proxy that does not know the route), or when another
+   * release is chosen. Nothing waits for it.
+   *
+   * @param {number} selection
+   * @param {number} fileIndex
+   * @param {object} transport
+   * @param {string | null} sourceKey
+   */
+  async #announceFingerprint(selection, fileIndex, transport, sourceKey) {
+    if (!sourceKey || !Number.isInteger(fileIndex)) return;
+    try {
+      for (;;) {
+        if (selection !== this.#mediaSelection) return;
+        const response = await transport.fetch(
+          `/api/sources/${encodeURIComponent(sourceKey)}/files/${fileIndex}/fingerprint`,
+          { signal: this.#session.abortController.signal, timeoutMs: 0 }
+        );
+        if (selection !== this.#mediaSelection) return;
+        if (response.status === 200) {
+          const fingerprint = await response.json();
+          if (/^[0-9a-f]{16}$/u.test(fingerprint?.hash) && Number.isInteger(fingerprint?.size)) {
+            document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.FINGERPRINT, {
+              detail: { selection, fileIndex, fingerprint: { hash: fingerprint.hash, size: fingerprint.size } }
+            }));
+          }
+          return;
+        }
+        if (response.status !== 202) return;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    } catch (error) {
+      if (!this.#isAbortError(error)) this.#logEvt(`file hash unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -3093,6 +3134,7 @@ export class Loading extends StateDerivedView {
         detail: { selection: metadataSelection, fileIndex, durationSeconds: prepared.durationSeconds }
       }));
     }
+    void this.#announceFingerprint(metadataSelection, fileIndex, transport, earlySourceKey);
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 

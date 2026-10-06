@@ -293,6 +293,7 @@ export async function parseTorrentBytes(torrentBytes) {
         .filter((item) => item.length > 0)
     : [];
   const webSeeds = toStringList(rootNode["url-list"]);
+  const comment = normalizeString(rootNode.comment);
 
   return {
     name,
@@ -304,6 +305,7 @@ export async function parseTorrentBytes(torrentBytes) {
     announce,
     announceList,
     webSeeds,
+    comment,
     isMultiFile
   };
 }

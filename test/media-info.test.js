@@ -252,3 +252,46 @@ test("probed duration refines a year-policy selection and ignores old selections
   send(MEDIA_INFO_EVENTS.PROBED, { selection: 1, fileIndex: 0, durationSeconds: 7200 });
   assert.equal(pending.length, 3);
 });
+
+test("the category a torrent states is sent with every request, and the hash asks again once for a release that was not found", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Scene.Name.2025.mkv"], category: "adult" });
+  send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Scene.Name.2025.mkv", shape: "single", items: [{ fileIndex: 0 }] }, files: [{ index: 0, relativePath: "Scene.Name.2025.mkv" }] });
+  assert.equal(pending.length, 2);
+  assert.ok(pending.every(request => request.body.category === "adult" && request.body.fingerprint === undefined));
+  pending[1].resolve(Response.json({ status: "not-found" }));
+  await new Promise(resolve => setImmediate(resolve));
+  const fingerprint = { hash: "8e245d9679d31e12", size: 12909756 };
+  send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint });
+  assert.equal(pending.length, 3);
+  assert.deepEqual(pending[2].body.fingerprint, fingerprint);
+  assert.equal(pending[2].body.category, "adult");
+  send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint });
+  assert.equal(pending.length, 3, "a hash is asked about once");
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 2, names: ["Other.mkv"] });
+  assert.equal(pending[3].body.category, undefined, "the next choice does not inherit the category");
+});
+
+test("a release that is already identified is not asked again when its hash arrives", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Known.Film.1999.mkv"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Known.Film.1999.mkv", shape: "single", items: [{ fileIndex: 0 }] }, files: [{ index: 0, relativePath: "Known.Film.1999.mkv" }] });
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 3, title: "Known Film" } }));
+  await new Promise(resolve => setImmediate(resolve));
+  send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint: { hash: "8e245d9679d31e12", size: 1 } });
+  assert.equal(pending.length, 2);
+});
