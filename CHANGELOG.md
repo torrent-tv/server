@@ -1,4 +1,4 @@
-## Unreleased
+## 0.47.3
 
 - **Fix**: A terminal proxy output failure ends playback preparation with its reported cause, including before media metadata has arrived. The page no longer keeps waiting for an output that cannot be produced.
 
