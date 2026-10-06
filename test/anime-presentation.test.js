@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AnimeMetadata, hasAnimeHints } from "../services/metadata/AnimeMetadata.js";
+import { AniListProvider, hasAnimeHints } from "../services/metadata/AniListProvider.js";
+import { MetadataRegistry } from "../services/metadata/MetadataRegistry.js";
+import { TmdbProvider } from "../services/metadata/TmdbProvider.js";
 import { normalizeWork } from "../services/metadata/normalize-work.js";
 import { pageTitle, playlistNaming, playerArt, systemArtwork } from "../public/domain/media-info.js";
 import { playlistRows } from "../public/domain/playlist-groups.js";
@@ -15,7 +17,7 @@ function service(answer, results = [anime], { incomplete = false, fail = false }
     return new Response(JSON.stringify({ data: { Page: { media: results, pageInfo: { hasNextPage: incomplete } } } }));
   };
   const gate = { run: task => task(), pause() {} };
-  return { metadata: new AnimeMetadata({ identify: async () => answer, episodes: request => request }, { fetch, gate }), calls: () => calls };
+  return { metadata: new MetadataRegistry({ providers: [new TmdbProvider({ identify: async () => answer, episodes: request => request }), new AniListProvider({ fetch, gate })] }), calls: () => calls };
 }
 
 test("normalization preserves providers separately and records provenance", () => {

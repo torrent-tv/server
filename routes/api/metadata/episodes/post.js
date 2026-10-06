@@ -62,7 +62,7 @@ function validFile(file) {
 /**
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
- * @param {{ metadata: import("../../../../services/metadata/MetadataService.js").MetadataService }} deps
+ * @param {{ metadata: import("../../../../services/metadata/MetadataRegistry.js").MetadataRegistry }} deps
  * @returns {Promise<void>}
  */
 export async function handleApiMetadataEpisodesPost(req, reply, { metadata }) {

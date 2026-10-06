@@ -1,4 +1,13 @@
-import { normalizeWork } from "./normalize-work.js";
+/**
+ * @file AniList as a metadata provider, asked after TMDB.
+ *
+ * Anime searches supplement TMDB; they never replace an ambiguous TMDB answer.
+ * The provider reads the answer so far (`prior`) and either confirms it with an
+ * AniList record, or, when TMDB found nothing, identifies the work itself and
+ * asks the primary sources again with the names AniList states.
+ */
+
+import { EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.js";
 import { parseReleaseName } from "./release-name.js";
 import { normalizeTitle } from "./title.js";
 import { RequestGate, MetadataUnavailableError } from "./RequestGate.js";
@@ -16,46 +25,54 @@ const QUERY = `query($search:String!, $page:Int!) {
   }
 }`;
 
+/** The statuses of an answer that mean no work was found yet. */
+const UNRESOLVED = ["not-found", "undetermined", "unavailable"];
+
 export function hasAnimeHints(names) {
   return names.some(name => /(?:\banime\b|аниме|\bOVA\b|\bONA\b|\[(?:HorribleSubs|SubsPlease|Erai-raws|Judas|ASW)\])/iu.test(name));
 }
 
-/** Anime searches supplement TMDB; they never replace an ambiguous TMDB answer. */
-export class AnimeMetadata {
-  #tmdb;
+/**
+ * An AniList media reduced to the common fields.
+ *
+ * @param {object} anilist
+ * @returns {Record<string, unknown>}
+ */
+export function anilistFields(anilist) {
+  return {
+    kind: anilist.format === "MOVIE" ? "movie" : "series",
+    title: anilist.title?.english || anilist.title?.romaji || anilist.title?.native || undefined,
+    originalTitle: anilist.title?.native || undefined,
+    year: anilist.startDate?.year ?? undefined,
+    isAnime: true
+  };
+}
+
+export class AniListProvider extends MetadataProvider {
   #fetch;
   #gate;
   #cache = new MetadataCache({ budgetBytes: 1024 * 1024, maxEntryBytes: 128 * 1024 });
   #pending = new Map();
 
-  constructor(tmdb, { fetch = globalThis.fetch, gate = new RequestGate({ concurrency: 1, perSecond: 0.45, queueLimit: 8 }), cache } = {}) {
-    this.#tmdb = tmdb;
+  constructor({ fetch = globalThis.fetch, gate = new RequestGate({ concurrency: 1, perSecond: 0.45, queueLimit: 8 }), cache } = {}) {
+    super({ name: "anilist", stage: STAGE.supplement, takes: [EVIDENCE.names] });
     this.#fetch = fetch;
     this.#gate = gate;
     if (cache) this.#cache = cache;
   }
 
-  episodes(request) { return this.#tmdb.episodes(request); }
-
-  async identify(request) {
-    let result = await this.#identify(request);
-    if (["not-found", "undetermined", "unavailable"].includes(result.status) && this.#tmdb.identifyTransliterated) {
-      const other = await this.#tmdb.identifyTransliterated(request);
-      if (["identified", "ambiguous"].includes(other.status) || result.status === "not-found") result = other;
-      if (result.status === "identified" && (hasAnimeHints(request.names) || result.work?.anime)) {
-        const enriched = await this.#identify({ ...request, names: [`${result.work.title} ${result.work.year}`], kindHint: result.work.kind });
-        if (enriched.status === "identified" && enriched.work?.tmdbId === result.work.tmdbId) result = enriched;
-      }
-    }
-    if (result.status !== "identified") return result;
-    const tmdb = result.work?.source === "anilist" ? null : result.work;
-    return { status: "identified", work: normalizeWork(tmdb, result.anilist ?? null) };
+  interestedIn(names, work) {
+    return hasAnimeHints(names) || Boolean(work?.anime);
   }
 
-  async #identify(request) {
-    const answer = await this.#tmdb.identify(request);
+  fields(record) {
+    return anilistFields(record);
+  }
+
+  async identify(request, { prior, again }) {
+    const answer = prior;
     const hinted = hasAnimeHints(request.names);
-    if (!hinted && !["not-found", "undetermined", "unavailable"].includes(answer.status) && !answer.work?.anime) return answer;
+    if (!hinted && !UNRESOLVED.includes(answer.status) && !answer.work?.anime) return answer;
     const readings = request.names.map(parseReleaseName);
     const years = [...new Set(readings.map(r => r.years?.from).filter(Number.isInteger))];
     if (answer.work?.year && !years.length) years.push(answer.work.year);
@@ -85,15 +102,15 @@ export class AnimeMetadata {
     if (answer.status === "identified") {
       const media = !incomplete && found.length === 1 && found.find(m =>
         Object.values(m.title ?? {}).some(n => n && [answer.work.title, answer.work.originalTitle].some(t => normalizeTitle(t) === normalizeTitle(n))));
-      return media ? { ...answer, anilist: media } : answer;
+      return media ? { ...answer, records: { ...answer.records, anilist: media } } : answer;
     }
-    if (!["not-found", "undetermined", "unavailable"].includes(answer.status) || incomplete || found.length !== 1) return answer;
+    if (!UNRESOLVED.includes(answer.status) || incomplete || found.length !== 1) return answer;
     const [media] = found;
     const kind = media.format === "MOVIE" ? "movie" : "tv";
     const names = [media.title.english, media.title.romaji, media.title.native].filter(Boolean).slice(0, 3);
-    const mapped = await this.#tmdb.identify({ ...request, names: names.map(n => [n, media.startDate?.year].filter(value => value != null).join(" ")), kindHint: kind });
-    if (mapped.status === "identified") return { ...mapped, anilist: media };
-    return { status: "identified", anilist: media, work: { source: "anilist", anilistId: media.id, anime: true, animeFormat: media.format,
+    const mapped = await again({ ...request, names: names.map(n => [n, media.startDate?.year].filter(value => value != null).join(" ")), kindHint: kind });
+    if (mapped.status === "identified") return { ...mapped, records: { ...mapped.records, anilist: media } };
+    return { status: "identified", records: { anilist: media }, work: { source: "anilist", anilistId: media.id, anime: true, animeFormat: media.format,
       kind, title: media.title.english || media.title.romaji || media.title.native, originalTitle: media.title.native,
       year: media.startDate?.year ?? null, seasons: [], poster: null, backdrop: null } };
   }

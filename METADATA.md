@@ -17,6 +17,32 @@ The browser's metadata state keeps `markers` from the proxy independently of
 `episodes` matched against TMDB. Labels use release numbers; titles are used
 only after episode matching. A mismatch never changes the release numbering.
 
+## Sources and their interface
+
+Every source extends `MetadataProvider` (`services/metadata/`), the way the
+subtitle sources extend `SubtitleProvider`, and `MetadataRegistry` holds the
+list. A source states the evidence it takes (`names`, `release`, `fingerprint`,
+`container`, `externalIds`) and the stage it answers in: primary (TMDB), supplementary
+(AniList, asked with the answer so far) or evidence only (the media container).
+The registry never asks a source about evidence it does not take.
+
+1. Each source keeps its own record. `fields(record)` reduces it to the common
+   format of `normalize-work.js`; a field the record does not state is
+   `undefined`, so the next source supplies it.
+2. Preference is stated per field in `FIELD_PRIORITY`, not per source, and the
+   `provenance` of the answer names the source of each field.
+3. The media container (`ContainerMetadata`) is a source and evidence at once.
+   Its title, original title and year enter normalization after the databases.
+   Its names, season, episode, episode title and `IMDB`/`TMDB`/`AniList` ids are
+   added to the request that the other sources are asked with. A container
+   title that is only a release name is not stated (so is one that ends in a
+   year, such as `Blade Runner 2049`: the databases supply it), and genres are kept in its
+   record and are not a field of the common format. Everything it states is
+   checked and bounded first, because it comes from a proxy.
+4. The request does not carry `container`, `fingerprint` or `externalIds` yet:
+   the sources and the registry accept them, and the routes and the proxy
+   answer that fills them follow (torrent-tv/meta#135, #139).
+
 ## Provider selection
 
 1. Always query AniList when a release name has an anime hint, including anime,

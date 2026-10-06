@@ -93,7 +93,10 @@ test("subtitle evidence excludes dialogue, invalid values and generic series tit
 
 
 test("the wrapper expands unresolved answers but retains actual ambiguity and confirmed identities", async () => {
-  const { AnimeMetadata } = await import("../services/metadata/AnimeMetadata.js");
+  const { MetadataRegistry } = await import("../services/metadata/MetadataRegistry.js");
+  const { TmdbProvider } = await import("../services/metadata/TmdbProvider.js");
+  const { AniListProvider } = await import("../services/metadata/AniListProvider.js");
+  const AnimeMetadata = class { constructor(tmdb, options) { return new MetadataRegistry({ providers: [new TmdbProvider(tmdb), new AniListProvider(options)] }); } };
   for (const status of ["identified", "ambiguous", "unavailable", "undetermined"]) {
     let expanded = false;
     const wrapper = new AnimeMetadata({ identify: async () => ({ status, work: status === "identified" ? { kind: "movie", title: "Film", year: 1997 } : undefined }),
