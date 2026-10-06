@@ -1,4 +1,4 @@
-## Unreleased
+## 0.44.1
 
 - **Fix**: Opening failures remain attached to the current playback attempt. Resetting source preferences no longer makes an active failure appear stale and leave the loading screen waiting indefinitely; cancelled and replaced attempts still cannot report an error for the new source.
 
