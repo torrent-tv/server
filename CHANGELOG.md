@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.1
 
 - **Fix**: What a file states about its work is kept for the next viewer also when its work was already identified by name: the page sends it to `POST /api/metadata/container` (torrent-tv/meta#139).
 
