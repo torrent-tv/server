@@ -529,7 +529,13 @@ export class SubtitlePlayback {
       video.appendChild(element);
       element.track.mode = "disabled";
       this.#providerEntries.set(key, { key, item, element, loaded: false });
-      this.#addMenuEntry(key, element.track, null);
+      // Not `#addMenuEntry`: that publishes the menu, and the player rebuilds
+      // every item on each publication. One per offer made the work grow with
+      // the square of the offers: a rebuild measured 0.7 ms per item, so 112
+      // offers one at a time are about four seconds of rebuilding — the page
+      // stood still for seven while a film was opening (field 2026-10-07).
+      // The menu is published once, below.
+      this.#menuEntries.set(key, { textTrack: element.track, planIndex: null, fileIndex: this.#subtitleContext?.fileIndex });
       // Provider variants without a confirmed translation identity must not
       // impersonate an embedded track of the same language on the next episode.
       this.#subtitleIdentities.set(element.track, null);
