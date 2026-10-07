@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.7
 
 - **Fix**: The error screen tells the viewer what happened to playback and what they can do, never a message written for the log. Only an error written for the viewer is shown as it is; any other — a status code, a timed-out request, a reason the proxy stated in its own terms — is shown as "Something went wrong while preparing this video. Press Retry to try again." (or, without Retry, "This video couldn't be played. Choose another file or torrent.") and its own text goes to the log together with the last refusal the proxy stated. A lost connection now says Retry continues from where the viewer was, and an empty pool says "No video source is available right now" (torrent-tv/meta#73).
 
