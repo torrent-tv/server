@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.2
 
 - **Fix**: A film whose file says to show a subtitle track no longer opens without it. Subtitles now start with the playback plan instead of after playback, the track the file opens with — its `FlagDefault`, or the viewer's choice carried from the previous episode — is reported to the proxy while the cushion fills, and the start waits until the proxy says that track has been read where the viewer stands. The wait ends with the cues or with the proxy's refusal to read the track; a proxy that does not state it is not waited on. The waiting overlay names it: "The subtitles this film opens with are being read" (torrent-tv/meta#8).
 
