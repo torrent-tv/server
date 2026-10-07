@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: knip 6.39.0 → 6.40.0; 1 package(s) changed in the lock file.
+
 ## 0.48.3
 
 - **Fix**: Subtitles found by a provider search are added to the menu in one publication instead of one per offer. The player rebuilds the whole menu on each publication, so a search answering 112 subtitles held the page for seconds while a film was opening (torrent-tv/meta#8).
