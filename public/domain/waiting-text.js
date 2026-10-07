@@ -238,7 +238,8 @@ export function formatWaitingText(measurements = {}) {
     ["source-input-ranges-unavailable", "The required media positions have not been determined"],
     ["source-measurement-unavailable", "Source measurements are not available"],
     ["media-continuity-unavailable", "A gap in the required media timeline prevents playback"],
-    ["service-not-advancing", "A required data service is not progressing"]
+    ["service-not-advancing", "A required data service is not progressing"],
+    ["subtitles-pending", "The subtitles this film opens with are being read"]
   ]);
   const timing = measurements.readinessUnavailable === true ? "This proxy needs an update before playback can start" :
     isNumber(measurements.etaSeconds) ? `${formatDuration(measurements.etaSeconds)} until playback` :
