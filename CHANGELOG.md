@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: A file opens on its first usable soundtrack when track 0, or the one chosen in an earlier episode, is marked unusable by the file (Matroska `FlagEnabled` 0, MP4 `track_enabled` cleared). Such a track was already left out of the menu, and was still played (torrent-tv/meta#49).
+
 ## 0.48.4
 
 - **Chore**: Update dependencies: knip 6.39.0 → 6.40.0; 1 package(s) changed in the lock file.
