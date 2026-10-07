@@ -249,11 +249,6 @@ export class Loading extends StateDerivedView {
     proxyCannotKeepUp:
       "This proxy doesn't currently have enough capacity to prepare this video. "
       + "Press Retry in a moment, or pick a different proxy or file.",
-    // A pick that did not happen has to say so. Switching regardless would empty
-    // the buffer and stop the picture, which is worse than the quality the
-    // viewer already has.
-    /** @param {number} height */
-    audioNotReady: "That soundtrack is not ready yet — still playing the one you had.",
     // Shown with the picture STOPPED while the chosen soundtrack is prepared.
     // The alternative is letting the film run on in a language the viewer does
     // not understand and leaving them to seek back afterwards, which is a worse
@@ -4315,9 +4310,11 @@ export class Loading extends StateDerivedView {
    * @param {CustomEvent} event
    */
   #onSelectAudioTrack = async (event) => {
-    // Whether the track was made ready before the switch. A track that is not
-    // ready is not switched to.
-    let ready = true;
+    // Whether the proxy prepared the track at the playhead. It answers only
+    // once the piece there exists — there is no "not ready" answer — so the
+    // one way this stays false is that there was no live session to prepare it
+    // on, and then the track is prepared by rebuilding the session with it.
+    let prepared = true;
     // What this page told the proxy about the track it moves to, kept for the
     // moment the switch is made: it is what a reconnect has to say again.
     /** @type {boolean | null} */
@@ -4394,29 +4391,20 @@ export class Loading extends StateDerivedView {
         const readyAt = Date.now();
         const answer = await this.#session.prepareAudioTrack(trackIndex, playhead, needsTranscode, preparation.signal);
         if (this.#audioPickSeq !== pick) return;
-        ready = answer === "ready" || answer === "unsupported";
+        prepared = answer !== false;
         this.#logEvt(
           `audio track ${trackIndex} ${answer} after ${Date.now() - readyAt}ms at ${playhead.toFixed(1)}s`
         );
       }
-      // Still not ready after the whole wait. The player discards the audio it
-      // holds the moment it is told to change, so switching into a track nobody
-      // has produced leaves the picture with nothing to play. Keep what is
-      // playing, put the menu back, and say so.
-      if (ready === false) {
-        // Written where the waiting overlay reads its step from. NOT seen by the
-        // viewer today, and the comment that used to claim otherwise was wrong
-        // in this version and in the one before it: releasing the hold takes the
-        // overlay off screen in the same turn, and the overlay clears its text
-        // when a wait ends. A menu that snaps back with no word for it reads as
-        // the player ignoring the viewer, so the message needs a place that
-        // outlives the wait — recorded as the open half of roadmap item 72.
-        this.setStatus(Loading.MESSAGES.audioNotReady);
-        this.#logEvt(`audio track ${trackIndex} was not ready; staying on ${this.#selectedAudioTrackIndex}`);
-        this.#publishAudioTracks();
-        return;
+      // Nothing was prepared: there was no live session to prepare the track
+      // on. Switching in place would discard the audio the player holds and
+      // leave the picture with nothing to play, and putting the menu back would
+      // ignore the viewer's choice — so the session is rebuilt with the track
+      // below (torrent-tv/meta#68).
+      if (!prepared) {
+        this.#logEvt(`audio track ${trackIndex}: no live session to prepare it on; rebuilding the session with it`);
       }
-      if (this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
+      if (prepared && this.#hlsPlayer.audioTracks().length > 1 && this.#hlsPlayer.switchAudioTrack(trackIndex)) {
         // What the PLAYER settled on, not what was asked for. Assigning a track
         // is a request: hls.js applies it asynchronously and can decline it or
         // choose another itself (a level switch changes group), and nothing
