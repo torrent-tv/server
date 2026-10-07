@@ -55,7 +55,9 @@ The registry never asks a source about evidence it does not take.
    (`ContainerRecords`, the disk cache's `container` namespace). The page sends
    `source: { infoHash, fileIndex }` with every identification of one file; with
    `container` the record is kept, without it the kept record is used and
-   returned as `container`. Reading it costs the first viewer about a minute; the
+   returned as `container`. When the work was established by name before the
+   file was read, the page sends it to `POST /api/metadata/container` instead,
+   which only keeps it. Reading it costs the first viewer about a minute; the
    next viewer of the file, on any proxy, has it from the first request.
 5. On the page (`media-info.js`) it only adds: the name's reading is shown at
    once; what the file states fills an empty episode title, year, description

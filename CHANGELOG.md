@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: What a file states about its work is kept for the next viewer also when its work was already identified by name: the page sends it to `POST /api/metadata/container` (torrent-tv/meta#139).
+
 ## 0.48.0
 
 - **New**: What an opened file states about its work — read by the proxy from the file's own tags — is used in identification: its titles are further names to search, a stated season or episode makes the release a series, a stated episode title is matched against the series' episodes, and an `IMDB`, `TMDB` or `TVDB` id replaces the search with a lookup. It fills an empty episode title, year and description, and the file's own cover is shown where there is no poster; nothing already shown is replaced (torrent-tv/meta#139).
