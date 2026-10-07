@@ -174,6 +174,7 @@ export class OutputUnavailableError extends Error {
     super(describeUnavailable(body, height));
     this.name = "OutputUnavailableError";
     this.outcome = "output-unavailable";
+    this.viewerFacing = true;
     this.reason = typeof body?.reason === "string" ? body.reason : "";
     this.figures = body?.figures && typeof body.figures === "object" ? body.figures : null;
     this.canRetry = true;
@@ -195,6 +196,7 @@ export class NoCapacityError extends Error {
     super("This proxy doesn't currently have enough capacity to prepare this video. Press Retry in a moment, or pick another proxy or file.");
     this.name = "NoCapacityError";
     this.outcome = "no-capacity";
+    this.viewerFacing = true;
     this.reason = typeof body?.reason === "string" ? body.reason : "";
     this.figures = body?.figures && typeof body.figures === "object" ? body.figures : null;
     this.canRetry = true;

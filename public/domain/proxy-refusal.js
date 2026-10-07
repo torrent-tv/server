@@ -10,7 +10,9 @@
  * travelled nowhere.
  *
  * So a refusal carries its reason in the response, this holds the last one, and
- * the failure shown to the viewer says it. One fact, one writer — whoever reads
+ * the log line written when playback fails says it. The viewer is not shown it:
+ * it is stated in the proxy's terms, and the viewer is told what happened to
+ * playback instead (`viewer-failure.js`). One fact, one writer — whoever reads
  * the proxy's answers — and it is cleared when a request succeeds, so a stale
  * reason cannot be attached to a later, different failure.
  */

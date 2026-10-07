@@ -2,6 +2,7 @@
 /** @import { HealthMetrics } from '../../../../proxy/services/health-collector.js' */
 
 import { getDebugState } from "../../shared/debug-state.js";
+import { viewerError } from "../../domain/viewer-failure.js";
 import { WebRtcProxy } from "../../domain/webrtc-proxy.js";
 import { choosePool } from "../../domain/proxy-preference.js";
 
@@ -114,7 +115,9 @@ export class ProxySelector {
     };
 
     if (scored.length === 0) {
-      throw new Error("No proxy clients are available.");
+      // Said to the viewer: no proxy is connected to the pool at all, which is
+      // a fact about now and not about the film.
+      throw viewerError("No video source is available right now. Try again later.");
     }
 
     // Which of them may be chosen: reachable from the internet or on the
