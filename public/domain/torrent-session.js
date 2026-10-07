@@ -286,7 +286,10 @@ export class TorrentSession {
    * @param {number} positionSeconds
    * @param {boolean | null} [browserNeedsTranscode] - Whether this browser
    *   cannot play THAT track's codec as it stands; null leaves it unsaid.
-   * @returns {Promise<"ready" | "not-ready" | "unsupported">} Whether the track reported itself ready.
+   * @returns {Promise<"ready" | "unsupported" | false>} "ready" once the piece at
+   *   the position exists — the proxy holds the answer until then; "unsupported"
+   *   when the session has no such track; false when there is no live session
+   *   to prepare it on.
    */
   async prepareAudioTrack(trackIndex, positionSeconds, browserNeedsTranscode = null, signal = null) {
     const current = this.currentTranscodeSession;

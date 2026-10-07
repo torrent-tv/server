@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: A soundtrack chosen while the proxy had just dropped the playback session is no longer discarded. The menu used to return to the previous track and the rebuilt session kept it; the session is now rebuilt with the chosen track. The message "That soundtrack is not ready yet" is removed: the proxy answers a track request only once the piece at the viewer's position exists, so a track that is not ready cannot be reported (torrent-tv/meta#68).
+
 ## 0.48.5
 
 - **Fix**: A file opens on its first usable soundtrack when track 0, or the one chosen in an earlier episode, is marked unusable by the file (Matroska `FlagEnabled` 0, MP4 `track_enabled` cleared). Such a track was already left out of the menu, and was still played (torrent-tv/meta#49).
