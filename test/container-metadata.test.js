@@ -16,6 +16,7 @@ import { SharedFetches } from "../services/metadata/SharedFetches.js";
 import { MetadataUnavailableError } from "../services/metadata/RequestGate.js";
 import { ContainerRecords, fileOf } from "../services/metadata/ContainerRecords.js";
 import { handleApiMetadataIdentifyPost } from "../routes/api/metadata/identify/post.js";
+import { handleApiMetadataContainerPost } from "../routes/api/metadata/container/post.js";
 import { artFor, containerEpisode, containerEvidence, playerArt, systemArtwork, workFor } from "../public/domain/media-info.js";
 
 // The component starts one controller of its own when it is first loaded; it is
@@ -241,4 +242,37 @@ test("a record that cannot be kept or read costs only the record", async () => {
   } finally {
     console.warn = warn;
   }
+});
+
+test("what a file states is kept even when the work was established without it", async () => {
+  const records = new ContainerRecords({ cache: new MetadataCache({ budgetBytes: 1 << 20, maxEntryBytes: 1 << 14 }) });
+  const ask = async (body) => {
+    const reply = { code(status) { reply.status = status; return reply; }, send(payload) { reply.body = payload; return reply; } };
+    await handleApiMetadataContainerPost({ body }, reply, { containerRecords: records });
+    return reply;
+  };
+  assert.equal((await ask({ source: { infoHash: INFO_HASH, fileIndex: 0 }, container: { segmentTitle: "Mortal.Kombat.2021.BDRip-1080p" } })).status, 204);
+  assert.equal((await records.get({ infoHash: INFO_HASH, fileIndex: 0 })).segmentTitle, "Mortal.Kombat.2021.BDRip-1080p");
+  assert.equal((await ask({ container: { title: "A" } })).status, 400);
+  assert.equal((await ask({ source: { infoHash: INFO_HASH, fileIndex: 0 }, container: "x" })).status, 400);
+});
+
+test("the page tells the server to keep what a file states when its work is already established", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (url, init) => new Promise((resolve) => pending.push({ url, body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Mortal.Kombat.1080p.mkv"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Mortal.Kombat.1080p.mkv", infoHash: INFO_HASH, shape: "single", items: [{ fileIndex: 0 }] },
+    files: [{ index: 0, relativePath: "Mortal.Kombat.1080p.mkv" }] });
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 460465, title: "Mortal Kombat", year: 2021 } }));
+  await new Promise((resolve) => setImmediate(resolve));
+  send(MEDIA_INFO_EVENTS.CONTAINER, { selection: 1, fileIndex: 0, container: { segmentTitle: "Mortal.Kombat.2021.BDRip-1080p", trackTitles: ["RUS"] } });
+  assert.equal(pending.length, 3);
+  assert.equal(pending[2].url, "/api/metadata/container");
+  assert.deepEqual(pending[2].body, { source: { infoHash: INFO_HASH, fileIndex: 0 }, container: { segmentTitle: "Mortal.Kombat.2021.BDRip-1080p" } });
 });

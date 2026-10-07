@@ -193,13 +193,18 @@ export class MediaInfoController {
     // Asked again only where the names did not establish the work; asked with
     // what the file states, the server also keeps it for the next viewer.
     if (shapeOf(this.#contents) === "undetermined") {
-      if (this.#pictures[String(fileIndex)]) return;
-      this.#askedPictures.delete(fileIndex);
-      void this.#identifyPicture(this.#selection, fileIndex);
+      if (!this.#pictures[String(fileIndex)]) {
+        this.#askedPictures.delete(fileIndex);
+        void this.#identifyPicture(this.#selection, fileIndex);
+        return;
+      }
+    } else if (this.#releaseRequest && !this.#work && this.#itemsByIndex.has(fileIndex)) {
+      void this.#identifyRelease(this.#selection, this.#releaseRequest);
       return;
     }
-    if (!this.#releaseRequest || this.#work || !this.#itemsByIndex.has(fileIndex)) return;
-    void this.#identifyRelease(this.#selection, this.#releaseRequest);
+    // The work is established without it: the server is only told to keep it.
+    const { container, source } = this.#evidence(fileIndex);
+    if (container && source) void this.#post("/api/metadata/container", { source, container });
   };
 
   /** The cover a file carries arrived: it is shown only where no poster is. */
@@ -539,7 +544,7 @@ export class MediaInfoController {
         body: JSON.stringify(body),
         signal: this.#abort?.signal
       });
-      return response.ok ? await response.json() : null;
+      return response.ok && response.status !== 204 ? await response.json() : null;
     } catch {
       // silent-ok: film metadata is decoration over playback. A failed or
       // cancelled request leaves the release's own names on screen, which is

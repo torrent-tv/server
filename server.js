@@ -35,6 +35,7 @@ import {
   IDENTIFY_BODY_LIMIT,
   handleApiMetadataIdentifyPost
 } from "./routes/api/metadata/identify/post.js";
+import { CONTAINER_BODY_LIMIT, handleApiMetadataContainerPost } from "./routes/api/metadata/container/post.js";
 import {
   EPISODES_BODY_LIMIT,
   handleApiMetadataEpisodesPost
@@ -215,6 +216,9 @@ app.post("/api/client-logs", async (req, reply) => handleApiClientLogsPost(req, 
 // here. Never on the playback path: every answer may be late, absent or refused.
 app.post("/api/metadata/identify", { bodyLimit: IDENTIFY_BODY_LIMIT }, async (req, reply) =>
   handleApiMetadataIdentifyPost(req, reply, { metadata, containerRecords })
+);
+app.post("/api/metadata/container", { bodyLimit: CONTAINER_BODY_LIMIT }, async (req, reply) =>
+  handleApiMetadataContainerPost(req, reply, { containerRecords })
 );
 app.post("/api/metadata/episodes", { bodyLimit: EPISODES_BODY_LIMIT }, async (req, reply) =>
   handleApiMetadataEpisodesPost(req, reply, { metadata })
