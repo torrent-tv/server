@@ -1,3 +1,14 @@
+/**
+ * The caller's statement that the browser cannot play this file, written for
+ * the viewer (torrent-tv/meta#73).
+ *
+ * @param {string} message
+ * @returns {Error}
+ */
+function unsupported(message) {
+  return Object.assign(new Error(message), { viewerFacing: true });
+}
+
 /** Observe loaded media without starting playback or assigning a time limit. */
 export function waitForMediaReady(media, { signal, requirePicture = true, unsupportedMessage } = {}) {
   return new Promise((resolve, reject) => {
@@ -20,12 +31,12 @@ export function waitForMediaReady(media, { signal, requirePicture = true, unsupp
         if (media.error.code === 2) {
           return finish(Object.assign(new Error("Media connection failed"), { canRetry: true }));
         }
-        return finish(new Error(unsupportedMessage));
+        return finish(unsupported(unsupportedMessage));
       }
       if (media.readyState < 1) return;
       if (!requirePicture) return finish();
       if (!(media.videoWidth > 0 && media.videoHeight > 0)) {
-        return finish(new Error(unsupportedMessage));
+        return finish(unsupported(unsupportedMessage));
       }
       // HAVE_CURRENT_DATA proves a decoded frame while playback remains paused.
       if (media.readyState >= 2) finish();

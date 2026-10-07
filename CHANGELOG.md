@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The error screen tells the viewer what happened to playback and what they can do, never a message written for the log. Only an error written for the viewer is shown as it is; any other — a status code, a timed-out request, a reason the proxy stated in its own terms — is shown as "Something went wrong while preparing this video. Press Retry to try again." (or, without Retry, "This video couldn't be played. Choose another file or torrent.") and its own text goes to the log together with the last refusal the proxy stated. A lost connection now says Retry continues from where the viewer was, and an empty pool says "No video source is available right now" (torrent-tv/meta#73).
+
 ## 0.48.6
 
 - **Fix**: A soundtrack chosen while the proxy had just dropped the playback session is no longer discarded. The menu used to return to the previous track and the rebuilt session kept it; the session is now rebuilt with the chosen track. The message "That soundtrack is not ready yet" is removed: the proxy answers a track request only once the piece at the viewer's position exists, so a track that is not ready cannot be reported (torrent-tv/meta#68).

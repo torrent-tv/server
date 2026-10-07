@@ -17,6 +17,8 @@ import {
 import { describeMediaFailure } from "../../domain/media-failure.js";
 import { measureLink, reportNow } from "../../domain/net-report.js";
 import { onProxyOutcome, outcomeBelongsTo } from "../../domain/proxy-outcome.js";
+import { describeFailure, viewerError } from "../../domain/viewer-failure.js";
+import { lastProxyRefusal } from "../../domain/proxy-refusal.js";
 import { VisiblePictureWatch } from "../../domain/visible-picture.js";
 import { PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { StageTimeline } from "../../domain/stage-timeline.js";
@@ -254,7 +256,7 @@ export class Loading extends StateDerivedView {
     // not understand and leaving them to seek back afterwards, which is a worse
     // thing to do to them than a wait they can see the reason for.
     audioPreparing: "Preparing the soundtrack you chose…",
-    connectionLost: "Connection to the proxy was lost.",
+    connectionLost: "Connection to the video source was lost. Press Retry to continue from where you were.",
     reconnecting: "Reconnecting...",
     waitingForNetwork: "Waiting for the network to come back…",
     switchingAudio: "Switching audio track...",
@@ -618,8 +620,8 @@ export class Loading extends StateDerivedView {
       this.#logEvt(`seek failed: ${description}`);
       const canRetry = this.#activeFileIndex >= 0;
       this.#logEvt(`seek to ${position}s failed (retry ${canRetry ? "offered" : "impossible"}): ${description}`);
-      if (canRetry) this.#armRetryableStall(this.#activeFileIndex, description);
-      this.#failPlayback(epoch, { description, canRetry });
+      if (canRetry) this.#armRetryableStall(this.#activeFileIndex);
+      this.#failWith(epoch, error, { canRetry });
     }
   }
   /**
@@ -1494,7 +1496,7 @@ export class Loading extends StateDerivedView {
       if (this.#isAbortError(error)) return;
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] playback failed:", message, error);
-      this.#failPlayback(epoch, { description: message, canRetry: error?.canRetry === true });
+      this.#failWith(epoch, error);
     });
   }
 
@@ -1788,6 +1790,23 @@ export class Loading extends StateDerivedView {
    * @param {{ description: string, canRetry?: boolean }} detail
    * @returns {void}
    */
+  /**
+   * Fail playback with an error: the viewer is shown what is written for them,
+   * and everything else about the failure goes to the log
+   * (`describeFailure`, torrent-tv/meta#73).
+   *
+   * @param {number} epoch
+   * @param {unknown} error
+   * @param {{ canRetry?: boolean }} [options] - Overrides the error's own
+   *   `canRetry` when the caller decides it.
+   * @returns {void}
+   */
+  #failWith(epoch, error, { canRetry } = {}) {
+    const failure = describeFailure(error, { canRetry, proxyRefusal: lastProxyRefusal() });
+    if (failure.logDetail) this.#logEvt(`playback failure, not shown to the viewer: ${failure.logDetail}`);
+    this.#failPlayback(epoch, { description: failure.description, canRetry: failure.canRetry });
+  }
+
   #failPlayback(epoch, detail) {
     if (epoch !== this.#playbackEpoch) {
       this.#logEvt(`stale playback failure ignored (epoch ${epoch}≠${this.#playbackEpoch}): ${detail?.description ?? ""}`);
@@ -1957,7 +1976,7 @@ export class Loading extends StateDerivedView {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
     if (this.#isProcessing) {
-      throw new Error(Loading.MESSAGES.alreadyProcessing);
+      throw viewerError(Loading.MESSAGES.alreadyProcessing);
     }
 
     // A fresh torrent invalidates any pending resume state, cancellation and
@@ -2005,7 +2024,7 @@ export class Loading extends StateDerivedView {
       this.#throwIfCancelled();
       const transport = await this.#acquireTransport();
       if (!transport) {
-        throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+        throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
       }
       const sourceKey = await this.#session.registerSourceOnProxy(transport);
       const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
@@ -2055,7 +2074,7 @@ export class Loading extends StateDerivedView {
 
       const videoCount = mediaFiles.video.length;
       if (videoCount <= 0) {
-        throw new Error(Loading.MESSAGES.noVideoFile);
+        throw viewerError(Loading.MESSAGES.noVideoFile);
       }
       // Start the torrent NOW, before the viewer has picked an episode. None of
       // what a cold torrent must do first depends on which file is wanted:
@@ -2319,9 +2338,7 @@ export class Loading extends StateDerivedView {
           // and is explained there. Retryable, because the next attempt may be
           // answered by another proxy.
           if (!statesWhatIsInTheTorrent(body)) {
-            const error = new Error(Loading.MESSAGES.torrentContentsNotStated);
-            error.canRetry = true;
-            throw error;
+            throw viewerError(Loading.MESSAGES.torrentContentsNotStated, { canRetry: true });
           }
           return body;
         }
@@ -2389,7 +2406,7 @@ export class Loading extends StateDerivedView {
       throw new Error(Loading.MESSAGES.playerNotReady);
     }
     if (this.#isProcessing) {
-      throw new Error(Loading.MESSAGES.alreadyProcessing);
+      throw viewerError(Loading.MESSAGES.alreadyProcessing);
     }
 
     // A fresh source invalidates any pending resume state, cancellation and
@@ -2429,7 +2446,7 @@ export class Loading extends StateDerivedView {
       const transport = await this.#acquireTransport();
       this.#throwIfCancelled();
       if (!transport) {
-        throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+        throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
       }
       const sourceKey = await this.#session.registerSourceOnProxy(transport);
       this.#throwIfCancelled();
@@ -2442,7 +2459,7 @@ export class Loading extends StateDerivedView {
         typeof contents?.name === "string" && contents.name.length > 0 ? contents.name : displayName;
       const files = normalizeRemoteFileList(name, contents?.files);
       if (files.length === 0) {
-        throw new Error(this.#magnetFailureMessage(magnetUri));
+        throw viewerError(this.#magnetFailureMessage(magnetUri));
       }
 
       current.name = name;
@@ -2463,7 +2480,7 @@ export class Loading extends StateDerivedView {
 
       const videoCount = mediaFiles.video.length;
       if (videoCount <= 0) {
-        throw new Error(Loading.MESSAGES.noVideoFile);
+        throw viewerError(Loading.MESSAGES.noVideoFile);
       }
       // Start the torrent NOW, before the viewer has picked an episode. None of
       // what a cold torrent must do first depends on which file is wanted:
@@ -2975,9 +2992,7 @@ export class Loading extends StateDerivedView {
         sessionCurrent: this.#session.current
       };
     }
-    const error = new Error(message);
-    error.canRetry = true;
-    return error;
+    return viewerError(message, { canRetry: true });
   }
 
 
@@ -3027,14 +3042,14 @@ export class Loading extends StateDerivedView {
    */
   async #playVideoFile(fileIndex) {
     if (!Number.isInteger(fileIndex) || fileIndex < 0) {
-      throw new Error(Loading.MESSAGES.noVideoFile);
+      throw viewerError(Loading.MESSAGES.noVideoFile);
     }
     const current = this.#session.current;
     const file = Array.isArray(current?.files)
       ? current.files.find((entry) => entry?.index === fileIndex) ?? null
       : null;
     if (!file || file.isVideo !== true) {
-      throw new Error(Loading.MESSAGES.selectedFileNotFound);
+      throw viewerError(Loading.MESSAGES.selectedFileNotFound);
     }
     this.#openingFileIndex = fileIndex;
     const address = readUrlState(location.search);
@@ -3105,7 +3120,7 @@ export class Loading extends StateDerivedView {
     });
     this.#throwIfCancelled();
     if (!transport) {
-      throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+      throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
     }
     this.#coldStart.t1 = performance.now();
     // The connection is made, so stop saying it is being made. Nothing cleared
@@ -4454,7 +4469,7 @@ export class Loading extends StateDerivedView {
     } catch (error) {
       this.#logEvt(`audio preparation ended: ${error?.message ?? error}`);
       if (error?.name !== "AbortError" && this.#audioPickSeq === pick) {
-        this.#failPlayback(epoch, { description: error?.message ?? String(error), canRetry: error?.canRetry === true });
+        this.#failWith(epoch, error);
       }
     } finally {
       if (this.#audioPreparation === preparation) this.#audioPreparation = null;
@@ -4974,7 +4989,7 @@ export class Loading extends StateDerivedView {
       transport = await this.#acquireTransport();
     }
     if (!transport) {
-      throw new Error(Loading.MESSAGES.noProxyAndNoWebseed);
+      throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
     }
     this.setStatus(
       typeof options.statusMessage === "string" && options.statusMessage.trim().length > 0
@@ -5902,7 +5917,7 @@ export class Loading extends StateDerivedView {
       this.#playbackLive = false;
       this.#clearBuffering();
     }
-    this.#failPlayback(epoch, { description: error.message, canRetry: true });
+    this.#failWith(epoch, error);
   }
 
   /**
