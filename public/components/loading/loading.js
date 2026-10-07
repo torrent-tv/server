@@ -46,6 +46,7 @@ import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
+import { subtitleStartHold } from "../../domain/subtitle-start.js";
 import { mediaInfoHintFromFilename } from "../../domain/release-hints.js";
 import { categoryOfTorrent } from "../../domain/torrent-category.js";
 
@@ -2073,21 +2074,11 @@ export class Loading extends StateDerivedView {
       if (videoCount === 1) {
         const videoFileIndex = mediaFiles.video[0].index;
         await this.#playVideoFile(videoFileIndex);
-        void this.#loadSubtitlesForVideo(videoFileIndex).catch((e) => {
-          if (!this.#isAbortError(e)) {
-            console.warn("[torrent-tv][subtitles] load failed:", e);
-          }
-        });
       } else if (sharedVideoFileIndex != null) {
         // A shared link targeted a specific file of a multi-file torrent — open
         // it directly instead of the playlist.
         this.#pendingFileIndex = null;
         await this.#playVideoFile(sharedVideoFileIndex);
-        void this.#loadSubtitlesForVideo(sharedVideoFileIndex).catch((e) => {
-          if (!this.#isAbortError(e)) {
-            console.warn("[torrent-tv][subtitles] load failed:", e);
-          }
-        });
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
@@ -2491,21 +2482,11 @@ export class Loading extends StateDerivedView {
       if (videoCount === 1) {
         const videoFileIndex = mediaFiles.video[0].index;
         await this.#playVideoFile(videoFileIndex);
-        void this.#loadSubtitlesForVideo(videoFileIndex).catch((e) => {
-          if (!this.#isAbortError(e)) {
-            console.warn("[torrent-tv][subtitles] load failed:", e);
-          }
-        });
       } else if (sharedVideoFileIndex != null) {
         // A shared link targeted a specific file of a multi-file torrent — open
         // it directly instead of the playlist.
         this.#pendingFileIndex = null;
         await this.#playVideoFile(sharedVideoFileIndex);
-        void this.#loadSubtitlesForVideo(sharedVideoFileIndex).catch((e) => {
-          if (!this.#isAbortError(e)) {
-            console.warn("[torrent-tv][subtitles] load failed:", e);
-          }
-        });
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
@@ -3034,11 +3015,6 @@ export class Loading extends StateDerivedView {
       this.#session.releaseActiveTranscodeSessions({ reason: "switch-file" });
       this.setStatus(Loading.MESSAGES.switchingToSelectedFile);
       await this.#playVideoFile(fileIndex);
-      void this.#loadSubtitlesForVideo(fileIndex).catch((e) => {
-        if (!this.#isAbortError(e)) {
-          console.warn("[torrent-tv][subtitles] load failed:", e);
-        }
-      });
       this.setProgress(100);
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
           detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
@@ -3116,6 +3092,7 @@ export class Loading extends StateDerivedView {
           this.#setActiveMediaFile(fileIndex);
         }
       }
+      this.#startSubtitlesForVideo(fileIndex);
       return;
     }
 
@@ -3225,6 +3202,12 @@ export class Loading extends StateDerivedView {
       // its first piece off the swarm.
       sidecarSubtitles: Array.isArray(prepared.sidecarSubtitles) ? prepared.sidecarSubtitles : [],
     });
+    // Subtitles start with the plan, not after playback. The track the file
+    // opens with is reported to the proxy now, so its cues are read while the
+    // cushion fills, and the start of playback waits for them
+    // (`#waitForPrebuffer`). Started after playback, as this was, the opening
+    // played without the subtitles the file says to show (torrent-tv/meta#8).
+    this.#startSubtitlesForVideo(fileIndex);
     // Source coded resolution — drives the manual quality menu.
     this.#sourceVideoWidth = Number.isFinite(prepared.videoWidth) ? prepared.videoWidth : 0;
     this.#sourceVideoHeight = Number.isFinite(prepared.videoHeight) ? prepared.videoHeight : 0;
@@ -4124,8 +4107,12 @@ export class Loading extends StateDerivedView {
   }
 
   /** @param {number} fileIndex */
-  #loadSubtitlesForVideo(fileIndex) {
-    return this.#subtitlePlayback.loadForVideo(fileIndex);
+  #startSubtitlesForVideo(fileIndex) {
+    void this.#subtitlePlayback.loadForVideo(fileIndex).catch((e) => {
+      if (!this.#isAbortError(e)) {
+        console.warn("[torrent-tv][subtitles] load failed:", e);
+      }
+    });
   }
 
   /**
@@ -5196,6 +5183,10 @@ export class Loading extends StateDerivedView {
     let lastGrowthAt = Date.now();
     let cachedProgress = null;
     let lastProgressFetchAt = 0;
+    // When the request behind `cachedProgress` was SENT — what decides whether
+    // that forecast could have weighed the subtitle reported since.
+    let cachedProgressRequestedAt = -Infinity;
+    let saidProxyUnaware = false;
     while (true) {
       this.#throwIfCancelled(epoch);
       if (videoElement.error) {
@@ -5209,7 +5200,9 @@ export class Loading extends StateDerivedView {
       if (now - lastProgressFetchAt >= 1500) {
         lastProgressFetchAt = now;
         try {
+          const requestedAt = performance.now();
           cachedProgress = await this.#session.fetchActiveTranscodeProgress();
+          cachedProgressRequestedAt = requestedAt;
         } catch (error) {
           // The estimate and the quality menu are built from these readings; a
           // run of failures freezes both at their last value with no sign why.
@@ -5227,19 +5220,40 @@ export class Loading extends StateDerivedView {
       this.#assertTranscodeProgress(cachedProgress);
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
-      const unified = this.#waitingModel.update({
-        playbackReadiness: cachedProgress?.playbackReadiness,
-        bufferedAhead: ahead
-      });
-      const readiness = cachedProgress?.playbackReadiness;
-      if (readiness?.reason === "media-continuity-unavailable") {
+      const proxyReadiness = cachedProgress?.playbackReadiness;
+      if (proxyReadiness?.reason === "media-continuity-unavailable") {
         throw new Error("Prepared media contains a timestamp gap; playback cannot start.");
       }
+      // The subtitle the file opens with: the proxy decides when it has been
+      // read, and this only refuses a "ready" taken before the page's own
+      // report of that track reached it (`subtitleStartHold`).
+      const startSubtitle = this.#subtitlePlayback.startSelection();
+      const subtitleHold = proxyReadiness?.version === 1 && proxyReadiness.ready === true
+        ? subtitleStartHold(startSubtitle, proxyReadiness, cachedProgressRequestedAt)
+        : null;
+      if (subtitleHold === "proxy-unaware" && !saidProxyUnaware) {
+        saidProxyUnaware = true;
+        this.#logEvt(
+          `prebuffer: this proxy does not state whether subtitle track ${startSubtitle.trackIndex} ` +
+            `has been read; starting without waiting for it`
+        );
+      }
+      const holdsForSubtitles = subtitleHold === "subtitles-pending";
+      const readiness = holdsForSubtitles
+        ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
+        : proxyReadiness;
+      const unified = this.#waitingModel.update({
+        playbackReadiness: readiness,
+        bufferedAhead: ahead
+      });
       if (readiness?.version === 1 && readiness.ready === true) {
+        const subtitles = readiness.subtitles;
         this.#logEvt(
           `prebuffer ready delay=${Number(readiness.delaySeconds).toFixed(2)}s ` +
             `ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s ` +
-            `prepared=${readiness.preparedSegments} reason=${readiness.reason}`
+            `prepared=${readiness.preparedSegments} reason=${readiness.reason} ` +
+            `subtitles=${subtitles ? `${subtitles.fileIndex}:${subtitles.trackIndex ?? "file"}` : String(subtitles)} ` +
+            `start=${startSubtitle.state}`
         );
         this.#logColdStart();
         return;

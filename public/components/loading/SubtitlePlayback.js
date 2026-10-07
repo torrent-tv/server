@@ -3,11 +3,14 @@ import { ProviderSubtitles } from "./ProviderSubtitles.js";
 import { providerSubtitleLabel } from "../../domain/provider-subtitles.js";
 import { subtitleMenuItems, subtitleToggleKey } from "../../domain/subtitle-menu.js";
 import { readCoverage, describeCoverage } from "../../domain/subtitle-coverage.js";
+import { buildSubtitleLabel } from "../../domain/subtitle-utils.js";
+import { trackIdentity, sameTrackIdentity } from "../../domain/track-memory.js";
 import {
-  buildSubtitleLabel,
-  containerDefaultSubtitleIndex
-} from "../../domain/subtitle-utils.js";
-import { trackIdentity, sameTrackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
+  embeddedStartTrackIndex,
+  embeddedSubtitleIdentity,
+  offeredSubtitleTracks,
+  subtitleStartChoice
+} from "../../domain/subtitle-start.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 
 import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
@@ -207,6 +210,15 @@ export class SubtitlePlayback {
    * @type {ReturnType<typeof setInterval> | null}
    */
   #subtitleCoverageTimer = null;
+  /**
+   * Where the report of the EMBEDDED track this file opens with stands. The
+   * start of playback is not released on a forecast that could not have
+   * weighed it (`subtitleStartHold`, torrent-tv/meta#8).
+   *
+   * @type {{ state: "none" | "reporting" | "reported" | "refused", epoch?: number,
+   *   fileIndex?: number, trackIndex?: number, reportedAt?: number }}
+   */
+  #start = { state: "none" };
   #providers;
   #providerEntries = new Map();
   #providerStatuses = [];
@@ -261,6 +273,7 @@ export class SubtitlePlayback {
     // to the `<video>` element, which survives a file switch, and it reads the
     // current file from `#subtitleContext` rather than from a closure.
     this.#subtitleEpoch += 1;
+    this.#start = { state: "none" };
     this.#menuEntries.clear();
     this.#lastChosenKey = null;
     this.#cuesById.clear();
@@ -363,20 +376,43 @@ export class SubtitlePlayback {
     this.#publishMenu();
   }
 
-  #reportSubtitleSelection(entry) {
+  /**
+   * @param {{ planIndex: number | null, fileIndex?: number } | null} entry
+   * @param {(accepted: boolean) => void} [settled] - Told whether the proxy
+   *   recorded the choice; not told at all when the file has changed since.
+   */
+  #reportSubtitleSelection(entry, settled = () => {}) {
     const context = this.#subtitleContext;
-    if (!context) return;
+    if (!context) {
+      settled(false);
+      return;
+    }
     const epoch = this.#subtitleEpoch;
-      this.#subtitleSelectionPending = this.#subtitleSelectionPending.then(async () => {
+    this.#subtitleSelectionPending = this.#subtitleSelectionPending.then(async () => {
       if (epoch !== this.#subtitleEpoch || context !== this.#subtitleContext) return;
-        const response = await context.transport.fetch("/api/subtitles", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ consumerId: this.#getConsumerId(), sourceKey: context.sourceKey,
-        fileIndex: entry?.fileIndex ?? context.fileIndex, trackIndex: entry?.planIndex ?? null, off: !entry }),
-      signal: this.#subtitleSignal(), timeoutMs: 0
+      const response = await context.transport.fetch("/api/subtitles", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ consumerId: this.#getConsumerId(), sourceKey: context.sourceKey,
+          fileIndex: entry?.fileIndex ?? context.fileIndex, trackIndex: entry?.planIndex ?? null, off: !entry }),
+        signal: this.#subtitleSignal(), timeoutMs: 0
       });
-        if (response?.ok === false) throw new Error(`Subtitle selection was refused (${response.status}).`);
-    }).catch(error => { if (!isAbortError(error)) console.warn("[torrent-tv][subtitles] selection report failed:", error); });
+      if (response?.ok === false) throw new Error(`Subtitle selection was refused (${response.status}).`);
+      if (epoch === this.#subtitleEpoch) settled(true);
+    }).catch(error => {
+      if (epoch === this.#subtitleEpoch) settled(false);
+      if (!isAbortError(error)) console.warn("[torrent-tv][subtitles] selection report failed:", error);
+    });
+  }
+
+  /**
+   * Where the report of the embedded track this file opens with stands — read
+   * by the start of playback, which waits for that track (torrent-tv/meta#8).
+   *
+   * @returns {{ state: "none" | "reporting" | "reported" | "refused", fileIndex?: number,
+   *   trackIndex?: number, reportedAt?: number }}
+   */
+  startSelection() {
+    return { ...this.#start };
   }
 
   /** @returns {Array<{ key: string, label: string, showing: boolean }>} */
@@ -443,11 +479,24 @@ export class SubtitlePlayback {
     if (!(this.#getVideoElement() instanceof HTMLVideoElement)) {
       return;
     }
+    // Known from the plan alone, so it is stated BEFORE anything is awaited:
+    // the start of playback must not read "nothing to wait for" in the moment
+    // between this call and the track's own report.
+    const startIndex = embeddedStartTrackIndex({
+      tracks: this.#planTracks?.subtitles,
+      sidecars: this.#planTracks?.sidecarSubtitles,
+      remembered: this.#rememberedSubtitle
+    });
+    if (startIndex !== null) {
+      this.#start = { state: "reporting", epoch, fileIndex, trackIndex: startIndex };
+      this.#logEvent(`subtitles: the file opens with embedded track ${startIndex}; the start waits for it`);
+    }
 
     let sourceKey;
     try {
       sourceKey = await this.#registerSourceOnProxy(transport);
     } catch (e) {
+      if (epoch === this.#subtitleEpoch) this.#start = { state: "none" };
       console.warn("[torrent-tv][subtitles] could not obtain sourceKey:", e);
       return;
     }
@@ -712,9 +761,7 @@ export class SubtitlePlayback {
     // `isEnabled` is FlagEnabled read from the container: "Set to 1 if the track
     // is usable." ffmpeg keeps such a track and numbers it, so it still holds
     // its place in `0:s:N` — it is simply never offered.
-    const tracks = (this.#planTracks?.subtitles ?? []).filter(
-      (t) => t?.textBased === true && t?.isEnabled !== false
-    );
+    const tracks = offeredSubtitleTracks(this.#planTracks?.subtitles);
     if (tracks.length === 0) {
       return;
     }
@@ -745,10 +792,7 @@ export class SubtitlePlayback {
       // What this track IS, for carrying a choice of it to the next episode.
       // Corrected in `#refineSubtitleLabel` if the container said nothing and
       // the cues answer later.
-      this.#subtitleIdentities.set(el.track, trackIdentity({
-        code: fallbackLang,
-        releaser: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null
-      }));
+      this.#subtitleIdentities.set(el.track, embeddedSubtitleIdentity(track));
       if (fallbackLang && fallbackLang !== "und") {
         this.#namedSubtitleTracks.add(track.index);
       }
@@ -967,22 +1011,13 @@ export class SubtitlePlayback {
         return;
       }
 
-      // Refine the label if the container said nothing and the text was read
-      // as a language. Nothing else is a source: see `#loadExternalSubtitles`.
-      const fallbackLang = trackLanguageCode(trackLanguageTag(track));
-      if (!fallbackLang || fallbackLang === "und") {
-        const detected = this.#languageFromHeader(response);
-        if (detected?.code && detected.code !== "und") {
-          el.label = buildSubtitleLabel({
-            code: detected.code,
-            name: detected.name || languageName(detected.code) || "Unknown",
-            group: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null,
-            isForced: track.isForced === true,
-            isHearingImpaired: track.isHearingImpaired === true
-          });
-          el.srclang = detected.code;
-          this.#publishMenu();
-        }
+      // Refine the label if the container said nothing and the proxy's measured
+      // detector named the text's language. Nothing else is a source: see
+      // `#loadExternalSubtitles`. The same path as a push, so the identity the
+      // next episode is matched by moves with the label.
+      const detected = this.#languageFromHeader(response);
+      if (detected?.code && detected.code !== "und") {
+        this.#refineSubtitleLabel(track.index, detected);
       }
 
       const cursor = Number.parseInt(response.headers.get("x-subtitle-cursor") ?? "", 10);
@@ -1248,9 +1283,7 @@ export class SubtitlePlayback {
     if (!context || this.#embeddedTextTracks.size === 0 || this.#subtitleResubscribing) {
       return;
     }
-    const tracks = (this.#planTracks?.subtitles ?? []).filter(
-      (track) => track?.textBased === true && track?.isEnabled !== false
-    );
+    const tracks = offeredSubtitleTracks(this.#planTracks?.subtitles);
     if (tracks.length === 0) {
       return;
     }
@@ -1383,7 +1416,17 @@ export class SubtitlePlayback {
     const wanted = show ? "showing" : "disabled";
     if (show) {
       this.#subtitleShowingWeApplied = textTrack;
-      this.#reportSubtitleSelection([...this.#menuEntries.values()].find(entry => entry.textTrack === textTrack) ?? null);
+      const start = this.#start;
+      const opensWith = start.state === "reporting" && start.epoch === epoch && planIndex === start.trackIndex;
+      this.#reportSubtitleSelection(
+        [...this.#menuEntries.values()].find(entry => entry.textTrack === textTrack) ?? null,
+        opensWith ? (accepted) => this.#settleStart(start, accepted) : undefined
+      );
+    } else if (this.#start.state === "reporting" && this.#start.epoch === epoch && planIndex === this.#start.trackIndex) {
+      // The choice moved between the plan and this track's arming — the viewer
+      // picked something else in that moment. Nothing will report this track,
+      // so nothing may wait for it.
+      this.#settleStart(this.#start, false);
     }
     const apply = () => {
       if (epoch !== this.#subtitleEpoch) {
@@ -1417,46 +1460,34 @@ export class SubtitlePlayback {
    * @returns {boolean}
    */
   #subtitleShouldShow(textTrack, planIndex) {
-    const remembered = this.#rememberedSubtitle;
-    if (remembered?.off === true) {
-      return false;
+    const choice = subtitleStartChoice({
+      tracks: this.#planTracks?.subtitles,
+      sidecars: this.#planTracks?.sidecarSubtitles,
+      remembered: this.#rememberedSubtitle
+    });
+    if (choice && "identity" in choice) {
+      return sameTrackIdentity(this.#subtitleIdentities.get(textTrack) ?? null, choice.identity);
     }
-    if (remembered && findTrackByIdentity(this.#subtitleCandidateIdentities(), remembered) >= 0) {
-      return sameTrackIdentity(this.#subtitleIdentities.get(textTrack) ?? null, remembered);
-    }
-    const chosenIndex = containerDefaultSubtitleIndex(this.#planTracks?.subtitles ?? []);
-    return planIndex !== null && planIndex === chosenIndex;
+    return choice !== null && "planIndex" in choice && planIndex === choice.planIndex;
   }
 
   /**
-   * What every subtitle track this file can offer IS, in one list.
+   * The proxy answered the report of the track this file opens with.
    *
-   * Needed whole rather than one at a time, because a remembered choice with no
-   * counterpart here must fall back to the container's default — and that
-   * cannot be told from a single track. Tracks are attached over time (a
-   * sidecar costs a fetch), so the list is built from what the file DECLARES,
-   * which is known before any of them is attached.
-   *
-   * @returns {Array<{ code: string, releaser: string | null } | null>}
+   * @param {object} start - The state the report was made under.
+   * @param {boolean} accepted
+   * @returns {void}
    */
-  #subtitleCandidateIdentities() {
-    const identities = (this.#planTracks?.subtitles ?? [])
-      .filter((track) => track?.textBased === true && track?.isEnabled !== false)
-      .map((track) => {
-        const title = typeof track.title === "string" ? track.title.trim() : "";
-        return trackIdentity({
-          code: trackLanguageCode(trackLanguageTag(track) || ""),
-          releaser: title.length > 0 ? title : null
-        });
-      });
-    // The files beside the picture, as the proxy paired and read them.
-    for (const sub of this.#planTracks.sidecarSubtitles ?? []) {
-      identities.push(trackIdentity({
-        code: sub.naming?.code ?? "und",
-        releaser: sub.naming?.releaser ?? null
-      }));
+  #settleStart(start, accepted) {
+    if (this.#start !== start) {
+      return;
     }
-    return identities;
+    this.#start = accepted
+      ? { ...start, state: "reported", reportedAt: performance.now() }
+      : { ...start, state: "refused" };
+    this.#logEvent(accepted
+      ? `subtitles: the proxy recorded embedded track ${start.trackIndex} as the one the file opens with`
+      : `subtitles: the proxy did not record embedded track ${start.trackIndex}; the start does not wait for it`);
   }
 
   /**
