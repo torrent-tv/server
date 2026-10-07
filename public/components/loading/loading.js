@@ -1,6 +1,7 @@
 import { waitForMediaReady } from "../../domain/media-ready.js";
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { SeekPosition } from "../../domain/seek-position.js";
+import { openingAudioTrack } from "../../domain/audio-opening.js";
 import { PlaybackTasks } from "../../domain/playback-tasks.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
@@ -3215,6 +3216,13 @@ export class Loading extends StateDerivedView {
       this.#selectedAudioTrackIndex = 0;
     }
     this.#applyRememberedAudioTrack(prepared);
+    // Neither track 0 nor the one remembered from an earlier episode is played
+    // where the file marks it unusable (torrent-tv/meta#49).
+    const opening = openingAudioTrack(this.#audioTracks, this.#selectedAudioTrackIndex);
+    if (opening !== this.#selectedAudioTrackIndex) {
+      this.#logEvt(`audio track ${this.#selectedAudioTrackIndex} is marked unusable; opening on ${opening}`);
+      this.#selectedAudioTrackIndex = opening;
+    }
 
     // The codec of the track that will actually be PLAYED, not of the file's
     // first one. They are the same track until a viewer chooses another, and can
