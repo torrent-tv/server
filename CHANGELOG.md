@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.6
 
 - **Fix**: A soundtrack chosen while the proxy had just dropped the playback session is no longer discarded. The menu used to return to the previous track and the rebuilt session kept it; the session is now rebuilt with the chosen track. The message "That soundtrack is not ready yet" is removed: the proxy answers a track request only once the piece at the viewer's position exists, so a track that is not ready cannot be reported (torrent-tv/meta#68).
 
