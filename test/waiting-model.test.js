@@ -53,7 +53,10 @@ test("accepts only finite nonnegative numeric delays", () => {
   for (const delaySeconds of [undefined, "0", "7.5", false, NaN, Infinity, -1]) {
     assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds }) }).etaSeconds, null);
   }
-  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 0 }) }).etaSeconds, 0);
+  const answer = model.update({ playbackReadiness: readiness({ delaySeconds: 0, reason: "minimum-safe-delay" }) });
+  assert.equal(answer.etaSeconds, null);
+  assert.match(formatWaitingText({ etaSeconds: answer.etaSeconds, readinessReason: answer.reason }),
+    /Playback readiness has not been confirmed/);
 });
 
 test("a full browser buffer does not override a proxy forecast that is not ready", () => {
@@ -92,7 +95,7 @@ test("counts down in the local monotonic clock without depending on proxy clock 
   now += 2500;
   assert.equal(model.update({}).etaSeconds, 5);
   now += 9000;
-  assert.equal(model.update({}).etaSeconds, 0);
+  assert.equal(model.update({}).etaSeconds, null);
   assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 3 }) }).etaSeconds, 3);
 });
 

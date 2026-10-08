@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Keep the playback estimate unknown until the proxy confirms readiness or provides a positive delay (#ttv-160).
+
 ## 0.48.8
 
 - **Chore**: Update dependencies: @fastify/cors 11.3.0 → 11.3.1; 1 package(s) changed in the lock file.
