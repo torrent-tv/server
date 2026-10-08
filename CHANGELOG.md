@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.9
 
 - **Fix**: Keep the playback estimate unknown until the proxy confirms readiness or provides a positive delay (#ttv-160).
 
