@@ -1,6 +1,6 @@
 # server — public web app + WebRTC signalling
 
-Runs at https://webauth.courses. See the parent `../CLAUDE.md` for the overall
+Runs at https://webauth.courses. See the parent `../AGENTS.md` for the overall
 architecture and conventions. This repo is one of three (`server`, `proxy`,
 `ha-addon`).
 
@@ -45,7 +45,7 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
     track being refilled while the picture keeps running (changing a separately
     published audio track). Pure, tested, and the source of `FRAME_BLOCKED`.
   - `domain/webrtc-proxy.js` — WebRTC signalling + PNA health pre-flight
-    (the intentional `http://<lan>:9090/healthz` fetch; see parent CLAUDE.md).
+    (the intentional `http://<lan>:9090/healthz` fetch; see parent AGENTS.md).
   - `components/player/player.js` — player UI; hides the playlist button when
     there is a single media file.
 
@@ -100,8 +100,8 @@ four rules the design is held to, and which any change must respect:
 
 ## Planned: reachability probe + per-proxy certificates (remote access)
 
-Decided direction — full plan in the parent `../CLAUDE.md`, DNS/TLS limits in
-`../infra/CLAUDE.md`. Server-side pieces:
+Decided direction — full plan in the parent `../AGENTS.md`, DNS/TLS limits in
+`../infra/AGENTS.md`. Server-side pieces:
 
 - **Dial-back reachability probe** (does not exist yet): when a proxy reports
   its UPnP-mapped endpoint over the tunnel, connect to it from this server and
