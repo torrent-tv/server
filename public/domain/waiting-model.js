@@ -39,10 +39,11 @@ export class WaitingModel {
     const ahead = this.#bufferedAhead ?? (Number.isFinite(proxyBuffer) ? proxyBuffer : null);
     const ready = readiness?.ready === true;
     const delay = readiness?.delaySeconds;
+    const countdown = Number.isFinite(this.#deadline) ? (this.#deadline - now) / 1000 : null;
     const etaSeconds = ready
       ? 0
-      : Number.isFinite(delay) && delay >= 0
-        ? Math.max(0, (this.#deadline - now) / 1000)
+      : Number.isFinite(delay) && delay > 0 && Number.isFinite(countdown) && countdown > 0
+        ? countdown
         : null;
     const cushionRemainingSeconds = Number.isFinite(reserve) && reserve > 0 && ahead !== null
       ? Math.max(0, reserve - ahead)
