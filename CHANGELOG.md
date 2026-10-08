@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.8
 
 - **Chore**: Update dependencies: @fastify/cors 11.3.0 → 11.3.1; 1 package(s) changed in the lock file.
 
