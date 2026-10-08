@@ -92,4 +92,4 @@ read the code regions listed at the top of design.md.
       `window.env.version` and a real mid-playback loss on the deployed
       site. If task 1.4 required a proxy fix: release proxy FIRST
       (`npm run patch` there), then bump the addon, then the server —
-      order per the root CLAUDE.md.
+      order per the root AGENTS.md.

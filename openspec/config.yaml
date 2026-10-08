@@ -7,7 +7,7 @@ context: |
   WebRTC signalling between browsers and torrent proxies; video flows P2P
   browser<->proxy over a WebRTC data channel and must NEVER flow through this
   server or Cloudflare.
-  Conventions (see CLAUDE.md for the full set):
+  Conventions (see AGENTS.md for the full set):
   - Routes: routes/<path>/<method>.js exporting handle<Name><Method>, wired
     explicitly in server.js. No router framework.
   - All code, comments and docs in English.
