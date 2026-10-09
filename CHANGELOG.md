@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.1
 
 - **Fix**: The tunnel round trip is measured with a probe message the proxy echoes (`rtt-probe` → `rtt-echo`); the WebSocket ping frame used in 0.50.0 never came back over Cloudflare and nginx, so every proxy reported no round trip (#ttv-36).
 
