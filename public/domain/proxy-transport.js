@@ -119,6 +119,17 @@ export class ProxyTransport {
   }
 
   /**
+   * Whether a request can be sent now. An HTTP transport has no connection to
+   * lose; a WebRTC one is as open as the connection it holds at this moment,
+   * which a reconnect replaces.
+   *
+   * @returns {boolean}
+   */
+  get isOpen() {
+    return this.#webRtcProxy === null || this.#webRtcProxy.isOpen;
+  }
+
+  /**
    * Fetch a path on the proxy.
    *
    * @param {string} path    - Absolute path on the proxy, e.g. `"/api/sources"`.

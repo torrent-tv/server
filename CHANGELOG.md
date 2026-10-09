@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Send the page log to the proxy again while its connection is open: 0.48.11 sent every line to the server, and a reconnect now takes the lines back to the proxy (#ttv-77).
+
 ## 0.48.11
 
 - **Fix**: Stop sending the page log to a proxy connection that has closed; the server takes the lines until a new connection opens, instead of one failure line every two seconds for as long as the page stays open (#ttv-77).
