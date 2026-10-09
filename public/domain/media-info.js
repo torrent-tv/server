@@ -419,7 +419,8 @@ export function addressRecord(state, fileIndex) {
     ...record,
     category: adult ? "adult" : anime ? "anime" : null,
     season: Number.isInteger(episode?.season) ? episode.season : null,
-    episode: Number.isInteger(episode?.episodes?.[0]) ? episode.episodes[0] : null
+    // A matched episode is the provider's record: `{ number, name, still }`.
+    episode: Number.isInteger(episode?.episodes?.[0]?.number) ? episode.episodes[0].number : null
   };
 }
 
