@@ -37,8 +37,10 @@ import {
   fileOpenState,
   playbackStateToRecord,
   readUrlState,
-  resumePositionFor
+  resumePositionFor,
+  sameRecord
 } from "../../domain/url-state.js";
+import { addressRecord } from "../../domain/media-info.js";
 import {
   magnetNamesATracker,
   mediaFilesFrom,
@@ -309,6 +311,10 @@ export class Loading extends StateDerivedView {
   #rebuildingSession = false;
   /** A Back/Forward navigation is being carried out; see #onHistoryNavigate. */
   #navigatingHistory = false;
+  /** What the metadata component last published (`MEDIA_INFO:CHANGED`), or `null`. */
+  #mediaInfo = null;
+  /** The pictures the proxy said the open torrent holds, with their episode markers. */
+  #contentsItems = [];
   /** Said once per player: a torn-down element's zero is not a position. */
   #torndownPositionReported = false;
   /** The loading screen stepped aside for the playlist drawer. */
@@ -1718,6 +1724,7 @@ export class Loading extends StateDerivedView {
     document.addEventListener(LOADING_EVENTS.SET_PROGRESS, this.#onSetProgress);
     document.addEventListener(LOADING_EVENTS.PROCESS_PLAYBACK, this.#onProcessPlayback);
     document.addEventListener(LOADING_EVENTS.PROCESS_MAGNET, this.#onProcessMagnet);
+    document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfoChanged);
     document.addEventListener(PLAYER_EVENTS.SELECT_MEDIA_FILE, this.#onSelectMediaFile);
     document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, this.#onSelectAudioTrack);
     // The subtitle menu and its key belong to the player view; the tracks they
@@ -1997,8 +2004,12 @@ export class Loading extends StateDerivedView {
         torrentBytes,
         meta
       });
+      const addressed = this.#addressedRecord();
       this.#recordSourceIntent();
-      const mediaSelection = this.#announceMediaSelection([file.name, parsed.name], categoryOfTorrent(meta));
+      const mediaSelection = this.#announceMediaSelection([file.name, parsed.name], categoryOfTorrent(meta), {
+        createdAt: Number.isInteger(parsed.createdAt) ? parsed.createdAt : null,
+        ...addressed
+      });
 
       this.visible = true;
       this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
@@ -2159,16 +2170,66 @@ export class Loading extends StateDerivedView {
    * @param {string[]} names - The `.torrent` file's name and the torrent's own,
    *   or a magnet's `dn`.
    * @param {"adult" | null} [category] - What the torrent says it is, when it says.
+   * @param {{ createdAt?: number | null, record?: object | null, recordFileIndex?: number }} [known] - When
+   *   the torrent was made (a `.torrent` file states it), and the work the
+   *   address already names for one of its files.
    * @returns {number} This choice's number, for the contents that follow.
    */
-  #announceMediaSelection(names, category = null) {
+  #announceMediaSelection(names, category = null, known = {}) {
     this.#mediaSelection += 1;
     document.dispatchEvent(
       new CustomEvent(MEDIA_INFO_EVENTS.SELECTED, {
-        detail: { selection: this.#mediaSelection, names, category }
+        detail: { selection: this.#mediaSelection, names, category, ...known }
       })
     );
     return this.#mediaSelection;
+  }
+
+  /**
+   * The work the address names for the source being opened, before anything
+   * rewrites the address: a refresh or a shared link asks for that record
+   * instead of searching again.
+   *
+   * @returns {{ record?: object, recordFileIndex?: number }}
+   */
+  #addressedRecord() {
+    const addressed = readUrlState(location.search);
+    return addressed.record && addressed.magnet === this.#currentMagnetUri()
+      ? { record: addressed.record, recordFileIndex: addressed.fileIndex }
+      : {};
+  }
+
+  /**
+   * What the metadata component published. Kept to write the work of the
+   * active file into the address and the share link.
+   *
+   * @param {Event} event
+   */
+  #onMediaInfoChanged = (event) => {
+    this.#mediaInfo = event instanceof CustomEvent ? event.detail ?? null : null;
+    this.#reflectRecordInUrl();
+  };
+
+  /**
+   * Write the work the active file is into the address, replacing — not
+   * adding — the entry: it describes the same thing watched. A record the
+   * address already holds is kept until the service names one, so a refresh
+   * does not lose it while the answer is on its way.
+   */
+  #reflectRecordInUrl() {
+    if (this.#navigatingHistory || this.#activeFileIndex < 0) {
+      return;
+    }
+    const record = addressRecord(this.#mediaInfo, this.#activeFileIndex);
+    if (!record) {
+      return;
+    }
+    const current = readUrlState(location.search);
+    if (current.magnet !== this.#currentMagnetUri() || current.fileIndex !== this.#activeFileIndex || sameRecord(current.record, record)) {
+      return;
+    }
+    this.#writeHistory("replace", { ...current, record });
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SHARE_LINK, { detail: { url: this.#buildShareUrl() } }));
   }
 
   /**
@@ -2285,6 +2346,7 @@ export class Loading extends StateDerivedView {
    * @param {object[]} files - The same list as the rest of this page reads it.
    */
   #announceMediaContents(selection, contents, files, transport, sourceKey) {
+    this.#contentsItems = Array.isArray(contents?.items) ? contents.items : [];
     document.dispatchEvent(
       new CustomEvent(MEDIA_INFO_EVENTS.CONTENTS, {
         detail: { selection, contents, files }
@@ -2423,6 +2485,7 @@ export class Loading extends StateDerivedView {
       this.#subtitlePlayback.clear();
       this.#session.clear();
       const current = this.#session.openMagnetDetails({ magnetUri });
+      const addressed = this.#addressedRecord();
       this.#recordSourceIntent();
 
       // Display name from the magnet's dn parameter until metadata arrives.
@@ -2441,7 +2504,7 @@ export class Loading extends StateDerivedView {
       this.setFileName(displayName);
       this.setProgress(0);
       this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
-      const mediaSelection = this.#announceMediaSelection(displayName === "Magnet link" ? [] : [displayName]);
+      const mediaSelection = this.#announceMediaSelection(displayName === "Magnet link" ? [] : [displayName], null, addressed);
 
       const transport = await this.#acquireTransport();
       this.#throwIfCancelled();
@@ -2758,10 +2821,15 @@ export class Loading extends StateDerivedView {
 
   #recordSourceIntent() {
     if (this.#navigatingHistory) return;
-    this.#writePlaybackState(readUrlState(location.search), {
-      magnet: this.#currentMagnetUri(),
-      fileIndex: this.#pendingFileIndex ?? -1,
-      currentTime: this.#pendingCurrentTime ?? 0
+    const current = readUrlState(location.search);
+    const magnet = this.#currentMagnetUri();
+    const fileIndex = this.#pendingFileIndex ?? -1;
+    this.#writePlaybackState(current, {
+      magnet,
+      fileIndex,
+      currentTime: this.#pendingCurrentTime ?? 0,
+      // The work the address names stays with the file it was written for.
+      ...(current.record && current.magnet === magnet && current.fileIndex === fileIndex ? { record: current.record } : {})
     });
   }
 
@@ -2843,6 +2911,12 @@ export class Loading extends StateDerivedView {
     if (this.#activeFileIndex >= 0 && this.#videoFileCount() > 1) {
       url += `&fileIndex=${this.#activeFileIndex}`;
     }
+    // Which work it is, so the recipient's page looks the record up instead
+    // of searching (torrent-tv/meta#172).
+    const record = this.#activeFileIndex >= 0 ? addressRecord(this.#mediaInfo, this.#activeFileIndex) : null;
+    if (record) {
+      url += buildUrlSearch({ magnet: "m", fileIndex: -1, currentTime: 0, record }).replace(/^\?magnet=m/u, "");
+    }
     return url;
   }
 
@@ -2854,12 +2928,32 @@ export class Loading extends StateDerivedView {
    * @returns {number | null}
    */
   #sharedVideoFileIndex() {
-    const fileIndex = this.#pendingFileIndex;
+    const fileIndex = this.#pendingFileIndex ?? this.#addressedEpisodeFileIndex();
     if (fileIndex == null) {
       return null;
     }
     const file = this.#session.current?.files?.find((entry) => entry.index === fileIndex);
     return file?.isVideo === true ? fileIndex : null;
+  }
+
+  /**
+   * The file an address with no `fileIndex` names by its episode: the one
+   * picture whose marker carries that episode number (and that season, where
+   * the file states one). `null` unless exactly one does.
+   *
+   * @returns {number | null}
+   */
+  #addressedEpisodeFileIndex() {
+    const { record } = readUrlState(location.search);
+    if (!Number.isInteger(record?.episode)) {
+      return null;
+    }
+    const matches = this.#contentsItems.filter((item) => {
+      const marker = item?.episode;
+      return Array.isArray(marker?.episodes) && marker.episodes.includes(record.episode) &&
+        (!Number.isInteger(record.season) || !Number.isInteger(marker.season) || marker.season === record.season);
+    });
+    return matches.length === 1 ? matches[0].fileIndex : null;
   }
 
   /**
@@ -3181,7 +3275,15 @@ export class Loading extends StateDerivedView {
     this.#throwIfCancelled();
     if (Number.isFinite(prepared.durationSeconds) && prepared.durationSeconds > 0) {
       document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.PROBED, {
-        detail: { selection: metadataSelection, fileIndex, durationSeconds: prepared.durationSeconds }
+        detail: {
+          selection: metadataSelection,
+          fileIndex,
+          durationSeconds: prepared.durationSeconds,
+          // What language the audio is in, against a work's original language.
+          audioLanguages: [...new Set((Array.isArray(prepared.audioTracks) ? prepared.audioTracks : [])
+            .map((track) => trackLanguageCode(trackLanguageTag(track) || ""))
+            .filter((code) => /^[a-z]{2,3}$/u.test(code) && code !== "und"))]
+        }
       }));
     }
     void this.#announceFingerprint(metadataSelection, fileIndex, transport, earlySourceKey);
@@ -4152,6 +4254,7 @@ export class Loading extends StateDerivedView {
         detail: { url: this.#buildShareUrl() }
       })
     );
+    this.#reflectRecordInUrl();
     this.#publishAudioTracks();
   }
 

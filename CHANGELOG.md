@@ -1,3 +1,9 @@
+## Unreleased
+
+- **New**: Identification chooses among works of one title by score instead of the newest year: a work that contradicts the release (a film for episodes, a work later than the torrent's creation date, an episode beyond the season) is set aside, and the rest are scored by title, stated year, runtime, episode count and audio language; AniList's single anime match moves the choice onto the TMDB work it agrees with (#ttv-172).
+- **New**: The page address and the share link carry the identified work (`type`, `id`, `kind`, `category`, `season`, `episode`); a refresh or a shared link looks the record up instead of searching, and `season` with `episode` open the matching file when the address has no `fileIndex` (#ttv-172).
+- **Chore**: `METADATA_RUNTIME_TOLERANCE_SECONDS` is removed; a runtime is compared by ratio with no allowance (#ttv-172).
+
 ## 0.48.12
 
 - **Fix**: Send the page log to the proxy again while its connection is open: 0.48.11 sent every line to the server, and a reconnect now takes the lines back to the proxy (#ttv-77).

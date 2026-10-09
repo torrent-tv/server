@@ -72,7 +72,9 @@ export class MetadataRegistry {
     }
     const { records, ...answer } = result;
     if (answer.status !== "identified") return answer;
-    return { status: "identified", work: this.#merge(records ?? {}, evidenced) };
+    // The candidates the choice was made among, with their scores: public film
+    // data, returned so the choice can be read back (and measured).
+    return { status: "identified", work: this.#merge(records ?? {}, evidenced), ...(answer.ranked ? { ranked: answer.ranked } : {}) };
   }
 
   /** The episodes of one season, from the first source that answers them. */

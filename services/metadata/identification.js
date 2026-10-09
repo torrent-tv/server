@@ -1,24 +1,21 @@
 /**
- * @file Which work a set of release names identifies — decided from the
- * provider's search answers, and only when those answers are complete.
+ * @file Which works a set of release names may be — gathered from the
+ * provider's search answers. Choosing one of several is `candidate-score.js`.
  *
  * **What counts as a candidate.** A search result whose title, in the
  * requested language or in the work's own, is EQUAL to a searched spelling
- * after {@link normalizeTitle}; and whose kind agrees with the
- * kind being searched. The first result of a search is never taken for being first.
+ * after {@link normalizeTitle} (`exact`), or begins with it followed by a
+ * whole word (`prefix`, as Jellyfin's `TmdbUtils.FindBestMatch` counts it: a
+ * search for `Wall` admits `Wall Street` and not `Wallace`); and whose kind
+ * agrees with the kind being searched. A year never removes a candidate here;
+ * it is scored.
  *
- * **The outcomes, and why each one is only reached when it is established.**
- *
- *  - `ambiguous` — two or more distinct candidates. Established even if some
- *    searches failed: two works matching is already proof that a name does not
- *    pick one;
- *  - `unavailable` — some search did not complete (the provider refused, the
- *    deadline passed). A single candidate is NOT reported then, because the
- *    search that did not run might have found a second;
- *  - `undetermined` — every search completed, but some had more pages than are
- *    read. Uniqueness among the pages read is not uniqueness of the search;
- *  - `identified` — every search complete, every page read, one candidate;
- *  - `not-found` — every search complete, every page read, no candidate.
+ * **The outcomes.** `identified` — one candidate; `ambiguous` — two or more;
+ * `unavailable` — no candidate and some search did not complete; `undetermined`
+ * — no candidate and some search had more pages than are read; `not-found` —
+ * no candidate and every search complete. A candidate found while another
+ * search failed or was capped is still a candidate: identification is a
+ * progressive enhancement and chooses from what it has (torrent-tv/meta#172).
  */
 
 import { normalizeTitle } from "./title.js";
@@ -39,6 +36,8 @@ import { normalizeTitle } from "./title.js";
  * @property {number} tmdbId
  * @property {string} title
  * @property {number | null} year
+ * @property {"exact" | "prefix" | "alternative" | "episodes"} titleMatch
+ * @property {number} order - Position among the provider's answers; lower came first.
  */
 
 /**
@@ -62,50 +61,48 @@ export function preferYearMatches(candidates, statedYears = []) {
   return preferred.length ? preferred : candidates;
 }
 
-export function latestCandidate(candidates) {
-  return [...candidates].sort((left, right) => (right.year ?? 0) - (left.year ?? 0) || left.tmdbId - right.tmdbId || left.kind.localeCompare(right.kind))[0];
-}
-
 /**
  * @param {object} params
  * @param {SearchOutcome[]} params.searches
- * @param {number[]} params.statedYears - Years the names state; empty when none do.
+ * @param {number} [params.candidateLimit]
  * @returns {Identity}
  */
-export function decideIdentity({ searches, statedYears, runtimeMatches = null, candidateLimit = 5, preferLatest = false }) {
+export function decideIdentity({ searches, candidateLimit = 5 }) {
   /** @type {Map<string, Candidate>} */
   const candidates = new Map();
+  let order = 0;
   for (const search of searches) {
     for (const result of search.results ?? []) {
       const titles = [normalizeTitle(result.name), normalizeTitle(result.originalName)];
-      if (!titles.includes(search.query)) {
+      const match = titles.includes(search.query)
+        ? "exact"
+        : titles.some((title) => title.startsWith(`${search.query} `)) ? "prefix" : null;
+      if (!match) {
         continue;
       }
       const key = `${search.kind}:${result.id}`;
-      if (!candidates.has(key)) {
-        candidates.set(key, { kind: search.kind, tmdbId: result.id, title: result.name, year: result.year });
+      const known = candidates.get(key);
+      if (!known) {
+        candidates.set(key, { kind: search.kind, tmdbId: result.id, title: result.name, year: result.year, titleMatch: match, order: order++ });
+      } else if (known.titleMatch === "prefix" && match === "exact") {
+        known.titleMatch = "exact";
       }
     }
   }
-  const all = [...candidates.values()];
-  const durationPreferred = runtimeMatches ? all.filter(candidate => runtimeMatches.has(`${candidate.kind}:${candidate.tmdbId}`)) : [];
-  const found = preferYearMatches(durationPreferred.length ? durationPreferred : all, statedYears);
-  const reported = found.slice(0, candidateLimit);
-  if (found.length >= 2 && preferLatest && searches.every(search => search.status === "complete")) {
-    return { status: "identified", candidates: [latestCandidate(found)], selectionReason: "latest-year" };
-  }
+  const found = [...candidates.values()].slice(0, candidateLimit);
   if (found.length >= 2) {
-    return { status: "ambiguous", candidates: reported };
+    return { status: "ambiguous", candidates: found };
+  }
+  if (found.length === 1) {
+    return { status: "identified", candidates: found };
   }
   if (searches.some((search) => search.status === "failed")) {
     return { status: "unavailable", candidates: [] };
   }
   if (searches.some((search) => search.status === "capped")) {
-    return { status: "undetermined", candidates: reported };
+    return { status: "undetermined", candidates: [] };
   }
-  return found.length === 1
-    ? { status: "identified", candidates: reported }
-    : { status: "not-found", candidates: [] };
+  return { status: "not-found", candidates: [] };
 }
 
 /**
@@ -127,17 +124,17 @@ export function decideIdentity({ searches, statedYears, runtimeMatches = null, c
  * @param {boolean} params.uncheckedRemain - Search results were left unchecked.
  * @returns {Identity}
  */
-export function decideByEpisodeTitles({ checked, titles, uncheckedRemain, statedYears = [] }) {
+export function decideByEpisodeTitles({ checked, titles, uncheckedRemain }) {
   const wanted = [...new Set(titles.map(normalizeTitle).filter((title) => title.length > 0))];
   const qualifiers = [];
   for (const { candidate, episodeNames } of checked) {
     const names = new Set(episodeNames.map(normalizeTitle).filter((name) => name.length > 0));
     const matched = wanted.filter((title) => names.has(title));
     if (matched.length >= 2 && matched.length * 2 >= wanted.length) {
-      qualifiers.push(candidate);
+      qualifiers.push({ ...candidate, titleMatch: "episodes" });
     }
   }
-  const found = preferYearMatches(qualifiers, statedYears);
+  const found = qualifiers;
   if (found.length >= 2) {
     return { status: "ambiguous", candidates: found.slice(0, 5) };
   }
@@ -165,11 +162,11 @@ export function decideByEpisodeTitles({ checked, titles, uncheckedRemain, stated
  * @param {boolean} params.uncheckedRemain
  * @returns {Identity}
  */
-export function decideByAlternativeTitles({ checked, queries, uncheckedRemain, statedYears = [] }) {
+export function decideByAlternativeTitles({ checked, queries, uncheckedRemain }) {
   const wanted = new Set(queries);
-  const qualifiers = preferYearMatches(checked
+  const qualifiers = checked
     .filter(({ titles }) => titles.some((title) => wanted.has(normalizeTitle(title))))
-    .map(({ candidate }) => candidate), statedYears);
+    .map(({ candidate }) => ({ ...candidate, titleMatch: "alternative" }));
   if (qualifiers.length >= 2) {
     return { status: "ambiguous", candidates: qualifiers.slice(0, 5) };
   }

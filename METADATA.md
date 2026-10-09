@@ -1,6 +1,46 @@
 # Media metadata
 
-`POST /api/metadata/identify` returns `work` only for an established identity.
+`POST /api/metadata/identify` returns `work` once any work matches the names.
+Identification is a progressive enhancement: it never blocks playback, it
+always chooses when it has candidates, and a card may change when the duration
+or the audio languages arrive (torrent-tv/meta#172).
+
+## Choosing among several works of one title
+
+`services/metadata/candidate-score.js`. Candidates are search results whose
+title (or original title) equals a searched spelling or begins with it followed
+by a whole word, then alternative titles, then episode names.
+
+1. A candidate that contradicts the release is set aside: a film for numbered
+   episodes, a work that started after the torrent's `creation date`, an
+   episode number beyond the season's episode count (a number with no season,
+   `Drifters - 01`, is counted against the whole series). When every candidate
+   contradicts something, all stay.
+2. The rest are scored. Each feature gives a share from 0 to 1; an unknown one
+   gives 0: title (exact 1, whole-word prefix or alternative 0.5), stated year
+   (exact 1, one off 0.5), runtime (`min(r, 1/r)` of the release's duration and
+   the record's, no allowance), the release's episodes fit the season, the
+   audio language is the work's original language. Weights: title 8, year 2
+   (Jellyfin's ratio), runtime 4, episodes 2, language 1 — the last three
+   provisional until derived from the labelled set of test releases. Equal
+   scores keep the provider's order.
+3. When AniList holds exactly one anime under the title and TMDB chose a work
+   that disagrees with it, the TMDB candidate of its kind and year is taken
+   instead (`identification: "anilist"`).
+
+The answer carries `ranked`: up to five candidates with their shares, score and
+contradiction.
+
+## A work the address names
+
+Once identified, the page writes the open file's work into its address:
+`type` (`tmdb`, `imdb`, `anilist`), `id`, `kind` (`movie`, `tv`; required for
+TMDB, which numbers films and series apart), `category` (`anime`, `adult`) and
+for an episode `season` and `episode`. The share link carries the same. On a
+refresh or a shared link the page sends `record: { type, id, kind }`, and the
+record is looked up instead of searched for. With no `fileIndex` in the address,
+`season` and `episode` open the one file whose marker names that episode.
+
 The work contains two separate sections:
 
 1. `sources`: provider records keyed by `tmdb` and `anilist`. A missing provider

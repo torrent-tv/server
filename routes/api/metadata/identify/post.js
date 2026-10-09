@@ -5,7 +5,14 @@
  * body: { names: string[], kindHint: "tv" | "movie" | null, requireYear?: boolean,
  *         episodeEvidence?: { season: number, titles: string[] }, language: string,
  *         category?: "adult" | null, fingerprint?: { hash: string, size: number },
- *         container?: object | null, source?: { infoHash: string, fileIndex: number } | null }
+ *         container?: object | null, source?: { infoHash: string, fileIndex: number } | null,
+ *         durationSeconds?: number, torrentCreatedAt?: number, episodeNumbers?: { season: number | null, episode }[],
+ *         audioLanguages?: string[], record?: { type: "tmdb" | "imdb" | "anilist", id: string, kind?: "movie" | "tv" } }
+ *
+ * `record` is a work the page already knows (its address carries it): it is
+ * looked up, not searched for. `torrentCreatedAt`, `episodeNumbers` and
+ * `audioLanguages` are scored when several works share a title
+ * (`candidate-score.js`).
  *
  * `container` is what the file states about its work, read by the proxy
  * (`ContainerMetadata.js`); `source` names that file. With both, what the file
@@ -43,6 +50,29 @@ export const MAX_EVIDENCE_TITLE_LENGTH = 160;
  * around them.
  */
 export const IDENTIFY_BODY_LIMIT = 128 * 1024;
+
+/** Most episode numbers sent as evidence: a long-running series' whole run. */
+const MAX_EPISODE_NUMBERS = 1000;
+
+/**
+ * The ids a record the page already knows (from its address) names, in the
+ * shape the sources look them up by, or `null` when it names none. A TMDB id
+ * needs its kind: a film and a series are numbered separately, and one number
+ * names two different works.
+ *
+ * @param {unknown} record
+ * @returns {{ tmdb?: { kind: "movie" | "tv", id: number }, imdb?: string, anilist?: number } | null}
+ */
+function recordIds(record) {
+  if (!record || typeof record !== "object") return null;
+  const id = String(record.id ?? "");
+  if (record.type === "tmdb" && /^[1-9]\d{0,9}$/u.test(id) && (record.kind === "movie" || record.kind === "tv")) {
+    return { tmdb: { kind: record.kind, id: Number(id) } };
+  }
+  if (record.type === "imdb" && /^tt\d{1,10}$/u.test(id)) return { imdb: id };
+  if (record.type === "anilist" && /^[1-9]\d{0,9}$/u.test(id)) return { anilist: Number(id) };
+  return null;
+}
 
 /**
  * @param {import("fastify").FastifyRequest} req
@@ -120,10 +150,32 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
   if (durationSeconds !== null && !(typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0 && durationSeconds <= 86_400)) {
     return reply.code(400).send({ error: "durationSeconds must be a positive number of at most 86400 seconds." });
   }
+  const torrentCreatedAt = body.torrentCreatedAt ?? null;
+  if (torrentCreatedAt !== null && !(Number.isInteger(torrentCreatedAt) && torrentCreatedAt > 0 && torrentCreatedAt <= 4_102_444_800)) {
+    return reply.code(400).send({ error: "torrentCreatedAt must be the torrent's creation date in whole seconds since 1970." });
+  }
+  const episodeNumbers = body.episodeNumbers ?? [];
+  if (!(Array.isArray(episodeNumbers) && episodeNumbers.length <= MAX_EPISODE_NUMBERS &&
+      episodeNumbers.every((one) => (one?.season === null || (Number.isInteger(one?.season) && one.season >= 0 && one.season <= 999)) &&
+        Number.isInteger(one?.episode) && one.episode >= 1 && one.episode <= 9999))) {
+    return reply.code(400).send({ error: `episodeNumbers must hold at most ${MAX_EPISODE_NUMBERS} { season, episode } pairs.` });
+  }
+  const audioLanguages = body.audioLanguages ?? [];
+  if (!(Array.isArray(audioLanguages) && audioLanguages.length <= 16 && audioLanguages.every((code) => typeof code === "string" && /^[a-z]{2,3}$/u.test(code)))) {
+    return reply.code(400).send({ error: "audioLanguages must hold at most 16 ISO 639 codes." });
+  }
+  const record = recordIds(body.record);
+  if (body.record != null && !record) {
+    return reply.code(400).send({ error: "record must be { type: tmdb | imdb | anilist, id, kind?: movie | tv }; a tmdb record needs its kind." });
+  }
   const answer = await withProviderContext(req, () => metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
     durationSeconds,
+    torrentCreatedAt,
+    episodeNumbers,
+    audioLanguages,
+    ...(record ? { externalIds: record } : {}),
     requireYear: body.requireYear === true,
     episodeEvidence: evidence,
     subtitleEvidence,

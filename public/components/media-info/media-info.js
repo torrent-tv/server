@@ -6,6 +6,7 @@ import {
   boundedNames,
   containerEpisode,
   containerEvidence,
+  episodeNumbersOf,
   pictureIdentification,
   releaseIdentification,
   seasonFiles,
@@ -33,8 +34,13 @@ import {
  *    reads it from the opened file's edges, typically a minute after the name
  *    was shown. It fills what is empty — an episode title, a year, a
  *    description, a cover where there is no poster — and asks again only when
- *    the names did not establish the work. A title, an episode title or a
- *    picture already shown is never replaced; a contradiction is logged;
+ *    the names did not establish the work; a contradiction is logged;
+ *  - **the work shown may change once more** (torrent-tv/meta#172): when the
+ *    service chose among several works of one title, the file's duration and
+ *    audio languages are sent again once known, and the answer replaces the
+ *    card. The card is shown as early as possible rather than held back;
+ *  - **a work the address names is looked up, not searched for**: a refresh
+ *    or a shared link carries `id` and `type`, and they are sent as `record`;
  *  - **the first answer is only a preparation.** What is known when a release
  *    is chosen — the `.torrent` file's name, a magnet's `dn` — is sent at once,
  *    so the service has searched by the time the proxy says what is in the
@@ -51,6 +57,16 @@ export class MediaInfoController {
   #releaseSequence = 0;
   #durations = new Map();
   #durationRetried = false;
+
+  /** The audio languages of each file the proxy has probed. @type {Map<number, string[]>} */
+  #audioLanguages = new Map();
+
+  /** When the torrent was made, in seconds since 1970, if its `.torrent` file said. */
+  #createdAt = null;
+
+  /** The work the address named for this release, and for which file. */
+  #record = null;
+  #recordFileIndex = -1;
 
   /** What the torrent says it is (`"adult"`), or `null`. */
   #category = null;
@@ -124,6 +140,9 @@ export class MediaInfoController {
     const detail = event instanceof CustomEvent ? event.detail : null;
     this.#begin(Number(detail?.selection));
     this.#category = detail?.category === "adult" ? "adult" : null;
+    this.#createdAt = Number.isInteger(detail?.createdAt) && detail.createdAt > 0 ? detail.createdAt : null;
+    this.#record = detail?.record && typeof detail.record === "object" ? detail.record : null;
+    this.#recordFileIndex = Number.isInteger(detail?.recordFileIndex) ? detail.recordFileIndex : -1;
     const names = boundedNames(Array.isArray(detail?.names) ? detail.names : []);
     if (names.length > 0) {
       // Preparation only; see the class comment.
@@ -157,6 +176,9 @@ export class MediaInfoController {
     if (detail?.selection !== this.#selection || !this.#filesByIndex.has(detail?.fileIndex) ||
         !Number.isFinite(detail?.durationSeconds) || detail.durationSeconds <= 0) return;
     this.#durations.set(detail.fileIndex, detail.durationSeconds);
+    if (Array.isArray(detail.audioLanguages)) {
+      this.#audioLanguages.set(detail.fileIndex, detail.audioLanguages.filter((code) => typeof code === "string").slice(0, 16));
+    }
     this.#retryWithDuration();
   };
 
@@ -173,11 +195,24 @@ export class MediaInfoController {
     const container = fileIndex === undefined ? null : containerEvidence(this.#containers.get(fileIndex));
     const infoHash = typeof this.#contents?.infoHash === "string" ? this.#contents.infoHash.toLowerCase() : "";
     const source = fileIndex !== undefined && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(infoHash) ? { infoHash, fileIndex } : null;
+    const episodeNumbers = shapeOf(this.#contents) === "series" ? episodeNumbersOf(this.#contents?.items) : [];
+    // A series is one work: the audio of any episode probed speaks for it.
+    const audioLanguages = shapeOf(this.#contents) === "series"
+      ? [...new Set([...this.#audioLanguages.values()].flat())].slice(0, 16)
+      : fileIndex === undefined ? [] : this.#audioLanguages.get(fileIndex) ?? [];
+    // The address names the work of one file; a series is one work, so any
+    // of its files may carry it.
+    const record = this.#record && (fileIndex === undefined || this.#recordFileIndex < 0 || fileIndex === this.#recordFileIndex ||
+      shapeOf(this.#contents) === "series") ? this.#record : null;
     return {
       ...(this.#category ? { category: this.#category } : {}),
       ...(fingerprint ? { fingerprint } : {}),
       ...(container ? { container } : {}),
-      ...(source ? { source } : {})
+      ...(source ? { source } : {}),
+      ...(this.#createdAt ? { torrentCreatedAt: this.#createdAt } : {}),
+      ...(episodeNumbers.length > 0 ? { episodeNumbers } : {}),
+      ...(audioLanguages.length > 0 ? { audioLanguages } : {}),
+      ...(record ? { record: { type: record.type, id: record.id, ...(record.kind ? { kind: record.kind } : {}) } } : {})
     };
   }
 
@@ -272,13 +307,19 @@ export class MediaInfoController {
     void this.#identifyRelease(this.#selection, this.#releaseRequest);
   };
 
+  /**
+   * Ask once more when one file's duration is known and the service either
+   * found nothing or chose among several works of one title: a film's runtime,
+   * or an episode's, tells such works apart. The answer may change the card.
+   */
   #retryWithDuration() {
-    const heuristic = (this.#work?.sources?.tmdb ?? this.#work)?.identification === "latest-year";
-    if (!this.#releaseRequest || (this.#work && !heuristic) || this.#durationRetried || shapeOf(this.#contents) !== "single" ||
-        !(heuristic || ["ambiguous", "undetermined", "unavailable", "not-found"].includes(this.#releaseStatus))) return;
-    const [item] = this.#contents.items ?? [];
+    const chosenAmong = (this.#work?.sources?.tmdb ?? this.#work)?.identification === "scored";
+    if (!this.#releaseRequest || (this.#work && !chosenAmong) || this.#durationRetried ||
+        !["single", "series"].includes(shapeOf(this.#contents)) ||
+        !(chosenAmong || ["ambiguous", "undetermined", "unavailable", "not-found"].includes(this.#releaseStatus))) return;
+    const item = (this.#contents.items ?? []).find((one) => this.#durations.has(one.fileIndex));
     const durationSeconds = this.#durations.get(item?.fileIndex);
-    if (!durationSeconds || item?.episode) return;
+    if (!durationSeconds) return;
     this.#durationRetried = true;
     void this.#identifyRelease(this.#selection, { ...this.#releaseRequest, durationSeconds });
   }
@@ -348,6 +389,10 @@ export class MediaInfoController {
     this.#releaseSequence += 1;
     this.#durations = new Map();
     this.#durationRetried = false;
+    this.#audioLanguages = new Map();
+    this.#createdAt = null;
+    this.#record = null;
+    this.#recordFileIndex = -1;
     this.#category = null;
     this.#fingerprints = new Map();
     this.#fingerprintRetried = new Set();
@@ -398,7 +443,22 @@ export class MediaInfoController {
     if (["series", "tv"].includes(work?.kind) && (answer.work?.sources?.tmdb || work?.tmdbId) && !seasonsAgree([...this.#itemsByIndex.values()], work)) {
       return;
     }
+    const before = this.#work;
     this.#work = answer.work;
+    const tmdbIdOf = (one) => one?.sources?.tmdb?.tmdbId ?? one?.tmdbId ?? null;
+    if (before && tmdbIdOf(before) !== tmdbIdOf(answer.work)) {
+      // Another work was chosen: its seasons and episodes are asked again, and
+      // what the last one matched is forgotten.
+      const asked = this.#askedSeasons;
+      this.#askedSeasons = new Set();
+      this.#seasons = {};
+      for (const [key, episode] of Object.entries(this.#episodes)) {
+        if (episode?.source === "tmdb") delete this.#episodes[key];
+      }
+      for (const [fileIndex, item] of this.#itemsByIndex) {
+        if (asked.has(seasonOf(item.episode, before?.normalized ?? before))) this.#wanted.add(fileIndex);
+      }
+    }
     this.#publish();
     this.#retryWithDuration();
     for (const fileIndex of this.#wanted) {
