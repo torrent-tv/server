@@ -1,3 +1,8 @@
+## Unreleased
+
+- **New**: The server chooses the proxy: `POST /api/proxy-clients/choose { infoHash, tried, onlyIds, current }` answers one proxy from the table each proxy keeps current over its tunnel (load, room for one more encode, the films it holds), preferring one that holds the film and has room; a page that cannot connect asks again naming the proxy and the error. Nothing is asked of a proxy while a viewer waits, and which films a proxy holds is no longer sent to every page: `/api/proxy-clients/health` answers from the table without them (#ttv-36).
+- **New**: The connection taken as the page opens uses the film the address names, and a page moves to another proxy only when that one holds the film and has room while the one in hand does not (#ttv-36).
+
 ## 0.49.0
 
 - **New**: Identification chooses among works of one title by score instead of the newest year: a work that contradicts the release (a film for episodes, a work later than the torrent's creation date, an episode beyond the season) is set aside, and the rest are scored by title, stated year, runtime, episode count and audio language; AniList's single anime match moves the choice onto the TMDB work it agrees with (#ttv-172).

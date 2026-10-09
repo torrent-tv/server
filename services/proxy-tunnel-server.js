@@ -51,15 +51,25 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * @property {(handler: (proxyId: string, endpoint: { externalIp: string | null, externalPort: number, protocol: string }) => void) => void} setEndpointHandler
  *   Wire up the callback that receives `proxy-endpoint` reports (the UPnP-mapped
  *   external endpoint). Called once during server bootstrap.
- * @property {(proxyId: string, timeoutMs?: number) => Promise<{ metrics: import("../../../proxy/services/health-collector.js").HealthMetrics, holds: { infoHash: string, progress: number, bytes: number }[], rttMs: number }>} requestHealth
- *   Send a `health-request` to a proxy and resolve with the response.
- *   `rttMs` is the full tunnel round-trip time.
+ * @property {(proxyId: string) => ProxyState | null} stateOf
+ *   What a connected proxy last said about itself (`proxy-state`), with the
+ *   tunnel round trip last measured; `null` before it has said anything.
  * @property {(proxyId: string, mediaInfo: object, timeoutMs?: number) => Promise<{ offer: { copy: number[], transcode: number[] } | null, rttMs: number }>} requestCanServe
  *   Ask a proxy whether it could sustain a file it is only told about.
  * @property {(proxyId: string, sessionId: string, signal: WebRtcSignal) => void} sendSignal
  *   Forward a WebRTC signal from the browser to a proxy.
  * @property {(proxyId: string, payload: RelayPayload, reply: import("fastify").FastifyReply) => Promise<void>} relay
  *   Relay a browser HTTP request to a proxy and stream the response back.
+ */
+
+/**
+ * What a proxy said about itself (`proxy-state`).
+ *
+ * @typedef {Object} ProxyState
+ * @property {{ cpuLoad?: number, memFree?: number, encodeSpeedX?: number | null, encodeOccupiedCostSec?: number }} metrics
+ * @property {{ infoHash: string, progress: number | null, bytes: number, wholeFiles?: number[] }[]} holds - The films it holds.
+ * @property {number} receivedAt - When it said it.
+ * @property {number | null} rttMs - The tunnel round trip last measured.
  */
 
 /**
@@ -75,6 +85,26 @@ const REQUEST_TIMEOUT_MS = 60_000;
 export function createProxyTunnelServer() {
   /** @type {Map<string, import("ws").WebSocket>} */
   const connections = new Map();
+  /**
+   * What each connected proxy last said about itself: its load and free
+   * memory, its room for one more encode, and the films it holds. The proxy
+   * sends it when it changes (proxy `transport/proxy-state.js`), so a proxy
+   * choice reads it here instead of asking every proxy and waiting
+   * (torrent-tv/meta#36). Forgotten with the proxy's connection.
+   *
+   * @type {Map<string, ProxyState>}
+   */
+  const states = new Map();
+  /**
+   * When the WebSocket ping answering a proxy's keepalive was sent, per
+   * connection: its pong gives the tunnel round trip without a timer of this
+   * server's own.
+   *
+   * @type {WeakMap<import("ws").WebSocket, number>}
+   */
+  const pingSentAt = new WeakMap();
+  /** The last tunnel round trip measured, per proxy. @type {Map<string, number>} */
+  const roundTrips = new Map();
   /**
    * The connections whose proxy follows a move (see `registerConnection`).
    *
@@ -94,13 +124,10 @@ export function createProxyTunnelServer() {
 
   /**
    * @typedef {Object} PendingHealthRequest
-   * @property {(result: { metrics: object, rttMs: number }) => void} resolve
+   * @property {(result: { offer: object | null, rttMs: number }) => void} resolve
    * @property {(error: Error) => void} reject
    * @property {number} sentAt - `Date.now()` at the time the request was sent.
    */
-
-  /** @type {Map<string, PendingHealthRequest>} */
-  const pendingHealthRequests = new Map();
 
   /**
    * In-flight "could you serve this file" questions, by request id.
@@ -139,7 +166,7 @@ export function createProxyTunnelServer() {
    * @param {string} proxyId - The proxy that owns this tunnel connection.
    * @returns {void}
    */
-  function onMessage(rawData, proxyId) {
+  function onMessage(rawData, proxyId, socket = null) {
     let message;
     try {
       message = JSON.parse(rawData.toString());
@@ -147,8 +174,28 @@ export function createProxyTunnelServer() {
       return;
     }
 
-    // Keepalive ping from proxy — respond with pong and ignore otherwise.
+    // Keepalive ping from the proxy. Answered with a WebSocket ping of our own,
+    // whose pong measures the tunnel round trip.
     if (message.type === "ping") {
+      if (socket && socket.readyState === 1 /* OPEN */ && typeof socket.ping === "function") {
+        pingSentAt.set(socket, Date.now());
+        try {
+          socket.ping();
+        } catch {
+          // silent-ok: a ping that cannot be sent measures nothing; the last
+          // round trip stays until the next keepalive.
+        }
+      }
+      return;
+    }
+
+    // What the proxy says about itself, sent when it changes.
+    if (message.type === "proxy-state") {
+      states.set(proxyId, {
+        metrics: message.metrics && typeof message.metrics === "object" ? message.metrics : {},
+        holds: Array.isArray(message.holds) ? message.holds : [],
+        receivedAt: Date.now()
+      });
       return;
     }
 
@@ -167,23 +214,6 @@ export function createProxyTunnelServer() {
       if (pending) {
         pendingCanServeRequests.delete(message.requestId);
         pending.resolve({ offer: message.offer ?? null, rttMs: Date.now() - pending.sentAt });
-      }
-      return;
-    }
-
-    // Health response from proxy.
-    if (message.type === "health-response") {
-      const pending = pendingHealthRequests.get(message.requestId);
-      if (pending) {
-        pendingHealthRequests.delete(message.requestId);
-        pending.resolve({
-          metrics: message.metrics ?? {},
-          // Which films that proxy holds. Passed through rather than judged
-          // here: what to do with it is the browser's, which is the only side
-          // that knows which film is being opened.
-          holds: Array.isArray(message.holds) ? message.holds : [],
-          rttMs: Date.now() - pending.sentAt
-        });
       }
       return;
     }
@@ -262,10 +292,18 @@ export function createProxyTunnelServer() {
       if (followsMoves) {
         followingMoves.add(socket);
       }
-      socket.on("message", (data) => onMessage(data, proxyId));
+      socket.on("message", (data) => onMessage(data, proxyId, socket));
+      socket.on("pong", () => {
+        const sentAt = pingSentAt.get(socket);
+        if (sentAt !== undefined && connections.get(proxyId) === socket) {
+          roundTrips.set(proxyId, Date.now() - sentAt);
+        }
+      });
       socket.on("close", () => {
         if (connections.get(proxyId) === socket) {
           connections.delete(proxyId);
+          states.delete(proxyId);
+          roundTrips.delete(proxyId);
           onConnectionChange?.(proxyId, false);
         }
       });
@@ -335,36 +373,16 @@ export function createProxyTunnelServer() {
     },
 
     /**
-     * Request current health metrics from a proxy via its tunnel connection.
-     * The returned `rttMs` measures the full tunnel round-trip time.
+     * What a connected proxy last said about itself, and the tunnel round trip
+     * last measured to it. `null` while it has said nothing yet — a proxy that
+     * has just connected sends its state at once.
      *
      * @param {string} proxyId
-     * @param {number} [timeoutMs=2000]
-     * @returns {Promise<{ metrics: object, rttMs: number }>}
+     * @returns {ProxyState | null}
      */
-    requestHealth(proxyId, timeoutMs = 2_000) {
-      const socket = connections.get(proxyId);
-      if (!socket || socket.readyState !== 1 /* OPEN */) {
-        return Promise.reject(new Error("Proxy tunnel is not connected."));
-      }
-
-      const requestId = randomUUID();
-      const sentAt = Date.now();
-
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pendingHealthRequests.delete(requestId);
-          reject(new Error("Health request timed out."));
-        }, timeoutMs);
-
-        pendingHealthRequests.set(requestId, {
-          resolve: (result) => { clearTimeout(timer); resolve(result); },
-          reject: (err) => { clearTimeout(timer); reject(err); },
-          sentAt
-        });
-
-        socket.send(JSON.stringify({ type: "health-request", requestId }));
-      });
+    stateOf(proxyId) {
+      const state = states.get(proxyId);
+      return state ? { ...state, rttMs: roundTrips.get(proxyId) ?? null } : null;
     },
 
     /**

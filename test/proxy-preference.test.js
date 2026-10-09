@@ -10,7 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { choosePool } from "../public/domain/proxy-preference.js";
+import { choosePool } from "../services/proxy-choice.js";
 
 const reachable = (id, extra = {}) => ({ id, reachable: true, sameNetwork: false, ...extra });
 

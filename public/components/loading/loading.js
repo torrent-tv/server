@@ -3683,9 +3683,12 @@ export class Loading extends StateDerivedView {
       return parsed.toLowerCase();
     }
     // A magnet is opened before anything is parsed, and carries the hash itself.
-    const magnet = current?.sourceType === "magnet" && typeof current.sourceValue === "string"
-      ? /xt=urn:btih:([0-9a-z]{40})/i.exec(current.sourceValue)
-      : null;
+    // Before anything is opened at all — the connection taken as the page
+    // opens — the address names the film a refresh or a shared link is for.
+    const source = current?.sourceType === "magnet" && typeof current.sourceValue === "string"
+      ? current.sourceValue
+      : current ? "" : readUrlState(location.search).magnet;
+    const magnet = /xt=urn:btih:([0-9a-z]{40})/i.exec(source);
     return magnet ? magnet[1].toLowerCase() : "";
   }
 
@@ -3693,12 +3696,15 @@ export class Loading extends StateDerivedView {
    * Make sure the proxy in hand is the right one for the film about to be
    * opened, and change it if it is not.
    *
-   * WHY THIS EXISTS. A proxy is taken the moment the page opens — before any
-   * film has been chosen — so the choice is made with no infohash, and
-   * `#acquireTransport` then returns that same connection to everyone who asks
-   * afterwards. The preference for a proxy that is ALREADY downloading this
-   * film therefore never applied to anybody: it is computed from the infohash,
-   * and the infohash did not exist when the decision was made.
+   * WHY THIS EXISTS. A proxy is taken the moment the page opens. When the
+   * address names a film (a refresh, a shared link) that choice already knows
+   * its infohash; when the viewer then drops a `.torrent` or pastes a magnet,
+   * it was made with no film in hand, and `#acquireTransport` returns that
+   * same connection to everyone who asks afterwards.
+   *
+   * The page moves only when another proxy holds this film and has room while
+   * the one in hand does not hold it (torrent-tv/meta#36): a difference in
+   * load alone is not worth a reconnect.
    *
    * Field 2026-09-13: two viewers opened one film 76 seconds apart and landed
    * on two different proxies, each of which downloaded and encoded it
@@ -3718,11 +3724,12 @@ export class Loading extends StateDerivedView {
     if (!infoHash || !this.#proxy) {
       return;
     }
-    const wanted = await this.#proxySelector.bestProxyIdFor({
+    const wanted = await this.#proxySelector.betterProxyIdFor({
       infoHash,
-      onlyIds: this.#restrictProxiesTo
+      onlyIds: this.#restrictProxiesTo,
+      current: this.#proxy.proxyId
     });
-    if (!wanted || wanted === this.#proxy.proxyId) {
+    if (!wanted) {
       return;
     }
     this.#logEvt(`proxy ${this.#proxy.proxyId?.slice(0, 8)} is not the best for this film; moving to ${wanted.slice(0, 8)}`);
