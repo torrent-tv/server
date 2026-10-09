@@ -3676,13 +3676,14 @@ export class Loading extends StateDerivedView {
       // its own on a durable disk. Until now it went to the registry server's
       // standard output, which every release of it destroys — and explaining a
       // failure needs both halves.
-      window.__ttvClientLogger?.setProxySink?.((body) =>
-        transport.fetch("/api/client-logs", {
+      window.__ttvClientLogger?.setProxySink?.({
+        isOpen: () => transport.isOpen,
+        send: (body) => transport.fetch("/api/client-logs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body
         })
-      );
+      });
       // MEASURE THE LINK NOW, while the person is still finding their film. The
       // figure used to come only from segments of the film itself, so it did
       // not exist until playback had begun — after every decision that wants
