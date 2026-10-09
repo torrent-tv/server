@@ -36,7 +36,7 @@
  * advances by whole frames — 1/24 s is 0.042 — and a stopped one advances by
  * nothing at all, so anything above measurement noise separates them.
  */
-export const PICTURE_MOVED_SECONDS = 0.02;
+const PICTURE_MOVED_SECONDS = 0.02;
 
 /**
  * Decide whether to report a wait to the viewer.

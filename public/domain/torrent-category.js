@@ -14,7 +14,7 @@
  */
 
 /** Hosts of trackers that carry only adult material. */
-export const ADULT_TRACKER_HOSTS = Object.freeze(["pornolab.net"]);
+const ADULT_TRACKER_HOSTS = Object.freeze(["pornolab.net"]);
 
 /** @param {string} value @returns {string | null} The host of a URL in `value`, lower case. */
 function hostOf(value) {

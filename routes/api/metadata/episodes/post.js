@@ -17,16 +17,16 @@
 import { LANGUAGE, signalOfRequest } from "../request-signal.js";
 
 /** Most files in one season. */
-export const MAX_SEASON_FILES = 1000;
+const MAX_SEASON_FILES = 1000;
 
 /** Longest page key, in characters. */
-export const MAX_KEY_LENGTH = 16;
+const MAX_KEY_LENGTH = 16;
 
 /** Longest title hint, in characters — the proxy sends at most this many. */
-export const MAX_TITLE_HINT_LENGTH = 160;
+const MAX_TITLE_HINT_LENGTH = 160;
 
 /** Most episode numbers one file may carry — the proxy reads at most this many. */
-export const MAX_EPISODES_PER_FILE = 8;
+const MAX_EPISODES_PER_FILE = 8;
 
 /**
  * Largest body, in bytes. One file is at most a 16-character key, a

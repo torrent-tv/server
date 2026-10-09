@@ -28,7 +28,7 @@ const BY_TERM = `query($t:String!){ searchScene(term:$t, limit:5){ ${SCENE} } }`
  * @param {object} scene
  * @returns {Record<string, unknown>}
  */
-export function stashdbFields(scene) {
+function stashdbFields(scene) {
   return {
     kind: "movie",
     title: scene.title || undefined,

@@ -28,7 +28,7 @@
  * derived from the labelled set of test releases (torrent-tv/meta#172) and are
  * replaced by its result.
  */
-export const WEIGHTS = Object.freeze({ title: 8, year: 2, runtime: 4, episodes: 2, language: 1 });
+const WEIGHTS = Object.freeze({ title: 8, year: 2, runtime: 4, episodes: 2, language: 1 });
 
 /** The share a title match gives, by how the candidate was found. */
 const TITLE_SHARE = Object.freeze({ exact: 1, prefix: 0.5, alternative: 0.5, episodes: 0 });
@@ -102,7 +102,7 @@ function episodeCountOf(record, season) {
  * @param {ReleaseEvidence} evidence
  * @returns {string | null}
  */
-export function contradiction(candidate, record, evidence) {
+function contradiction(candidate, record, evidence) {
   if (evidence.series && candidate.kind === "movie") return "film-for-episodes";
   if (Number.isInteger(evidence.createdYear) && Number.isInteger(candidate.year) && candidate.year > evidence.createdYear) {
     return "after-torrent";
@@ -122,7 +122,7 @@ export function contradiction(candidate, record, evidence) {
  * @param {ReleaseEvidence} evidence
  * @returns {{ title: number, year: number, runtime: number, episodes: number, language: number }}
  */
-export function shares(candidate, record, evidence) {
+function shares(candidate, record, evidence) {
   const years = evidence.statedYears ?? [];
   const yearGap = Number.isInteger(candidate.year) && years.length > 0
     ? Math.min(...years.map((year) => Math.abs(year - candidate.year)))

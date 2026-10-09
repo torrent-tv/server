@@ -81,7 +81,7 @@ function isNumber(value) {
  * @param {number} bytes
  * @returns {string}
  */
-export function formatBytes(bytes) {
+function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) {
     return "0 B";
   }

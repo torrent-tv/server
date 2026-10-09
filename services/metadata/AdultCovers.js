@@ -12,7 +12,7 @@ import { readBoundedBody } from "./bounded-body.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
 
 /** A scene id of either database. */
-export const SCENE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const SCENE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** Hosts a cover may be fetched from. */
 const COVER_HOSTS = [/^stashdb\.org$/u, /^(?:[a-z0-9-]+\.)*theporndb\.net$/u];

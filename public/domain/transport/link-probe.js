@@ -50,7 +50,7 @@ export const MAX_PROBE_BYTES = 2 * 1024 * 1024;
  * The same two the median over segments needs, and for the same reason: one
  * reading cannot be told apart from one accident.
  */
-export const PROBE_SAMPLES = 2;
+const PROBE_SAMPLES = 2;
 
 /**
  * The next size to ask for, or null when there is nothing left to learn.
