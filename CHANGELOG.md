@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.11
 
 - **Fix**: Stop sending the page log to a proxy connection that has closed; the server takes the lines until a new connection opens, instead of one failure line every two seconds for as long as the page stays open (#ttv-77).
 
