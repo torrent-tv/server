@@ -45,7 +45,7 @@ graph TB
     FFMPEG[ffmpeg HLS transcode]
   end
 
-  Browser -- "GET /api/proxy-clients/health" --> API
+  Browser -- "POST /api/proxy-clients/choose" --> API
   API -- "health-request / health-response" --> TS
   TS <-->|"WebSocket /ws/proxy-tunnel"| TC
 
@@ -69,7 +69,7 @@ graph TB
 Minimal [Fastify](https://fastify.dev) server. Its responsibilities are:
 
 - **Proxy client registry** — proxies register and send heartbeats; the store tracks them.
-- **Health aggregation** — on-demand health polling of all connected proxies via tunnel WebSockets, with RTT measurement.
+- **Proxy table and choice** — every proxy sends its state (load, free memory, room for one more encode, the films it holds) over its tunnel when it changes; the server keeps it with the tunnel round trip and chooses one proxy per viewer from it (`services/proxy-choice.js`). The films a proxy holds never leave the server.
 - **WebRTC signalling hub** — forwards SDP offers/answers and ICE candidates between the browser and the selected proxy, enabling P2P data channel establishment.
 - **Static file serving** — serves the frontend from `public/`.
 
@@ -78,7 +78,8 @@ Minimal [Fastify](https://fastify.dev) server. Its responsibilities are:
 ```
 POST /api/proxy-clients/register      register a proxy client
 GET  /api/proxy-clients               list all registered proxy clients
-GET  /api/proxy-clients/health        poll health metrics from all connected proxies
+GET  /api/proxy-clients/health        the connected proxies and their last stated metrics
+POST /api/proxy-clients/choose        the proxy this viewer should connect to, for a film
 POST /api/proxy-clients/can-serve     which proxies could sustain a described file
 POST /api/metadata/identify           which work a release is (TMDB and AniList), from its names
 POST /api/metadata/episodes           which episode of one season each file is
@@ -111,7 +112,7 @@ The provider-separated response format, anime routing and artwork selection are 
 
 Each proxy client opens one persistent WebSocket to this endpoint after starting. The server uses it for two purposes:
 
-- **Health requests** — `GET /api/proxy-clients/health` sends a `health-request` message and awaits a `health-response` (timeout: 2 s).
+- **Proxy state** — a proxy sends `proxy-state` (`metrics`, `holds`) when it changes and on every new connection; the server answers its keepalive `ping` with a WebSocket ping, whose pong gives the tunnel round trip. Nothing is asked of a proxy when a viewer is placed.
 - **WebRTC signal forwarding** — SDP offers from the browser are forwarded to the proxy; answers and ICE candidates from the proxy are forwarded back to the browser.
 
 ### WebRTC Signalling Flow
@@ -122,8 +123,8 @@ sequenceDiagram
   participant S as Server
   participant P as Proxy
 
-  B->>S: GET /api/proxy-clients/health
-  S-->>B: scored proxy list
+  B->>S: POST /api/proxy-clients/choose { infoHash }
+  S-->>B: { chosen }
 
   B->>S: WebSocket /ws/browser-signal
   S-->>B: { type: "session", sessionId }
@@ -158,13 +159,13 @@ sequenceDiagram
   participant S as Server
   participant P as Proxy (each)
 
-  B->>S: GET /api/proxy-clients/health
-  par for each connected proxy
-    S->>P: { type: "health-request" } via tunnel WS
-    P-->>S: { type: "health-response", metrics } via tunnel WS
-  end
-  Note over S: measure rttMs per proxy
-  S-->>B: [{ id, name, baseUrl, metrics, rttMs }, …]
+  P->>S: { type: "proxy-state", metrics, holds } when it changes
+  P->>S: { type: "ping" } keepalive
+  S->>P: WebSocket ping; pong gives rttMs
+  B->>S: POST /api/proxy-clients/choose { infoHash, tried }
+  Note over S: choose from the table: reachable, room, holds this film
+  S-->>B: { chosen: { id, name, baseUrl, sameNetwork, holdsThisFilm } }
+  Note over B: cannot connect → ask again with { tried: [{ id, error }] }
 ```
 
 ## Frontend (`public/`)
@@ -230,7 +231,7 @@ Components are **weakly coupled** — they never import each other. All cross-co
 | `torrent-tv` | App orchestrator / FSM |
 | `torrent` | File picker, torrent parsing trigger |
 | `loading` | Full playback pipeline: proxy selection, WebRTC setup, codec checks, live torrent stats polling, direct or HLS start |
-| `proxy-selector` | Polls `/api/proxy-clients/health`, scores proxies, connects WebRTC to the best one |
+| `proxy-selector` | Asks `/api/proxy-clients/choose` for a proxy, connects WebRTC to it, and asks for the next when it cannot |
 | `player` | Video element wrapper; playlist mode handling |
 | `playlist` | Playlist rendering and media-file selection events |
 | `error` | Error display with two action buttons: **"New Torrent"** (always) and **"Choose File"** (multi-file torrents only) |

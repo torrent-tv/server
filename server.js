@@ -13,6 +13,7 @@ import { createReachabilityProber } from "./services/reachability-prober.js";
 import { handleApiProxyClientsRegisterPost } from "./routes/api/proxy-clients/register/post.js";
 import { handleApiProxyClientsGet } from "./routes/api/proxy-clients/get.js";
 import { handleApiProxyClientsHealthGet } from "./routes/api/proxy-clients/health/get.js";
+import { handleApiProxyClientsChoosePost } from "./routes/api/proxy-clients/choose/post.js";
 import { handleApiProxyClientsCanServePost } from "./routes/api/proxy-clients/can-serve/post.js";
 import { handleApiClientLogsPost } from "./routes/api/client-logs/post.js";
 import { handleWsProxyTunnel } from "./routes/ws/proxy-tunnel/get.js";
@@ -199,6 +200,12 @@ app.get("/api/proxy-clients", async (req, reply) =>
 );
 app.get("/api/proxy-clients/health", async (req, reply) =>
   handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer })
+);
+// Which proxy a viewer should connect to, chosen here from the table every
+// proxy keeps current over its tunnel; the page names its film and is told
+// one proxy (torrent-tv/meta#36).
+app.post("/api/proxy-clients/choose", async (req, reply) =>
+  handleApiProxyClientsChoosePost(req, reply, { clientsStore, tunnelServer })
 );
 // Which proxies could sustain a file the browser already has a description of.
 // Asked only after one has refused it, so the viewer is sent somewhere that

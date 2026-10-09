@@ -1,16 +1,15 @@
 /**
- * On-demand proxy health poll.
- *
- * The browser calls this endpoint immediately before selecting a proxy for
- * playback.  The server sends a `health-request` to every connected proxy via
- * its tunnel WebSocket, waits up to 2 s for responses, and returns the
- * aggregated list with per-proxy metrics and tunnel round-trip time.
- *
- * Proxies that do not respond within the timeout are still included in the
- * list (with `metrics: null, rttMs: null`) so the caller can fall back to
- * them rather than silently losing options.
+ * The connected proxies and what each last said about its machine.
  *
  * GET /api/proxy-clients/health
+ *
+ * Answered from the table each proxy keeps current over its tunnel
+ * (torrent-tv/meta#36): nothing is asked of a proxy and nothing is waited for.
+ * A proxy that has not said anything yet is listed with `metrics: null`. The
+ * films a proxy holds are not listed: they stay on this server, and a page
+ * asks `POST /api/proxy-clients/choose` with the film it is opening instead.
+ * Read by the deploy checks (`infra/scripts/verify-site.mjs`) to see that the
+ * pool is not empty.
  *
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
@@ -18,74 +17,10 @@
  * @returns {Promise<void>}
  */
 
-/**
- * Public IP of the requesting browser. The site sits behind Cloudflare,
- * which sets CF-Connecting-IP authoritatively; the X-Forwarded-For first
- * entry and the socket address are dev-mode fallbacks.
- *
- * @param {import("fastify").FastifyRequest} req
- * @returns {string | null}
- */
-function getRequesterPublicIp(req) {
-  const cf = req.headers["cf-connecting-ip"];
-  if (typeof cf === "string" && cf.trim().length > 0) {
-    return cf.trim();
-  }
-  const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.trim().length > 0) {
-    return xff.split(",")[0].trim();
-  }
-  return typeof req.ip === "string" && req.ip.length > 0 ? req.ip : null;
-}
+import { proxyCandidates, requesterPublicIp } from "../../../../services/proxy-candidates.js";
 
 export async function handleApiProxyClientsHealthGet(req, reply, { clientsStore, tunnelServer }) {
-  clientsStore.pruneDisconnected({ isConnected: (id) => tunnelServer.isConnected(id) });
-  const requesterIp = getRequesterPublicIp(req);
-  const connected = clientsStore
-    .listClients()
-    .filter((client) => tunnelServer.isConnected(client.id));
-
-  const clients = await Promise.all(
-    connected.map(async (client) => {
-      let metrics = null;
-      let rttMs = null;
-      let holds = [];
-
-      try {
-        const result = await tunnelServer.requestHealth(client.id);
-        metrics = result.metrics;
-        rttMs = result.rttMs;
-        holds = Array.isArray(result.holds) ? result.holds : [];
-      } catch {
-        // Proxy timed out or disconnected — include it with null metrics.
-      }
-
-      return {
-        id: client.id,
-        name: client.name,
-        baseUrl: client.baseUrl,
-        createdAt: client.createdAt,
-        lastSeenAt: client.lastSeenAt,
-        metrics,
-        rttMs,
-        // The films this proxy is already downloading. A viewer of one of them
-        // costs it the encode and nothing else, while the same viewer sent
-        // anywhere else starts the download from nothing — which is the whole
-        // of what content affinity is. Reported, not acted on: only the browser
-        // knows which film it is about to open.
-        holds,
-        // Dial-back probe result (null = not probed yet). A false value means
-        // the inbound TCP probe failed — NOT that WebRTC cannot connect.
-        reachable: client.reachable ?? null,
-        // The viewer shares a public IP with the proxy → same network; such a
-        // proxy is usable via LAN ICE candidates even when not internet-reachable.
-        sameNetwork:
-          requesterIp !== null &&
-          typeof client.endpoint?.externalIp === "string" &&
-          client.endpoint.externalIp === requesterIp
-      };
-    })
-  );
-
+  const clients = proxyCandidates({ clientsStore, tunnelServer, requesterIp: requesterPublicIp(req) })
+    .map(({ holdsThisFilm: _holdsThisFilm, ...client }) => client);
   return reply.send({ clients });
 }

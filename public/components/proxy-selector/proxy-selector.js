@@ -1,10 +1,9 @@
 /** @import { WebRtcProxy } from '../../domain/webrtc-proxy.js' */
-/** @import { HealthMetrics } from '../../../../proxy/services/health-collector.js' */
 
 import { getDebugState } from "../../shared/debug-state.js";
+import { requestHeaders } from "../../shared/request-headers.js";
 import { viewerError } from "../../domain/viewer-failure.js";
 import { WebRtcProxy } from "../../domain/webrtc-proxy.js";
-import { choosePool } from "../../domain/proxy-preference.js";
 
 // Same-LAN public-only connect budget. When the browser and proxy share a
 // public IP, the public-only attempt can only succeed via router hairpin,
@@ -16,142 +15,80 @@ import { choosePool } from "../../domain/proxy-preference.js";
 const SAME_NETWORK_PUBLIC_CONNECT_TIMEOUT_MS = 5000;
 
 /**
- * A proxy client candidate as returned by `GET /api/proxy-clients/health`,
- * enriched with computed score and post-connect RTT.
+ * A proxy as `POST /api/proxy-clients/choose` names it.
  *
- * @typedef {Object} ProxyCandidate
- * @property {string}          id           - Stable proxy identifier.
- * @property {string}          name         - Human-readable display name.
- * @property {string}          baseUrl      - Advertised HTTP base URL (informational).
- * @property {HealthMetrics | null} metrics - Server-collected health metrics, or `null` on timeout.
- * @property {number | null}   tunnelRttMs  - Server ↔ proxy tunnel round-trip time in ms.
- * @property {number | null}   channelRttMs - Browser ↔ proxy data-channel RTT measured after connect.
+ * @typedef {Object} ChosenProxy
+ * @property {string}  id            - Stable proxy identifier.
+ * @property {string}  name          - Human-readable display name.
+ * @property {string}  baseUrl       - Advertised HTTP base URL; its port is the LAN port.
+ * @property {boolean} sameNetwork   - Shares a public IP with this viewer.
+ * @property {boolean} holdsThisFilm - Holds the film being opened.
  */
 
 /**
- * Proxy selection helper.
+ * Which proxy to connect to, and the connection to it.
  *
- * On-demand flow (called once at playback start):
- *   1. GET /api/proxy-clients/health  – server polls all connected proxies and
- *      returns metrics + tunnel RTT.
- *   2. Score each candidate using server-side data.
- *   3. Connect WebRTC to the best candidate.
- *   4. Measure data-channel RTT for the debug state record.
- *   5. Return the open WebRtcProxy instance ready to use.
+ * The SERVER chooses (torrent-tv/meta#36): it keeps a table of the proxies,
+ * which each proxy keeps current over its tunnel, and answers one request with
+ * one proxy. The page names the film it is about to open; which films any
+ * proxy holds never reaches the page. When a proxy cannot be connected to, the
+ * page asks again naming it and the error, and is given the next.
  */
 export class ProxySelector {
   /**
-   * Poll health from all connected proxies, score them, connect via WebRTC
-   * to the best candidate, and measure the actual data-channel RTT.
+   * Ask the server which proxy to connect to.
    *
-   * Throws when no proxies are available or the WebRTC connection fails. A
-   * connection failure carries `error.lanProbeUrl` (the proxy's LAN healthz
-   * URL, when a private candidate was seen) so the caller can run the
-   * local-network permission flow and retry with `allowPrivateCandidates`.
-   *
-   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number, onConnecting?: (proxyName: string) => void }} [options]
-   *   `allowPrivateCandidates: false` = public-only attempt: the proxy's
-   *   local-address candidates are dropped, so the browser never asks for the
-   *   local-network permission (same-LAN connects via router hairpin when
-   *   supported). `onConnecting` fires once the candidate is picked and the
-   *   WebRTC connect is about to begin — so the caller can split its status
-   *   between the (instant) selection and the (round-trip) connect.
-   * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
+   * @param {{ infoHash?: string, onlyIds?: string[] | null, tried?: Array<{ id: string, error: string }>, current?: string }} about
+   * @returns {Promise<{ chosen: ChosenProxy | null, candidates: object[], narrowedBy: string }>}
    */
-  /**
-   * The candidates worth choosing between, best first, for one film.
-   *
-   * Split out because the same question is asked twice and must be answered
-   * the same way both times: once when a proxy is being connected, and once
-   * when a film has been chosen and the proxy already in hand may be the wrong
-   * one for it. Two copies of this would be two answers.
-   *
-   * @param {{ infoHash?: string, onlyIds?: string[] | null }} about
-   * @returns {Promise<{ pool: any[], debugState: any }>}
-   */
-  async #poolOf({ infoHash = "", onlyIds = null } = {}) {
-    const response = await fetch("/api/proxy-clients/health");
+  async #choose({ infoHash = "", onlyIds = null, tried = [], current = "" } = {}) {
+    const response = await fetch("/api/proxy-clients/choose", {
+      method: "POST",
+      headers: requestHeaders(),
+      body: JSON.stringify({
+        ...(infoHash ? { infoHash } : {}),
+        ...(Array.isArray(onlyIds) && onlyIds.length > 0 ? { onlyIds } : {}),
+        ...(tried.length > 0 ? { tried } : {}),
+        ...(current ? { current } : {})
+      })
+    });
     if (!response.ok) {
-      throw new Error(`Proxy health request failed (${response.status}).`);
+      throw new Error(`Proxy choice request failed (${response.status}).`);
     }
-
-    const payload = await response.json();
-    const all = Array.isArray(payload.clients) ? payload.clients : [];
-    const raw = Array.isArray(onlyIds) && onlyIds.length > 0
-      ? all.filter((client) => onlyIds.includes(client.id))
-      : all;
-
-    /** @type {Array<ProxyCandidate & { score: number, reachable: boolean | null, sameNetwork: boolean }>} */
-    const scored = raw
-      .filter((c) => typeof c.id === "string" && c.id.trim().length > 0)
-      .map((c) => ({
-        id: c.id.trim(),
-        name: typeof c.name === "string" ? c.name : c.id,
-        baseUrl: typeof c.baseUrl === "string" ? c.baseUrl.trim() : "",
-        metrics: c.metrics ?? null,
-        tunnelRttMs: typeof c.rttMs === "number" ? c.rttMs : null,
-        channelRttMs: null,
-        reachable: typeof c.reachable === "boolean" ? c.reachable : null,
-        sameNetwork: c.sameNetwork === true,
-        // Whether this proxy is already downloading the film being opened. The
-        // proxy reports what it holds; matching it against what is being asked
-        // for happens here, because this is the only side that knows which film
-        // that is.
-        holdsThisFilm:
-          infoHash.length > 0 &&
-          Array.isArray(c.holds) &&
-          c.holds.some((held) => String(held?.infoHash ?? "").toLowerCase() === infoHash.toLowerCase()),
-        score: this.#scoreProxy(c.metrics, c.rttMs)
-      }))
-      .sort((a, b) => b.score - a.score);
-
+    const answer = await response.json();
     const debugState = getDebugState();
     debugState.proxies = {
       fetchedAt: new Date().toISOString(),
-      candidates: scored.map(({ id, name, score, metrics, tunnelRttMs, reachable, sameNetwork, holdsThisFilm }) => ({
-        id, name, score, metrics, tunnelRttMs, reachable, sameNetwork, holdsThisFilm
-      })),
-      selectedId: ""
+      candidates: Array.isArray(answer.candidates) ? answer.candidates : [],
+      narrowedBy: answer.narrowedBy ?? "",
+      tried: tried.map((one) => one.id),
+      selectedId: answer.chosen?.id ?? ""
     };
-
-    if (scored.length === 0) {
-      // Said to the viewer: no proxy is connected to the pool at all, which is
-      // a fact about now and not about the film.
-      throw viewerError("No video source is available right now. Try again later.");
+    if (answer.narrowedBy) {
+      console.info(`[proxy-selector] chosen from ${debugState.proxies.candidates.length} candidate(s) after ${answer.narrowedBy}`);
     }
-
-    // Which of them may be chosen: reachable from the internet or on the
-    // viewer's own network, and among those one that is already downloading
-    // this film. The rule itself is in `domain/proxy-preference.js` — it is
-    // pure, and a decision this easy to get quietly wrong should be exercised
-    // without a browser.
-    const { pool, narrowedBy } = choosePool(scored);
-    if (narrowedBy !== "") {
-      console.info(
-        `[proxy-selector] ${pool.length} of ${scored.length} candidate(s) after ${narrowedBy}`
-      );
-    }
-
-    return { pool, debugState };
+    return { chosen: answer.chosen ?? null, candidates: debugState.proxies.candidates, narrowedBy: answer.narrowedBy ?? "" };
   }
 
   /**
-   * Which proxy WOULD be chosen for this film, without connecting to it.
+   * Whether the proxy in hand should be left for another one, once the film
+   * is known.
    *
-   * Asked once a torrent is known, against the proxy already connected. A
-   * proxy is taken the moment the page opens — before any film exists — so
-   * without this the choice is made with no film in hand and never revisited,
-   * and the preference for a proxy that already holds the film can never
-   * apply. Field 2026-09-13: two viewers of one film, 76 seconds apart, on two
-   * different proxies, each downloading and encoding it separately.
+   * A proxy is taken the moment the page opens — before any film may exist —
+   * so the choice can be made with no film in hand. Field 2026-09-13: two
+   * viewers of one film, 76 seconds apart, on two different proxies, each
+   * downloading and encoding it separately. The server keeps the current proxy
+   * whenever it is among the best — holding the film when a proxy with room
+   * does — so the page moves only to a proxy that holds this film and has room
+   * while the one in hand does not.
    *
-   * @param {{ infoHash?: string, onlyIds?: string[] | null }} about
-   * @returns {Promise<string>} The id, or "" when nothing can be chosen.
+   * @param {{ infoHash?: string, onlyIds?: string[] | null, current?: string }} about
+   * @returns {Promise<string>} The id to move to, or "" to stay.
    */
-  async bestProxyIdFor(about = {}) {
+  async betterProxyIdFor(about = {}) {
     try {
-      const { pool } = await this.#poolOf(about);
-      return pool[0]?.id ?? "";
+      const { chosen } = await this.#choose(about);
+      return chosen && chosen.id !== about.current && chosen.holdsThisFilm ? chosen.id : "";
     } catch {
       // silent-ok: a question that cannot be answered leaves the connection in
       // hand alone — it is a preference, not a requirement, and the empty
@@ -160,32 +97,69 @@ export class ProxySelector {
     }
   }
 
+  /**
+   * Connect to the proxy the server chooses, and to the next one when that
+   * fails.
+   *
+   * Throws when no proxy is left or a connection failure needs the caller: a
+   * proxy on the viewer's own network that cannot be reached by public
+   * addresses is not a reason to try another proxy, it is the cue for the
+   * local-network permission flow, so its error (with `error.lanProbeUrl`) is
+   * thrown as it was.
+   *
+   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number, onConnecting?: (proxyName: string) => void, infoHash?: string, onlyIds?: string[] | null }} [options]
+   *   `allowPrivateCandidates: false` = public-only attempt: the proxy's
+   *   local-address candidates are dropped, so the browser never asks for the
+   *   local-network permission (same-LAN connects via router hairpin when
+   *   supported). `onConnecting` fires once a proxy is chosen and the WebRTC
+   *   connect is about to begin. `infoHash` is the film about to be opened,
+   *   when known; `onlyIds` the proxies that said they could sustain it after
+   *   another refused it.
+   * @returns {Promise<WebRtcProxy>} An open, ready-to-use `WebRtcProxy` instance.
+   */
   async chooseBestProxy({
     allowPrivateCandidates = true,
     connectTimeoutMs,
     onConnecting,
-    // The film about to be opened, by its own infohash. A proxy already
-    // downloading it is preferred over one that is not — see the pool below.
-    // Absent (a viewer who has not chosen a film yet) leaves selection exactly
-    // as it was.
     infoHash = "",
-    // Only these proxies may be chosen. Used after one has refused a file:
-    // every proxy here has answered that it could sustain THIS source, which
-    // is a question the score below cannot ask — it reads processor load, free
-    // memory and round-trip time, all of which are about the machine and none
-    // of which is about the file.
     onlyIds = null
   } = {}) {
-    const { pool, debugState } = await this.#poolOf({ infoHash, onlyIds });
-    const best = pool[0];
-    debugState.proxies.selectedId = best.id;
+    /** @type {Array<{ id: string, error: string }>} */
+    const tried = [];
+    for (;;) {
+      const { chosen } = await this.#choose({ infoHash, onlyIds, tried });
+      if (!chosen) {
+        // Said to the viewer: no proxy is connected to the pool at all, or
+        // none of them could be reached from here — a fact about now and not
+        // about the film.
+        throw viewerError("No video source is available right now. Try again later.");
+      }
+      try {
+        return await this.#connect(chosen, { allowPrivateCandidates, connectTimeoutMs, onConnecting });
+      } catch (error) {
+        if (chosen.sameNetwork) {
+          throw error;
+        }
+        tried.push({ id: chosen.id, error: error instanceof Error ? error.message : String(error) });
+        console.warn(`[proxy-selector] could not connect to ${chosen.name}; asking for another (${tried.at(-1).error})`);
+      }
+    }
+  }
 
+  /**
+   * Connect to one chosen proxy and prove the channel carries data.
+   *
+   * @param {ChosenProxy} chosen
+   * @param {{ allowPrivateCandidates: boolean, connectTimeoutMs?: number, onConnecting?: (proxyName: string) => void }} options
+   * @returns {Promise<WebRtcProxy>}
+   */
+  async #connect(chosen, { allowPrivateCandidates, connectTimeoutMs, onConnecting }) {
     // The proxy's local HTTP port (from baseUrl) — used to fire a Local Network
     // Access preflight to the proxy's LAN address, so the browser grants the
     // permission that lets WebRTC data flow to a same-LAN private candidate.
     let proxyLocalPort = null;
     try {
-      const u = new URL(best.baseUrl);
+      const u = new URL(chosen.baseUrl);
       const p = parseInt(u.port, 10);
       if (p > 0 && p <= 65535) proxyLocalPort = p;
     } catch (error) {
@@ -202,7 +176,7 @@ export class ProxySelector {
     // Same-LAN public-only attempts get a short connect budget (hairpin
     // connects fast or never); everyone else keeps the caller's timeout.
     const effectiveConnectTimeoutMs =
-      allowPrivateCandidates === false && best.sameNetwork
+      allowPrivateCandidates === false && chosen.sameNetwork
         ? Math.min(connectTimeoutMs ?? SAME_NETWORK_PUBLIC_CONNECT_TIMEOUT_MS, SAME_NETWORK_PUBLIC_CONNECT_TIMEOUT_MS)
         : connectTimeoutMs;
     if (effectiveConnectTimeoutMs !== connectTimeoutMs) {
@@ -214,10 +188,10 @@ export class ProxySelector {
     // The pick is done; what follows (WebRTC connect + liveness ping) is the
     // round-trip cost. Let the caller relabel from "selecting" to "connecting".
     if (typeof onConnecting === "function") {
-      onConnecting(best.name);
+      onConnecting(chosen.name);
     }
 
-    const proxy = new WebRtcProxy(best.id, proxyLocalPort, allowPrivateCandidates);
+    const proxy = new WebRtcProxy(chosen.id, proxyLocalPort, allowPrivateCandidates);
     try {
       await proxy.connect(effectiveConnectTimeoutMs);
     } catch (error) {
@@ -243,8 +217,8 @@ export class ProxySelector {
     // flow and retries with local candidates (where the permission makes SCTP
     // flow) instead of surfacing a non-retryable error.
     try {
-      best.channelRttMs = await proxy.ping();
-      debugState.proxies.channelRttMs = best.channelRttMs;
+      const channelRttMs = await proxy.ping();
+      getDebugState().proxies.channelRttMs = channelRttMs;
     } catch (pingError) {
       const error = pingError instanceof Error ? pingError : new Error(String(pingError));
       error.lanProbeUrl = proxy.lanProbeUrl;
@@ -257,9 +231,9 @@ export class ProxySelector {
 
   /**
    * Rebuild a connection to a specific proxy that was working moments ago
-   * (auto-reconnect, same-proxy path). No health poll, no scoring, no
-   * permission flow — reuse the exact descriptor (id, LAN port, candidate
-   * policy) of the connection that just dropped and dial it again.
+   * (auto-reconnect, same-proxy path). No choice, no permission flow — reuse
+   * the exact descriptor (id, LAN port, candidate policy) of the connection
+   * that just dropped and dial it again.
    *
    * @param {{ proxyId: string, proxyLocalPort: number | null, allowPrivateCandidates: boolean }} descriptor
    * @param {{ connectTimeoutMs?: number, signal?: AbortSignal }} [options]
@@ -274,36 +248,5 @@ export class ProxySelector {
       throw error;
     }
     return proxy;
-  }
-
-  /**
-   * Score a proxy candidate using server-collected metrics and tunnel RTT.
-   * Higher is better.
-   *
-   * Weights:
-   *   - Free memory (0–1):  40 %  — `memFree * 0.4`
-   *   - CPU availability:   40 %  — `(1 - clamp(cpuLoad, 0, 1)) * 0.4`
-   *   - Tunnel RTT penalty: 20 %  — `-(rttMs / 2000) * 0.2`
-   *
-   * When metrics are unavailable the proxy scores `0.1 - rttPenalty` so it
-   * remains eligible as a fallback rather than being excluded.
-   *
-   * @param {HealthMetrics | null} metrics
-   * @param {number | null} tunnelRttMs
-   * @returns {number}
-   */
-  #scoreProxy(metrics, tunnelRttMs) {
-    // Normalise tunnel RTT to a 0–1 penalty (1 = worst, 0 = 0 ms).
-    const rttPenalty = tunnelRttMs != null ? Math.min(1, tunnelRttMs / 2000) : 0.5;
-
-    if (!metrics) {
-      return 0.1 - rttPenalty * 0.2;
-    }
-
-    // cpuLoad is load-avg / cpu-count; clamp to 0–1 (>1 means overloaded).
-    const cpuScore = Math.max(0, 1 - Math.min(1, metrics.cpuLoad));
-    const memScore = Math.max(0, Math.min(1, metrics.memFree));
-
-    return memScore * 0.4 + cpuScore * 0.4 - rttPenalty * 0.2;
   }
 }
