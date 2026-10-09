@@ -118,13 +118,14 @@ let film = { name: "", infoHash: "" };
  * registry server writes them to its standard output, which every release of
  * it destroys — and both halves of a failure are needed to explain one.
  *
- * A connection that has closed never opens again — a new one installs its own
- * sink — so a sink whose connection is closed is dropped and the server takes
- * the lines until then.
+ * While its connection is closed the server takes the lines; a reconnect opens
+ * the same sink again.
  *
  * @type {ProxySink | null}
  */
 let proxySink = null;
+/** Whether the last flush found the proxy sink's connection open. */
+let proxySinkOpen = false;
 
 /**
  * Render a single console argument as a string.
@@ -199,13 +200,16 @@ function record(level, args) {
  */
 function flush(useBeacon = false) {
   try {
-    if (proxySink !== null && !proxySink.isOpen()) {
-      // Tried first, every batch failed on the dead connection, and the
-      // failure it counted was itself a line: a page left open after its proxy
-      // went away wrote one every two seconds for hours (field 2026-10-08,
-      // 13701 such lines from one page).
-      proxySink = null;
-      record("info", ["[client-logger] the proxy connection has closed; lines go to the server until another one opens"]);
+    // A closed connection is not tried: every batch used to fail on it first,
+    // and the failure it counted was itself a line, so a page left open after
+    // its proxy went away wrote one every two seconds for hours (field
+    // 2026-10-08, 13701 such lines from one page).
+    const viaProxy = proxySink !== null && proxySink.isOpen() ? proxySink : null;
+    if (proxySink !== null && (viaProxy !== null) !== proxySinkOpen) {
+      proxySinkOpen = viaProxy !== null;
+      record("info", [proxySinkOpen
+        ? "[client-logger] the proxy connection is open; lines go to the proxy"
+        : "[client-logger] the proxy connection is closed; lines go to the server until it opens"]);
     }
     queue.reportLosses();
     const beacon = useBeacon && typeof navigator.sendBeacon === "function";
@@ -223,8 +227,8 @@ function flush(useBeacon = false) {
         queue.delivered(batch);
         continue;
       }
-      if (proxySink) {
-        sendToProxy(proxySink, batch);
+      if (viaProxy) {
+        sendToProxy(viaProxy, batch);
       } else {
         sendToServer(batch);
       }
@@ -340,6 +344,7 @@ function install() {
      */
     setProxySink(sink) {
       proxySink = typeof sink?.send === "function" && typeof sink.isOpen === "function" ? sink : null;
+      proxySinkOpen = proxySink !== null && proxySink.isOpen();
     },
     /**
      * Name what is being watched, so the log file says which film it is.

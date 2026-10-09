@@ -33,7 +33,7 @@ async function flushOnce() {
   }
 }
 
-test("a closed proxy connection is dropped instead of failing every batch for as long as the page stays open", async () => {
+test("a closed proxy connection is not tried, and a reconnect takes the lines again", async () => {
   let open = true;
   /** @type {string[]} */
   const toProxy = [];
@@ -57,7 +57,7 @@ test("a closed proxy connection is dropped instead of failing every batch for as
   await flushOnce();
   const afterClose = messagesOf(toServer.slice(serverBefore));
   assert.ok(afterClose.includes("a line written after the connection closed"), "the server takes the lines");
-  assert.ok(afterClose.some((msg) => msg.startsWith("[client-logger] the proxy connection has closed")), "the switch is said once");
+  assert.ok(afterClose.some((msg) => msg.startsWith("[client-logger] the proxy connection is closed")), "the switch is said");
   assert.equal(afterClose.filter((msg) => msg.startsWith("[client-logger] since")).length, 0, "no batch failed on the dead connection");
 
   // Field 2026-10-08: with nothing else logged, the old forwarder still wrote a
@@ -67,4 +67,24 @@ test("a closed proxy connection is dropped instead of failing every batch for as
   await flushOnce();
   await flushOnce();
   assert.equal(toServer.length, quiet, "a quiet page sends nothing");
+
+  // A reconnect swaps the connection inside the same transport, so the same
+  // sink opens again.
+  open = true;
+  const proxyBefore = toProxy.length;
+  console.info("a line written after the reconnect");
+  await flushOnce();
+  assert.equal(toServer.length, quiet, "the server is not used once the connection is open again");
+  assert.ok(messagesOf(toProxy.slice(proxyBefore)).includes("a line written after the reconnect"));
+});
+
+test("a WebRTC transport is as open as the connection it holds now", async () => {
+  const { ProxyTransport } = await import("../public/domain/proxy-transport.js");
+  const closed = { isOpen: false, fetch: async () => ({ ok: true }) };
+  const opened = { isOpen: true, fetch: async () => ({ ok: true }) };
+  const transport = ProxyTransport.fromWebRtc(/** @type {any} */ (closed));
+  assert.equal(transport.isOpen, false);
+  transport.replaceWebRtcProxy(/** @type {any} */ (opened));
+  assert.equal(transport.isOpen, true);
+  assert.equal(ProxyTransport.fromHttp("http://192.168.1.5:9090").isOpen, true);
 });
