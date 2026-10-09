@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.12
 
 - **Fix**: Send the page log to the proxy again while its connection is open: 0.48.11 sent every line to the server, and a reconnect now takes the lines back to the proxy (#ttv-77).
 
