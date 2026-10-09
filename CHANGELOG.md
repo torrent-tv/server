@@ -1,4 +1,4 @@
-## Unreleased
+## 0.48.10
 
 - **Chore**: Update dependencies: @fastify/helmet 13.1.1 → 13.1.2, knip 6.40.0 → 6.41.0; 26 package(s) changed in the lock file.
 
