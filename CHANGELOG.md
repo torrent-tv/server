@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.2
 
 - **Fix**: The address carries the episode number of the open file: a matched episode is the provider's record (`{ number, name }`), and 0.49.0 read it as a bare number, so `episode` was never written (#ttv-172).
 
