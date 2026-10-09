@@ -104,13 +104,25 @@ const startedAt = new Date().toISOString();
 /** What is being watched, once a torrent has been chosen. */
 let film = { name: "", infoHash: "" };
 /**
+ * A proxy connection as the forwarder uses it.
+ *
+ * @typedef {object} ProxySink
+ * @property {() => boolean} isOpen - Whether its connection can carry a batch.
+ * @property {(body: string) => Promise<unknown>} send
+ */
+
+/**
  * Where batches go when the page has a proxy.
  *
  * The proxy writes them beside its OWN log, on the host's durable disk. The
  * registry server writes them to its standard output, which every release of
  * it destroys — and both halves of a failure are needed to explain one.
  *
- * @type {((body: string) => Promise<unknown>) | null}
+ * A connection that has closed never opens again — a new one installs its own
+ * sink — so a sink whose connection is closed is dropped and the server takes
+ * the lines until then.
+ *
+ * @type {ProxySink | null}
  */
 let proxySink = null;
 
@@ -187,6 +199,14 @@ function record(level, args) {
  */
 function flush(useBeacon = false) {
   try {
+    if (proxySink !== null && !proxySink.isOpen()) {
+      // Tried first, every batch failed on the dead connection, and the
+      // failure it counted was itself a line: a page left open after its proxy
+      // went away wrote one every two seconds for hours (field 2026-10-08,
+      // 13701 such lines from one page).
+      proxySink = null;
+      record("info", ["[client-logger] the proxy connection has closed; lines go to the server until another one opens"]);
+    }
     queue.reportLosses();
     const beacon = useBeacon && typeof navigator.sendBeacon === "function";
     for (let batch = queue.take(); batch !== null; batch = queue.take()) {
@@ -222,13 +242,13 @@ function flush(useBeacon = false) {
  * TO the proxy and only loses the answer, so after its timeout such a batch is
  * on both sides under the same `seq`.
  *
- * @param {(body: string) => Promise<unknown>} sink
+ * @param {ProxySink} sink
  * @param {import("./log-queue.js").LogBatch} batch
  * @returns {void}
  */
 function sendToProxy(sink, batch) {
   void Promise.resolve()
-    .then(() => sink(batch.body))
+    .then(() => sink.send(batch.body))
     .then((response) => {
       if (response && typeof response === "object" && "ok" in response && !response.ok) {
         throw new Error(`HTTP ${/** @type {{ status?: number }} */ (response).status ?? "?"}`);
@@ -315,11 +335,11 @@ function install() {
     /**
      * Send batches through the proxy from now on, or stop doing so.
      *
-     * @param {((body: string) => Promise<unknown>) | null} sink
+     * @param {ProxySink | null} sink
      * @returns {void}
      */
     setProxySink(sink) {
-      proxySink = typeof sink === "function" ? sink : null;
+      proxySink = typeof sink?.send === "function" && typeof sink.isOpen === "function" ? sink : null;
     },
     /**
      * Name what is being watched, so the log file says which film it is.
