@@ -269,3 +269,22 @@ test("nothing to read from keeps what the address has", () => {
   assert.equal(positionToRecord({ readyState: Number.NaN, currentTime: 0 }, 42), 42);
   assert.equal(positionToRecord({ readyState: 0, currentTime: 0 }, 0), 0);
 });
+
+test("the work a file is travels in the address and reads back", () => {
+  const record = { type: "tmdb", id: "67075", kind: "tv", category: "anime", season: 1, episode: 3 };
+  const state = { magnet: "magnet:?xt=urn:btih:84acab5f03b1477337d989d05578c84519585af7", fileIndex: 27, currentTime: 61, record };
+  const search = buildUrlSearch(state);
+  assert.match(search, /&type=tmdb&id=67075&kind=tv&category=anime&season=1&episode=3$/u);
+  assert.deepEqual(readUrlState(search), state);
+  // A TMDB number without its kind names two works, and is not read.
+  assert.equal(readUrlState(search.replace("&kind=tv", "")).record, undefined);
+  assert.deepEqual(readUrlState(`?magnet=m&type=anilist&id=21662`).record, { type: "anilist", id: "21662", kind: null, category: null, season: null, episode: null });
+});
+
+test("the record belongs to its file: kept while it stays open, dropped for another, replaced not pushed", () => {
+  const record = { type: "imdb", id: "tt0083944", kind: null, category: null, season: null, episode: null };
+  const current = { magnet: "m", fileIndex: 2, currentTime: 30, record };
+  assert.deepEqual(fileOpenState(current, "m", 2).record, record);
+  assert.equal(fileOpenState(current, "m", 3).record, undefined);
+  assert.equal(decideHistoryWrite({ magnet: "m", fileIndex: 2, currentTime: 30 }, current), "replace");
+});

@@ -225,7 +225,7 @@ test("subtitle metadata retries only after not-found and only once", async () =>
   assert.equal(pending.length, 4, "a late answer cannot retry a new selection with old evidence");
 });
 
-test("probed duration refines a year-policy selection and ignores old selections", async () => {
+test("probed duration and audio refine a choice among several works and ignore old selections", async () => {
   const target = new EventTarget();
   globalThis.document = target;
   const pending = [];
@@ -238,11 +238,12 @@ test("probed duration refines a year-policy selection and ignores old selections
   target.addEventListener(MEDIA_INFO_EVENTS.CHANGED, event => published.push(event.detail));
   send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Title.mkv"] });
   send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Title.mkv", shape: "single", items: [{ fileIndex: 0 }] }, files: [{ index: 0, relativePath: "Title.mkv" }] });
-  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 2, identification: "latest-year" } }));
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 2, identification: "scored" } }));
   await new Promise(resolve => setImmediate(resolve));
-  send(MEDIA_INFO_EVENTS.PROBED, { selection: 1, fileIndex: 0, durationSeconds: 7200 });
+  send(MEDIA_INFO_EVENTS.PROBED, { selection: 1, fileIndex: 0, durationSeconds: 7200, audioLanguages: ["ja"] });
   assert.equal(pending.length, 3);
   assert.equal(pending[2].body.durationSeconds, 7200);
+  assert.deepEqual(pending[2].body.audioLanguages, ["ja"]);
   send(MEDIA_INFO_EVENTS.PROBED, { selection: 1, fileIndex: 0, durationSeconds: 7200 });
   assert.equal(pending.length, 3);
   send(APP_EVENTS.RESET_TO_PICKER);
@@ -294,4 +295,51 @@ test("a release that is already identified is not asked again when its hash arri
   await new Promise(resolve => setImmediate(resolve));
   send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint: { hash: "8e245d9679d31e12", size: 1 } });
   assert.equal(pending.length, 2);
+});
+
+test("the address names the work of the open file: its database, number, kind, category and episode", async () => {
+  const { addressRecord } = await import("../public/domain/media-info.js");
+  const work = { sources: { tmdb: { kind: "tv", tmdbId: 67075, anime: true }, anilist: { id: 21662, format: "TV" } }, normalized: { isAnime: true } };
+  const state = { work, episodes: { 27: { source: "tmdb", season: 1, episodes: [3] } } };
+  assert.deepEqual(addressRecord(state, 27), { type: "tmdb", id: "67075", kind: "tv", category: "anime", season: 1, episode: 3 });
+  // A picture of a pack names its own work, not the release's.
+  const pack = { work: null, pictures: { 4: { sources: { tmdb: { kind: "movie", tmdbId: 1368 } } } } };
+  assert.deepEqual(addressRecord(pack, 4), { type: "tmdb", id: "1368", kind: "movie", category: null, season: null, episode: null });
+  assert.equal(addressRecord(pack, 5), null);
+  // Only AniList knows it.
+  assert.equal(addressRecord({ work: { sources: { anilist: { id: 21662, format: "MOVIE" } } } }, 0).type, "anilist");
+  assert.equal(addressRecord(null, 0), null);
+});
+
+test("episode numbers of a release are evidence, with no season where the name states none", async () => {
+  const { episodeNumbersOf } = await import("../public/domain/media-info.js");
+  const items = [
+    { episode: { season: null, episodes: [1] } },
+    { episode: { season: 1, episodes: [2, 3] } },
+    { episode: { season: 0, episodes: [1], special: true } },
+    { episode: null }
+  ];
+  assert.deepEqual(episodeNumbersOf(items), [{ season: null, episode: 1 }, { season: 1, episode: 2 }, { season: 1, episode: 3 }]);
+});
+
+test("the work the address names, and when the torrent was made, go with every request", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  const record = { type: "tmdb", id: "67075", kind: "tv", category: "anime", season: 1, episode: 1 };
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Drifters"], createdAt: 1482921955, record, recordFileIndex: 27 });
+  send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Drifters", shape: "series", items: [
+    { fileIndex: 27, episode: { season: null, episodes: [1] } }, { fileIndex: 28, episode: { season: null, episodes: [2] } }
+  ] }, files: [{ index: 27, relativePath: "Drifters/[HorribleSubs] Drifters - 01 [1080p].mkv" }, { index: 28, relativePath: "Drifters/[HorribleSubs] Drifters - 02 [1080p].mkv" }] });
+  assert.equal(pending.length, 2);
+  for (const { body } of pending) {
+    assert.deepEqual(body.record, { type: "tmdb", id: "67075", kind: "tv" });
+    assert.equal(body.torrentCreatedAt, 1482921955);
+  }
+  assert.deepEqual(pending[1].body.episodeNumbers, [{ season: null, episode: 1 }, { season: null, episode: 2 }]);
 });

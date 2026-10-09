@@ -32,7 +32,6 @@ export function createMetadata({ token = null, theporndbKey = null, stashdbKey =
   const source = token ? new TmdbSource({ token, gate: apiGate }) : null;
   const service = new MetadataService({
     source,
-    runtimeToleranceSeconds: process.env.METADATA_RUNTIME_TOLERANCE_SECONDS === undefined ? undefined : Number(process.env.METADATA_RUNTIME_TOLERANCE_SECONDS),
     // 8 MB of serialized data. Measured 2026-09-30 on Node 24, filling a cache
     // of this budget with entries of the shape kept here: 13.4 MB of heap and
     // 30.5 MB of process growth for searches (4169 entries), 16.8 MB and

@@ -9,6 +9,12 @@
  *   ?magnet=…                                that torrent's file list
  *   ?magnet=…&fileIndex=…[&currentTime=…]    playing one file
  *
+ * Once the file is identified the address also names the work it is —
+ * `id`, `type` (`tmdb`, `imdb`, `anilist`), `kind` (`movie`, `tv`), `category`
+ * (`anime`, `adult`) and, for an episode, `season` and `episode`
+ * (torrent-tv/meta#172) — so a refresh and a shared link ask for that record
+ * instead of searching again. They describe the open file and change with it.
+ *
  * The error screen is deliberately not among them: it is a transient condition,
  * not somewhere anyone bookmarks or navigates to.
  *
@@ -27,7 +33,75 @@
  * @property {string} magnet - Empty when none.
  * @property {number} fileIndex - -1 when none.
  * @property {number} currentTime - Whole seconds; 0 when none.
+ * @property {AddressRecord | null} [record] - The work the open file is, once known.
  */
+
+/**
+ * @typedef {object} AddressRecord
+ * @property {"tmdb" | "imdb" | "anilist"} type
+ * @property {string} id
+ * @property {"movie" | "tv" | null} kind - Needed for TMDB, where a film and a series are numbered apart.
+ * @property {"anime" | "adult" | null} category
+ * @property {number | null} season
+ * @property {number | null} episode
+ */
+
+const RECORD_TYPES = new Set(["tmdb", "imdb", "anilist"]);
+const RECORD_KINDS = new Set(["movie", "tv"]);
+const RECORD_CATEGORIES = new Set(["anime", "adult"]);
+
+/**
+ * The record a query string names, or `null` when it names none that can be
+ * looked up.
+ *
+ * @param {URLSearchParams} params
+ * @returns {AddressRecord | null}
+ */
+function readRecord(params) {
+  const type = params.get("type") ?? "";
+  const id = (params.get("id") ?? "").trim();
+  const kind = params.get("kind") ?? "";
+  if (!RECORD_TYPES.has(type) || !/^(?:tt)?\d{1,10}$/u.test(id) || (type === "tmdb" && !RECORD_KINDS.has(kind))) {
+    return null;
+  }
+  const whole = (name) => {
+    const value = Number.parseInt(params.get(name) ?? "", 10);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  };
+  const category = params.get("category") ?? "";
+  return {
+    type,
+    id,
+    kind: RECORD_KINDS.has(kind) ? kind : null,
+    category: RECORD_CATEGORIES.has(category) ? category : null,
+    season: whole("season"),
+    episode: whole("episode")
+  };
+}
+
+/**
+ * A state's `record` field: present only when there is a record, so an address
+ * without one reads as it always has.
+ *
+ * @param {AddressRecord | null} record
+ * @returns {{ record?: AddressRecord }}
+ */
+function withRecord(record) {
+  return record ? { record } : {};
+}
+
+/**
+ * Whether two records name the same thing, absent ones included.
+ *
+ * @param {AddressRecord | null | undefined} left
+ * @param {AddressRecord | null | undefined} right
+ * @returns {boolean}
+ */
+export function sameRecord(left, right) {
+  if (!left || !right) return !left && !right;
+  return left.type === right.type && left.id === right.id && left.kind === right.kind &&
+    left.category === right.category && left.season === right.season && left.episode === right.episode;
+}
 
 /**
  * Read the state a query string names.
@@ -43,7 +117,8 @@ export function readUrlState(search) {
   return {
     magnet,
     fileIndex: Number.isFinite(fileIndexRaw) && fileIndexRaw >= 0 ? fileIndexRaw : -1,
-    currentTime: Number.isFinite(currentTimeRaw) && currentTimeRaw > 0 ? currentTimeRaw : 0
+    currentTime: Number.isFinite(currentTimeRaw) && currentTimeRaw > 0 ? currentTimeRaw : 0,
+    ...withRecord(magnet ? readRecord(params) : null)
   };
 }
 
@@ -64,6 +139,14 @@ export function buildUrlSearch(state) {
   }
   if (state.currentTime > 0) {
     search += `&currentTime=${Math.floor(state.currentTime)}`;
+  }
+  const record = state.record;
+  if (record && RECORD_TYPES.has(record.type) && record.id) {
+    search += `&type=${record.type}&id=${encodeURIComponent(record.id)}`;
+    if (record.kind) search += `&kind=${record.kind}`;
+    if (record.category) search += `&category=${record.category}`;
+    if (Number.isInteger(record.season)) search += `&season=${record.season}`;
+    if (Number.isInteger(record.episode)) search += `&episode=${record.episode}`;
   }
   return search;
 }
@@ -91,7 +174,8 @@ export function decideHistoryWrite(current, next) {
   if (
     current.magnet === next.magnet &&
     current.fileIndex === next.fileIndex &&
-    current.currentTime === next.currentTime
+    current.currentTime === next.currentTime &&
+    sameRecord(current.record, next.record)
   ) {
     // Nothing to say. Writing anyway is harmless on a torrent — the position
     // moves, so this is rare — but on the empty address it would fire on every
@@ -234,6 +318,19 @@ export function positionToRecord(element, recorded) {
   return element.readyState > 0 ? 0 : known;
 }
 
+/**
+ * The record the address keeps for a file: the one it already names when the
+ * file is the same, nothing for another file (its work is found again).
+ *
+ * @param {UrlState} current
+ * @param {string} magnet
+ * @param {number} fileIndex
+ * @returns {AddressRecord | null}
+ */
+function recordKeptFor(current, magnet, fileIndex) {
+  return current.magnet === magnet && current.fileIndex === fileIndex ? current.record ?? null : null;
+}
+
 /** Opening intent is recorded before any media work or element events. */
 export function fileOpenState(current, magnet, fileIndex, requestedPosition = null) {
   return {
@@ -241,7 +338,8 @@ export function fileOpenState(current, magnet, fileIndex, requestedPosition = nu
     fileIndex,
     currentTime: Number.isFinite(requestedPosition) && requestedPosition >= 0
       ? requestedPosition
-      : current.magnet === magnet ? resumePositionFor(current, fileIndex) : 0
+      : current.magnet === magnet ? resumePositionFor(current, fileIndex) : 0,
+    ...withRecord(recordKeptFor(current, magnet, fileIndex))
   };
 }
 
@@ -253,6 +351,7 @@ export function playbackStateToRecord(current, { magnet, fileIndex, opening, ele
     fileIndex,
     currentTime: current.magnet === magnet && current.fileIndex === fileIndex
       ? positionToRecord(element, current.currentTime)
-      : 0
+      : 0,
+    ...withRecord(recordKeptFor(current, magnet, fileIndex))
   };
 }

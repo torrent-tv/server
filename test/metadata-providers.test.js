@@ -138,3 +138,62 @@ test("episodes go to the first source that answers them, and without one the ans
   assert.equal((await registry().episodes({ tmdbId: 7 })).status, "ok");
   assert.deepEqual(await new MetadataRegistry({ providers: [new ContainerMetadata()] }).episodes({}), { status: "unavailable" });
 });
+/**
+ * An AniList that answers from a table: a search by title or a record by id.
+ *
+ * @param {{ search?: Record<string, object[]>, byId?: Record<number, object> }} table
+ */
+function anilistFrom({ search = {}, byId = {} }) {
+  const fetch = async (_url, init) => {
+    const { variables } = JSON.parse(init.body);
+    const data = variables.id !== undefined
+      ? { Media: byId[variables.id] ?? null }
+      : { Page: { pageInfo: { hasNextPage: false }, media: search[variables.search] ?? [] } };
+    return new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } });
+  };
+  return new AniListProvider({ fetch, gate: { run: task => task(), pause() {} } });
+}
+
+const drifters2016 = { id: 21662, title: { romaji: "Drifters", english: "Drifters", native: "ドリフターズ" }, synonyms: [], format: "TV", episodes: 12, startDate: { year: 2016 } };
+
+test("the one anime AniList holds under a title moves TMDB's choice onto the candidate it agrees with", async () => {
+  const tmdbWork = (tmdbId, year) => ({ ...work, tmdbId, title: "Drifters", originalTitle: "Drifters", year });
+  const ranked = [
+    { kind: "tv", tmdbId: 281558, title: "Drifters", year: 2019, score: 8, contradiction: null },
+    { kind: "tv", tmdbId: 67075, title: "Drifters", year: 2016, score: 8, contradiction: null }
+  ];
+  const looked = [];
+  const tmdb = new TmdbProvider({
+    identify: async () => ({ status: "identified", work: tmdbWork(281558, 2019), ranked }),
+    identifyById: async (request) => { looked.push(request.externalIds.tmdb); return { status: "identified", work: tmdbWork(request.externalIds.tmdb.id, 2016) }; },
+    episodes: async () => ({ status: "ok" })
+  });
+  const answer = await new MetadataRegistry({ providers: [anilistFrom({ search: { Drifters: [drifters2016] } }), tmdb] })
+    .identify({ names: ["[HorribleSubs] Drifters - 01 [1080p].mkv"], kindHint: "tv", language: "en-US" });
+  assert.deepEqual(looked, [{ kind: "tv", id: 67075 }]);
+  assert.equal(answer.work.sources.tmdb.tmdbId, 67075);
+  assert.equal(answer.work.sources.tmdb.identification, "anilist");
+});
+
+test("a record the address names is looked up, not searched for", async () => {
+  const searched = [];
+  const looked = [];
+  const tmdb = new TmdbProvider({
+    identify: async (request) => {
+      searched.push(request.names);
+      return { status: "identified", work: { ...work, title: "Drifters", year: request.names.some((name) => name.includes("2016")) ? 2016 : 2019 } };
+    },
+    identifyById: async (request) => { looked.push(request.externalIds); return request.externalIds.tmdb ? { status: "identified", work } : { status: "not-found" }; },
+    episodes: async () => ({ status: "ok" })
+  });
+  const byTmdb = await new MetadataRegistry({ providers: [new ContainerMetadata(), tmdb] })
+    .identify({ names: ["Anything"], externalIds: { tmdb: { kind: "tv", id: 7 } } });
+  assert.equal(byTmdb.work.sources.tmdb.tmdbId, 7);
+  assert.equal(searched.length, 0);
+  // An AniList id: the record, then the TMDB work of its title and year.
+  const byAnilist = await new MetadataRegistry({ providers: [anilistFrom({ byId: { 21662: drifters2016 } }), tmdb] })
+    .identify({ names: ["Drifters"], kindHint: "tv", externalIds: { anilist: 21662 } });
+  assert.equal(byAnilist.work.sources.anilist.id, 21662);
+  assert.equal(byAnilist.work.sources.tmdb.year, 2016);
+  assert.ok(searched.some((names) => names.includes("Drifters 2016")));
+});

@@ -144,11 +144,13 @@ test("duration distinguishes First Blood from the Rambo III record sharing its a
     works: { "movie|1370": { runtimeSeconds: 6120 }, "movie|1368": { runtimeSeconds: 5580, imdbId: "tt0083944" } } });
   const metadata = service(source);
   const request = { names: ["Rambo.First.Blood.1080p.rus.LostFilm.TV.mkv"], kindHint: null, language: "en-US" };
-  assert.equal((await metadata.identify(request)).work.identification, "latest-year");
+  // Two equal candidates without a duration: the provider's order stands.
+  assert.equal((await metadata.identify(request)).work.tmdbId, 1370);
   const answer = await metadata.identify({ ...request, durationSeconds: 5620 });
   assert.equal(answer.work.tmdbId, 1368);
   assert.equal(answer.work.imdbId, "tt0083944");
-  assert.equal(answer.work.identification, "duration");
+  assert.equal(answer.work.identification, "scored");
+  assert.ok(answer.ranked[0].shares.runtime > answer.ranked[1].shares.runtime);
 });
 
 test("measured durations distinguish the two recent ambiguous movie titles", async () => {
@@ -162,7 +164,6 @@ test("measured durations distinguish the two recent ambiguous movie titles", asy
   ]) {
     const source = fakeSource({ [`movie|${query}`]: results }, { works, totalPages: 4 });
     const metadata = service(source);
-    assert.notEqual((await metadata.identify({ names: [name], kindHint: null, language: "en-US" })).status, "identified");
     const answer = await metadata.identify({ names: [name], kindHint: null, durationSeconds, language: "en-US" });
     assert.equal(answer.status, "identified");
     assert.equal(answer.work.tmdbId, expectedId);
@@ -171,26 +172,45 @@ test("measured durations distinguish the two recent ambiguous movie titles", asy
   }
 });
 
-test("equally matching runtimes select the later year by explicit policy", async () => {
-  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2000 }, { id: 2, name: "Title", year: 2020 }] },
-    { works: { "movie|1": { runtimeSeconds: 5400 }, "movie|2": { runtimeSeconds: 5500 } } });
-  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 5450, language: "en-US" });
-  assert.equal(answer.status, "identified");
-  assert.equal(answer.work.tmdbId, 2);
-  assert.equal(answer.work.identification, "latest-year");
-});
-
-test("duration prefers the closest record within the configured allowance", async () => {
+test("the runtime closer by ratio wins, with no allowance to fall outside", async () => {
   const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2000 }, { id: 2, name: "Title", year: 2026 }] },
     { works: { "movie|1": { runtimeSeconds: 7200 }, "movie|2": { runtimeSeconds: 6000 } } });
-  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 7600, language: "en-US" });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 9600, language: "en-US" });
   assert.equal(answer.work.tmdbId, 1);
-  assert.equal(answer.work.identification, "duration");
-  const strict = new MetadataService({ source, runtimeToleranceSeconds: 60,
-    cache: new MetadataCache({ budgetBytes: 1 << 20, maxEntryBytes: 1 << 16 }), fetches: new SharedFetches({ waiterLimit: 64 }) });
-  const withoutDurationMatch = await strict.identify({ names: ["Title"], kindHint: "movie", durationSeconds: 7600, language: "en-US" });
-  assert.equal(withoutDurationMatch.work.tmdbId, 2);
-  assert.equal(withoutDurationMatch.work.identification, "latest-year");
+  assert.equal(answer.work.identification, "scored");
+});
+
+test("Drifters: a later work, a season too short and the audio language each set the wrong series aside", async () => {
+  const results = [{ id: 281558, name: "Drifters", year: 2019 }, { id: 67075, name: "Drifters", year: 2016 }, { id: 60853, name: "Drifters", year: 2013 }];
+  const works = {
+    "tv|281558": { year: 2019, originalLanguage: "en", seasons: [{ number: 1, name: "S1", episodeCount: 6 }] },
+    "tv|67075": { year: 2016, originalLanguage: "ja", seasons: [{ number: 1, name: "S1", episodeCount: 12 }] },
+    "tv|60853": { year: 2013, originalLanguage: "en", seasons: [{ number: 1, name: "S1", episodeCount: 6 }] }
+  };
+  const names = ["Drifters", "[HorribleSubs] Drifters - 01 [1080p].mkv"];
+  const episodeNumbers = Array.from({ length: 12 }, (_, index) => ({ season: 1, episode: index + 1 }));
+  // The page after a refresh: a magnet, so no creation date. The episode count
+  // alone sets both six-episode series aside.
+  const fromMagnet = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", episodeNumbers, language: "en-US" });
+  assert.equal(fromMagnet.work.tmdbId, 67075);
+  assert.equal(fromMagnet.ranked.find((one) => one.tmdbId === 281558).contradiction, "episode-beyond-season");
+  // The uploaded .torrent: created at the end of 2016, so the 2019 series cannot be it.
+  const created = Date.UTC(2016, 11, 28) / 1000;
+  const uploaded = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", torrentCreatedAt: created, language: "en-US" });
+  assert.equal(uploaded.ranked.find((one) => one.tmdbId === 281558).contradiction, "after-torrent");
+  // Japanese audio against a Japanese original.
+  const heard = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", audioLanguages: ["jpn"], language: "en-US" });
+  assert.equal(heard.work.tmdbId, 67075);
+  // `Drifters - 12` names no season: counted against the whole series.
+  const absolute = Array.from({ length: 12 }, (_, index) => ({ season: null, episode: index + 1 }));
+  const unnumbered = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", episodeNumbers: absolute, language: "en-US" });
+  assert.equal(unnumbered.work.tmdbId, 67075);
+});
+
+test("when every candidate contradicts something the facts do not empty the choice", async () => {
+  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2030 }] }, { works: { "movie|1": { year: 2030 } } });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", torrentCreatedAt: Date.UTC(2016, 0, 1) / 1000, language: "en-US" });
+  assert.equal(answer.work.tmdbId, 1);
 });
 
 test("a shortened series title is identified by the episode names of its files", async () => {
@@ -231,10 +251,10 @@ test("legacy requireYear requests still search pictures without a year", async (
   assert.ok(source.asked.includes("search|movie|27 nights|1"));
 });
 
-test("more pages than are read make a single match undetermined", async () => {
+test("more pages than are read still leave the candidate found chosen", async () => {
   const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2020 }] }, { totalPages: 9 });
   const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", language: "en-US" });
-  assert.equal(answer.status, "undetermined");
+  assert.equal(answer.status, "identified");
   assert.equal(source.asked.filter((line) => line.startsWith("search|movie|Title|")).length, 3);
 });
 

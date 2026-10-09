@@ -391,6 +391,61 @@ export function workFor(state, fileIndex) {
 }
 
 /**
+ * The record the address names for one file, once its work is known: which
+ * database and number, the kind and category, and for an episode its season
+ * and number. `null` while the work is not known or is in no database the
+ * service can look a number up in (torrent-tv/meta#172).
+ *
+ * @param {object | null} state - What `MEDIA_INFO:CHANGED` publishes.
+ * @param {number} fileIndex
+ * @returns {import("./url-state.js").AddressRecord | null}
+ */
+export function addressRecord(state, fileIndex) {
+  const raw = state?.pictures?.[String(fileIndex)] ?? state?.work ?? null;
+  if (!raw) return null;
+  const tmdb = raw.sources?.tmdb ?? (Number.isInteger(raw.tmdbId) ? raw : null);
+  const anilist = raw.sources?.anilist ?? null;
+  const adult = Boolean(raw.sources?.theporndb || raw.sources?.stashdb);
+  const anime = (raw.normalized ?? raw).isAnime === true || tmdb?.anime === true || Boolean(anilist);
+  let record = null;
+  if (tmdb && Number.isInteger(tmdb.tmdbId) && (tmdb.kind === "tv" || tmdb.kind === "movie")) {
+    record = { type: "tmdb", id: String(tmdb.tmdbId), kind: tmdb.kind };
+  } else if (anilist && Number.isInteger(anilist.id)) {
+    record = { type: "anilist", id: String(anilist.id), kind: anilist.format === "MOVIE" ? "movie" : "tv" };
+  }
+  if (!record) return null;
+  const episode = state.episodes?.[String(fileIndex)];
+  return {
+    ...record,
+    category: adult ? "adult" : anime ? "anime" : null,
+    season: Number.isInteger(episode?.season) ? episode.season : null,
+    episode: Number.isInteger(episode?.episodes?.[0]) ? episode.episodes[0] : null
+  };
+}
+
+/**
+ * The episode numbers a release's files state, as identification evidence: a
+ * candidate whose season holds fewer episodes than the release cannot be it.
+ * `season` is `null` for a number that names no season (`Drifters - 01`).
+ *
+ * @param {Array<{ episode?: { season?: number | null, episodes?: number[], special?: boolean } | null }>} items
+ * @returns {Array<{ season: number | null, episode: number }>}
+ */
+export function episodeNumbersOf(items) {
+  const numbers = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const marker = item?.episode;
+    if (!marker || marker.special) continue;
+    for (const episode of Array.isArray(marker.episodes) ? marker.episodes : []) {
+      if (Number.isInteger(episode) && episode >= 1 && episode <= 9999) {
+        numbers.push({ season: Number.isInteger(marker.season) ? marker.season : null, episode });
+      }
+    }
+  }
+  return numbers.slice(0, 1000);
+}
+
+/**
  * A work's title as a line: `Agatha Christie's Poirot (1989)`.
  *
  * @param {{ title?: string, year?: number | null } | null} work

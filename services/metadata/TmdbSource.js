@@ -42,6 +42,9 @@ const DEFAULT_PAUSE_MS = 10_000;
  * @property {string} title
  * @property {string} originalTitle
  * @property {number | null} year
+ * @property {string | null} originalLanguage - ISO 639-1, as TMDB states it.
+ * @property {number | null} runtimeSeconds - A film's runtime.
+ * @property {number[]} episodeRuntimeSeconds - A series' stated episode runtimes.
  * @property {string} overview
  * @property {string | null} poster - TMDB file name, e.g. `abc.jpg`.
  * @property {string | null} backdrop
@@ -165,6 +168,7 @@ export class TmdbSource {
       originalTitle: String((kind === "tv" ? body?.original_name : body?.original_title) ?? ""),
       year: yearOf(kind === "tv" ? body?.first_air_date : body?.release_date),
       imdbId: /^tt\d+$/u.test(body?.imdb_id ?? "") ? body.imdb_id : null,
+      originalLanguage: /^[a-z]{2}$/u.test(body?.original_language ?? "") ? body.original_language : null,
       runtimeSeconds: kind === "movie" && Number.isFinite(body?.runtime) && body.runtime > 0 ? body.runtime * 60 : null,
       episodeRuntimeSeconds: kind === "tv" ? (body?.episode_run_time ?? []).filter(minutes => Number.isFinite(minutes) && minutes > 0).map(minutes => minutes * 60) : [],
       overview: String(body?.overview ?? ""),

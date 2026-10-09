@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseReleaseName } from "../services/metadata/release-name.js";
 import { decideIdentity } from "../services/metadata/identification.js";
+import { rankCandidates } from "../services/metadata/candidate-score.js";
 import { normalizeTitle } from "../services/metadata/title.js";
 
 test("two spellings of one title compare equal", () => {
@@ -78,17 +79,26 @@ test("one exact title in a complete search is identified", () => {
   assert.equal(identity.candidates[0].tmdbId, 790);
 });
 
-test("the first search result is not taken for being first", () => {
-  const identity = decideIdentity({ searches: [search("movie", "Superman", [[9, "Superman Returns", 2006]])], statedYears: [] });
-  assert.equal(identity.status, "not-found");
+test("a title that begins with the searched one by a whole word is a candidate, another word is not", () => {
+  const identity = decideIdentity({ searches: [search("movie", "Superman", [[9, "Superman Returns", 2006], [10, "Supermanic", 2010]])] });
+  assert.equal(identity.status, "identified");
+  assert.equal(identity.candidates[0].tmdbId, 9);
+  assert.equal(identity.candidates[0].titleMatch, "prefix");
+  assert.equal(decideIdentity({ searches: [search("movie", "Wall", [[1, "Wallace", 1990]])] }).status, "not-found");
 });
 
-test("a remake with no year stated is ambiguous, and the year separates it", () => {
+test("an exact title outscores a title that only begins with the searched one", () => {
+  const { candidates } = decideIdentity({ searches: [search("movie", "Alien", [[2, "Alien Resurrection", 1997], [1, "Alien", 1979]])] });
+  assert.equal(rankCandidates(candidates, new Map(), {})[0].tmdbId, 1);
+});
+
+test("a remake is two candidates, and the stated year scores the right one first", () => {
   const results = [[1, "A Nightmare on Elm Street", 1984], [2, "A Nightmare on Elm Street", 2010]];
-  assert.equal(decideIdentity({ searches: [search("movie", "A Nightmare on Elm Street", results)], statedYears: [] }).status, "ambiguous");
-  const dated = decideIdentity({ searches: [search("movie", "A Nightmare on Elm Street", results)], statedYears: [2010] });
-  assert.equal(dated.status, "identified");
-  assert.equal(dated.candidates[0].tmdbId, 2);
+  const identity = decideIdentity({ searches: [search("movie", "A Nightmare on Elm Street", results)] });
+  assert.equal(identity.status, "ambiguous");
+  assert.equal(rankCandidates(identity.candidates, new Map(), { statedYears: [2010] })[0].tmdbId, 2);
+  // Nothing tells them apart: the provider's order stands.
+  assert.equal(rankCandidates(identity.candidates, new Map(), {})[0].tmdbId, 1);
 });
 
 test("a missing catalogue date does not exclude an exact title", () => {
@@ -110,26 +120,13 @@ test("a film and a series of one title, with the kind unknown, are ambiguous", (
   assert.equal(identity.status, "ambiguous");
 });
 
-test("latest-year policy is stable and never resolves an incomplete search", () => {
-  const results = [[9, "Title", 2026], [2, "Title", 2026], [1, "Title", 2000]];
-  const decide = status => decideIdentity({ searches: [search("movie", "Title", results, status)], statedYears: [], preferLatest: true });
-  assert.equal(decide("complete").candidates[0].tmdbId, 2);
-  assert.equal(decide("complete").selectionReason, "latest-year");
-  assert.notEqual(decide("failed").status, "identified");
-  assert.notEqual(decide("capped").status, "identified");
-});
-
-test("one candidate while another search failed is not identified", () => {
-  const identity = decideIdentity({
-    searches: [search("movie", "Title", [[1, "Title", 2020]]), search("tv", "Title", [], "failed")],
-    statedYears: []
-  });
-  assert.equal(identity.status, "unavailable");
-});
-
-test("uniqueness among the pages read is not uniqueness of the search", () => {
-  const identity = decideIdentity({ searches: [search("movie", "Title", [[1, "Title", 2020]], "capped")], statedYears: [] });
-  assert.equal(identity.status, "undetermined");
+test("a candidate found while another search failed or was capped is still chosen", () => {
+  for (const status of ["failed", "capped"]) {
+    const identity = decideIdentity({ searches: [search("movie", "Title", [[1, "Title", 2020]]), search("tv", "Title", [], status)] });
+    assert.equal(identity.status, "identified");
+  }
+  assert.equal(decideIdentity({ searches: [search("tv", "Title", [], "failed")] }).status, "unavailable");
+  assert.equal(decideIdentity({ searches: [search("tv", "Title", [], "capped")] }).status, "undetermined");
 });
 
 test("two names pointing at two works are ambiguous even if one search failed", () => {

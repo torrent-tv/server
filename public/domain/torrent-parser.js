@@ -294,6 +294,10 @@ export async function parseTorrentBytes(torrentBytes) {
     : [];
   const webSeeds = toStringList(rootNode["url-list"]);
   const comment = normalizeString(rootNode.comment);
+  // When the torrent was made, in seconds since 1970: a work that began after
+  // it cannot be what it holds. Outside the `info` dictionary, so a magnet and
+  // the swarm never carry it — only the `.torrent` file does.
+  const created = toNumber(rootNode["creation date"]);
 
   return {
     name,
@@ -306,6 +310,7 @@ export async function parseTorrentBytes(torrentBytes) {
     announceList,
     webSeeds,
     comment,
+    createdAt: Number.isInteger(created) && created > 0 ? created : null,
     isMultiFile
   };
 }

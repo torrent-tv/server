@@ -18,7 +18,8 @@
  * carries counts and outcomes only.
  */
 
-import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, preferYearMatches, latestCandidate } from "./identification.js";
+import { decideByAlternativeTitles, decideByEpisodeTitles, decideIdentity, preferYearMatches } from "./identification.js";
+import { rankCandidates } from "./candidate-score.js";
 import { matchSeason } from "./episode-match.js";
 import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
@@ -48,8 +49,15 @@ const MAX_ALTERNATIVE_CHECKS = 5;
 const MAX_RUNTIME_SEARCH_PAGES = 20;
 const MAX_RUNTIME_CHECKS = 60;
 const RUNTIME_REQUEST_BUDGET_MS = 15_000;
-/** User-selected allowance for cuts, credits and inserted advertising. */
-export const DEFAULT_RUNTIME_TOLERANCE_SECONDS = 15 * 60;
+
+/**
+ * Candidates whose record is read to score their seasons, runtime and language
+ * when no duration is known, the best by title and year first. A stated limit.
+ */
+const MAX_RECORD_CHECKS = 8;
+
+/** Ranked candidates returned beside the work. */
+const RANKED_REPORTED = 5;
 
 /**
  * The answer of the alternative-title stage joined with the episode stage's.
@@ -101,7 +109,6 @@ export class MetadataService {
 
   /** @type {() => number} */
   #now;
-  #runtimeToleranceSeconds;
 
   /**
    * @param {object} params
@@ -110,13 +117,11 @@ export class MetadataService {
    * @param {import("./SharedFetches.js").SharedFetches} params.fetches
    * @param {() => number} [params.now]
    */
-  constructor({ source, cache, fetches, now = Date.now, runtimeToleranceSeconds = DEFAULT_RUNTIME_TOLERANCE_SECONDS }) {
-    if (!Number.isFinite(runtimeToleranceSeconds) || runtimeToleranceSeconds < 0) throw new TypeError("runtimeToleranceSeconds must be a non-negative finite number");
+  constructor({ source, cache, fetches, now = Date.now }) {
     this.#source = source;
     this.#cache = cache;
     this.#fetches = fetches;
     this.#now = now;
-    this.#runtimeToleranceSeconds = runtimeToleranceSeconds;
   }
 
   /**
@@ -157,7 +162,7 @@ export class MetadataService {
       if (candidates.size > MAX_ALTERNATIVE_CHECKS) return { status: "undetermined" };
       const matches = [];
       for (const candidate of candidates.values()) {
-        const russian = await this.#cached(`work|v2|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
+        const russian = await this.#cached(`work|v3|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
           deadlineAt => this.#source.work(candidate.kind, candidate.id, "ru-RU", { deadlineAt }), wait);
         const aliases = await this.#cached(`alternative|${candidate.kind}|${candidate.id}`, () => FOUND_TTL_MS,
           deadlineAt => this.#source.alternativeTitles(candidate.kind, candidate.id, { deadlineAt }), wait);
@@ -171,7 +176,7 @@ export class MetadataService {
       const found = preferYearMatches(matches, years);
       if (found.length !== 1) return { status: "ambiguous" };
       const [chosen] = found;
-      const work = await this.#cached(`work|v2|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
+      const work = await this.#cached(`work|v3|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
         deadlineAt => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
       return { status: "identified", work };
       }
@@ -204,7 +209,7 @@ export class MetadataService {
         if (all.length === 1) chosen = all[0];
       }
       if (!chosen) return { status: "not-found" };
-      const work = await this.#cached(`work|v2|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
+      const work = await this.#cached(`work|v3|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
         (deadlineAt) => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
       return { status: "identified", work: { ...work, identification: "external-id" } };
     } catch (error) {
@@ -216,7 +221,7 @@ export class MetadataService {
     }
   }
 
-  async identify({ names, kindHint, episodeEvidence = null, durationSeconds = null, language, signal }) {
+  async identify({ names, kindHint, episodeEvidence = null, durationSeconds = null, torrentCreatedAt = null, episodeNumbers = [], audioLanguages = [], language, signal }) {
     if (episodeEvidence) {
       episodeEvidence = { ...episodeEvidence, titles: episodeEvidence.titles.filter(title => parseReleaseName(title).titles.length > 0) };
       if (!episodeEvidence.titles.length) episodeEvidence = null;
@@ -276,24 +281,22 @@ export class MetadataService {
       )
     );
 
-    let identity = decideIdentity({ searches, statedYears: hasDuration ? [] : statedYears, candidateLimit: MAX_RUNTIME_CHECKS + 1 });
-    let runtimeMatches = null;
-    // No complete main or original title match. Check further evidence without
-    // restricting the candidates by their years:
-    // the provider's alternative titles (a transliterated or romanized name),
-    // and, for a series, its episodes.
+    let identity = decideIdentity({ searches, candidateLimit: MAX_RUNTIME_CHECKS + 1 });
+    // No main or original title matched. Check further evidence without
+    // restricting the candidates by their years: the provider's alternative
+    // titles (a transliterated or romanized name), and, for a series, its
+    // episodes.
     if (identity.status === "not-found" || identity.status === "undetermined") {
       try {
         const byAlternative = await this.#identifyByAlternativeTitles({
           searches,
-          statedYears: hasDuration ? [] : statedYears,
           queries: queries.map((query) => query.normalized),
           deadlineAt,
           signal
         });
         identity = combineStages(identity, byAlternative);
         if (byAlternative.status !== "identified" && kinds.includes("tv") && episodeEvidence) {
-          const byEpisodes = await this.#identifyByEpisodes({ searches, statedYears: hasDuration ? [] : statedYears, episodeEvidence, language, deadlineAt, signal });
+          const byEpisodes = await this.#identifyByEpisodes({ searches, episodeEvidence, language, deadlineAt, signal });
           identity = combineStages(identity, byEpisodes);
         }
       } catch (error) {
@@ -303,27 +306,37 @@ export class MetadataService {
         throw error;
       }
     }
-    // Refine only candidates already qualified by main, alternative or episode titles.
-    if (identity.status === "ambiguous" && !identity.incomplete && searches.every(search => search.status === "complete")) {
-      if (identity.candidates.length > MAX_RUNTIME_CHECKS) return { status: "undetermined" };
-      try {
-        if (hasDuration) runtimeMatches = await this.#closestByDuration(identity.candidates, { durationSeconds, language, deadlineAt, signal });
-        const matching = identity.candidates.filter(candidate => runtimeMatches?.has(`${candidate.kind}:${candidate.tmdbId}`));
-        const found = preferYearMatches(matching.length ? matching : identity.candidates, statedYears);
-        identity = { status: "identified", candidates: [latestCandidate(found)], selectionReason: found.length > 1 ? "latest-year" : matching.length ? "duration" : "title" };
-      } catch (error) {
-        if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
-        throw error;
-      }
+    const pool = identity.candidates ?? [];
+    if (pool.length === 0) {
+      return { status: identity.status };
     }
-    if (identity.status !== "identified") {
-      return { status: identity.status, candidates: identity.status === "ambiguous" ? identity.candidates : undefined };
+    const highestEpisode = new Map();
+    for (const { season, episode } of episodeNumbers) {
+      highestEpisode.set(season, Math.max(highestEpisode.get(season) ?? 0, episode));
     }
-    const [chosen] = identity.candidates;
+    const evidence = {
+      statedYears,
+      createdYear: Number.isFinite(torrentCreatedAt) && torrentCreatedAt > 0 ? new Date(torrentCreatedAt * 1000).getUTCFullYear() : null,
+      series: episodeNumbers.length > 0,
+      highestEpisode,
+      durationSeconds: hasDuration ? durationSeconds : null,
+      audioLanguages
+    };
+    // The records are read for the best by title and year first; with a
+    // measured duration every candidate's runtime is worth reading.
+    const read = rankCandidates(pool, new Map(), evidence).slice(0, hasDuration ? MAX_RUNTIME_CHECKS : MAX_RECORD_CHECKS);
+    const records = await this.#records(read, { language, deadlineAt, signal });
+    const ranked = rankCandidates(read, records, evidence);
+    const [chosen] = ranked;
     try {
-      const work = await this.#cached(`work|v2|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS, (fetchDeadline) =>
-        this.#source.work(chosen.kind, chosen.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
-      return { status: "identified", work: { ...work, identification: identity.selectionReason ?? (runtimeMatches?.size ? "duration" : "title") } };
+      const work = records.get(`${chosen.kind}:${chosen.tmdbId}`) ?? await this.#cached(`work|v3|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS,
+        (fetchDeadline) => this.#source.work(chosen.kind, chosen.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+      return {
+        status: "identified",
+        work: { ...work, identification: pool.length > 1 ? "scored" : chosen.titleMatch },
+        ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction }) =>
+          ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction }))
+      };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) {
         return { status: "unavailable" };
@@ -332,20 +345,30 @@ export class MetadataService {
     }
   }
 
-  async #closestByDuration(candidates, { durationSeconds, language, deadlineAt, signal }) {
-    const checked = [];
+  /**
+   * The records of the candidates to be scored. A record the provider does not
+   * answer is left out: the candidate is still scored, on what its search
+   * result states.
+   *
+   * @param {Array<{ kind: "tv" | "movie", tmdbId: number }>} candidates
+   * @param {{ language: string, deadlineAt: number, signal?: AbortSignal }} wait
+   * @returns {Promise<Map<string, import("./TmdbSource.js").Work>>}
+   */
+  async #records(candidates, { language, deadlineAt, signal }) {
+    const records = new Map();
     // Match source concurrency rather than filling its shared request queue.
     for (let offset = 0; offset < candidates.length; offset += 4) {
-      checked.push(...await Promise.all(candidates.slice(offset, offset + 4).map(async candidate => {
-        const work = await this.#cached(`work|v2|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
-          fetchDeadline => this.#source.work(candidate.kind, candidate.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
-        const runtimes = work.kind === "movie" ? [work.runtimeSeconds] : work.episodeRuntimeSeconds ?? [];
-        const differences = runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0).map(runtime => Math.abs(runtime - durationSeconds));
-        return { candidate, difference: Math.min(...differences) };
-      })));
+      await Promise.all(candidates.slice(offset, offset + 4).map(async (candidate) => {
+        try {
+          const work = await this.#cached(`work|v3|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
+            (fetchDeadline) => this.#source.work(candidate.kind, candidate.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+          records.set(`${candidate.kind}:${candidate.tmdbId}`, work);
+        } catch (error) {
+          if (!(error instanceof MetadataUnavailableError)) throw error;
+        }
+      }));
     }
-    const closest = Math.min(...checked.filter(item => item.difference <= this.#runtimeToleranceSeconds).map(item => item.difference));
-    return new Set(checked.filter(item => item.difference === closest && Number.isFinite(closest)).map(({ candidate }) => `${candidate.kind}:${candidate.tmdbId}`));
+    return records;
   }
 
   /**
@@ -356,7 +379,7 @@ export class MetadataService {
    * @param {object} params
    * @returns {Promise<import("./identification.js").Identity>}
    */
-  async #identifyByAlternativeTitles({ searches, statedYears, queries, deadlineAt, signal }) {
+  async #identifyByAlternativeTitles({ searches, queries, deadlineAt, signal }) {
     const admitted = [];
     const seen = new Set();
     for (const search of searches) {
@@ -371,7 +394,7 @@ export class MetadataService {
     const toCheck = admitted.slice(0, MAX_ALTERNATIVE_CHECKS);
     const checked = await Promise.all(
       toCheck.map(async ({ kind, result }) => ({
-        candidate: { kind, tmdbId: result.id, title: result.name, year: result.year },
+        candidate: { kind, tmdbId: result.id, title: result.name, year: result.year, order: admitted.findIndex((one) => one.result === result) },
         titles: await this.#cached(
           `alternative|${kind}|${result.id}`,
           () => FOUND_TTL_MS,
@@ -380,7 +403,7 @@ export class MetadataService {
         )
       }))
     );
-    return { ...decideByAlternativeTitles({ checked, queries, statedYears, uncheckedRemain: admitted.length > toCheck.length }),
+    return { ...decideByAlternativeTitles({ checked, queries, uncheckedRemain: admitted.length > toCheck.length }),
       incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete") };
   }
 
@@ -391,7 +414,7 @@ export class MetadataService {
    * @param {object} params
    * @returns {Promise<import("./identification.js").Identity>}
    */
-  async #identifyByEpisodes({ searches, statedYears, episodeEvidence, language, deadlineAt, signal }) {
+  async #identifyByEpisodes({ searches, episodeEvidence, language, deadlineAt, signal }) {
     const admitted = [];
     const seen = new Set();
     for (const search of searches) {
@@ -421,14 +444,13 @@ export class MetadataService {
           throw error;
         });
         return {
-          candidate: { kind: "tv", tmdbId: result.id, title: result.name, year: result.year },
+          candidate: { kind: "tv", tmdbId: result.id, title: result.name, year: result.year, order: admitted.indexOf(result) },
           episodeNames: season.episodes.map((episode) => episode.name)
         };
       })
     );
     return { ...decideByEpisodeTitles({
       checked,
-      statedYears,
       titles: episodeEvidence.titles,
       uncheckedRemain: admitted.length > toCheck.length
     }), incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete") };
