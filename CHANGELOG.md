@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.0
 
 - **New**: The server chooses the proxy: `POST /api/proxy-clients/choose { infoHash, tried, onlyIds, current }` answers one proxy from the table each proxy keeps current over its tunnel (load, room for one more encode, the films it holds), preferring one that holds the film and has room; a page that cannot connect asks again naming the proxy and the error. Nothing is asked of a proxy while a viewer waits, and which films a proxy holds is no longer sent to every page: `/api/proxy-clients/health` answers from the table without them (#ttv-36).
 - **New**: The connection taken as the page opens uses the film the address names, and a page moves to another proxy only when that one holds the film and has room while the one in hand does not (#ttv-36).
