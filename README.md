@@ -112,7 +112,7 @@ The provider-separated response format, anime routing and artwork selection are 
 
 Each proxy client opens one persistent WebSocket to this endpoint after starting. The server uses it for two purposes:
 
-- **Proxy state** — a proxy sends `proxy-state` (`metrics`, `holds`) when it changes and on every new connection; the server answers its keepalive `ping` with a WebSocket ping, whose pong gives the tunnel round trip. Nothing is asked of a proxy when a viewer is placed.
+- **Proxy state** — a proxy sends `proxy-state` (`metrics`, `holds`) when it changes and on every new connection; the server answers its keepalive `ping` with `rtt-probe`, and the proxy's `rtt-echo` gives the tunnel round trip on the server's own clock. Nothing is asked of a proxy when a viewer is placed.
 - **WebRTC signal forwarding** — SDP offers from the browser are forwarded to the proxy; answers and ICE candidates from the proxy are forwarded back to the browser.
 
 ### WebRTC Signalling Flow
@@ -161,7 +161,8 @@ sequenceDiagram
 
   P->>S: { type: "proxy-state", metrics, holds } when it changes
   P->>S: { type: "ping" } keepalive
-  S->>P: WebSocket ping; pong gives rttMs
+  S->>P: { type: "rtt-probe", sentAt }
+  P->>S: { type: "rtt-echo", sentAt } → rttMs
   B->>S: POST /api/proxy-clients/choose { infoHash, tried }
   Note over S: choose from the table: reachable, room, holds this film
   S-->>B: { chosen: { id, name, baseUrl, sameNetwork, holdsThisFilm } }

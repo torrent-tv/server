@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The tunnel round trip is measured with a probe message the proxy echoes (`rtt-probe` → `rtt-echo`); the WebSocket ping frame used in 0.50.0 never came back over Cloudflare and nginx, so every proxy reported no round trip (#ttv-36).
+
 ## 0.50.0
 
 - **New**: The server chooses the proxy: `POST /api/proxy-clients/choose { infoHash, tried, onlyIds, current }` answers one proxy from the table each proxy keeps current over its tunnel (load, room for one more encode, the films it holds), preferring one that holds the film and has room; a page that cannot connect asks again naming the proxy and the error. Nothing is asked of a proxy while a viewer waits, and which films a proxy holds is no longer sent to every page: `/api/proxy-clients/health` answers from the table without them (#ttv-36).

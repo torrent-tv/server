@@ -95,14 +95,6 @@ export function createProxyTunnelServer() {
    * @type {Map<string, ProxyState>}
    */
   const states = new Map();
-  /**
-   * When the WebSocket ping answering a proxy's keepalive was sent, per
-   * connection: its pong gives the tunnel round trip without a timer of this
-   * server's own.
-   *
-   * @type {WeakMap<import("ws").WebSocket, number>}
-   */
-  const pingSentAt = new WeakMap();
   /** The last tunnel round trip measured, per proxy. @type {Map<string, number>} */
   const roundTrips = new Map();
   /**
@@ -174,17 +166,22 @@ export function createProxyTunnelServer() {
       return;
     }
 
-    // Keepalive ping from the proxy. Answered with a WebSocket ping of our own,
-    // whose pong measures the tunnel round trip.
+    // Keepalive ping from the proxy, answered with a probe the proxy echoes at
+    // once: the echo measures the tunnel round trip on this server's own clock,
+    // with no timer of its own. A message and not a WebSocket ping frame: on
+    // the field path (Cloudflare, nginx) a ping frame's pong never came back.
     if (message.type === "ping") {
-      if (socket && socket.readyState === 1 /* OPEN */ && typeof socket.ping === "function") {
-        pingSentAt.set(socket, Date.now());
-        try {
-          socket.ping();
-        } catch {
-          // silent-ok: a ping that cannot be sent measures nothing; the last
-          // round trip stays until the next keepalive.
-        }
+      if (socket && socket.readyState === 1 /* OPEN */) {
+        socket.send(JSON.stringify({ type: "rtt-probe", sentAt: Date.now() }));
+      }
+      return;
+    }
+
+    // The proxy's echo of that probe.
+    if (message.type === "rtt-echo") {
+      const sentAt = Number(message.sentAt);
+      if (Number.isFinite(sentAt) && sentAt <= Date.now() && connections.get(proxyId) === socket) {
+        roundTrips.set(proxyId, Date.now() - sentAt);
       }
       return;
     }
@@ -293,12 +290,6 @@ export function createProxyTunnelServer() {
         followingMoves.add(socket);
       }
       socket.on("message", (data) => onMessage(data, proxyId, socket));
-      socket.on("pong", () => {
-        const sentAt = pingSentAt.get(socket);
-        if (sentAt !== undefined && connections.get(proxyId) === socket) {
-          roundTrips.set(proxyId, Date.now() - sentAt);
-        }
-      });
       socket.on("close", () => {
         if (connections.get(proxyId) === socket) {
           connections.delete(proxyId);

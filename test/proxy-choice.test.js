@@ -79,6 +79,14 @@ test("what a proxy says over its tunnel decides the choice, and what it holds st
   assert.equal(answer.chosen.metrics.encodeSpeedX, 3);
   assert.equal((await choose({ infoHash: FILM, tried: [{ id: "proxy-1", error: "ICE failed" }] })).chosen, null);
 
+  // The proxy's keepalive is answered with a probe; the proxy's echo is the round trip.
+  socket.on("message", (data) => {
+    const message = JSON.parse(String(data));
+    if (message.type === "rtt-probe") socket.send(JSON.stringify({ type: "rtt-echo", sentAt: message.sentAt }));
+  });
+  socket.send(JSON.stringify({ type: "ping" }));
+  await waitFor(async () => typeof (await choose({})).chosen?.rttMs === "number", "the tunnel round trip measured");
+
   const health = await (await fetch(`http://127.0.0.1:${port}/api/proxy-clients/health`)).text();
   assert.ok(health.includes("proxy-1"), health);
   assert.ok(!health.includes(FILM), "the films a proxy holds are not listed");
