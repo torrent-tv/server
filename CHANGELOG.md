@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The address carries the episode number of the open file: a matched episode is the provider's record (`{ number, name }`), and 0.49.0 read it as a bare number, so `episode` was never written (#ttv-172).
+
 ## 0.50.1
 
 - **Fix**: The tunnel round trip is measured with a probe message the proxy echoes (`rtt-probe` → `rtt-echo`); the WebSocket ping frame used in 0.50.0 never came back over Cloudflare and nginx, so every proxy reported no round trip (#ttv-36).

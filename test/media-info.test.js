@@ -300,7 +300,7 @@ test("a release that is already identified is not asked again when its hash arri
 test("the address names the work of the open file: its database, number, kind, category and episode", async () => {
   const { addressRecord } = await import("../public/domain/media-info.js");
   const work = { sources: { tmdb: { kind: "tv", tmdbId: 67075, anime: true }, anilist: { id: 21662, format: "TV" } }, normalized: { isAnime: true } };
-  const state = { work, episodes: { 27: { source: "tmdb", season: 1, episodes: [3] } } };
+  const state = { work, episodes: { 27: { source: "tmdb", season: 1, episodes: [{ number: 3, name: "Army of Ours: Sortie at Dawn", still: null }] } } };
   assert.deepEqual(addressRecord(state, 27), { type: "tmdb", id: "67075", kind: "tv", category: "anime", season: 1, episode: 3 });
   // A picture of a pack names its own work, not the release's.
   const pack = { work: null, pictures: { 4: { sources: { tmdb: { kind: "movie", tmdbId: 1368 } } } } };
