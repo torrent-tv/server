@@ -1,6 +1,6 @@
 import { nowIso } from "../utils/time.js";
 
-export const PROXY_CLIENT_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
+const PROXY_CLIENT_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The externally-reachable endpoint a proxy opened via UPnP/NAT-PMP and

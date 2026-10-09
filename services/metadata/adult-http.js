@@ -8,7 +8,7 @@ import { MetadataUnavailableError } from "./RequestGate.js";
 import { providerResponseError } from "./provider-diagnostics.js";
 
 /** Largest answer read from an adult database, in bytes. A stated limit. */
-export const MAX_ANSWER_BYTES = 256 * 1024;
+const MAX_ANSWER_BYTES = 256 * 1024;
 
 /** Deadline of one request, in milliseconds. */
 const REQUEST_DEADLINE_MS = 4000;

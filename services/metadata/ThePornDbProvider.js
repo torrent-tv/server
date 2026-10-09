@@ -33,7 +33,7 @@ function coverOf(scene) {
  * @param {object} scene
  * @returns {Record<string, unknown>}
  */
-export function theporndbFields(scene) {
+function theporndbFields(scene) {
   return {
     kind: "movie",
     title: scene.title || undefined,

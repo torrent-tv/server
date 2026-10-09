@@ -26,7 +26,7 @@ const MAX_NAMES = 24;
 const MAX_NAME_LENGTH = 300;
 
 /** Image sizes the service serves, by use. */
-export const IMAGE_SIZE = { poster: "w342", still: "w780", artwork: "w185" };
+const IMAGE_SIZE = { poster: "w342", still: "w780", artwork: "w185" };
 
 /**
  * The address of a TMDB image served through this site.
@@ -322,7 +322,7 @@ export function containerEvidence(container) {
  * @param {number} fileIndex
  * @returns {object | null}
  */
-export function containerFor(state, fileIndex) {
+function containerFor(state, fileIndex) {
   return state?.containers?.[String(fileIndex)] ?? null;
 }
 
@@ -508,7 +508,7 @@ export function playlistNaming(state) {
 }
 
 /** A release number remains useful even when provider matching fails. */
-export function markerLabel(marker, withSeason = false) {
+function markerLabel(marker, withSeason = false) {
   if (!marker?.episodes?.length) return null;
   const number = marker.episodes.join("–");
   const season = withSeason && Number.isInteger(marker.season) ? "Season " + marker.season + " | " : "";

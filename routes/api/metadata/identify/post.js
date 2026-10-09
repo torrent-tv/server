@@ -32,16 +32,16 @@ import { readContainerFacts } from "../../../../services/metadata/ContainerMetad
 import { withProviderContext, providerOutcome } from "../../../../services/metadata/provider-diagnostics.js";
 
 /** Most names one request may carry. */
-export const MAX_NAMES = 24;
+const MAX_NAMES = 24;
 
 /** Longest name, in characters. */
-export const MAX_NAME_LENGTH = 300;
+const MAX_NAME_LENGTH = 300;
 
 /** Most episode titles sent as evidence. */
-export const MAX_EVIDENCE_TITLES = 50;
+const MAX_EVIDENCE_TITLES = 50;
 
 /** Longest episode title sent as evidence; the proxy sends at most this many characters. */
-export const MAX_EVIDENCE_TITLE_LENGTH = 160;
+const MAX_EVIDENCE_TITLE_LENGTH = 160;
 
 /**
  * Largest body, in bytes: 24 names of 300 characters and 50 titles of 160, and
