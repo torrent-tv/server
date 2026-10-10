@@ -1,14 +1,16 @@
-# syntax=docker/dockerfile:1.7
-
+# Alpine comes from Amazon's copy of Docker's official images (the same
+# digest), not from Docker Hub: Docker Hub refuses anonymous pulls past a
+# per-address limit, the CI runners share their addresses, and on
+# 2026-10-09 the release stopped twice on `429 Too Many Requests`.
 # Both stages take node from Alpine's own package; npm is installed only in
 # the stage that installs the production dependencies.
-FROM alpine:3 AS dependencies
+FROM public.ecr.aws/docker/library/alpine:3 AS dependencies
 RUN apk add --no-cache nodejs npm
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM alpine:3
+FROM public.ecr.aws/docker/library/alpine:3
 RUN apk add --no-cache nodejs \
  && addgroup -S app && adduser -S -G app app
 
