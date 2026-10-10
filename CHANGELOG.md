@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.3
 
 - **Chore**: Update dependencies: @fastify/static 10.1.5 → 10.1.6, @fastify/websocket 11.3.3 → 11.3.4; 6 package(s) changed in the lock file, 1 removed.
 
