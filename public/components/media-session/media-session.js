@@ -130,9 +130,14 @@ export class MediaSessionBridge {
     });
   }
 
+  /**
+   * The request names its origin: from the player's side it is otherwise
+   * indistinguishable from a click on the page's own controls.
+   */
   #requestPlayback(type) {
     this.#video?.dispatchEvent(new CustomEvent(type, {
-      bubbles: true, composed: true, cancelable: true
+      bubbles: true, composed: true, cancelable: true,
+      detail: { source: "media-session" }
     }));
   }
 

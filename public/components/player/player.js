@@ -709,10 +709,21 @@ export class Player extends StateDerivedView {
     button.hidden = true;
   }
 
-  /** Record explicit controls before media-chrome changes the element. */
+  /**
+   * Record explicit controls before media-chrome changes the element.
+   *
+   * Every request is logged with where it came from — the system's media
+   * controls, or the media-chrome element that sent it (`media-play-button`,
+   * `media-gesture-receiver` for a tap on the picture, `media-controller` for
+   * a key) — because a pause nobody remembers making is otherwise reported
+   * only as PAUSED_BY_VIEWER (torrent-tv/meta#178, 2026-10-11).
+   */
   #onPlaybackRequest = (event) => {
-    if (!acceptsPlaybackIntent(this.#state)) return;
     const paused = event.type === "mediapauserequest";
+    const accepted = acceptsPlaybackIntent(this.#state);
+    const origin = event.detail?.source ?? event.composedPath()[0]?.localName ?? "unknown";
+    this.#logEvt(`viewer ${paused ? "pause" : "play"} request from ${origin}${accepted ? "" : ` ignored in ${this.#state}`}`);
+    if (!accepted) return;
     noteViewerStopped(this.#video, paused);
     signalApp(paused ? APP_EVENT.PAUSED_BY_VIEWER : APP_EVENT.RESUMED, {
       viewerWantsPlayback: !paused
