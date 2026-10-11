@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Hovering the subtitles button shows its "Subtitles" tooltip instead of an empty one — only its arrow was drawn (#ttv-187).
+
 ## 0.50.4
 
 - **Chore**: Update dependencies: 17 package(s) changed in the lock file.
