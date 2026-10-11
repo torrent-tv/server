@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.6
 
 - **Chore**: A play or pause request is logged with its origin — the system's media controls (`media-session`), the play button, a tap on the picture or a key — since a pause nobody remembers making was reported only as the viewer's (#ttv-178).
 
