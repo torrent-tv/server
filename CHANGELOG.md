@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.4
 
 - **Chore**: Update dependencies: 17 package(s) changed in the lock file.
 
