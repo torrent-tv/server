@@ -28,6 +28,7 @@ test("system play and pause use explicit requests even when the element is alrea
       assert.equal(event.bubbles, true);
       assert.equal(event.composed, true);
       assert.equal(event.cancelable, true);
+      assert.equal(event.detail?.source, "media-session");
     });
     actions.get("pause")();
     actions.get("play")();

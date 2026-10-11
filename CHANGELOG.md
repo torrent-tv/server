@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: A play or pause request is logged with its origin — the system's media controls (`media-session`), the play button, a tap on the picture or a key — since a pause nobody remembers making was reported only as the viewer's (#ttv-178).
+
 ## 0.50.5
 
 - **Fix**: Hovering the subtitles button shows its "Subtitles" tooltip instead of an empty one — only its arrow was drawn (#ttv-187).
