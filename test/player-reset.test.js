@@ -16,8 +16,15 @@ test("player resets source controls on close and replacement through its owning 
     removeAttribute(name) { this.attributes.delete(name); }
     getAttribute(name) { return this.attributes.get(name); }
     toggleAttribute(name, enabled) { if (enabled) this.setAttribute(name, ""); else this.removeAttribute(name); }
+    hasAttribute(name) { return this.attributes.has(name); }
     querySelectorAll() { return [...this.children]; }
-    appendChild(child) { child.parent = this; this.children.push(child); }
+    appendChild(child) { this.insertBefore(child, null); }
+    insertBefore(child, before) {
+      if (child.parent) child.parent.children = child.parent.children.filter(other => other !== child);
+      child.parent = this;
+      const at = before ? this.children.indexOf(before) : -1;
+      if (at < 0) this.children.push(child); else this.children.splice(at, 0, child);
+    }
     remove() { this.parent.children = this.parent.children.filter(child => child !== this); }
     matches() { return this.popover === true; }
     hidePopover() { this.popover = false; }
