@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.5
 
 - **Fix**: Hovering the subtitles button shows its "Subtitles" tooltip instead of an empty one — only its arrow was drawn (#ttv-187).
 
