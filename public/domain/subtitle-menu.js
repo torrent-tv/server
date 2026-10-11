@@ -16,6 +16,25 @@
  */
 
 /**
+ * The subtitle menu as the view shows it: "Off" first, checked when no track
+ * is, then the items in the order they were given.
+ *
+ * @param {{ key: string, text?: string, checked?: boolean, disabled?: boolean }[]} items
+ * @returns {import("./menu-update.js").MenuItemState[]}
+ */
+export function subtitleMenuState(items) {
+  return [
+    { key: "", text: "Off", checked: !items.some((item) => item.checked === true), disabled: false },
+    ...items.map((item) => ({
+      key: String(item.key),
+      text: String(item.text ?? ""),
+      checked: item.checked === true,
+      disabled: item.disabled === true
+    }))
+  ];
+}
+
+/**
  * @typedef {object} SubtitleMenuEntry
  * @property {string} key - Stable for the life of the track.
  * @property {string} label - What the track is called now.

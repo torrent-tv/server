@@ -12,7 +12,8 @@ import {
 } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
-import { isTypingTarget } from "../../domain/subtitle-menu.js";
+import { isTypingTarget, subtitleMenuState } from "../../domain/subtitle-menu.js";
+import { menuUpdate } from "../../domain/menu-update.js";
 import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
 
 /**
@@ -741,31 +742,53 @@ export class Player extends StateDerivedView {
    * and it may change while the menu is open without the item losing its
    * track. "Off" is the item with the empty key.
    *
+   * Brought to the published list by key rather than re-created: the menu is
+   * published on every text-track `change`, and re-creating 339 items each time
+   * stood the page for 620–780 ms per publication (`domain/menu-update.js`).
+   * What the menu holds is read from its elements, which media-chrome also
+   * changes on a click.
+   *
    * @param {CustomEvent} event
    */
   #onSetSubtitleTracks = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const items = Array.isArray(detail?.items) ? detail.items : [];
-    this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton, items.length === 0);
-    this.#subtitleButton.hidden = items.length === 0;
     if (items.length === 0) {
-      this.#subtitleMenu.hidden = true;
+      this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton);
       return;
     }
-    const off = document.createElement("media-chrome-menu-item");
-    off.setAttribute("type", "radio");
-    off.dataset.subtitleKey = "";
-    off.toggleAttribute("checked", !items.some((item) => item.checked));
-    off.textContent = "Off";
-    this.#subtitleMenu.appendChild(off);
-    for (const item of items) {
+    this.#subtitleButton.hidden = false;
+    const elements = new Map();
+    const current = [];
+    for (const element of this.#subtitleMenu.querySelectorAll("media-chrome-menu-item[data-subtitle-key]")) {
+      const key = element.dataset.subtitleKey ?? "";
+      elements.set(key, element);
+      current.push({ key, text: element.textContent ?? "", checked: element.hasAttribute("checked"), disabled: element.hasAttribute("disabled") });
+    }
+    const wanted = subtitleMenuState(items);
+    const { remove, set, create, reorder } = menuUpdate(current, wanted);
+    for (const key of remove) {
+      elements.get(key)?.remove();
+      elements.delete(key);
+    }
+    for (const change of set) {
+      const element = elements.get(change.key);
+      if ("text" in change) element.textContent = change.text;
+      if ("checked" in change) element.toggleAttribute("checked", change.checked);
+      if ("disabled" in change) element.toggleAttribute("disabled", change.disabled);
+    }
+    for (const { item, before } of create) {
       const element = document.createElement("media-chrome-menu-item");
       element.setAttribute("type", "radio");
       element.dataset.subtitleKey = item.key;
-      element.toggleAttribute("checked", item.checked === true);
-      element.toggleAttribute("disabled", item.disabled === true);
+      element.toggleAttribute("checked", item.checked);
+      element.toggleAttribute("disabled", item.disabled);
       element.textContent = item.text;
-      this.#subtitleMenu.appendChild(element);
+      this.#subtitleMenu.insertBefore(element, before === null ? null : elements.get(before) ?? null);
+      elements.set(item.key, element);
+    }
+    if (reorder) {
+      for (const item of wanted) this.#subtitleMenu.appendChild(elements.get(item.key));
     }
   };
 

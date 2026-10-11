@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The subtitle menu is brought to each publication by item key instead of being re-created: with a subtitle provider's 330 offers in it, every text-track change re-created 339 items and stood the page for 620–780 ms, eight times in a row while a film opened (#ttv-178).
+
 ## 0.50.6
 
 - **Chore**: A play or pause request is logged with its origin — the system's media controls (`media-session`), the play button, a tap on the picture or a key — since a pause nobody remembers making was reported only as the viewer's (#ttv-178).
