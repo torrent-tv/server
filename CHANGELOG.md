@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: fastify 5.12.5 → 5.12.7; 3 package(s) changed in the lock file.
+
 ## 0.50.8
 
 - **Chore**: Update dependencies: 1 package(s) changed in the lock file.
