@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The page's long-frame timing keeps each long frame as the browser reports it and says it with the minute's totals, instead of formatting and logging a line inside the observer's callback, which runs on the page's main thread: on Home Assistant that callback was itself a long frame of 284 ms (#ttv-178).
+
 ## 0.50.12
 
 - **Chore**: Update dependencies: @fastify/helmet 13.1.2 → 13.2.0; 1 package(s) changed in the lock file.

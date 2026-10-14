@@ -15,6 +15,11 @@ test("a long frame names the timed calls inside its own interval, and only those
   timed("net-report:fetch", () => { clock += 300; });        // 2000-2300
   noteFrame({ startTime: 1990, duration: 400, blockingDuration: 350,
     scripts: [{ duration: 351, sourceFunctionName: "send", sourceURL: "https://x/domain/net-report.js", invoker: "TimerHandler:setInterval" }] });
+  // Kept as it arrives, said with the minute: nothing is formatted or logged
+  // inside the observer's callback.
+  assert.equal(lines.filter(line => line.includes("long frame")).length, 0);
+  clock = 61_500;
+  timed("url-state:read", () => { clock += 1; });
   const frame = lines.find(line => line.includes("long frame"));
   assert.match(frame, /long frame 400ms \(blocking 350ms\)/);
   assert.match(frame, /TimerHandler:setInterval:send@net-report\.js 351ms/);

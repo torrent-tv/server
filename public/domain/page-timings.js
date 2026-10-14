@@ -14,6 +14,11 @@
  *
  * Once a minute the totals per part and the long frames are said as well,
  * whether or not any frame was long.
+ *
+ * A long frame is KEPT as it arrives and said with the minute: the observer's
+ * callback runs on the page's own main thread, and formatting and logging a
+ * line for each frame there was itself a long frame of 284 ms in r34
+ * (torrent-tv/meta#178 review).
  */
 
 /** Spans kept for matching, by part. @type {Array<{ name: string, start: number, end: number }>} */
@@ -21,6 +26,8 @@ const spans = [];
 /** Per part, this minute: count, sum and largest, in milliseconds. @type {Map<string, { count: number, sum: number, max: number }>} */
 const totals = new Map();
 const frames = { count: 0, sum: 0, max: 0, blocking: 0 };
+/** The minute's long frames, as the browser stated them and the calls inside, said with the minute. @type {Array<{ start: number, duration: number, blocking: number, scripts: object[], inside: object[] }>} */
+const kept = [];
 let since = 0;
 let say = null;
 
@@ -69,6 +76,7 @@ export function startPageTimings(log, Observer = globalThis.PerformanceObserver)
   since = performance.now();
   totals.clear();
   spans.length = 0;
+  kept.length = 0;
   Object.assign(frames, { count: 0, sum: 0, max: 0, blocking: 0 });
   if (typeof Observer !== "function" || !Observer.supportedEntryTypes?.includes?.("long-animation-frame")) {
     log("[page-timings] long-animation-frame is not reported by this browser; only the call totals are said");
@@ -98,14 +106,9 @@ export function noteFrame(entry) {
   frames.sum += entry.duration;
   frames.max = Math.max(frames.max, entry.duration);
   frames.blocking += Number(entry.blockingDuration) || 0;
-  const inside = spans.filter(span => span.end > start && span.start < end);
-  const scripts = (entry.scripts ?? []).map(script =>
-    `${script.invoker ?? "?"}:${script.sourceFunctionName || "(anonymous)"}@${String(script.sourceURL ?? "").split("/").pop()} ${Math.round(script.duration)}ms`);
-  say?.(`[page-timings] long frame ${Math.round(entry.duration)}ms (blocking ${Math.round(Number(entry.blockingDuration) || 0)}ms) ` +
-    `at ${Math.round(start)}ms; scripts [${scripts.join(", ")}]; timed calls inside ` +
-    `[${inside.map(span => `${span.name} ${Math.round(span.end - span.start)}ms`).join(", ")}]`);
+  kept.push({ start, duration: entry.duration, blocking: Number(entry.blockingDuration) || 0, scripts: entry.scripts ?? [],
+    inside: spans.filter(span => span.end > start && span.start < end) });
   prune(start);
-  report(end);
 }
 
 /** Drop the spans that ended before `before`. */
@@ -116,6 +119,14 @@ function prune(before) {
 /** The minute's totals, said once a minute. */
 function report(now) {
   if (!say || now - since < 60_000) return;
+  for (const frame of kept) {
+    const scripts = frame.scripts.map(script =>
+      `${script.invoker ?? "?"}:${script.sourceFunctionName || "(anonymous)"}@${String(script.sourceURL ?? "").split("/").pop()} ${Math.round(script.duration)}ms`);
+    say(`[page-timings] long frame ${Math.round(frame.duration)}ms (blocking ${Math.round(frame.blocking)}ms) ` +
+      `at ${Math.round(frame.start)}ms; scripts [${scripts.join(", ")}]; timed calls inside ` +
+      `[${frame.inside.map(span => `${span.name} ${Math.round(span.end - span.start)}ms`).join(", ")}]`);
+  }
+  kept.length = 0;
   const parts = [...totals].map(([name, { count, sum, max }]) =>
     `${name} ${count}× ${Math.round(sum)}ms max ${Math.round(max)}ms`).join(", ");
   say(`[page-timings] in ${((now - since) / 1000).toFixed(1)}s: ${parts || "no timed call"}; ` +
