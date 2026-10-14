@@ -16,6 +16,7 @@
  */
 
 import { FIRST_PROBE_BYTES, nextProbeBytes } from "./transport/link-probe.js";
+import { timed } from "./page-timings.js";
 
 const SAMPLE_WINDOW_MS = 30_000;
 const REPORT_INTERVAL_MS = 1_500;
@@ -154,7 +155,11 @@ export function startNetReporter({
   let probing = false;
   let lastProbeAt = 0;
   const path = reportPath ?? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/net-report`;
-  const send = () => {
+  // Timed whole and in parts — the line it logs, its body, the synchronous part
+  // of the send — so a long frame of the page can be matched to them
+  // (`page-timings.js`, torrent-tv/meta#178).
+  const send = () => timed("net-report:send", sendNow);
+  const sendNow = () => {
     // The last figure stands when nothing has been measured recently. A viewer
     // who has stopped the picture measures nothing by construction, and their
     // stopping is the fact this report exists to carry — skipping the report
@@ -289,13 +294,13 @@ export function startNetReporter({
       // answer counts as on screen, which is what every page meant before it
       // could say otherwise.
     }
-    console.debug(
+    timed("net-report:log", () => console.debug(
       `[torrent-tv] net-report link=${linkMbps === null ? "?" : `${linkMbps.toFixed(2)}Mbps`} buffer=${bufferedAheadSec.toFixed(1)}s` +
         (positionSeconds === null ? "" : ` at=${positionSeconds.toFixed(1)}s`) +
         (playing ? "" : waiting ? " waiting" : " paused") +
         (onScreen ? "" : " off-screen") +
         (inPictureInPicture ? " in-pip" : "")
-    );
+    ));
     // A paused loader can stop delivering at a segment join. Keep measuring
     // the existing channel while startup waits, rather than extrapolating an
     // old transfer indefinitely. One probe at a time, at the existing sample
@@ -310,32 +315,33 @@ export function startNetReporter({
         probing = false;
       });
     }
-    void transport
-      .fetch(path, {
-        signal: abortController.signal,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bufferedAheadSec,
-          ...(getBufferedRanges ? { bufferedRanges: getBufferedRanges() } : {}),
-          ...(bufferLimitSeconds === null ? {} : { bufferLimitSeconds }),
-          playing,
-          waiting,
-          onScreen,
-          inPictureInPicture,
-          qualityMode,
-          ...(playingHeight > 0 ? { playingHeight } : {}),
-          ...(visiblePicture ? { visiblePicture } : {}),
-          ...(consumerId ? { consumerId } : {}),
-          ...(getGeneration ? { generation: getGeneration() } : {}),
-          ...(linkMbps === null ? {} : { linkMbps }),
-          ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
-          ...(linkSampleAt === null ? {} : { linkSampleAt }),
-          ...(linkSampleAt === null ? {} : { linkSampleAgeMs: sampleAgeMs }),
-          ...(positionSeconds === null ? {} : { positionSeconds })
-        })
-      })
-      .catch(() => undefined); // best-effort — next tick simply tries again
+    const body = timed("net-report:body", () => JSON.stringify({
+      bufferedAheadSec,
+      ...(getBufferedRanges ? { bufferedRanges: getBufferedRanges() } : {}),
+      ...(bufferLimitSeconds === null ? {} : { bufferLimitSeconds }),
+      playing,
+      waiting,
+      onScreen,
+      inPictureInPicture,
+      qualityMode,
+      ...(playingHeight > 0 ? { playingHeight } : {}),
+      ...(visiblePicture ? { visiblePicture } : {}),
+      ...(consumerId ? { consumerId } : {}),
+      ...(getGeneration ? { generation: getGeneration() } : {}),
+      ...(linkMbps === null ? {} : { linkMbps }),
+      ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
+      ...(linkSampleAt === null ? {} : { linkSampleAt }),
+      ...(linkSampleAt === null ? {} : { linkSampleAgeMs: sampleAgeMs }),
+      ...(positionSeconds === null ? {} : { positionSeconds })
+
+    }));
+    const sent = timed("net-report:fetch", () => transport.fetch(path, {
+      signal: abortController.signal,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    }));
+    void Promise.resolve(sent).catch(() => undefined); // best-effort — next tick simply tries again
   };
   const timer = setInterval(send, REPORT_INTERVAL_MS);
   active = { timer, send, abortController };

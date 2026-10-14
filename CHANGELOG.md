@@ -1,6 +1,7 @@
 ## Unreleased
 
 - **Fix**: After a seek the picture is held, as the first start is, until the proxy forecasts it can play on from the new position; the frame arriving no longer starts it on its own. On Home Assistant a seek back started with 4 s buffered while the picture was being made slower than real time, and stood 3.35 s fourteen seconds later. A later seek takes the hold over and the earlier one's answer releases nothing; the viewer's own pause is kept; a proxy that states no forecast releases it at once, as before (#ttv-178).
+- **Chore**: The page times the parts of two calls a long frame named on Home Assistant — the address update (reading the address, building the magnet and the state, writing history) and the network report (its log line, its body, the synchronous part of its send) — and matches every long frame the browser reports to the calls that ran inside its interval, by time. Once a minute it states the totals per part and of the long frames (#ttv-178).
 
 ## 0.50.9
 
