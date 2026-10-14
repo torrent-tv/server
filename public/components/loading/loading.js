@@ -49,6 +49,7 @@ import {
 } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
+import { PictureHolds, seekHoldAnswer } from "../../domain/picture-holds.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
 import { subtitleStartHold } from "../../domain/subtitle-start.js";
@@ -489,6 +490,14 @@ export class Loading extends StateDerivedView {
    * @type {number | null}
    */
   #audioHoldPick = null;
+  /**
+   * Who holds the picture now: the audio pick being prepared and the latest
+   * seek (`domain/picture-holds.js`).
+   */
+  #holds = new PictureHolds({
+    held: () => signalApp(APP_EVENT.SWITCH_REQUESTED),
+    released: () => signalApp(APP_EVENT.SWITCH_FINISHED)
+  });
   /** Whether the current stream's video is re-encoded rather than copied. */
   #videoIsReencoded = false;
   /** @type {number} Source coded width/height from the proxy plan (0 = unknown / not proxy-served). */
@@ -614,13 +623,26 @@ export class Loading extends StateDerivedView {
     this.#waitingModel.reset();
     this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
     const epoch = this.#playbackEpoch;
+    // Held from the seek itself: the frame arriving must not start the picture
+    // before the forecast for this position has been read.
+    const hold = this.#playbackLive ? this.#holds.beginSeek() : null;
     try {
+      let reportedAt = Number.POSITIVE_INFINITY;
       await this.#seekPosition.move(position, {
       stopLoad: () => this.#hlsPlayer.stopLoad(),
-      reportSeek: (target) => this.#session.reportSeek(target),
+      reportSeek: async (target) => {
+        const answer = await this.#session.reportSeek(target);
+        reportedAt = performance.now();
+        return answer;
+      },
       startLoad: (target) => this.#hlsPlayer.seekTo(target, this.#videoElement)
       });
+      if (hold !== null) {
+        if (epoch === this.#playbackEpoch && Number.isFinite(reportedAt)) void this.#holdSeekUntilReady(hold, epoch, reportedAt);
+        else this.#holds.releaseSeek(hold);
+      }
     } catch (error) {
+      if (hold !== null) this.#holds.releaseSeek(hold);
       if (epoch !== this.#playbackEpoch) return;
       const description = error instanceof Error ? error.message : String(error);
       this.#logEvt(`seek failed: ${description}`);
@@ -1245,7 +1267,7 @@ export class Loading extends StateDerivedView {
    */
   #holdForAudio(pick) {
     this.#audioHoldPick = pick;
-    signalApp(APP_EVENT.SWITCH_REQUESTED);
+    this.#holds.take("audio");
     this.setStatus(Loading.MESSAGES.audioPreparing);
   }
 
@@ -1269,7 +1291,77 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#audioHoldPick = null;
-    signalApp(APP_EVENT.SWITCH_FINISHED);
+    this.#holds.release("audio");
+  }
+
+  /**
+   * HOLD THE PICTURE AFTER A SEEK UNTIL THE PROXY FORECASTS IT CAN PLAY ON.
+   *
+   * The first start waits for the proxy's continuity forecast
+   * (`playbackReadiness`, `#waitForPrebuffer`); a seek did not: `seeked`
+   * ended the wait and the element went on with the first segment that
+   * arrived. Field r28 (torrent-tv/meta#178): back to 100 s, the picture moved
+   * with 4.0 s buffered while the picture encoder made 4 s in about 4.5 s, and
+   * stood 3.35 s at 116 s. The same forecast now decides here, for the
+   * position the proxy was told of: a forecast asked for before the seek was
+   * reported may describe the old position and is not read.
+   *
+   * The seek takes the hold at once, so the frame arriving does not start the
+   * picture, and a later seek takes it over: an earlier seek's answer releases
+   * nothing. A proxy that states no forecast releases it at once, as before.
+   * The viewer's own pause is kept (`SWITCHING` decides where the hold ends).
+   *
+   * The hold is taken by `#moveToPosition` (`#holds.beginSeek()`); this
+   * releases it. A forecast that cannot be read is asked again rather than
+   * read as none, and the seek's owner is let go however the wait ends, so a
+   * hold never outlives the playback it was taken in.
+   *
+   * @param {number} seq - The seek, from `#holds.beginSeek()`.
+   * @param {number} epoch - The playback this seek belongs to.
+   * @param {number} reportedAt - When the proxy was told of the seek (`performance.now()`).
+   * @returns {Promise<void>}
+   */
+  async #holdSeekUntilReady(seq, epoch, reportedAt) {
+    const current = () => epoch === this.#playbackEpoch && this.#holds.holdsSeek(seq);
+    let loggedReason = "";
+    while (current()) {
+      let progress = null;
+      let requestedAt = -Infinity;
+      let unread = false;
+      try {
+        requestedAt = performance.now();
+        progress = await this.#session.fetchActiveTranscodeProgress();
+      } catch (error) {
+        if (error?.name === "AbortError") break;
+        unread = true;
+      }
+      if (!current()) break;
+      if (unread) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        continue;
+      }
+      const readiness = progress?.playbackReadiness;
+      const answer = seekHoldAnswer({ readiness, requestedAt, reportedAt });
+      if (answer === "stale") continue;
+      const video = this.#videoElement;
+      const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
+      this.#waitingModel.update({ playbackReadiness: readiness ?? null, bufferedAhead: ahead });
+      if (answer === "release") {
+        this.#logEvt(readiness?.version === 1
+          ? `seek hold released: forecast ready ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s`
+          : "seek hold released: this proxy states no forecast");
+        break;
+      }
+      const reason = String(readiness.reason ?? "forecast-unavailable");
+      if (reason !== loggedReason) {
+        loggedReason = reason;
+        this.#logEvt(`seek hold: waiting ahead=${ahead.toFixed(1)}s ` +
+          `delay=${Number.isFinite(readiness.delaySeconds) ? `${readiness.delaySeconds.toFixed(2)}s` : "unknown"} reason=${reason}`);
+      }
+      // The start's own cadence for the same forecast (`#waitForPrebuffer`).
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    this.#holds.releaseSeek(seq);
   }
 
   /**
