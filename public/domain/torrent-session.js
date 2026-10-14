@@ -1263,6 +1263,10 @@ export class TorrentSession {
         // act on whichever viewer reported last.
         consumerId: this.consumerId,
         getBufferedAheadSec: bufferedAheadSecondsForReporter,
+        // Which viewing the report belongs to: one made before a seek and
+        // answered after it must not put the viewer back where they were
+        // (torrent-tv/meta#178).
+        getGeneration: () => this.#viewGeneration,
         getBufferLimitSeconds: options.getBufferLimitSeconds,
         getBufferedRanges: options.getBufferedRanges,
         getPositionSeconds: () => {
