@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @fastify/helmet 13.1.2 → 13.2.0; 1 package(s) changed in the lock file.
+
 ## 0.50.11
 
 - **Fix**: The report a transcoded viewing sends carries the viewing it was made in, as a direct one already did, so a report made before a seek and answered after it no longer puts the viewer back where they stood (proxy 2.98.4, #ttv-178).
