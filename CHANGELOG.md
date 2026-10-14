@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The player stops the buffer poll when the picture starts moving. Starting the decoded-frames report returned before the poll was stopped, so the poll and the buffer event it sends ran every 500 ms for the whole of playback (#ttv-178).
+
 ## 0.50.14
 
 - **Fix**: After a seek the held picture asks the proxy's forecast again when the forecast says the position may be ready, if that comes before the 1.5 s cadence; what releases the picture is still the answer to that question. Asked only at the cadence, the hold ended up to 1.5 s after the stated delay: 2.5 s and 1.0 s at two seeks of r30 on Home Assistant (#ttv-178).
