@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: After a seek the picture is held, as the first start is, until the proxy forecasts it can play on from the new position; the frame arriving no longer starts it on its own. On Home Assistant a seek back started with 4 s buffered while the picture was being made slower than real time, and stood 3.35 s fourteen seconds later. A later seek takes the hold over and the earlier one's answer releases nothing; the viewer's own pause is kept; a proxy that states no forecast releases it at once, as before (#ttv-178).
+
 ## 0.50.9
 
 - **Chore**: Update dependencies: fastify 5.12.5 → 5.12.7; 3 package(s) changed in the lock file.

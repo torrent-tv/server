@@ -64,10 +64,13 @@ export const APP_STATE = Object.freeze({
   STALLED: "STALLED",
   /**
    * The viewer asked for a change to the stream and the picture is held until
-   * that change is ready. Today the one change that raises it is a soundtrack
-   * published as its own rendition: the player discards the audio it holds the
-   * moment it is told to move, so a switch made before the track exists leaves
-   * the picture with nothing to play.
+   * that change is ready. Two changes raise it: a soundtrack published as its
+   * own rendition — the player discards the audio it holds the moment it is
+   * told to move, so a switch made before the track exists leaves the picture
+   * with nothing to play — and a seek, held until the proxy forecasts it can
+   * play on from there, as the first start is (`domain/picture-holds.js`).
+   * Field r28: a seek released with the first segment that arrived stood
+   * 3.35 s fourteen seconds later (torrent-tv/meta#178).
    *
    * It is a state and not a variable because it changes both outputs a state is
    * allowed to change: the waiting overlay is on screen, and the play control
@@ -187,7 +190,8 @@ export const APP_EVENT = Object.freeze({
   RESUMED: "RESUMED",
   /**
    * The viewer asked for a change the stream must be made ready for before the
-   * picture may move — today, a soundtrack published as its own rendition.
+   * picture may move — a soundtrack published as its own rendition, or a seek
+   * the proxy does not yet forecast it can play on from.
    * Raised again for a second pick made while the first is still being
    * prepared; that is the self-transition on LIVE.
    */
