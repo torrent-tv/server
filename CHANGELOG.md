@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.12
 
 - **Chore**: Update dependencies: @fastify/helmet 13.1.2 → 13.2.0; 1 package(s) changed in the lock file.
 
