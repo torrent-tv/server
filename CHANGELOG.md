@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.15
 
 - **Fix**: The player stops the buffer poll when the picture starts moving. Starting the decoded-frames report returned before the poll was stopped, so the poll and the buffer event it sends ran every 500 ms for the whole of playback (#ttv-178).
 
