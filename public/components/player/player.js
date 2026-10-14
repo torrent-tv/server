@@ -297,13 +297,6 @@ export class Player extends StateDerivedView {
   };
 
   /**
-   * Keep a reading arriving for as long as the viewer is waiting, and stop the
-   * moment they are not.
-   *
-   * @param {boolean} waiting
-   * @returns {void}
-   */
-  /**
    * Whether the picture is actually being decoded, said plainly.
    *
    * A track we chose to COPY is one we told ourselves the browser can play. If
@@ -352,24 +345,36 @@ export class Player extends StateDerivedView {
     this.#logEvt(line);
   };
 
+  /**
+   * Keep a reading arriving for as long as the viewer is waiting, and stop the
+   * moment they are not.
+   *
+   * The timer that is not wanted is stopped before the wanted one starts:
+   * starting one used to return before the other was stopped, so the buffer
+   * poll went on every 500 ms for the whole of playback (torrent-tv/meta#178).
+   *
+   * @param {boolean} waiting
+   * @returns {void}
+   */
   #measureWhileWaiting(waiting) {
-    if (waiting && this.#bufferTimer === null) {
-      this.#onBufferChanged();
-      this.#bufferTimer = window.setInterval(this.#onBufferChanged, 500);
+    if (waiting) {
+      if (this.#decodeTimer !== null) {
+        window.clearInterval(this.#decodeTimer);
+        this.#decodeTimer = null;
+      }
+      if (this.#bufferTimer === null) {
+        this.#onBufferChanged();
+        this.#bufferTimer = window.setInterval(this.#onBufferChanged, 500);
+      }
       return;
     }
-    if (!waiting && this.#decodeTimer === null) {
-      // Only while the picture is meant to be moving.
-      this.#decodeTimer = window.setInterval(this.#reportDecodedFrames, 5_000);
-      return;
-    }
-    if (!waiting && this.#bufferTimer !== null) {
+    if (this.#bufferTimer !== null) {
       window.clearInterval(this.#bufferTimer);
       this.#bufferTimer = null;
     }
-    if (waiting && this.#decodeTimer !== null) {
-      window.clearInterval(this.#decodeTimer);
-      this.#decodeTimer = null;
+    if (this.#decodeTimer === null) {
+      // Only while the picture is meant to be moving.
+      this.#decodeTimer = window.setInterval(this.#reportDecodedFrames, 5_000);
     }
   }
 
