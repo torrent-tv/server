@@ -50,6 +50,7 @@ import {
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 import { PictureHolds, seekHoldAnswer } from "../../domain/picture-holds.js";
+import { startPageTimings, timed } from "../../domain/page-timings.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
 import { subtitleStartHold } from "../../domain/subtitle-start.js";
@@ -1769,6 +1770,9 @@ export class Loading extends StateDerivedView {
     }
 
     this.#session = new TorrentSession(() => undefined);
+    // The page's own long frames, set against the calls timed inside them
+    // (`domain/page-timings.js`, torrent-tv/meta#178).
+    startPageTimings((line) => console.debug(line));
     this.#subtitlePlayback = new SubtitlePlayback({
       getVideoElement: () => this.#videoElement,
       getTransport: () => this.#transport,
@@ -2856,7 +2860,7 @@ export class Loading extends StateDerivedView {
     if (this.#navigatingHistory) {
       return;
     }
-    const magnet = this.#currentMagnetUri();
+    const magnet = timed("url-state:magnet", () => this.#currentMagnetUri());
     if (magnet.length === 0) {
       // Nothing to say. The address is cleared only when the viewer DELIBERATELY
       // leaves — see the RESET_TO_PICKER handler — never merely because the
@@ -2867,18 +2871,18 @@ export class Loading extends StateDerivedView {
       return;
     }
     const video = this.#videoElement;
-    const current = readUrlState(location.search);
+    const current = timed("url-state:read", () => readUrlState(location.search));
     // Not `video.currentTime` outright: a torn-down element reports zero
     // through the very events that record a position, and a zero written here
     // removes the parameter altogether — the viewer's refresh then starts the
     // film from the beginning. `positionToRecord` decides what the element's
     // reading is worth.
-    const next = playbackStateToRecord(current, {
+    const next = timed("url-state:record", () => playbackStateToRecord(current, {
       magnet,
       fileIndex: this.#activeFileIndex >= 0 ? this.#activeFileIndex : -1,
       opening: this.#isProcessing || this.#openingFileIndex !== null,
       element: video instanceof HTMLVideoElement ? video : null
-    });
+    }));
     if (
       video instanceof HTMLVideoElement &&
       video.readyState === 0 &&
@@ -2891,7 +2895,7 @@ export class Loading extends StateDerivedView {
         "rather than the zero it reports"
       );
     }
-    this.#writePlaybackState(current, next);
+    timed("url-state:write", () => this.#writePlaybackState(current, next));
   }
 
   #writePlaybackState(current, next) {
