@@ -91,3 +91,20 @@ export function seekHoldAnswer({ readiness, requestedAt, reportedAt }) {
   if (readiness?.version !== 1) return "release";
   return readiness.ready === true ? "release" : "wait";
 }
+
+/**
+ * How long the hold waits before it asks the forecast again: until the moment
+ * the forecast says the position may be ready, when that comes before the
+ * start's own cadence, and the cadence otherwise. Asked only every 1.5 s, the
+ * hold ended up to a cadence after the delay the forecast had stated: 2.5 s and
+ * 1.0 s at two seeks of r30 (torrent-tv/meta#178). What releases the picture is
+ * the answer to that next question, never the delay itself.
+ *
+ * @param {{ delaySeconds?: number } | null | undefined} readiness
+ * @param {number} cadenceMs - The start's own cadence for the same forecast.
+ * @returns {number} Milliseconds.
+ */
+export function nextSeekHoldAsk(readiness, cadenceMs) {
+  const delay = Number(readiness?.delaySeconds);
+  return Number.isFinite(delay) && delay > 0 ? Math.min(cadenceMs, delay * 1000) : cadenceMs;
+}

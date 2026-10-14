@@ -49,7 +49,7 @@ import {
 } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
-import { PictureHolds, seekHoldAnswer } from "../../domain/picture-holds.js";
+import { PictureHolds, seekHoldAnswer, nextSeekHoldAsk } from "../../domain/picture-holds.js";
 import { startPageTimings, timed } from "../../domain/page-timings.js";
 import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
@@ -1368,8 +1368,9 @@ export class Loading extends StateDerivedView {
         this.#logEvt(`seek hold: waiting ahead=${ahead.toFixed(1)}s ` +
           `delay=${Number.isFinite(readiness.delaySeconds) ? `${readiness.delaySeconds.toFixed(2)}s` : "unknown"} reason=${reason}`);
       }
-      // The start's own cadence for the same forecast (`#waitForPrebuffer`).
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Asked again when the forecast says it may be ready, or at the start's
+      // own cadence for the same forecast (`#waitForPrebuffer`).
+      await new Promise(resolve => setTimeout(resolve, nextSeekHoldAsk(readiness, 1500)));
     }
     this.#holds.releaseSeek(seq);
   }
