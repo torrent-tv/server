@@ -1335,6 +1335,15 @@ export class Loading extends StateDerivedView {
       } catch (error) {
         if (error?.name === "AbortError") break;
         unread = true;
+        // Said on the edge, as the start's own wait does: this poll runs
+        // every 1.5 s while the picture is held.
+        if (!this.#progressPollFailing) {
+          this.#progressPollFailing = true;
+          console.warn(
+            `[torrent-tv] the forecast after a seek could not be read; asking again: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+          );
+        }
       }
       if (!current()) break;
       if (unread) {
