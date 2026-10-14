@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PictureHolds, seekHoldAnswer } from "../public/domain/picture-holds.js";
+import { PictureHolds, nextSeekHoldAsk, seekHoldAnswer } from "../public/domain/picture-holds.js";
 
 // Which change holds the picture, and when a seek's hold may end
 // (torrent-tv/meta#178).
@@ -52,4 +52,12 @@ test("a seek's hold ends on the proxy's forecast for the position it was told of
     "a proxy that states no forecast releases the hold, as before");
   assert.equal(seekHoldAnswer({ readiness: { version: 1, ready: false, bufferLimitReached: true }, requestedAt: 11, reportedAt: 10 }), "wait",
     "a full browser buffer is not a reason to start (review)");
+});
+
+test("the hold asks again when the forecast says the position may be ready, or at the cadence", () => {
+  assert.equal(nextSeekHoldAsk({ delaySeconds: 0.15 }, 1500), 150, "a short delay is not waited out a whole cadence");
+  assert.equal(nextSeekHoldAsk({ delaySeconds: 7.18 }, 1500), 1500, "a long one is asked about at the cadence, which may bring it nearer");
+  assert.equal(nextSeekHoldAsk({ delaySeconds: 0 }, 1500), 1500, "no delay stated in the future is no reason to ask at once");
+  assert.equal(nextSeekHoldAsk({}, 1500), 1500);
+  assert.equal(nextSeekHoldAsk(null, 1500), 1500);
 });

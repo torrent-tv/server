@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: After a seek the held picture asks the proxy's forecast again when the forecast says the position may be ready, if that comes before the 1.5 s cadence; what releases the picture is still the answer to that question. Asked only at the cadence, the hold ended up to 1.5 s after the stated delay: 2.5 s and 1.0 s at two seeks of r30 on Home Assistant (#ttv-178).
+
 ## 0.50.13
 
 - **Fix**: The page's long-frame timing keeps each long frame as the browser reports it and says it with the minute's totals, instead of formatting and logging a line inside the observer's callback, which runs on the page's main thread: on Home Assistant that callback was itself a long frame of 284 ms (#ttv-178).
