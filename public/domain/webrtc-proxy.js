@@ -98,6 +98,10 @@ const PING_TIMEOUT_MS = 5_000;
 const REQUEST_CHUNK_BYTES = 64 * 1024;
 const REQUEST_CHUNK_THRESHOLD_BYTES = 128 * 1024;
 const REQUEST_BUFFERED_HIGH_BYTES = 1 * 1024 * 1024; // pause sending above this
+
+// The answers a held picture waits for: a seek's acknowledgement and the
+// start forecast. Each is logged on arrival with its request id.
+const HELD_ANSWER_PATH = /\/api\/transcode-sessions\/[^/?]+\/(?:progress|seek)(?:\?|$)/u;
 const REQUEST_BUFFERED_LOW_BYTES = 256 * 1024; // resume once drained to this
 const REQUEST_BUFFER_DRAIN_TIMEOUT_MS = 5_000; // fallback so a missed drain event cannot deadlock
 
@@ -1018,8 +1022,16 @@ export class WebRtcProxy {
       const transferMs = typeof entry.startedAt === "number"
         ? finishedAt - (entry.firstByteAt ?? finishedAt)
         : null;
-      // Only worth reporting for real payloads; status-only replies are noise.
-      if (totalBytes > 65536 && waitMs !== null && transferMs !== null) {
+      // Reported for real payloads, and for the two answers a held picture
+      // waits for: the seek's acknowledgement and the forecast. Their time
+      // here, read beside the proxy's `sent` line of the same request id, says
+      // how long each answer stood in the connection (torrent-tv/meta#178).
+      if (waitMs !== null && transferMs !== null && HELD_ANSWER_PATH.test(entry.path ?? "")) {
+        console.debug(
+          `[dc-recv] ${entry.path} requestId=${requestId} bytes=${totalBytes} ` +
+            `waitMs=${waitMs.toFixed(0)} transferMs=${transferMs.toFixed(0)}`
+        );
+      } else if (totalBytes > 65536 && waitMs !== null && transferMs !== null) {
         const mbps = transferMs > 0 ? (totalBytes * 8) / (transferMs * 1000) : 0;
         console.debug(
           `[dc-recv] ${entry.path ?? "?"} bytes=${totalBytes} ` +
