@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.17
 
 - **Chore**: The page logs the arrival of a seek's acknowledgement and of every start forecast with its request id, so the time each answer stood in the connection can be read beside the proxy's line for the same request (#ttv-178).
 
