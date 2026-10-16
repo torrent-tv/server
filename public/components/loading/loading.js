@@ -5411,6 +5411,8 @@ export class Loading extends StateDerivedView {
     let lastGrowthAt = Date.now();
     let cachedProgress = null;
     let lastProgressFetchAt = 0;
+    // What the page held ahead when the proxy was last asked.
+    let aheadAtFetch = -1;
     // When the request behind `cachedProgress` was SENT — what decides whether
     // that forecast could have weighed the subtitle reported since.
     let cachedProgressRequestedAt = -Infinity;
@@ -5425,8 +5427,18 @@ export class Loading extends StateDerivedView {
         pauseWithoutIntent(videoElement);
       }
       const now = Date.now();
-      if (now - lastProgressFetchAt >= 1500) {
+      // ASKED AGAIN WHEN A PIECE HAS ARRIVED, not only every 1.5 s. A piece the
+      // page appends is what the start waits for, and the answer that lets it
+      // start came up to 1.5 s after it: on Home Assistant the last piece a
+      // seek needed reached the page at 07:19:56.1 and the start was allowed
+      // at the next ask, 07:19:57.4 (r68, torrent-tv/meta#178). The proxy reads
+      // what the page holds from its report, so the report goes first.
+      const aheadNow = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
+      const grown = aheadAtFetch >= 0 && aheadNow > aheadAtFetch + 0.01;
+      if (now - lastProgressFetchAt >= 1500 || grown) {
+        if (grown) reportNow();
         lastProgressFetchAt = now;
+        aheadAtFetch = aheadNow;
         try {
           const requestedAt = performance.now();
           cachedProgress = await this.#session.fetchActiveTranscodeProgress();

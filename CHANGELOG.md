@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Perf**: While playback waits to start, the page reports its buffer and asks the proxy again as soon as a piece has arrived, instead of on its next 1.5 s ask. The piece a start waits for is one the page appends, and the answer that let it start came up to 1.5 s after it: after a seek on Home Assistant the last piece reached the page at 07:19:56.1 and the start was allowed at the next ask, 07:19:57.4 (r68, #ttv-178).
+
 ## 0.50.17
 
 - **Chore**: The page logs the arrival of a seek's acknowledgement and of every start forecast with its request id, so the time each answer stood in the connection can be read beside the proxy's line for the same request (#ttv-178).
