@@ -1369,10 +1369,39 @@ export class Loading extends StateDerivedView {
           `delay=${Number.isFinite(readiness.delaySeconds) ? `${readiness.delaySeconds.toFixed(2)}s` : "unknown"} reason=${reason}`);
       }
       // Asked again when the forecast says it may be ready, or at the start's
-      // own cadence for the same forecast (`#waitForPrebuffer`).
-      await new Promise(resolve => setTimeout(resolve, nextSeekHoldAsk(readiness, 1500)));
+      // own cadence for the same forecast (`#waitForPrebuffer`) — or at once
+      // when the element says the position's media has arrived, which is what
+      // the forecast was waiting for. Back to 30 s in r69 the media arrived at
+      // 22.01 and the hold asked again only at 23.52 (torrent-tv/meta#178).
+      await this.#untilMediaArrivesOr(nextSeekHoldAsk(readiness, 1500));
     }
     this.#holds.releaseSeek(seq);
+  }
+
+  /**
+   * Resolve after `ms`, or as soon as the video element reports that media at
+   * its position has arrived (`seeked`, `canplay`), whichever comes first.
+   *
+   * @param {number} ms
+   * @returns {Promise<void>}
+   */
+  #untilMediaArrivesOr(ms) {
+    const video = this.#videoElement;
+    return new Promise(resolve => {
+      const done = () => {
+        clearTimeout(timer);
+        if (video instanceof HTMLVideoElement) {
+          video.removeEventListener("seeked", done);
+          video.removeEventListener("canplay", done);
+        }
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      if (video instanceof HTMLVideoElement) {
+        video.addEventListener("seeked", done);
+        video.addEventListener("canplay", done);
+      }
+    });
   }
 
   /**
