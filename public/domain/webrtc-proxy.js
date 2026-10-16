@@ -107,6 +107,14 @@ const HELD_ANSWER_PATH = /\/api\/transcode-sessions\/[^/?]+\/(?:progress|seek)(?
 const REQUEST_BUFFERED_LOW_BYTES = 256 * 1024; // resume once drained to this
 const REQUEST_BUFFER_DRAIN_TIMEOUT_MS = 5_000; // fallback so a missed drain event cannot deadlock
 
+/** Bulk responses must not share the association reserved for control answers. */
+function isBulkPath(path, method) {
+  return path.startsWith("/transcode/") || path.startsWith("/stream") || path === "/media" ||
+    path === "/api/link-probe" || path === "/api/delivery-sink" ||
+    (method === "GET" && path === "/api/subtitles") ||
+    (path.startsWith("/api/sources/") && path.endsWith("/cover"));
+}
+
 export class WebRtcProxy {
   /** @type {string} */
   #proxyId;
@@ -1162,13 +1170,14 @@ export class WebRtcProxy {
     const requestId = crypto.randomUUID();
     const url = new URL(path, "http://proxy");
     const signal = options.signal instanceof AbortSignal ? options.signal : null;
+    const method = (options.method ?? "GET").toUpperCase();
     // Route large request bodies by their encoded size, not character count.
     const payload = options.body != null ? new TextEncoder().encode(options.body) : null;
     const largeBody = payload && payload.length > REQUEST_CHUNK_THRESHOLD_BYTES;
-    const isMedia = url.pathname.startsWith("/transcode/") || url.pathname.startsWith("/stream") || largeBody;
+    const isMedia = isBulkPath(url.pathname, method) || largeBody;
     if (!isMedia && this.#controlLink) await this.#controlLink.wait(signal);
     if (!this.isOpen) throw new Error("Data channel is not open.");
-    const channel = isMedia ? this.#channel : this.#channelFor(url.pathname);
+    const channel = isMedia ? this.#channel : this.#controlChannelFor();
 
     // Keep settlement available if channel.send() throws.
     let pendingResolve;
@@ -1227,7 +1236,6 @@ export class WebRtcProxy {
       signal.addEventListener("abort", onAbort);
     }
 
-    const method = options.method ?? "GET";
     const reqPath = url.pathname;
     const query = url.search.slice(1);
     const headers = { ...(options.headers ?? {}) };
@@ -1273,13 +1281,11 @@ export class WebRtcProxy {
    * control when supported; fetch waits for it to reconnect rather than sending
    * control back through a media queue. Only legacy proxies use that fallback.
    *
-   * @param {string} requestPath
    * @returns {RTCDataChannel}
    */
-  #channelFor(requestPath) {
-    const isMedia = requestPath.startsWith("/transcode/") || requestPath.startsWith("/stream");
-    if (!isMedia && this.#controlLink) return this.#controlChannel;
-    if (isMedia || this.#controlChannel?.readyState !== "open") {
+  #controlChannelFor() {
+    if (this.#controlLink) return this.#controlChannel;
+    if (this.#controlChannel?.readyState !== "open") {
       return this.#channel;
     }
     return this.#controlChannel;
@@ -1403,7 +1409,7 @@ export class WebRtcProxy {
     }
     if (this.#controlLink) await this.#controlLink.wait();
     if (!this.isOpen) throw new Error("Data channel is not open.");
-    const channel = this.#channelFor("/healthz");
+    const channel = this.#controlChannelFor();
 
     const id = crypto.randomUUID();
     const sentAt = performance.now();
@@ -1737,7 +1743,7 @@ export class WebRtcProxy {
             })
           );
         } catch {
-          // A closed channel stops reporting; the proxy observes that silence.
+          // silent-ok: a closed channel stops reporting; the proxy observes that silence.
         }
       }
     }, PROBE_ECHO_MS);

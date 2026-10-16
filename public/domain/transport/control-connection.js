@@ -50,17 +50,17 @@ export class ControlConnection {
       return Promise.reject(error);
     }
     let resolve;
-    let reject;
-    const ready = new Promise((yes, no) => { resolve = yes; reject = no; });
+    let rejectReady;
+    const ready = new Promise((yes, no) => { resolve = yes; rejectReady = no; });
     const current = {
-      id: crypto.randomUUID(), pc, channel, ws, ready, resolve, reject, sessionId: null,
+      id: crypto.randomUUID(), pc, channel, ws, ready, resolve, reject: rejectReady, sessionId: null,
       opened: false, remoteSet: false, candidates: [], timer: null, deliveryTimer: null,
       estimate: emptyArrivalEstimate(), probe: null, arrivalAt: performance.now(), handled: 0,
       stalled: false, candidateRefusals: 0
     };
     this.#current = current;
-    const fail = (error) => this.#fail(current, error);
-    current.timer = setTimeout(() => fail(new Error("Control connection timed out.")), CONNECT_TIMEOUT_MS);
+    const reject = (error) => this.#reject(current, error);
+    current.timer = setTimeout(() => reject(new Error("Control connection timed out.")), CONNECT_TIMEOUT_MS);
     ws.addEventListener("message", event => {
       if (this.#current !== current) return;
       try {
@@ -73,15 +73,15 @@ export class ControlConnection {
         } else {
           void this.handleSignal(signal);
         }
-      } catch (error) { fail(error); }
+      } catch (error) { reject(error); }
     });
     // Signalling can disappear during a server release after the data channel
     // is established. Keep that channel; its next replacement gets a new socket.
     ws.addEventListener("close", () => {
-      if (!current.opened) fail(new Error("Control signalling closed before connection."));
+      if (!current.opened) reject(new Error("Control signalling closed before connection."));
     });
     ws.addEventListener("error", () => {
-      if (!current.opened) fail(new Error("Control signalling failed."));
+      if (!current.opened) reject(new Error("Control signalling failed."));
     });
     channel.addEventListener("open", () => {
       if (this.#current !== current) return;
@@ -105,24 +105,24 @@ export class ControlConnection {
             current.probe = { seq: message.seq, at };
           }
         } catch {
-          // The common response reader reports malformed messages.
+          // silent-ok: the common response reader reports malformed messages.
         }
       }
       this.#options.onMessage(event.data);
       this.noteRequest();
     });
-    channel.addEventListener("close", () => fail(new Error("Control data channel closed.")));
-    channel.addEventListener("error", () => fail(new Error("Control data channel failed.")));
+    channel.addEventListener("close", () => reject(new Error("Control data channel closed.")));
+    channel.addEventListener("error", () => reject(new Error("Control data channel failed.")));
     pc.addEventListener("connectionstatechange", () => {
       console.debug(`[ice-control] ${current.id} state=${pc.connectionState}`);
-      if (pc.connectionState === "failed" || pc.connectionState === "closed") fail(new Error("Control peer connection failed."));
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") reject(new Error("Control peer connection failed."));
     });
     pc.addEventListener("icecandidate", event => {
       if (this.#current === current && event.candidate) {
         try {
           this.#sendSignal(current, { type: "candidate",
             candidate: event.candidate.candidate, mid: event.candidate.sdpMid ?? "0" });
-        } catch (error) { if (!current.opened) fail(error); }
+        } catch (error) { if (!current.opened) reject(error); }
       }
     });
     return ready;
@@ -143,7 +143,7 @@ export class ControlConnection {
       // Apply the same Chromium zero-RTT compatibility rule as the media offer.
       const sdp = offer.sdp.replace(/a=sctp-init:[^\r\n]*\r\n/g, "");
       this.#sendSignal(current, { type: "offer", sdp });
-    } catch (error) { this.#fail(current, error); }
+    } catch (error) { this.#reject(current, error); }
   }
 
   async #addCandidate(current, candidate) {
@@ -174,7 +174,7 @@ export class ControlConnection {
         else current.candidates.push(candidate);
       }
     } catch (error) {
-      this.#fail(current, error);
+      this.#reject(current, error);
     }
   }
 
@@ -203,7 +203,7 @@ export class ControlConnection {
         }
       });
     } catch {
-      // Without a receive counter the verdict uses observed arrivals.
+      // silent-ok: without a receive counter the verdict uses observed arrivals.
     }
     if (this.#current !== current) return;
     const verdict = silenceVerdict({
@@ -216,14 +216,14 @@ export class ControlConnection {
       requestTimeoutMs: this.#options.silenceWindowMs
     });
     if (verdict.state === "lost") {
-      this.#fail(current, new Error(`Control delivery lost: ${verdict.reason}`));
+      this.#reject(current, new Error(`Control delivery lost: ${verdict.reason}`));
       return;
     }
     current.stalled = verdict.state === "stalled";
     this.noteRequest();
   }
 
-  #fail(current, error) {
+  #reject(current, error) {
     if (this.#current !== current) return;
     this.#current = null;
     clearTimeout(current.timer);
@@ -237,6 +237,6 @@ export class ControlConnection {
 
   close() {
     this.#closed = true;
-    if (this.#current) this.#fail(this.#current, new DOMException("Control connection closed.", "AbortError"));
+    if (this.#current) this.#reject(this.#current, new DOMException("Control connection closed.", "AbortError"));
   }
 }

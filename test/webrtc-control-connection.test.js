@@ -183,6 +183,24 @@ test("large request bodies and their cancellation stay on the media association"
   assert.ok(media.sent.some(message => message.type === "request-cancel" && message.requestId === start.requestId));
 });
 
+test("speed samples, subtitle files and covers use media while subtitle selection uses control", async t => {
+  const { proxy, media, control } = await connect(t);
+  for (const path of ["/api/link-probe?bytes=2097152", "/api/delivery-sink?bytes=8388608",
+    "/api/subtitles?sourceKey=file&fileIndex=0", "/api/sources/file/files/0/cover", "/media?fileIndex=0"]) {
+    const response = proxy.fetch(path);
+    const request = media.sent.at(-1);
+    assert.equal(request.type, "request");
+    assert.equal(request.path, new URL(path, "http://test").pathname);
+    media.answer(request.requestId);
+    await response;
+  }
+  const selected = proxy.fetch("/api/subtitles", { method: "POST", body: "{}" });
+  await flush();
+  assert.equal(control.sent.at(-1).path, "/api/subtitles");
+  control.answer(control.sent.at(-1).requestId);
+  await selected;
+});
+
 test("initial connection waits for control and cancellation closes both peers", async t => {
   const { proxy, peers, sockets } = setup(t);
   let settled = false;
