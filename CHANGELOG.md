@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Send control requests over a separate WebRTC connection when supported by the proxy, so large video transfers cannot occupy its SCTP queue. Reconnect control independently without replaying sent actions or releasing a viewer still receiving media. Keep legacy proxies compatible and report delivery separately for each connection.
+
 ## 0.50.19
 
 - **Fix**: After a seek the page asks the proxy again as soon as the media at the new position has arrived, instead of only when the forecast's delay or the 1.5 s cadence comes round. Back to an already made position on Home Assistant the media arrived at 22.01 and the picture started at 24.07, after a question asked at 23.52 (r69, #ttv-178).
