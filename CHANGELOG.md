@@ -1,6 +1,6 @@
 ## Unreleased
 
-- **Fix**: Send control requests over a separate WebRTC connection when supported by the proxy, so large video transfers cannot occupy its SCTP queue. Reconnect control independently without replaying sent actions or releasing a viewer still receiving media. Keep legacy proxies compatible and report delivery separately for each connection.
+- **Fix**: Send control requests over a separate WebRTC connection when supported by the proxy, so video transfers, speed samples, subtitle files and covers cannot occupy its SCTP queue. Reconnect control independently without replaying sent actions or releasing a viewer still receiving media. Keep legacy proxies compatible and report delivery separately for each connection.
 
 ## 0.50.19
 
