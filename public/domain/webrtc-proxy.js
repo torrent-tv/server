@@ -15,11 +15,13 @@
  * 4. The server forwards the offer to the proxy via the proxy tunnel.
  * 5. The proxy generates an SDP answer; the server forwards it back.
  * 6. ICE candidates are exchanged the same way until the P2P path is found.
- * 7. Once the data channel opens, `connect()` resolves.
- * 8. All subsequent communication uses `fetch()` / `ping()` on the channel.
+ * 7. Capability version 2 adds a control-only peer through its own signalling
+ *    socket. `connect()` resolves when both required channels are open.
+ * 8. `fetch()` routes media and control separately; `ping()` uses control.
  */
 
 import { CONNECT_TIMEOUT_MS } from "./connect-deadline.js";
+import { ControlConnection } from "./transport/control-connection.js";
 import {
   deliveryDueWithinMs,
   emptyArrivalEstimate,
@@ -122,24 +124,16 @@ export class WebRtcProxy {
   #transportSampler = null;
 
   /**
-   * A second channel carrying only small control messages.
-   *
-   * One channel used to carry both. SCTP delivers an ordered stream in order,
-   * so a 300-byte seek written after an 8 MB segment waits for that segment to
-   * finish going out. On a fast link that costs nothing — measured on the LAN
-   * 2026-08-05, control responses left in 1-4 ms while 6-11 MB segments were
-   * being pushed and the send buffer never accumulated — but on the 1-5.8
-   * Mbit/s measured on cellular one segment takes 11-64 s to push, and the
-   * proxy would learn about a seek that much later. That is the same failure
-   * the supersede fix (proxy 2.9.89) exists to prevent, one layer down.
-   *
-   * Null until it opens, and it may never open: a browser meets proxies older
-   * than itself, and those accept one channel only. Everything falls back to
-   * {@link #channel} in that case, which is exactly today's behaviour.
-   *
-   * Reasoning, measurements and the staging: research/control-channel-2026-08-05.md
+   * Reliable control messages. Capability version 2 puts this channel on an
+   * independent SCTP association: different streams on one association still
+   * share its send buffer and congestion window (r69, torrent-tv/meta#189).
+   * Legacy proxies retain their second channel on the media association.
    */
   #controlChannel = null;
+  #controlLink = null;
+  #controlNegotiated = false;
+  #controlCounters = {};
+  #controlTransportIn = null;
   /**
    * Who is watching over this connection: the page's own consumer id.
    *
@@ -318,6 +312,7 @@ export class WebRtcProxy {
       entry.reject(error);
     }
     this.#pending.clear();
+    this.#controlLink?.close();
     try {
       this.onConnectionLost?.();
     } catch (error) {
@@ -472,6 +467,7 @@ export class WebRtcProxy {
       return;
     }
 
+    if (this.#closedByUser) return;
     if (msg.type === "session") {
       // Record the session id and hand it to the log forwarder so browser logs
       // can be joined to the proxy's `[webrtc] Session <id>` lines.
@@ -505,13 +501,23 @@ export class WebRtcProxy {
 
     if (msg.type === "answer" && this.#pc) {
       try {
-        await this.#pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        const pc = this.#pc;
+        await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        if (this.#closedByUser || this.#pc !== pc) return;
         this.#remoteDescriptionSet = true;
         // Drain buffered candidates so ICE checking can start.
         for (const c of this.#pendingCandidates) {
-          await this.#pc.addIceCandidate(c).catch(() => {});
+          await pc.addIceCandidate(c).catch(() => {});
         }
+        if (this.#closedByUser || this.#pc !== pc) return;
         this.#pendingCandidates = [];
+        if (msg.separateControl === 2) {
+          this.#openSeparateControl(settle);
+        } else if (!this.#controlChannel) {
+          this.#openLegacyControl();
+        }
+        this.#controlNegotiated = true;
+        this.#settleConnected(settle);
       } catch (err) {
         settle(err instanceof Error ? err : new Error(String(err)));
       }
@@ -582,28 +588,6 @@ export class WebRtcProxy {
   async #createPeerConnection(_sessionId, settle) {
     this.#pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this.#channel = this.#pc.createDataChannel("proxy", { ordered: true });
-    // Reliable and ordered like the other one: an unreliable control channel
-    // could drop a seek, and a dropped seek is worse than a late one.
-    this.#controlChannel = this.#pc.createDataChannel("proxy-control", { ordered: true });
-    this.#controlChannel.binaryType = "arraybuffer";
-    this.#controlChannel.addEventListener("message", (event) => {
-      this.#onChannelMessage(event.data, "proxy-control");
-    });
-    this.#controlChannel.addEventListener("error", () => {
-      // Never fatal: the request simply goes down the media channel instead.
-      console.debug("[dc] control channel error — falling back to the single channel");
-      this.#controlChannel = null;
-    });
-    this.#controlChannel.addEventListener("close", () => {
-      this.#controlChannel = null;
-    });
-    // Say who is here, the moment there is something to say it on. This is
-    // what lets the proxy treat a closed connection as a PERSON leaving: until
-    // it was sent, a connection knew nothing about who was on it, and a killed
-    // tab released nothing at all.
-    this.#controlChannel.addEventListener("open", () => {
-      this.#announceViewer();
-    });
 
     // The unordered, non-retransmitting channel. It carries probes only, so a
     // failure to open it costs one reading and nothing else.
@@ -635,10 +619,10 @@ export class WebRtcProxy {
     this.#channel.bufferedAmountLowThreshold = REQUEST_BUFFERED_LOW_BYTES;
 
     this.#channel.addEventListener("open", () => {
-      this.#connected = true;
       // A silence is counted from the moment there was something to deliver on.
       this.#lastArrivalAt = performance.now();
-      settle();
+      this.#announceViewer();
+      this.#settleConnected(settle);
     });
 
     this.#channel.addEventListener("error", (event) => {
@@ -704,6 +688,84 @@ export class WebRtcProxy {
     this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: sdpForProxy }));
   }
 
+  #settleConnected(settle) {
+    if (!this.#controlNegotiated) return;
+    if (this.#channel?.readyState !== "open") return;
+    if (this.#controlLink && this.#controlChannel?.readyState !== "open") return;
+    this.#connected = true;
+    settle();
+  }
+
+  #openLegacyControl() {
+    const channel = this.#pc.createDataChannel("proxy-control", { ordered: true });
+    this.#controlChannel = channel;
+    channel.binaryType = "arraybuffer";
+    channel.addEventListener("message", event => this.#onChannelMessage(event.data, "proxy-control"));
+    channel.addEventListener("open", () => this.#announceViewer());
+    const closed = () => {
+      this.#rejectChannel(channel, new Error("Control data channel closed."));
+      if (this.#controlChannel === channel) this.#controlChannel = null;
+    };
+    channel.addEventListener("close", closed);
+    channel.addEventListener("error", closed);
+  }
+
+  #openSeparateControl(settle) {
+    if (this.#controlLink) return;
+    this.#controlLink = new ControlConnection({
+      proxyId: this.#proxyId,
+      iceServers: ICE_SERVERS,
+      silenceWindowMs: TRANSPORT_SILENCE_WINDOW_MS,
+      pending: channel => this.#pendingOn(channel),
+      acceptCandidate: candidate => {
+        console.debug(`[ice-control] remote ${WebRtcProxy.#describeCandidate(candidate.candidate)}`);
+        const ip = WebRtcProxy.#extractCandidateIp(candidate.candidate);
+        return this.#allowPrivateCandidates || !ip || !WebRtcProxy.#isLocalAddress(ip);
+      },
+      onMessage: raw => this.#onChannelMessage(raw, "proxy-control"),
+      onOpen: channel => {
+        this.#controlChannel = channel;
+        this.#announceViewer();
+        this.#settleConnected(settle);
+      },
+      onClosed: (channel, error, opened) => {
+        this.#rejectChannel(channel, error);
+        if (this.#controlChannel === channel) this.#controlChannel = null;
+        this.#probeSeen.delete("proxy-control");
+        this.#probeSeenAt.delete("proxy-control");
+        this.#controlCounters = {};
+        this.#controlTransportIn = null;
+        // Rebuild control independently. Requests already sent are rejected,
+        // never replayed; a later request can retry connection establishment.
+        if (opened && !this.#closedByUser && !this.#lostFired && this.isOpen) {
+          void this.#controlLink.open().catch(err => {
+            if (!this.#closedByUser && !this.#lostFired) console.warn("[dc-control] reconnect failed:", err);
+          });
+        }
+      }
+    });
+    void this.#controlLink.open().then(() => this.#settleConnected(settle), error => settle(error));
+  }
+
+  #pendingOn(channel) {
+    let count = 0;
+    for (const entry of this.#pending.values()) if (entry.channel === channel) count++;
+    return count;
+  }
+
+  #mediaPending() {
+    return this.#controlLink ? this.#pendingOn(this.#channel) : this.#pending.size;
+  }
+
+  #rejectChannel(channel, error) {
+    for (const [id, entry] of this.#pending) {
+      if (entry.channel === channel) {
+        this.#pending.delete(id);
+        entry.reject(error);
+      }
+    }
+  }
+
   /**
    * Handle an incoming data channel message.
    *
@@ -714,6 +776,10 @@ export class WebRtcProxy {
     // draining the channel is one of the two candidate causes of a delivery
     // freeze, and the proxy cannot see it at all; this is the reading that can.
     const handlerStartedAt = performance.now();
+    if (this.#controlLink && label === "proxy-control") {
+      this.#dispatchChannelMessage(raw, label);
+      return;
+    }
     // A delivery, whatever it carries: it ends any silence.
     this.#messagesHandled += 1;
     this.#lastArrivalAt = handlerStartedAt;
@@ -772,7 +838,7 @@ export class WebRtcProxy {
     if (this.#deliveryCheck !== null || !this.#connected || this.#closedByUser) {
       return;
     }
-    if (this.#pending.size === 0 && !this.#stalled) {
+    if (this.#mediaPending() === 0 && !this.#stalled) {
       return;
     }
     const silentMs = performance.now() - this.#lastArrivalAt;
@@ -823,7 +889,7 @@ export class WebRtcProxy {
     const verdict = silenceVerdict({
       silentMs,
       dueWithinMs: due,
-      outstanding: this.#pending.size,
+      outstanding: this.#mediaPending(),
       channelOpen: this.isOpen,
       messagesWaiting: received !== null && received > this.#messagesHandled,
       stalledAlready: this.#stalled,
@@ -924,7 +990,7 @@ export class WebRtcProxy {
     // proxy sent and what arrived here is what names the fault.
     if (msg.type === "probe") {
       if (Number.isInteger(msg.seq)) {
-        this.#countProbe(msg.seq);
+        if (!this.#controlLink || label !== "proxy-control") this.#countProbe(msg.seq);
         const previous = this.#probeSeen.get(label);
         if (previous === undefined || msg.seq > previous) {
           this.#probeSeen.set(label, msg.seq);
@@ -1088,7 +1154,7 @@ export class WebRtcProxy {
    *   connection may legitimately wait while its proxy prepares media.
    * @returns {Promise<DataChannelResponse>}
    */
-  fetch(path, options = {}) {
+  async fetch(path, options = {}) {
     if (!this.isOpen) {
       return Promise.reject(new Error("Data channel is not open."));
     }
@@ -1096,6 +1162,13 @@ export class WebRtcProxy {
     const requestId = crypto.randomUUID();
     const url = new URL(path, "http://proxy");
     const signal = options.signal instanceof AbortSignal ? options.signal : null;
+    // Route large request bodies by their encoded size, not character count.
+    const payload = options.body != null ? new TextEncoder().encode(options.body) : null;
+    const largeBody = payload && payload.length > REQUEST_CHUNK_THRESHOLD_BYTES;
+    const isMedia = url.pathname.startsWith("/transcode/") || url.pathname.startsWith("/stream") || largeBody;
+    if (!isMedia && this.#controlLink) await this.#controlLink.wait(signal);
+    if (!this.isOpen) throw new Error("Data channel is not open.");
+    const channel = isMedia ? this.#channel : this.#channelFor(url.pathname);
 
     // Keep settlement available if channel.send() throws.
     let pendingResolve;
@@ -1132,7 +1205,8 @@ export class WebRtcProxy {
       // for. `firstByteAt` is filled when the first body byte arrives.
       startedAt: performance.now(),
       path,
-      firstByteAt: undefined
+      firstByteAt: undefined,
+      channel
     });
     // Somebody is waiting now: a silence from here on means something.
     this.#armDeliveryCheck();
@@ -1142,7 +1216,7 @@ export class WebRtcProxy {
         this.#pending.delete(requestId);
         cleanup();
         try {
-          this.#channelFor(url.pathname).send(JSON.stringify({ type: "request-cancel", requestId }));
+          channel.send(JSON.stringify({ type: "request-cancel", requestId }));
         } catch {
           // silent-ok: a closed connection already ends its outstanding proxy requests.
         }
@@ -1157,14 +1231,11 @@ export class WebRtcProxy {
     const reqPath = url.pathname;
     const query = url.search.slice(1);
     const headers = { ...(options.headers ?? {}) };
-    // Measure the body in UTF-8 bytes (what the proxy reassembles), not string
-    // length — a body may contain multi-byte characters.
-    const payload = options.body != null ? new TextEncoder().encode(options.body) : null;
 
     if (!payload || payload.length <= REQUEST_CHUNK_THRESHOLD_BYTES) {
       // Legacy single message: small or bodyless requests, one send.
       try {
-        this.#channelFor(reqPath).send(JSON.stringify({
+        channel.send(JSON.stringify({
           type: "request",
           requestId,
           method,
@@ -1173,6 +1244,7 @@ export class WebRtcProxy {
           headers,
           body: options.body ?? null
         }));
+        if (channel === this.#controlChannel) this.#controlLink?.noteRequest();
       } catch (err) {
         // channel.send() can throw if the channel transitions to closing/closed
         // between the isOpen check and the send.  Remove the pending entry, cancel
@@ -1197,21 +1269,16 @@ export class WebRtcProxy {
   /**
    * Which channel a request goes down.
    *
-   * Media bodies keep the original channel; everything else — seek, session
-   * create and release, progress, stats, the link report — goes down the
-   * control channel when it is open. SCTP delivers one stream in order, so a
-   * 300-byte seek written after an 8 MB segment waits for that segment to
-   * finish; on the 1-5.8 Mbit/s measured on cellular that is 11-64 s, and the
-   * proxy learns about the seek that much later.
-   *
-   * Falls back to the single channel whenever the control one is not open,
-   * which is what happens against a proxy older than this browser.
+   * Media paths use the original association. Other requests use independent
+   * control when supported; fetch waits for it to reconnect rather than sending
+   * control back through a media queue. Only legacy proxies use that fallback.
    *
    * @param {string} requestPath
    * @returns {RTCDataChannel}
    */
   #channelFor(requestPath) {
     const isMedia = requestPath.startsWith("/transcode/") || requestPath.startsWith("/stream");
+    if (!isMedia && this.#controlLink) return this.#controlChannel;
     if (isMedia || this.#controlChannel?.readyState !== "open") {
       return this.#channel;
     }
@@ -1330,10 +1397,13 @@ export class WebRtcProxy {
    *
    * @returns {Promise<number>} RTT in milliseconds.
    */
-  ping() {
+  async ping() {
     if (!this.isOpen) {
       return Promise.reject(new Error("Data channel is not open."));
     }
+    if (this.#controlLink) await this.#controlLink.wait();
+    if (!this.isOpen) throw new Error("Data channel is not open.");
+    const channel = this.#channelFor("/healthz");
 
     const id = crypto.randomUUID();
     const sentAt = performance.now();
@@ -1354,11 +1424,19 @@ export class WebRtcProxy {
         reject: (err) => { clearTimeout(timer); reject(err); },
         chunks: [],
         status: 0,
-        headers: {}
+        headers: {},
+        channel
       });
     });
 
-    this.#channel.send(JSON.stringify({ type: "ping", id }));
+    try {
+      channel.send(JSON.stringify({ type: "ping", id }));
+      if (channel === this.#controlChannel) this.#controlLink?.noteRequest();
+    } catch (error) {
+      const entry = this.#pending.get(`ping:${id}`);
+      this.#pending.delete(`ping:${id}`);
+      entry?.reject(error);
+    }
     return rttPromise;
   }
 
@@ -1392,19 +1470,17 @@ export class WebRtcProxy {
    * @returns {void}
    */
   #announceViewer() {
-    if (!this.#viewerName || this.#controlChannel?.readyState !== "open") {
-      return;
-    }
-    try {
-      this.#controlChannel.send(
-        JSON.stringify({ type: "viewer", consumerId: this.#viewerName })
-      );
-    } catch (error) {
-      // Not fatal and not retried here: the next control channel to open says
-      // it again, and until then the proxy falls back to the silence rule.
-      console.debug(
-        `[dc] could not name the viewer on the control channel: ${error instanceof Error ? error.message : String(error)}`
-      );
+    if (!this.#viewerName) return;
+    // The existing presence relation permits multiple live connections for one
+    // viewer. Name both associations; only losing the last releases the viewer.
+    const channels = this.#controlLink ? [this.#channel, this.#controlChannel] : [this.#controlChannel];
+    for (const channel of channels) {
+      if (channel?.readyState !== "open") continue;
+      try {
+        channel.send(JSON.stringify({ type: "viewer", consumerId: this.#viewerName }));
+      } catch (error) {
+        console.debug(`[dc] could not name the viewer: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 
@@ -1530,6 +1606,23 @@ export class WebRtcProxy {
       if (!this.#pc) {
         return;
       }
+      const controlPc = this.#controlLink?.peer;
+      if (controlPc) void controlPc.getStats().then(stats => {
+        if (this.#controlLink?.peer !== controlPc) return;
+        let transport = null;
+        const channels = {};
+        stats.forEach(report => {
+          if (report.type === "transport") transport = report;
+          if (report.type === "data-channel") channels[report.label ?? "?"] = {
+            messages: report.messagesReceived ?? null, bytes: report.bytesReceived ?? null
+          };
+        });
+        this.#controlCounters = channels;
+        this.#controlTransportIn = transport?.bytesReceived ?? null;
+        console.debug(`[dc-control-transport] session=${this.#controlLink.signalSessionId} connectionId=${this.#controlLink.connectionId} ` +
+          `received=${this.#controlTransportIn ?? "?"} sent=${transport?.bytesSent ?? "?"} ` +
+          `state=${controlPc.connectionState} channels=${JSON.stringify(channels)} at=${new Date().toISOString()}`);
+      }).catch(() => {});
       void this.#pc.getStats().then((stats) => {
         let transport = null;
         let pair = null;
@@ -1610,41 +1703,42 @@ export class WebRtcProxy {
     }, LOOP_LAG_PROBE_MS);
 
     this.#probeEchoTimer = window.setInterval(() => {
-      const channel =
+      const mediaChannel =
         this.#channel?.readyState === "open"
           ? this.#channel
-          : this.#controlChannel?.readyState === "open"
+          : !this.#controlLink && this.#controlChannel?.readyState === "open"
             ? this.#controlChannel
             : null;
-      if (!channel) {
-        return;
-      }
       const handlerMaxMs = Math.round(this.#handlerMaxMs * 10) / 10;
       this.#handlerMaxMs = 0;
-      try {
-        channel.send(
-          JSON.stringify({
-            type: "probe-echo",
-            seen: Object.fromEntries(this.#probeSeen),
-            // The two timestamps that turn a count into a time. `seenAt` is
-            // when each channel's newest probe arrived here, `sentAt` is when
-            // this report leaves — both on this machine's clock, which the
-            // proxy does not assume agrees with its own.
-            seenAt: Object.fromEntries(this.#probeSeenAt),
-            sentAt: Date.now(),
-            report: {
-              visibility: typeof document === "undefined" ? "?" : document.visibilityState,
-              loopLagMs: Math.round(this.#loopLagMs),
-              handlerMaxMs,
-              transportBytesReceived: this.#lastTransportIn,
-              channels: this.#lastChannelCounters,
-              pending: this.#pending.size
-            }
-          })
-        );
-      } catch {
-        // silent-ok: a channel that will not take a 200-byte message is itself
-        // the answer, and the proxy reads it — the echo simply stops arriving.
+      const reports = this.#controlLink
+        ? [[mediaChannel, false], [this.#controlChannel, true]]
+        : [[mediaChannel, false]];
+      for (const [channel, control] of reports) {
+        if (channel?.readyState !== "open") continue;
+        const belongs = ([label]) => !this.#controlLink || (label === "proxy-control") === control;
+        try {
+          channel.send(
+            JSON.stringify({
+              type: "probe-echo",
+              seen: Object.fromEntries([...this.#probeSeen].filter(belongs)),
+              // Both timestamps use this machine's clock; the proxy estimates
+              // the offset rather than assuming the clocks agree.
+              seenAt: Object.fromEntries([...this.#probeSeenAt].filter(belongs)),
+              sentAt: Date.now(),
+              report: {
+                visibility: typeof document === "undefined" ? "?" : document.visibilityState,
+                loopLagMs: Math.round(this.#loopLagMs),
+                handlerMaxMs,
+                transportBytesReceived: control ? this.#controlTransportIn : this.#lastTransportIn,
+                channels: control ? this.#controlCounters : this.#lastChannelCounters,
+                pending: this.#controlLink ? this.#pendingOn(channel) : this.#pending.size
+              }
+            })
+          );
+        } catch {
+          // A closed channel stops reporting; the proxy observes that silence.
+        }
       }
     }, PROBE_ECHO_MS);
   }
@@ -1686,6 +1780,7 @@ export class WebRtcProxy {
     }
     this.#pending.clear();
     this.#ws?.close();
+    this.#controlLink?.close();
     this.#controlChannel?.close();
     this.#controlChannel = null;
     this.#fastChannel?.close();
