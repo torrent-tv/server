@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: After a seek the page asks the proxy again as soon as the media at the new position has arrived, instead of only when the forecast's delay or the 1.5 s cadence comes round. Back to an already made position on Home Assistant the media arrived at 22.01 and the picture started at 24.07, after a question asked at 23.52 (r69, #ttv-178).
+
 ## 0.50.18
 
 - **Perf**: While playback waits to start, the page reports its buffer and asks the proxy again as soon as a piece has arrived, instead of on its next 1.5 s ask. The piece a start waits for is one the page appends, and the answer that let it start came up to 1.5 s after it: after a seek on Home Assistant the last piece reached the page at 07:19:56.1 and the start was allowed at the next ask, 07:19:57.4 (r68, #ttv-178).
