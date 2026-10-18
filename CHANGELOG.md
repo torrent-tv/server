@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.23
 
 - **Fix**: Show wait estimates to tenths of a second below 10 seconds and milliseconds below one second; log each displayed estimate and the first presented video frame with elapsed time for per-run accuracy checks.
 - **Fix**: Repeated copies of the same proxy timing measurement no longer restart the displayed playback countdown.
