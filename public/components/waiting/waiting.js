@@ -46,6 +46,10 @@ export class WaitingOverlay {
   /** @type {number | null} Latest reading from the component that owns the element. */
   #bufferedAhead = null;
   #timer = null;
+  #waitSequence = 0;
+  #waitStartedAt = null;
+  #wasWaiting = false;
+  #lastRenderedText = null;
 
 
   /**
@@ -158,7 +162,14 @@ export class WaitingOverlay {
    */
   #onStateChanged = (event) => {
     const state = event instanceof CustomEvent ? event.detail?.state : "";
-    if (isWaiting(state) && this.#timer === null) {
+    const waiting = isWaiting(state);
+    if (waiting && !this.#wasWaiting) {
+      this.#waitSequence += 1;
+      this.#waitStartedAt = performance.now();
+      this.#lastRenderedText = null;
+    }
+    this.#wasWaiting = waiting;
+    if (waiting && this.#timer === null) {
       // Refresh at the displayed time unit; this is not a forecasting window.
       this.#timer = setInterval(() => {
         this.#measurements.etaSeconds = this.#model.update({}).etaSeconds ?? undefined;
@@ -196,10 +207,21 @@ export class WaitingOverlay {
 
   #render() {
     const text = formatWaitingText(this.#measurements);
+    if (text === this.#lastRenderedText) {
+      return;
+    }
     // `replaceChildren` rather than `textContent`: it removes whatever is there
     // first, whoever put it there, so the node cannot accumulate.
     this.#text.replaceChildren(text);
     this.#text.style.visibility = text.length > 0 ? "visible" : "hidden";
+    this.#lastRenderedText = text;
+    const estimate = this.#measurements.etaSeconds;
+    if (typeof estimate === "number" && Number.isFinite(estimate)) {
+      console.debug(`[wait-estimate] wait=${this.#waitSequence} renderedAt=${performance.now().toFixed(3)}ms ` +
+        `elapsedMs=${this.#waitStartedAt === null ? "?" : (performance.now() - this.#waitStartedAt).toFixed(3)} ` +
+        `seconds=${estimate.toFixed(6)} reason=${this.#measurements.readinessReason ?? "unknown"} ` +
+        `label=${JSON.stringify(text.split("\n").at(-1))}`);
+    }
   }
 }
 
