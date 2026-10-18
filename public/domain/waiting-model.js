@@ -5,6 +5,7 @@
  */
 export class WaitingModel {
   #readiness = null;
+  #readinessKey = null;
   #bufferedAhead = null;
   #deadline = null;
   #clock;
@@ -24,11 +25,15 @@ export class WaitingModel {
       const next = facts.playbackReadiness && typeof facts.playbackReadiness === "object"
         ? facts.playbackReadiness
         : null;
-      if (next !== this.#readiness) {
+      const key = Number.isFinite(next?.measuredAt)
+        ? `${next.measuredAt}:${next.ready === true}:${String(next.reason ?? "")}:${String(next.delaySeconds)}`
+        : next;
+      if (key !== this.#readinessKey) {
         const delay = next?.delaySeconds;
         this.#deadline = Number.isFinite(delay) && delay >= 0 ? now + delay * 1000 : null;
       }
       this.#readiness = next;
+      this.#readinessKey = key;
     }
     if (typeof facts.bufferedAhead === "number" && Number.isFinite(facts.bufferedAhead) && facts.bufferedAhead >= 0) {
       this.#bufferedAhead = facts.bufferedAhead;
@@ -66,6 +71,7 @@ export class WaitingModel {
   /** The old client-side readiness calculation has been removed. */
   reset() {
     this.#readiness = null;
+    this.#readinessKey = null;
     this.#bufferedAhead = null;
     this.#deadline = null;
   }
