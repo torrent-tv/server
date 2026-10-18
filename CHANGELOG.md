@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Repeated copies of the same proxy timing measurement no longer restart the displayed playback countdown.
+
 ## 0.50.22
 
 - **Chore**: Update dependencies: 1 package(s) changed in the lock file.

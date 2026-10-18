@@ -118,3 +118,20 @@ test("rendering the same cached observation does not postpone its deadline", () 
   now = 1500;
   assert.equal(model.update({ playbackReadiness: observation }).etaSeconds, 2.5);
 });
+
+test("a separately parsed duplicate measurement does not restart its deadline", () => {
+  let now = 0;
+  const model = new WaitingModel({ clock: () => now });
+  const observation = readiness({ measuredAt: 1234, delaySeconds: 4 });
+  model.update({ playbackReadiness: observation });
+  now = 1500;
+  assert.equal(model.update({ playbackReadiness: { ...observation } }).etaSeconds, 2.5);
+});
+
+test("a new measurement starts a new countdown even when its value is unchanged", () => {
+  let now = 0;
+  const model = new WaitingModel({ clock: () => now });
+  model.update({ playbackReadiness: readiness({ measuredAt: 1234, delaySeconds: 4 }) });
+  now = 1500;
+  assert.equal(model.update({ playbackReadiness: readiness({ measuredAt: 2234, delaySeconds: 4 }) }).etaSeconds, 4);
+});
