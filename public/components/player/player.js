@@ -3,6 +3,7 @@ import { playerArt } from "../../domain/media-info.js";
 import {
   APP_VIEW,
   APP_EVENT,
+  APP_STATE,
   MEDIA_INTENT,
   acceptsPlaybackInput,
   acceptsPlaybackIntent,
@@ -133,10 +134,13 @@ export class Player extends StateDerivedView {
   applyAppState(state, belongsOnScreen) {
     const wasWaiting = isWaiting(this.#state);
     const waiting = isWaiting(state);
-    if (waiting && !wasWaiting) {
+    if (waiting && !wasWaiting && !this.#awaitingFirstPresentedFrame) {
       this.#waitSequence += 1;
       this.#waitStartedAt = performance.now();
       this.#awaitingFirstPresentedFrame = true;
+    }
+    if (!waiting && state !== APP_STATE.ADVANCING) {
+      this.#awaitingFirstPresentedFrame = false;
     }
     if (!belongsOnScreen && this.onScreen) {
       // Leaving the player entirely — the picker or the error screen. Let go of
@@ -174,7 +178,7 @@ export class Player extends StateDerivedView {
       return;
     }
     const observe = (_now, metadata) => {
-      if (waitSequence !== this.#waitSequence || sourceEpoch !== this.#sourceEpoch) {
+      if (!this.#awaitingFirstPresentedFrame || waitSequence !== this.#waitSequence || sourceEpoch !== this.#sourceEpoch) {
         this.#firstFrameCallbackId = null;
         return;
       }
@@ -185,7 +189,11 @@ export class Player extends StateDerivedView {
           `mediaTime=${metadata.mediaTime.toFixed(6)} currentTime=${this.#video.currentTime.toFixed(6)} ` +
           `bufferedAhead=${aheadSeconds.toFixed(3)}s readyState=${this.#video.readyState} ` +
           `presentedFrames=${metadata.presentedFrames}`);
+        document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.FIRST_FRAME, {
+          detail: { waitSequence, elapsedMs, mediaTime: metadata.mediaTime, bufferedAhead: aheadSeconds }
+        }));
         this.#awaitingFirstPresentedFrame = false;
+        this.#waitStartedAt = null;
         this.#firstFrameCallbackId = null;
         return;
       }

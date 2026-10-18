@@ -70,6 +70,8 @@ export const PLAYER_EVENTS = {
    * owner per fact.
    */
   BUFFER: "PLAYER:BUFFER",
+  /** `{ waitSequence, elapsedMs, mediaTime, bufferedAhead }` — first presented frame after a wait. */
+  FIRST_FRAME: "PLAYER:FIRST_FRAME",
   /** `{ attemptId, ceilingSeconds }` — the active HLS playback attempt's buffer ceiling. */
   BUFFER_CEILING: "PLAYER:BUFFER_CEILING",
   SHOW: "PLAYER:SHOW",
