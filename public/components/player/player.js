@@ -180,8 +180,11 @@ export class Player extends StateDerivedView {
       }
       if (metadata.presentedFrames > 0) {
         const elapsedMs = this.#waitStartedAt === null ? null : performance.now() - this.#waitStartedAt;
+        const aheadSeconds = bufferedAheadSeconds(this.#video);
         this.#logEvt(`[first-frame] wait=${waitSequence} elapsedMs=${elapsedMs?.toFixed(3) ?? "?"} ` +
-          `mediaTime=${metadata.mediaTime.toFixed(6)} presentedFrames=${metadata.presentedFrames}`);
+          `mediaTime=${metadata.mediaTime.toFixed(6)} currentTime=${this.#video.currentTime.toFixed(6)} ` +
+          `bufferedAhead=${aheadSeconds.toFixed(3)}s readyState=${this.#video.readyState} ` +
+          `presentedFrames=${metadata.presentedFrames}`);
         this.#awaitingFirstPresentedFrame = false;
         this.#firstFrameCallbackId = null;
         return;
