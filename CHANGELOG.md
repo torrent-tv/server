@@ -2,6 +2,7 @@
 
 - **Fix**: Show wait estimates to tenths of a second below 10 seconds and milliseconds below one second; log each displayed estimate and the first presented video frame with elapsed time for per-run accuracy checks.
 - **Fix**: Repeated copies of the same proxy timing measurement no longer restart the displayed playback countdown.
+- **Chore**: Capture the media, video and audio ranges held when the first frame is presented, so accuracy checks can verify required audio readiness.
 
 ## 0.50.22
 

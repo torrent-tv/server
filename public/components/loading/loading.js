@@ -728,6 +728,27 @@ export class Loading extends StateDerivedView {
     }
   };
 
+  /** @param {CustomEvent} event */
+  #onFirstPresentedFrame = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    if (!detail || !Number.isFinite(detail.waitSequence) || !Number.isFinite(detail.mediaTime) ||
+        !this.#videoElement) return;
+    let buffers = null;
+    try {
+      buffers = this.#hlsPlayer.getBufferedRanges(this.#videoElement);
+    } catch (error) {
+      console.debug(`[first-frame-buffers] wait=${detail.waitSequence} unavailable=` +
+        `${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    console.debug(`[first-frame-buffers] wait=${detail.waitSequence} mediaTime=${detail.mediaTime.toFixed(6)} ` +
+      `tracks=${JSON.stringify({
+        media: buffers?.media ?? [],
+        video: buffers?.video ?? null,
+        audio: buffers?.audio ?? null
+      })}`);
+  };
+
   /**
    * [evt] TEMPORARY: timestamped playback diagnostics (seek/stall/play) for
    * correlating the browser timeline with the proxy's segment/restart logs.
@@ -1871,6 +1892,7 @@ export class Loading extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.TOGGLE_SUBTITLES, () => this.#subtitlePlayback.toggle());
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);
     document.addEventListener(PLAYER_EVENTS.READY, this.#onPlayerReady);
+    document.addEventListener(PLAYER_EVENTS.FIRST_FRAME, this.#onFirstPresentedFrame);
     document.addEventListener("mediaseekrequest", this.#onMediaSeekRequest, true);
     document.addEventListener(ERROR_EVENTS.SHOW, this.#onErrorShow);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
