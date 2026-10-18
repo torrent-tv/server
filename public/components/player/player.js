@@ -71,6 +71,10 @@ export class Player extends StateDerivedView {
   /** @type {ReturnType<typeof setTimeout> | null} Copied-feedback reset timer. */
   #shareCopiedTimer = null;
   #sourceEpoch = 0;
+  #waitSequence = 0;
+  #waitStartedAt = null;
+  #awaitingFirstPresentedFrame = false;
+  #firstFrameCallbackId = null;
 
   /**
    * Recent buffer readings, for the fill rate. Held here because this component
@@ -127,6 +131,13 @@ export class Player extends StateDerivedView {
    * @returns {void}
    */
   applyAppState(state, belongsOnScreen) {
+    const wasWaiting = isWaiting(this.#state);
+    const waiting = isWaiting(state);
+    if (waiting && !wasWaiting) {
+      this.#waitSequence += 1;
+      this.#waitStartedAt = performance.now();
+      this.#awaitingFirstPresentedFrame = true;
+    }
     if (!belongsOnScreen && this.onScreen) {
       // Leaving the player entirely — the picker or the error screen. Let go of
       // the media: a hidden <video> still holds its source and still emits
@@ -149,6 +160,35 @@ export class Player extends StateDerivedView {
     this.#measureWhileWaiting(belongsOnScreen && isWaiting(state));
     this.#applyPlaybackInput(state);
     this.#applyMediaIntent(state);
+  }
+
+  #watchFirstPresentedFrame(waitSequence, sourceEpoch) {
+    if (!this.#awaitingFirstPresentedFrame || waitSequence !== this.#waitSequence) {
+      return;
+    }
+    if (this.#firstFrameCallbackId !== null && typeof this.#video.cancelVideoFrameCallback === "function") {
+      this.#video.cancelVideoFrameCallback(this.#firstFrameCallbackId);
+      this.#firstFrameCallbackId = null;
+    }
+    if (typeof this.#video.requestVideoFrameCallback !== "function") {
+      return;
+    }
+    const observe = (_now, metadata) => {
+      if (waitSequence !== this.#waitSequence || sourceEpoch !== this.#sourceEpoch) {
+        this.#firstFrameCallbackId = null;
+        return;
+      }
+      if (metadata.presentedFrames > 0) {
+        const elapsedMs = this.#waitStartedAt === null ? null : performance.now() - this.#waitStartedAt;
+        this.#logEvt(`[first-frame] wait=${waitSequence} elapsedMs=${elapsedMs?.toFixed(3) ?? "?"} ` +
+          `mediaTime=${metadata.mediaTime.toFixed(6)} presentedFrames=${metadata.presentedFrames}`);
+        this.#awaitingFirstPresentedFrame = false;
+        this.#firstFrameCallbackId = null;
+        return;
+      }
+      this.#firstFrameCallbackId = this.#video.requestVideoFrameCallback(observe);
+    };
+    this.#firstFrameCallbackId = this.#video.requestVideoFrameCallback(observe);
   }
 
   /**
@@ -619,6 +659,7 @@ export class Player extends StateDerivedView {
       this.#video.addEventListener("playing", () => {
         this.#playbackStarted = true;
         document.querySelector("#player__poster").classList.remove("player__poster--shown");
+        this.#watchFirstPresentedFrame(this.#waitSequence, this.#sourceEpoch);
       });
       this.#video.addEventListener("emptied", () => { this.#playbackStarted = false; this.#applyPoster(); });
       new ResizeObserver(() => this.#applyPoster()).observe(this.#video);
@@ -688,6 +729,11 @@ export class Player extends StateDerivedView {
   /** Restore source-dependent presentation without changing application flow. */
   reset = () => {
     this.#sourceEpoch += 1;
+    this.#awaitingFirstPresentedFrame = false;
+    if (this.#firstFrameCallbackId !== null && typeof this.#video.cancelVideoFrameCallback === "function") {
+      this.#video.cancelVideoFrameCallback(this.#firstFrameCallbackId);
+      this.#firstFrameCallbackId = null;
+    }
     this.#clearTrackMenu(this.#audioMenu, this.#audioButton);
     this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton);
     this.#playlistToggle.hidden = true;

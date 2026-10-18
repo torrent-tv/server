@@ -104,6 +104,18 @@ function formatDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) {
     return plural(0, "second");
   }
+  if (seconds === 0) {
+    return plural(0, "second");
+  }
+  // Nearest whole seconds can add up to 0.5 s of display error, so use that
+  // precision only at 10 s or more. Nearest tenths can add 0.05 s, so use it
+  // from 1 s. Below that, millisecond precision keeps formatting error below 0.5 ms.
+  if (seconds < 1) {
+    return `${seconds.toFixed(3)} seconds`;
+  }
+  if (seconds < 10) {
+    return `${seconds.toFixed(1)} seconds`;
+  }
   const total = Math.round(seconds);
   if (total < 60) {
     return plural(total, "second");

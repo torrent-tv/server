@@ -26,6 +26,14 @@ test("shows download and processing facts in one details row and total playback 
   assert.equal(rows[2], "38 seconds until playback");
 });
 
+test("formats wait estimates with precision that keeps display rounding within five percent", () => {
+  const lastLine = (etaSeconds) => formatWaitingText({ etaSeconds }).split("\n").at(-1);
+  assert.equal(lastLine(0.19), "0.190 seconds until playback");
+  assert.equal(lastLine(1.05), "1.1 seconds until playback");
+  assert.equal(lastLine(6.02), "6.0 seconds until playback");
+  assert.equal(lastLine(10.5), "11 seconds until playback");
+});
+
 test("a proxy without the readiness forecast is identified", () => {
   assert.match(
     formatWaitingText({ readinessUnavailable: true }),
