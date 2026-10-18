@@ -49,6 +49,7 @@ export class WaitingOverlay {
   #waitSequence = 0;
   #waitStartedAt = null;
   #wasWaiting = false;
+  #awaitingFirstPresentedFrame = false;
   #lastRenderedText = null;
 
 
@@ -69,6 +70,7 @@ export class WaitingOverlay {
     }
     document.addEventListener(PROXY_EVENTS.MEASURED, this.#onProxyMeasured);
     document.addEventListener(PLAYER_EVENTS.BUFFER, this.#onBuffer);
+    document.addEventListener(PLAYER_EVENTS.FIRST_FRAME, this.#onFirstFrame);
     document.addEventListener(WAITING_EVENTS.STEP, this.#onStep);
     document.addEventListener(APP_EVENTS.STATE_CHANGED, this.#onStateChanged);
   }
@@ -163,11 +165,15 @@ export class WaitingOverlay {
   #onStateChanged = (event) => {
     const state = event instanceof CustomEvent ? event.detail?.state : "";
     const waiting = isWaiting(state);
-    if (waiting && !this.#wasWaiting) {
+    if (waiting && !this.#wasWaiting && !this.#awaitingFirstPresentedFrame) {
       this.#waitSequence += 1;
       this.#waitStartedAt = performance.now();
+      this.#awaitingFirstPresentedFrame = true;
       this.#lastRenderedText = null;
       console.debug(`[wait-start] wait=${this.#waitSequence} startedAt=${this.#waitStartedAt.toFixed(3)}ms state=${state}`);
+    }
+    if (!waiting && state !== APP_STATE.ADVANCING) {
+      this.#awaitingFirstPresentedFrame = false;
     }
     this.#wasWaiting = waiting;
     if (waiting && this.#timer === null) {
@@ -188,6 +194,14 @@ export class WaitingOverlay {
     this.#measurements = {};
     this.#pipelineStep = "";
     this.#render();
+  };
+
+  #onFirstFrame = (event) => {
+    const waitSequence = event instanceof CustomEvent ? event.detail?.waitSequence : null;
+    if (waitSequence === this.#waitSequence) {
+      this.#awaitingFirstPresentedFrame = false;
+      this.#waitStartedAt = null;
+    }
   };
 
   /**
