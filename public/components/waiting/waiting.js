@@ -167,6 +167,7 @@ export class WaitingOverlay {
       this.#waitSequence += 1;
       this.#waitStartedAt = performance.now();
       this.#lastRenderedText = null;
+      console.debug(`[wait-start] wait=${this.#waitSequence} startedAt=${this.#waitStartedAt.toFixed(3)}ms state=${state}`);
     }
     this.#wasWaiting = waiting;
     if (waiting && this.#timer === null) {
