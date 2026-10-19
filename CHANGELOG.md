@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.27
 
 - **Fix**: Send the pre-session client-link rate and sample age with the early source wait estimates (#ttv-185).
 
