@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.28
 
 - **Fix**: Keep the total-wait estimate instead of a local readiness delay, and do not show zero before the first presented frame (#ttv-185).
 
