@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.26
 
 - **Fix**: Start first-frame wait measurements at the file selection or magnet submission, before local torrent parsing.
 - **Fix**: Attempt to reconnect after the proxy transport is lost while the viewer is at the file picker.
