@@ -1,6 +1,9 @@
-## 0.50.29
+## Unreleased
 
 - **Fix**: Record separate cold-start phase durations and time from startup completion to the first audio-ready presented frame for the proxy's wait model (#ttv-185).
+
+## 0.50.29
+
 - **Fix**: Send the elapsed time from the original playback action with source estimates so later forecasts remain a time left, not a new full-wait countdown (#ttv-185).
 
 ## 0.50.28
