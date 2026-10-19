@@ -5,13 +5,11 @@
  */
 export class WaitingModel {
   #readiness = null;
-  #readinessKey = null;
   #waitEstimateKey = null;
   #waitEstimateDeadline = null;
   #waitEstimateId = null;
   #waitEstimateRevision = -1;
   #bufferedAhead = null;
-  #deadline = null;
   #clock;
 
   constructor({ clock = () => performance.now() } = {}) {
@@ -49,15 +47,7 @@ export class WaitingModel {
       const next = facts.playbackReadiness && typeof facts.playbackReadiness === "object"
         ? facts.playbackReadiness
         : null;
-      const key = Number.isFinite(next?.measuredAt)
-        ? `${next.measuredAt}:${next.ready === true}:${String(next.reason ?? "")}:${String(next.delaySeconds)}`
-        : next;
-      if (key !== this.#readinessKey) {
-        const delay = next?.delaySeconds;
-        this.#deadline = Number.isFinite(delay) && delay >= 0 ? now + delay * 1000 : null;
-      }
       this.#readiness = next;
-      this.#readinessKey = key;
     }
     if (typeof facts.bufferedAhead === "number" && Number.isFinite(facts.bufferedAhead) && facts.bufferedAhead >= 0) {
       this.#bufferedAhead = facts.bufferedAhead;
@@ -67,16 +57,13 @@ export class WaitingModel {
     const proxyBuffer = Number(readiness?.bufferedSeconds);
     const ahead = this.#bufferedAhead ?? (Number.isFinite(proxyBuffer) ? proxyBuffer : null);
     const ready = readiness?.ready === true;
-    const delay = readiness?.delaySeconds;
-    const countdown = Number.isFinite(this.#deadline) ? (this.#deadline - now) / 1000 : null;
-    const readinessEta = ready
-      ? 0
-      : Number.isFinite(delay) && delay > 0 && Number.isFinite(countdown) && countdown > 0
-        ? countdown : null;
     const earlyCountdown = Number.isFinite(this.#waitEstimateDeadline)
       ? (this.#waitEstimateDeadline - now) / 1000 : null;
     const earlyEta = Number.isFinite(earlyCountdown) && earlyCountdown > 0 ? earlyCountdown : null;
-    const etaSeconds = readinessEta ?? earlyEta;
+    // An unready playback-readiness delay describes its current constraint,
+    // not the full remaining time to the first presented frame.
+    // Only the early wait estimate covers that complete end-to-end wait.
+    const etaSeconds = earlyEta;
     const cushionRemainingSeconds = Number.isFinite(reserve) && reserve > 0 && ahead !== null
       ? Math.max(0, reserve - ahead)
       : null;
@@ -88,8 +75,7 @@ export class WaitingModel {
 
     return {
       etaSeconds,
-      reason: readinessEta !== null ? readiness?.reason ?? "forecast-not-received"
-        : earlyEta !== null ? "initial-playback-estimate" : readiness?.reason ?? "forecast-not-received",
+      reason: earlyEta !== null ? "initial-playback-estimate" : readiness?.reason ?? "forecast-not-received",
       cushionPercent,
       cushionRemainingSeconds,
       encodeSpeedText: null
@@ -99,12 +85,10 @@ export class WaitingModel {
   /** The old client-side readiness calculation has been removed. */
   reset() {
     this.#readiness = null;
-    this.#readinessKey = null;
     this.#waitEstimateKey = null;
     this.#waitEstimateDeadline = null;
     this.#waitEstimateId = null;
     this.#waitEstimateRevision = -1;
     this.#bufferedAhead = null;
-    this.#deadline = null;
   }
 }
