@@ -55,6 +55,16 @@ test("a single-file torrent starts the estimate request before waiting for the p
   assert.match(source.slice(registration, fileList), /parsed\.files\.length === 1/);
 });
 
+test("returning to the picker keeps the established proxy transport for the next estimate", () => {
+  const resetStart = source.indexOf("  #onAppReset = () => {");
+  const resetEnd = source.indexOf("\n  };", resetStart) + 5;
+  const stopStart = source.indexOf("  #stopPlayback(options = {}) {");
+  const stopEnd = source.indexOf("\n  };", stopStart) + 5;
+  assert.ok(resetStart >= 0 && stopStart >= 0);
+  assert.match(source.slice(resetStart, resetEnd), /#stopPlayback\(\{ keepTransport: true \}\)/);
+  assert.match(source.slice(stopStart, stopEnd), /if \(this\.#proxy && options\.keepTransport !== true\)/);
+});
+
 test("a late source estimate from an earlier viewing is ignored", async () => {
   const events = [];
   let answer;
