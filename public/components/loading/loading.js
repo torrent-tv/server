@@ -1767,7 +1767,10 @@ export class Loading extends StateDerivedView {
   }
 
   #onAppReset = () => {
-    this.#stopPlayback();
+    // The file and any output session are over, but keeping the already-open
+    // proxy connection lets the next selection use the early estimate without
+    // paying for another ICE exchange first.
+    this.#stopPlayback({ keepTransport: true });
     this.#resetSourceState();
     this.setProgress(0);
     this.setStatus("");
@@ -1820,7 +1823,7 @@ export class Loading extends StateDerivedView {
     // Before the proxy is torn down, so a connect that finishes a moment later
     // cannot put a live one back on a component that has just let go of it.
     this.#abandonTransportAcquisition();
-    if (this.#proxy) {
+    if (this.#proxy && options.keepTransport !== true) {
       this.#proxy.close();
       this.#proxy = null;
       this.#transport = null;

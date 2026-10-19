@@ -2,6 +2,7 @@
 
 - **Fix**: Start a single-file wait at the original open action and a multi-file wait at file selection; use the proxy's preloaded file-list estimate, refine it with live source statistics, and preserve one countdown through playback planning.
 - **Fix**: Show wait estimates to hundredths of a second below one minute and milliseconds below one second; refresh the countdown within four percent of its current wait and log each estimate with the first presented video frame for per-run accuracy checks.
+- **Fix**: Keep the open proxy transport when returning to the file picker, so another selection does not add a new connection delay to its countdown.
 - **Chore**: Capture the media, video and audio ranges held when the first frame is presented; learn its wait only when the required audio range covers that frame.
 
 ## 0.50.23
