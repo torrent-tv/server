@@ -13,13 +13,17 @@ function method(name) {
   assert.ok(start >= 0, name);
   return source.slice(start, source.indexOf("\n  }\n", start) + 4);
 }
+const waitEstimateHelperStart = source.indexOf("function withProgressWaitEstimate(");
+const waitEstimateHelperEnd = source.indexOf("\n}", waitEstimateHelperStart) + 2;
+const waitEstimateHelper = source.slice(waitEstimateHelperStart, waitEstimateHelperEnd);
 
 class HTMLVideoElement { constructor() { this.paused = true; this.error = null; } }
 
 test("the page asks again as soon as a piece has arrived, after reporting it", async () => {
   const calls = [];
   const Component = new Function("HTMLVideoElement", "reportNow", "bufferedAheadSeconds", "bufferedEndSeconds",
-    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", `return class {
+    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", `${waitEstimateHelper}
+    return class {
     #playbackEpoch = 0; #coldStart = null; #lastBufferedAhead = 0; #lastDownloadStats = null;
     #browserBufferLimitSeconds = null; #progressPollFailing = false;
     #waitingModel = { update: () => ({ cushionPercent: 0 }) };

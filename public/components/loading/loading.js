@@ -1192,7 +1192,7 @@ export class Loading extends StateDerivedView {
       // model, this component from its own. Handing round conclusions is how
       // one of them came to be told what to display.
       document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-        detail: { downloadStats, transcodeProgress }
+        detail: { downloadStats: withProgressWaitEstimate(downloadStats, transcodeProgress), transcodeProgress }
       }));
     };
     await poll();
@@ -1392,7 +1392,11 @@ export class Loading extends StateDerivedView {
       if (answer === "stale") continue;
       const video = this.#videoElement;
       const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
-      this.#waitingModel.update({ playbackReadiness: readiness ?? null, bufferedAhead: ahead });
+      this.#waitingModel.update({
+        ...(progress?.waitEstimate ? { waitEstimate: progress.waitEstimate } : {}),
+        playbackReadiness: readiness ?? null,
+        bufferedAhead: ahead
+      });
       if (answer === "release") {
         this.#logEvt(readiness?.version === 1
           ? `seek hold released: forecast ready ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s`
@@ -2594,6 +2598,8 @@ export class Loading extends StateDerivedView {
         query.set("linkMbps", String(link.linkMbps));
         query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
       }
+      const hasActionAge = this.#addWaitElapsed(query);
+      const requestStartedAt = performance.now();
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/files?${query}`,
         { signal: this.#session.abortController.signal, timeoutMs: 0 }
@@ -2608,7 +2614,11 @@ export class Loading extends StateDerivedView {
           if (!statesWhatIsInTheTorrent(body)) {
             throw viewerError(Loading.MESSAGES.torrentContentsNotStated, { canRetry: true });
           }
-          return body;
+          if (!hasActionAge || !Array.isArray(body.files)) return body;
+          const ageMs = Math.max(0, performance.now() - requestStartedAt);
+          return { ...body, files: body.files.map(file => file?.waitEstimate
+            ? { ...file, waitEstimate: { ...file.waitEstimate, ageMs: (file.waitEstimate.ageMs ?? 0) + ageMs } }
+            : file) };
         }
       } else {
         const error = new Error(`Torrent file list request failed (${response.status}).`);
@@ -2636,6 +2646,8 @@ export class Loading extends StateDerivedView {
       query.set("linkMbps", String(link.linkMbps));
       query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
     }
+    const hasActionAge = this.#addWaitElapsed(query);
+    const requestStartedAt = performance.now();
     try {
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
@@ -2644,8 +2656,12 @@ export class Loading extends StateDerivedView {
       if (!response.ok) return;
       const stats = await response.json();
       if (stats?.waitEstimate && this.#session.viewGeneration === generation && this.#activeSourceKey === sourceKey) {
+        const waitEstimate = hasActionAge
+          ? { ...stats.waitEstimate, ageMs: (stats.waitEstimate.ageMs ?? 0) +
+            Math.max(0, performance.now() - requestStartedAt) }
+          : stats.waitEstimate;
         document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-          detail: { downloadStats: stats }
+          detail: { downloadStats: { ...stats, waitEstimate } }
         }));
       }
     } catch (error) {
@@ -2653,6 +2669,15 @@ export class Loading extends StateDerivedView {
         console.debug(`[wait-estimate] early source estimate unavailable: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+  }
+
+  #addWaitElapsed(query) {
+    const startedAt = this.#currentPlaybackWaitStartedAt ?? this.#pendingOriginalWaitStartedAt;
+    if (Number.isFinite(startedAt)) {
+      query.set("waitElapsedMs", String(Math.max(0, performance.now() - startedAt)));
+      return true;
+    }
+    return false;
   }
 
   #warmSourceInBackground(fileIndex, positionSeconds = 0) {
@@ -5654,6 +5679,7 @@ export class Loading extends StateDerivedView {
         ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
         : proxyReadiness;
       const unified = this.#waitingModel.update({
+        ...(cachedProgress?.waitEstimate ? { waitEstimate: cachedProgress.waitEstimate } : {}),
         playbackReadiness: readiness,
         bufferedAhead: ahead
       });
@@ -5710,7 +5736,7 @@ export class Loading extends StateDerivedView {
       // nobody read.
       document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
         detail: {
-          downloadStats: this.#lastDownloadStats,
+          downloadStats: withProgressWaitEstimate(this.#lastDownloadStats, cachedProgress),
           transcodeProgress: cachedProgress,
           playbackReadiness: readiness ?? null,
           bufferLimitSeconds: this.#browserBufferLimitSeconds
@@ -5812,6 +5838,7 @@ export class Loading extends StateDerivedView {
     this.#assertTranscodeProgress(progress);
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
+      ...(progress.waitEstimate ? { waitEstimate: progress.waitEstimate } : {}),
       playbackReadiness: progress.playbackReadiness
     });
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
@@ -5823,7 +5850,7 @@ export class Loading extends StateDerivedView {
     }
     document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
       detail: {
-        downloadStats: this.#lastDownloadStats,
+        downloadStats: withProgressWaitEstimate(this.#lastDownloadStats, progress),
         transcodeProgress: progress,
         playbackReadiness: progress.playbackReadiness
       }
@@ -5983,15 +6010,29 @@ export class Loading extends StateDerivedView {
     const poll = async () => {
       while (!stopped) {
         try {
+          const query = new URLSearchParams({
+            fileIndex: String(fileIndex),
+            consumer: this.#session.consumerId,
+            generation: String(this.#session.viewGeneration)
+          });
+          const link = getEarlyLinkEstimate();
+          if (link) {
+            query.set("linkMbps", String(link.linkMbps));
+            query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
+          }
+          const hasActionAge = this.#addWaitElapsed(query);
+          const requestStartedAt = performance.now();
           const resp = await transport.fetch(
-            `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${fileIndex}` +
-              `&consumer=${encodeURIComponent(this.#session.consumerId)}` +
-              `&generation=${encodeURIComponent(String(this.#session.viewGeneration))}`,
+            `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
             { cache: "no-store" }
           );
           if (!stopped && resp.ok) {
-            const stats = await resp.json();
+            let stats = await resp.json();
             if (!stopped) {
+              if (hasActionAge && stats?.waitEstimate) {
+                stats = { ...stats, waitEstimate: { ...stats.waitEstimate,
+                  ageMs: (stats.waitEstimate.ageMs ?? 0) + Math.max(0, performance.now() - requestStartedAt) } };
+              }
               this.#updateMetadataStatus(stats);
               document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
                 detail: { downloadStats: stats }
@@ -6851,6 +6892,12 @@ const PREBUFFER_NUDGE_AFTER_MS = 4_000;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function withProgressWaitEstimate(downloadStats, progress) {
+  if (!progress?.waitEstimate) return downloadStats;
+  return { ...(downloadStats && typeof downloadStats === "object" ? downloadStats : {}),
+    waitEstimate: progress.waitEstimate };
+}
 
 function bootstrapLoading() {
   new Loading();

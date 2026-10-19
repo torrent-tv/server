@@ -7,14 +7,21 @@ const start = source.indexOf("  async #requestEarlyWaitEstimate(");
 assert.ok(start >= 0, "early estimate request method exists");
 const end = source.indexOf("\n  }", start) + 4;
 const requestMethod = source.slice(start, end);
+const elapsedStart = source.indexOf("  #addWaitElapsed(query) {");
+const elapsedEnd = source.indexOf("\n  }", elapsedStart) + 4;
+const elapsedMethod = source.slice(elapsedStart, elapsedEnd);
 
 function loading(document) {
   const create = new Function("document", "CustomEvent", "PROXY_EVENTS", "getEarlyLinkEstimate", `return class {
     #session = { consumerId: "viewer", viewGeneration: 3, abortController: new AbortController() };
     #activeSourceKey = "source";
+    #currentPlaybackWaitStartedAt = null;
+    #pendingOriginalWaitStartedAt = null;
     #isAbortError(error) { return error?.name === "AbortError"; }
     ${requestMethod}
+    ${elapsedMethod}
     request(transport, sourceKey, file) { return this.#requestEarlyWaitEstimate(transport, sourceKey, file); }
+    setWaitStartedAt(value) { this.#pendingOriginalWaitStartedAt = value; }
     changeGeneration(value) { this.#session.viewGeneration = value; }
     changeSource(value) { this.#activeSourceKey = value; }
   }`);
@@ -47,6 +54,25 @@ test("requests a first-frame estimate from the source before proxy metadata is r
   assert.deepEqual(events[0].detail.downloadStats.waitEstimate, waitEstimate);
 });
 
+test("sends the monotonic age of the original wait with early source requests", async () => {
+  let request;
+  const events = [];
+  const waitEstimate = { version: 1, waitId: "source:0:3", revision: 0, remainingSeconds: 7.75, ageMs: 0 };
+  const component = loading({ dispatchEvent: event => events.push(event) });
+  component.setWaitStartedAt(performance.now() - 4_250);
+  await component.request({ fetch: async url => {
+    request = new URL(url, "http://proxy.invalid");
+    await new Promise(resolve => setTimeout(resolve, 15));
+    return { ok: true, json: async () => ({ pending: true, waitEstimate }) };
+  } }, "source", { index: 0, name: "Film.mkv", length: 800 });
+
+  const elapsedMs = Number(request.searchParams.get("waitElapsedMs"));
+  assert.ok(elapsedMs >= 4_250 && elapsedMs < 4_300, `unexpected action age ${elapsedMs}`);
+  const emittedEstimate = events[0]?.detail.downloadStats.waitEstimate;
+  assert.equal(emittedEstimate.remainingSeconds, 7.75);
+  assert.ok(emittedEstimate.ageMs >= 10 && emittedEstimate.ageMs < 100);
+});
+
 test("a single-file torrent starts the estimate request before waiting for the proxy file list", () => {
   const registration = source.indexOf("const sourceKey = await this.#session.registerSourceOnProxy(transport);");
   const estimate = source.indexOf("void this.#requestEarlyWaitEstimate(transport, sourceKey, earlyFile);", registration);
@@ -55,6 +81,13 @@ test("a single-file torrent starts the estimate request before waiting for the p
   assert.ok(registration >= 0);
   assert.ok(estimate > registration && estimate < fileList);
   assert.match(source.slice(registration, fileList), /parsed\.files\.length === 1/);
+});
+
+test("metadata source polls keep sending the original action age", () => {
+  const start = source.indexOf("  #startTorrentStatsPoll(transport, sourceKey, fileIndex) {");
+  const end = source.indexOf("\n  }", start) + 4;
+  assert.ok(start >= 0);
+  assert.match(source.slice(start, end), /this\.#addWaitElapsed\(query\)/);
 });
 
 test("returning to the picker keeps the established proxy transport for the next estimate", () => {

@@ -96,12 +96,7 @@ export class WaitingOverlay {
     const readiness = detail?.playbackReadiness;
     const hasCurrentWaitEstimate = this.#awaitingFirstPresentedFrame && downloadStats &&
       Object.hasOwn(downloadStats, "waitEstimate");
-    const earlyWaitEstimate = this.#awaitingFirstPresentedFrame && downloadStats?.waitEstimate &&
-      typeof downloadStats.waitEstimate === "object"
-      ? { ...downloadStats.waitEstimate,
-        ageMs: this.#waitStartedAt === null ? downloadStats.waitEstimate.ageMs ?? 0 :
-          Math.max(0, performance.now() - this.#waitStartedAt) }
-      : downloadStats?.waitEstimate;
+    const earlyWaitEstimate = downloadStats?.waitEstimate;
     const unified = this.#model.update({
       ...(hasCurrentWaitEstimate ? { waitEstimate: earlyWaitEstimate } : {}),
       ...(detail && Object.hasOwn(detail, "playbackReadiness") ? { playbackReadiness: readiness } : {}),

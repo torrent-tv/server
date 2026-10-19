@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Send the elapsed time from the original playback action with source estimates so later forecasts remain a time left, not a new full-wait countdown (#ttv-185).
+
 ## 0.50.28
 
 - **Fix**: Keep the total-wait estimate instead of a local readiness delay, and do not show zero before the first presented frame (#ttv-185).
