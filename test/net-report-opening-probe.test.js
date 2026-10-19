@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { measureLink, startNetReporter, stopNetReporter } from "../public/domain/net-report.js";
+import { getEarlyLinkEstimate, measureLink, startNetReporter, stopNetReporter } from "../public/domain/net-report.js";
 
 test("the first report carries the link the opening probe measured", async () => {
   const posted = [];
@@ -29,6 +29,7 @@ test("the first report carries the link the opening probe measured", async () =>
   };
 
   await measureLink(transport);
+  const early = getEarlyLinkEstimate();
   startNetReporter({
     transport,
     sessionId: "session",
@@ -39,6 +40,8 @@ test("the first report carries the link the opening probe measured", async () =>
   stopNetReporter();
 
   assert.equal(posted.length, 1, "the reporter sends its first report at once");
+  assert.equal(early.linkMbps, posted[0].linkMbps);
+  assert.ok(early.linkSampleAgeMs >= 0);
   assert.ok(
     Math.abs(posted[0].linkMbps - (65536 * 8) / 0.1 / 1e6) < 1e-9,
     `the first report said linkMbps=${posted[0].linkMbps}, not the probe's figure`
