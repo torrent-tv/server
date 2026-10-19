@@ -516,6 +516,7 @@ export class Loading extends StateDerivedView {
    * @type {{ t0: number, t1?: number, t2?: number, t3?: number } | null}
    */
   #coldStart = null;
+  #coldStartStages = null;
   #pendingOriginalWaitStartedAt = null;
   #currentPlaybackWaitStartedAt = null;
   /**
@@ -759,9 +760,17 @@ export class Loading extends StateDerivedView {
     const waitId = this.#activeSourceKey && this.#activeFileIndex >= 0
       ? `${this.#activeSourceKey}:${this.#activeFileIndex}:${generation}` : "";
     if (waitId && Number.isFinite(detail.elapsedMs)) {
+      const stages = audioReady ? this.#coldStartStages : null;
+      if (stages) this.#coldStartStages = null;
+      const stageFields = stages
+        ? ` coldStartTotalMs=${stages.totalMs.toFixed(3)} transportMs=${stages.transportMs.toFixed(3)}` +
+          ` planMs=${stages.planMs.toFixed(3)} prepareMs=${stages.prepareMs.toFixed(3)}` +
+          ` prebufferMs=${stages.prebufferMs.toFixed(3)}` +
+          ` presentationMs=${Math.max(0, detail.elapsedMs - stages.totalMs).toFixed(3)}`
+        : "";
       console.debug(`[first-frame-observation] consumer=${this.#session?.consumerId ?? ""} ` +
         `generation=${generation} waitId=${waitId} wait=${detail.waitSequence} ` +
-        `audioReady=${audioReady} elapsedMs=${detail.elapsedMs.toFixed(3)}`);
+        `audioReady=${audioReady} elapsedMs=${detail.elapsedMs.toFixed(3)}${stageFields}`);
     }
   };
 
@@ -3497,6 +3506,7 @@ export class Loading extends StateDerivedView {
     // Cold-start timing (proxy-served flow): t0 = entry, filled through the
     // phases and logged once on a successful prebuffer.
     this.#coldStart = { t0: waitStartedAt };
+    this.#coldStartStages = null;
     // Honest status split: the pick is instant; the time is the WebRTC connect.
     // Relabel to "Connecting to proxy" once the selector starts the connect.
     const transport = await this.#acquireTransport({
@@ -5760,10 +5770,18 @@ export class Loading extends StateDerivedView {
       return;
     }
     const t4 = performance.now();
+    const stages = {
+      totalMs: t4 - c.t0,
+      transportMs: c.t1 - c.t0,
+      planMs: c.t2 - c.t1,
+      prepareMs: c.t3 - c.t2,
+      prebufferMs: t4 - c.t3
+    };
+    this.#coldStartStages = stages;
     this.#logEvt(
-      `cold-start total=${Math.round(t4 - c.t0)}ms ` +
-        `transport=${Math.round(c.t1 - c.t0)}ms plan=${Math.round(c.t2 - c.t1)}ms ` +
-        `prepare=${Math.round(c.t3 - c.t2)}ms prebuffer=${Math.round(t4 - c.t3)}ms`
+      `cold-start total=${Math.round(stages.totalMs)}ms ` +
+        `transport=${Math.round(stages.transportMs)}ms plan=${Math.round(stages.planMs)}ms ` +
+        `prepare=${Math.round(stages.prepareMs)}ms prebuffer=${Math.round(stages.prebufferMs)}ms`
     );
   }
 
