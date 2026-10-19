@@ -1648,7 +1648,9 @@ export class Loading extends StateDerivedView {
     const magnetUri = event instanceof CustomEvent ? event.detail?.magnetUri : "";
     const currentTime = event instanceof CustomEvent ? (event.detail?.currentTime ?? null) : null;
     const fileIndex = event instanceof CustomEvent ? (event.detail?.fileIndex ?? null) : null;
-    this.#runPlaybackTask(() => this.#processMagnetPlayback(magnetUri, currentTime, fileIndex));
+    const startedAt = event instanceof CustomEvent && Number.isFinite(event.detail?.startedAt)
+      ? event.detail.startedAt : performance.now();
+    this.#runPlaybackTask(() => this.#processMagnetPlayback(magnetUri, currentTime, fileIndex, startedAt));
   };
 
   #runPlaybackTask(run, { preservePlayer = false } = {}) {
@@ -2151,7 +2153,7 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   async #processPlayback(payload) {
-    const openStartedAt = performance.now();
+    const openStartedAt = Number.isFinite(payload?.startedAt) ? payload.startedAt : performance.now();
     this.#pendingOriginalWaitStartedAt = null;
     this.#currentPlaybackWaitStartedAt = null;
     const file = payload?.file;
@@ -2686,8 +2688,8 @@ export class Loading extends StateDerivedView {
    * @param {string} magnetUri
    * @returns {Promise<void>}
    */
-  async #processMagnetPlayback(magnetUri, currentTime = null, fileIndex = null) {
-    const openStartedAt = performance.now();
+  async #processMagnetPlayback(magnetUri, currentTime = null, fileIndex = null, startedAt = performance.now()) {
+    const openStartedAt = Number.isFinite(startedAt) ? startedAt : performance.now();
     this.#pendingOriginalWaitStartedAt = null;
     this.#currentPlaybackWaitStartedAt = null;
     if (typeof magnetUri !== "string" || magnetUri.trim().length === 0) {
@@ -4215,7 +4217,7 @@ export class Loading extends StateDerivedView {
     }
     // Surface a mid-playback loss of this connection (auto-reconnect flow). A
     // close() by #stopPlayback never fires this.
-    proxy.onConnectionLost = () => this.#onTransportLost();
+    proxy.onConnectionLost = () => this.#onTransportLost(proxy);
     // A connection that stays open and stops delivering. Not a loss: a second
     // connection is raised beside it and adopted only once it has proved itself.
     proxy.onDeliveryStalled = () => this.#onDeliveryStalled(proxy);
@@ -4849,7 +4851,10 @@ export class Loading extends StateDerivedView {
    *
    * @returns {void}
    */
-  #onTransportLost() {
+  #onTransportLost(lostProxy = this.#proxy) {
+    if (lostProxy && this.#proxy !== lostProxy) {
+      return;
+    }
     this.#logEvt("transport lost (data channel closed/failed)");
     // A second connection being raised beside this one is the ladder's to
     // replace now.
@@ -4861,6 +4866,12 @@ export class Loading extends StateDerivedView {
     }
     const current = this.#session.current;
     if (!current || this.#activeFileIndex < 0) {
+      this.#abandonTransportAcquisition();
+      this.#proxy = null;
+      this.#transport = null;
+      if (!this.#cancelRequested) {
+        this.#connectEarly();
+      }
       return;
     }
     // A fresh loss invalidates any pending "playback is stable" reset, so a

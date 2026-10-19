@@ -138,6 +138,7 @@ class TorrentTV {
       new CustomEvent(LOADING_EVENTS.PROCESS_PLAYBACK, {
         detail: {
           file, torrentBytes, meta,
+          startedAt: Number.isFinite(payload?.startedAt) ? payload.startedAt : performance.now(),
           currentTime: payload?.currentTime ?? null,
           fileIndex: payload?.fileIndex ?? null
         }
@@ -164,7 +165,10 @@ class TorrentTV {
     this.#setLoadingContent("Magnet link", TorrentTV.MESSAGES.playbackPreparing);
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PROCESS_MAGNET, {
-        detail: { magnetUri, currentTime, fileIndex }
+        detail: {
+          magnetUri, currentTime, fileIndex,
+          startedAt: Number.isFinite(event?.detail?.startedAt) ? event.detail.startedAt : performance.now()
+        }
       })
     );
   };
