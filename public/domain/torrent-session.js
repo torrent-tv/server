@@ -1544,10 +1544,15 @@ async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
       return null;
     }
     progressComplainedAbout.delete(progressUrl);
+    const requestElapsedMs = Math.max(0, performance.now() - requestStartedAt);
+    const ageEstimate = (estimate) => ({ ...estimate,
+      ageMs: (Number.isFinite(estimate.ageMs) && estimate.ageMs >= 0 ? estimate.ageMs : 0) + requestElapsedMs });
     if (payload.waitEstimate && typeof payload.waitEstimate === "object") {
-      payload.waitEstimate = { ...payload.waitEstimate,
-        ageMs: (Number.isFinite(payload.waitEstimate.ageMs) && payload.waitEstimate.ageMs >= 0
-          ? payload.waitEstimate.ageMs : 0) + Math.max(0, performance.now() - requestStartedAt) };
+      payload.waitEstimate = ageEstimate(payload.waitEstimate);
+    }
+    if (payload.playbackReadiness?.waitEstimate && typeof payload.playbackReadiness.waitEstimate === "object") {
+      payload.playbackReadiness = { ...payload.playbackReadiness,
+        waitEstimate: ageEstimate(payload.playbackReadiness.waitEstimate) };
     }
     return payload;
   } catch (error) {

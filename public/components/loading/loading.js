@@ -1402,7 +1402,7 @@ export class Loading extends StateDerivedView {
       const video = this.#videoElement;
       const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
       this.#waitingModel.update({
-        ...(progress?.waitEstimate ? { waitEstimate: progress.waitEstimate } : {}),
+        ...(waitEstimateForProgress(progress) ? { waitEstimate: waitEstimateForProgress(progress) } : {}),
         playbackReadiness: readiness ?? null,
         bufferedAhead: ahead
       });
@@ -5689,7 +5689,7 @@ export class Loading extends StateDerivedView {
         ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
         : proxyReadiness;
       const unified = this.#waitingModel.update({
-        ...(cachedProgress?.waitEstimate ? { waitEstimate: cachedProgress.waitEstimate } : {}),
+        ...(waitEstimateForProgress(cachedProgress) ? { waitEstimate: waitEstimateForProgress(cachedProgress) } : {}),
         playbackReadiness: readiness,
         bufferedAhead: ahead
       });
@@ -5856,7 +5856,7 @@ export class Loading extends StateDerivedView {
     this.#assertTranscodeProgress(progress);
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
-      ...(progress.waitEstimate ? { waitEstimate: progress.waitEstimate } : {}),
+      ...(waitEstimateForProgress(progress) ? { waitEstimate: waitEstimateForProgress(progress) } : {}),
       playbackReadiness: progress.playbackReadiness
     });
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
@@ -6911,10 +6911,15 @@ const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+function waitEstimateForProgress(progress) {
+  return progress?.waitEstimate ?? progress?.playbackReadiness?.waitEstimate ?? null;
+}
+
 function withProgressWaitEstimate(downloadStats, progress) {
-  if (!progress?.waitEstimate) return downloadStats;
+  const waitEstimate = waitEstimateForProgress(progress);
+  if (!waitEstimate) return downloadStats;
   return { ...(downloadStats && typeof downloadStats === "object" ? downloadStats : {}),
-    waitEstimate: progress.waitEstimate };
+    waitEstimate };
 }
 
 function bootstrapLoading() {
