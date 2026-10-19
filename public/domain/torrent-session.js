@@ -1532,6 +1532,7 @@ export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
  */
 async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
   try {
+    const requestStartedAt = performance.now();
     const response = await fetchFn(progressUrl, { cache: "no-store", signal: signal ?? undefined });
     if (!response.ok) {
       noteProgressUnreadable(progressUrl, `the proxy answered ${response.status}`);
@@ -1543,6 +1544,11 @@ async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
       return null;
     }
     progressComplainedAbout.delete(progressUrl);
+    if (payload.waitEstimate && typeof payload.waitEstimate === "object") {
+      payload.waitEstimate = { ...payload.waitEstimate,
+        ageMs: (Number.isFinite(payload.waitEstimate.ageMs) && payload.waitEstimate.ageMs >= 0
+          ? payload.waitEstimate.ageMs : 0) + Math.max(0, performance.now() - requestStartedAt) };
+    }
     return payload;
   } catch (error) {
     if (isAbortError(error)) {
