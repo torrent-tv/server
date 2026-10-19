@@ -25,6 +25,16 @@ test("excluded clips are not possible episode choices in the normalized file lis
   assert.deepEqual(files.map((file) => file.isVideo), [true, false, false]);
 });
 
+test("a host-matched early wait estimate stays attached to its selected file", () => {
+  const waitEstimate = { version: 1, waitId: "source:0:0", revision: 0, remainingSeconds: 12, ageMs: 0 };
+  const files = normalizeRemoteFileList("Film", [
+    { fileIndex: 0, name: "Film.mkv", kind: "video", length: 10, waitEstimate },
+    { fileIndex: 1, name: "Film.srt", kind: "subtitle", length: 1 }
+  ]);
+  assert.deepEqual(files[0].waitEstimate, waitEstimate);
+  assert.equal(files[1].waitEstimate, undefined);
+});
+
 /**
  * The proxy's answer, in the shape it arrives in.
  *

@@ -378,6 +378,8 @@ export class Loading extends StateDerivedView {
   #transportAcquisition = null;
   /** @type {number} Index of the file currently playing (-1 = none). */
   #activeFileIndex = -1;
+  /** @type {string} Proxy source currently supplying the active file. */
+  #activeSourceKey = "";
   /** @type {number} Invalidates late sidecar metadata responses after a file switch. */
   #audioMetadataRefreshSeq = 0;
   /**
@@ -448,6 +450,8 @@ export class Loading extends StateDerivedView {
   #rememberedAudio = null;
   /** @type {Array<object>} Audio tracks from the active playback plan. */
   #audioTracks = [];
+  /** @type {boolean} Whether the current plan requires an audio track. */
+  #audioRequired = false;
   #subtitlePlayback;
   /** @type {number} The height of the rung the player is playing, as hls.js last switched to (0 = not known yet). */
   #playingHeight = 0;
@@ -512,6 +516,8 @@ export class Loading extends StateDerivedView {
    * @type {{ t0: number, t1?: number, t2?: number, t3?: number } | null}
    */
   #coldStart = null;
+  #pendingOriginalWaitStartedAt = null;
+  #currentPlaybackWaitStartedAt = null;
   /**
    * True once the player view is revealed and playback is live, so buffer-empty
    * events are treated as mid-playback data starvation (buffering notice) rather
@@ -747,6 +753,16 @@ export class Loading extends StateDerivedView {
         video: buffers?.video ?? null,
         audio: buffers?.audio ?? null
       })}`);
+    const audioReady = !this.#audioRequired || (Array.isArray(buffers?.audio) &&
+      buffers.audio.some(range => detail.mediaTime >= range.start && detail.mediaTime < range.end));
+    const generation = this.#session?.viewGeneration ?? 0;
+    const waitId = this.#activeSourceKey && this.#activeFileIndex >= 0
+      ? `${this.#activeSourceKey}:${this.#activeFileIndex}:${generation}` : "";
+    if (waitId && Number.isFinite(detail.elapsedMs)) {
+      console.debug(`[first-frame-observation] consumer=${this.#session?.consumerId ?? ""} ` +
+        `generation=${generation} waitId=${waitId} wait=${detail.waitSequence} ` +
+        `audioReady=${audioReady} elapsedMs=${detail.elapsedMs.toFixed(3)}`);
+    }
   };
 
   /**
@@ -1763,6 +1779,7 @@ export class Loading extends StateDerivedView {
   #resetSourceState() {
     this.#audioMetadataRefreshSeq += 1;
     this.#activeFileIndex = -1;
+    this.#activeSourceKey = "";
     this.#resumeState = null;
     this.#selectedAudioTrackIndex = 0;
     this.#rememberedAudio = null;
@@ -1770,6 +1787,7 @@ export class Loading extends StateDerivedView {
     this.#sourceVideoWidth = 0;
     this.#sourceVideoHeight = 0;
     this.#audioTracks = [];
+    this.#audioRequired = false;
     this.#subtitlePlayback.reset();
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, { detail: { tracks: [], activeIndex: 0 } }));
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_MEDIA_FILES, { detail: { video: [] } }));
@@ -2130,6 +2148,9 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   async #processPlayback(payload) {
+    const openStartedAt = performance.now();
+    this.#pendingOriginalWaitStartedAt = null;
+    this.#currentPlaybackWaitStartedAt = null;
     const file = payload?.file;
     const torrentBytes = payload?.torrentBytes;
     const meta = payload?.meta;
@@ -2161,6 +2182,14 @@ export class Loading extends StateDerivedView {
         torrentBytes,
         meta
       });
+      if (parsed.files.length === 1 || Number.isSafeInteger(payload?.fileIndex)) {
+        const fileIndex = Number.isSafeInteger(payload?.fileIndex)
+          ? payload.fileIndex : (Number.isSafeInteger(parsed.files[0]?.index) ? parsed.files[0].index : 0);
+        this.#pendingOriginalWaitStartedAt = openStartedAt;
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOSEN, {
+          detail: { fileIndex, startedAt: openStartedAt, originalOpen: true }
+        }));
+      }
       const addressed = this.#addressedRecord();
       this.#recordSourceIntent();
       const mediaSelection = this.#announceMediaSelection([file.name, parsed.name], categoryOfTorrent(meta), {
@@ -2195,6 +2224,12 @@ export class Loading extends StateDerivedView {
         throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
       }
       const sourceKey = await this.#session.registerSourceOnProxy(transport);
+      this.#activeSourceKey = sourceKey;
+      if (parsed.files.length === 1 || Number.isSafeInteger(payload?.fileIndex)) {
+        const earlyFileIndex = Number.isSafeInteger(payload?.fileIndex) ? payload.fileIndex : parsed.files[0]?.index;
+        const earlyFile = parsed.files.find(fileEntry => fileEntry?.index === earlyFileIndex);
+        void this.#requestEarlyWaitEstimate(transport, sourceKey, earlyFile);
+      }
       const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
         this.setStatus(Loading.MESSAGES.readingMetadata);
       });
@@ -2546,7 +2581,8 @@ export class Loading extends StateDerivedView {
     for (;;) {
       this.#throwIfCancelled();
       const response = await transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/files?consumerId=${encodeURIComponent(this.#session.consumerId)}`,
+        `/api/sources/${encodeURIComponent(sourceKey)}/files?consumerId=${encodeURIComponent(this.#session.consumerId)}` +
+          `&generation=${encodeURIComponent(String(this.#session.viewGeneration))}`,
         { signal: this.#session.abortController.signal, timeoutMs: 0 }
       );
       this.#throwIfCancelled();
@@ -2568,6 +2604,36 @@ export class Loading extends StateDerivedView {
       }
       whileWaiting?.();
       await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  }
+
+  async #requestEarlyWaitEstimate(transport, sourceKey, file) {
+    if (!Number.isSafeInteger(file?.index) || !Number.isFinite(file?.length) ||
+      typeof file?.name !== "string" || file.name.length === 0) return;
+    const generation = this.#session.viewGeneration;
+    const query = new URLSearchParams({
+      fileIndex: String(file.index),
+      consumer: this.#session.consumerId,
+      generation: String(generation),
+      fileName: file.name,
+      fileLength: String(file.length)
+    });
+    try {
+      const response = await transport.fetch(
+        `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
+        { signal: this.#session.abortController.signal, timeoutMs: 1_000 }
+      );
+      if (!response.ok) return;
+      const stats = await response.json();
+      if (stats?.waitEstimate && this.#session.viewGeneration === generation && this.#activeSourceKey === sourceKey) {
+        document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+          detail: { downloadStats: stats }
+        }));
+      }
+    } catch (error) {
+      if (!this.#isAbortError(error)) {
+        console.debug(`[wait-estimate] early source estimate unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 
@@ -2618,6 +2684,9 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<void>}
    */
   async #processMagnetPlayback(magnetUri, currentTime = null, fileIndex = null) {
+    const openStartedAt = performance.now();
+    this.#pendingOriginalWaitStartedAt = null;
+    this.#currentPlaybackWaitStartedAt = null;
     if (typeof magnetUri !== "string" || magnetUri.trim().length === 0) {
       return;
     }
@@ -2669,6 +2738,7 @@ export class Loading extends StateDerivedView {
         throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
       }
       const sourceKey = await this.#session.registerSourceOnProxy(transport);
+      this.#activeSourceKey = sourceKey;
       this.#throwIfCancelled();
 
       const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
@@ -2691,6 +2761,15 @@ export class Loading extends StateDerivedView {
 
       const mediaFiles = mediaFilesFrom(files, contents?.items);
       this.#subtitlePlayback.setTorrentSubtitleFiles(mediaFiles.subtitles);
+      const videoCount = mediaFiles.video.length;
+      const sharedVideoFileIndex = this.#sharedVideoFileIndex();
+      if ((files.length === 1 && videoCount === 1) || sharedVideoFileIndex != null) {
+        const selectedFileIndex = sharedVideoFileIndex ?? files[0].index;
+        this.#pendingOriginalWaitStartedAt = openStartedAt;
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOSEN, {
+          detail: { fileIndex: selectedFileIndex, startedAt: openStartedAt, originalOpen: true }
+        }));
+      }
       document.dispatchEvent(
         new CustomEvent(PLAYER_EVENTS.SET_MEDIA_FILES, {
           detail: mediaFiles
@@ -2698,7 +2777,6 @@ export class Loading extends StateDerivedView {
       );
       this.#setPlaylistButtonVisible(mediaFiles.video.length > 1);
 
-      const videoCount = mediaFiles.video.length;
       if (videoCount <= 0) {
         throw viewerError(Loading.MESSAGES.noVideoFile);
       }
@@ -2711,7 +2789,6 @@ export class Loading extends StateDerivedView {
       // playback was exactly that, and all of it happened after the file was
       // chosen. Reading a list of episodes takes about as long.
       this.#warmSourceInBackground(videoCount === 1 ? mediaFiles.video[0].index : null);
-      const sharedVideoFileIndex = this.#sharedVideoFileIndex();
       if (videoCount === 1) {
         const videoFileIndex = mediaFiles.video[0].index;
         await this.#playVideoFile(videoFileIndex);
@@ -3302,6 +3379,9 @@ export class Loading extends StateDerivedView {
     if (!file || file.isVideo !== true) {
       throw viewerError(Loading.MESSAGES.selectedFileNotFound);
     }
+    const waitStartedAt = this.#pendingOriginalWaitStartedAt ?? performance.now();
+    this.#pendingOriginalWaitStartedAt = null;
+    this.#currentPlaybackWaitStartedAt = waitStartedAt;
     this.#openingFileIndex = fileIndex;
     const address = readUrlState(location.search);
     const intent = fileOpenState(address, this.#currentMagnetUri(), fileIndex, this.#pendingCurrentTime);
@@ -3321,9 +3401,17 @@ export class Loading extends StateDerivedView {
     this.#stallCount = 0;
     // Which file is being LOADED, before anything is ready — so what the page
     // shows while waiting (the episode's picture) is this file's, not the last.
-    document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOSEN, { detail: { fileIndex } }));
-
     const hasWebseed = Array.isArray(current?.webSeeds) && current.webSeeds.length > 0;
+    const proxySourceKey = this.#activeSourceKey;
+    if (hasWebseed) this.#activeSourceKey = "";
+    document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOSEN, {
+      detail: { fileIndex, startedAt: waitStartedAt }
+    }));
+    if (!hasWebseed && file.waitEstimate) {
+      document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+        detail: { downloadStats: { waitEstimate: file.waitEstimate } }
+      }));
+    }
 
     if (!hasWebseed) {
       await this.#preferProxyFromFilename(fileIndex);
@@ -3343,6 +3431,7 @@ export class Loading extends StateDerivedView {
         }
         this.setStatus(Loading.MESSAGES.fallingBackToTranscode);
         try {
+          this.#activeSourceKey = proxySourceKey;
           await this.#playWithProxyTranscode(fileIndex, { transcodeAudio: false });
           this.#setActiveMediaFile(fileIndex);
         } catch (transcodeError) {
@@ -3350,6 +3439,7 @@ export class Loading extends StateDerivedView {
             throw transcodeError;
           }
           this.setStatus(Loading.MESSAGES.fallingBackToVideoTranscode);
+          this.#activeSourceKey = proxySourceKey;
           await this.#playWithProxyTranscode(fileIndex, { transcodeVideo: true, transcodeAudio: false });
           this.#setActiveMediaFile(fileIndex);
         }
@@ -3363,7 +3453,7 @@ export class Loading extends StateDerivedView {
     this.#setPhaseProgress(0, 10); // phase 0 (download) — small floor before stats arrive
     // Cold-start timing (proxy-served flow): t0 = entry, filled through the
     // phases and logged once on a successful prebuffer.
-    this.#coldStart = { t0: performance.now() };
+    this.#coldStart = { t0: waitStartedAt };
     // Honest status split: the pick is instant; the time is the WebRTC connect.
     // Relabel to "Connecting to proxy" once the selector starts the connect.
     const transport = await this.#acquireTransport({
@@ -3389,6 +3479,7 @@ export class Loading extends StateDerivedView {
     let earlySourceKey;
     try {
       earlySourceKey = await this.#session.registerSourceOnProxy(transport);
+      this.#activeSourceKey = earlySourceKey;
     } catch (registerError) {
       // See #isTransportClosedError: a transport death here must not become a
       // dead-end fatal error either — same treatment as the plan-poll loop
@@ -3451,6 +3542,8 @@ export class Loading extends StateDerivedView {
     // Track inventory of the active file (drives the audio menu and the
     // embedded-subtitle loading).
     this.#audioTracks = Array.isArray(prepared.audioTracks) ? prepared.audioTracks : [];
+    this.#audioRequired = prepared.audioTracksPending === true || this.#audioTracks.length > 0 ||
+      (typeof prepared.audioCodec === "string" && prepared.audioCodec.length > 0);
     const audioMetadataRefreshSeq = ++this.#audioMetadataRefreshSeq;
     if (prepared.audioTracksPending) {
       void this.#refreshAudioTrackMetadata({
@@ -5864,13 +5957,18 @@ export class Loading extends StateDerivedView {
       while (!stopped) {
         try {
           const resp = await transport.fetch(
-            `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${fileIndex}`,
+            `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${fileIndex}` +
+              `&consumer=${encodeURIComponent(this.#session.consumerId)}` +
+              `&generation=${encodeURIComponent(String(this.#session.viewGeneration))}`,
             { cache: "no-store" }
           );
           if (!stopped && resp.ok) {
             const stats = await resp.json();
             if (!stopped) {
               this.#updateMetadataStatus(stats);
+              document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+                detail: { downloadStats: stats }
+              }));
             }
           }
         } catch (error) {
