@@ -22,8 +22,8 @@ function loading(events, logged = []) {
     #openingFileIndex; #browserBufferLimitSeconds; #hasPlayedOnce;
     #qualityPreparation; #audioPreparation;
     #audioMetadataRefreshSeq = 0;
-    #activeFileIndex; #resumeState; #selectedAudioTrackIndex; #rememberedAudio;
-    #playingHeight; #sourceVideoWidth; #sourceVideoHeight; #audioTracks;
+    #activeFileIndex; #activeSourceKey; #resumeState; #selectedAudioTrackIndex; #rememberedAudio;
+    #playingHeight; #sourceVideoWidth; #sourceVideoHeight; #audioTracks; #audioRequired;
     #waitingModel = { reset() {} };
     #refusedProxiesForThisOpen = new Set();
     #session = { abortPendingRequests() {}, fetchActiveTranscodeProgress: async () =>

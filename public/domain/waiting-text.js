@@ -107,14 +107,14 @@ function formatDuration(seconds) {
   if (seconds === 0) {
     return plural(0, "second");
   }
-  // Nearest whole seconds can add up to 0.5 s of display error, so use that
-  // precision only at 10 s or more. Nearest tenths can add 0.05 s, so use it
-  // from 1 s. Below that, millisecond precision keeps formatting error below 0.5 ms.
+  // Milliseconds keep sub-second display error small; hundredths do the same
+  // below a minute. Longer waits use whole seconds, whose rounding error stays
+  // below one percent once the wait exceeds a minute.
   if (seconds < 1) {
     return `${seconds.toFixed(3)} seconds`;
   }
-  if (seconds < 10) {
-    return `${seconds.toFixed(1)} seconds`;
+  if (seconds < 60) {
+    return `${seconds.toFixed(2)} seconds`;
   }
   const total = Math.round(seconds);
   if (total < 60) {

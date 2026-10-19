@@ -1,4 +1,4 @@
-import { APP_EVENTS, PLAYER_EVENTS, PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
+import { APP_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, PROXY_EVENTS, WAITING_EVENTS } from "../../shared/events.js";
 import { APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { formatWaitingText } from "../../domain/waiting-text.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
@@ -48,6 +48,7 @@ export class WaitingOverlay {
   #timer = null;
   #waitSequence = 0;
   #waitStartedAt = null;
+  #waitFileIndex = null;
   #wasWaiting = false;
   #awaitingFirstPresentedFrame = false;
   #lastRenderedText = null;
@@ -69,6 +70,7 @@ export class WaitingOverlay {
       return;
     }
     document.addEventListener(PROXY_EVENTS.MEASURED, this.#onProxyMeasured);
+    document.addEventListener(LOADING_EVENTS.FILE_CHOSEN, this.#onFileChosen);
     document.addEventListener(PLAYER_EVENTS.BUFFER, this.#onBuffer);
     document.addEventListener(PLAYER_EVENTS.FIRST_FRAME, this.#onFirstFrame);
     document.addEventListener(WAITING_EVENTS.STEP, this.#onStep);
@@ -92,7 +94,16 @@ export class WaitingOverlay {
     const downloadStats = detail?.downloadStats ?? null;
     const transcodeProgress = detail?.transcodeProgress ?? null;
     const readiness = detail?.playbackReadiness;
+    const hasCurrentWaitEstimate = this.#awaitingFirstPresentedFrame && downloadStats &&
+      Object.hasOwn(downloadStats, "waitEstimate");
+    const earlyWaitEstimate = this.#awaitingFirstPresentedFrame && downloadStats?.waitEstimate &&
+      typeof downloadStats.waitEstimate === "object"
+      ? { ...downloadStats.waitEstimate,
+        ageMs: this.#waitStartedAt === null ? downloadStats.waitEstimate.ageMs ?? 0 :
+          Math.max(0, performance.now() - this.#waitStartedAt) }
+      : downloadStats?.waitEstimate;
     const unified = this.#model.update({
+      ...(hasCurrentWaitEstimate ? { waitEstimate: earlyWaitEstimate } : {}),
       ...(detail && Object.hasOwn(detail, "playbackReadiness") ? { playbackReadiness: readiness } : {}),
       bufferedAhead: this.#bufferedAhead ?? undefined
     });
@@ -168,22 +179,31 @@ export class WaitingOverlay {
     if (waiting && !this.#wasWaiting && !this.#awaitingFirstPresentedFrame) {
       this.#waitSequence += 1;
       this.#waitStartedAt = performance.now();
+      this.#waitFileIndex = null;
       this.#awaitingFirstPresentedFrame = true;
       this.#lastRenderedText = null;
       console.debug(`[wait-start] wait=${this.#waitSequence} startedAt=${this.#waitStartedAt.toFixed(3)}ms state=${state}`);
     }
     if (!waiting && state !== APP_STATE.ADVANCING) {
       this.#awaitingFirstPresentedFrame = false;
+      this.#waitFileIndex = null;
     }
     this.#wasWaiting = waiting;
     if (waiting && this.#timer === null) {
-      // Refresh at the displayed time unit; this is not a forecasting window.
-      this.#timer = setInterval(() => {
-        this.#measurements.etaSeconds = this.#model.update({}).etaSeconds ?? undefined;
+      // Spend at most four percent of the current wait on a stale displayed
+      // value, leaving room for the duration formatter's rounding.
+      const refresh = () => {
+        if (this.#timer === null) return;
+        const estimate = this.#model.update({}).etaSeconds ?? undefined;
+        this.#measurements.etaSeconds = estimate;
         this.#render();
-      }, 1000);
+        const delay = typeof estimate === "number" && estimate > 0
+          ? Math.min(100, Math.max(1, estimate * 40)) : 100;
+        this.#timer = setTimeout(refresh, delay);
+      };
+      this.#timer = setTimeout(refresh, 100);
     } else if (!isWaiting(state) && this.#timer !== null) {
-      clearInterval(this.#timer);
+      clearTimeout(this.#timer);
       this.#timer = null;
     }
     if (typeof state !== "string" || isWaiting(state) || state === APP_STATE.PAUSED) {
@@ -196,11 +216,32 @@ export class WaitingOverlay {
     this.#render();
   };
 
+  /** @param {CustomEvent} event */
+  #onFileChosen = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const fileIndex = Number.isSafeInteger(detail?.fileIndex) ? detail.fileIndex : null;
+    if (detail?.originalOpen !== true && this.#awaitingFirstPresentedFrame && this.#waitFileIndex === fileIndex) {
+      return;
+    }
+    this.#model.reset();
+    this.#bufferedAhead = null;
+    this.#measurements = {};
+    this.#pipelineStep = "";
+    this.#waitSequence += 1;
+    this.#waitStartedAt = Number.isFinite(detail?.startedAt) ? detail.startedAt : performance.now();
+    this.#waitFileIndex = fileIndex;
+    this.#awaitingFirstPresentedFrame = true;
+    this.#lastRenderedText = null;
+    console.debug(`[wait-start] wait=${this.#waitSequence} startedAt=${this.#waitStartedAt.toFixed(3)}ms ` +
+      `fileIndex=${fileIndex ?? "-"}${detail?.originalOpen === true ? " originalOpen=true" : ""}`);
+  };
+
   #onFirstFrame = (event) => {
     const waitSequence = event instanceof CustomEvent ? event.detail?.waitSequence : null;
     if (waitSequence === this.#waitSequence) {
       this.#awaitingFirstPresentedFrame = false;
       this.#waitStartedAt = null;
+      this.#waitFileIndex = null;
     }
   };
 

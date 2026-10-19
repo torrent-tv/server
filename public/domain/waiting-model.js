@@ -6,6 +6,10 @@
 export class WaitingModel {
   #readiness = null;
   #readinessKey = null;
+  #waitEstimateKey = null;
+  #waitEstimateDeadline = null;
+  #waitEstimateId = null;
+  #waitEstimateRevision = -1;
   #bufferedAhead = null;
   #deadline = null;
   #clock;
@@ -21,6 +25,26 @@ export class WaitingModel {
    */
   update(facts = {}) {
     const now = this.#clock();
+    if (Object.hasOwn(facts, "waitEstimate")) {
+      const next = facts.waitEstimate && typeof facts.waitEstimate === "object" &&
+        facts.waitEstimate.version === 1 && typeof facts.waitEstimate.waitId === "string" &&
+        Number.isSafeInteger(facts.waitEstimate.revision) && facts.waitEstimate.revision >= 0 &&
+        Number.isFinite(facts.waitEstimate.remainingSeconds) && facts.waitEstimate.remainingSeconds >= 0 &&
+        Number.isFinite(facts.waitEstimate.ageMs) && facts.waitEstimate.ageMs >= 0
+        ? facts.waitEstimate : null;
+      const clear = facts.waitEstimate === null;
+      const key = next ? `${next.waitId}:${next.revision}` : null;
+      const stale = next && next.waitId === this.#waitEstimateId &&
+        next.revision < this.#waitEstimateRevision;
+      if (clear || (next && !stale && key !== this.#waitEstimateKey)) {
+        this.#waitEstimateDeadline = next
+          ? now + Math.max(0, next.remainingSeconds * 1000 - next.ageMs)
+          : null;
+        this.#waitEstimateRevision = next?.revision ?? -1;
+        this.#waitEstimateId = next?.waitId ?? null;
+        this.#waitEstimateKey = key;
+      }
+    }
     if (Object.hasOwn(facts, "playbackReadiness")) {
       const next = facts.playbackReadiness && typeof facts.playbackReadiness === "object"
         ? facts.playbackReadiness
@@ -45,11 +69,14 @@ export class WaitingModel {
     const ready = readiness?.ready === true;
     const delay = readiness?.delaySeconds;
     const countdown = Number.isFinite(this.#deadline) ? (this.#deadline - now) / 1000 : null;
-    const etaSeconds = ready
+    const readinessEta = ready
       ? 0
       : Number.isFinite(delay) && delay > 0 && Number.isFinite(countdown) && countdown > 0
-        ? countdown
-        : null;
+        ? countdown : null;
+    const earlyCountdown = Number.isFinite(this.#waitEstimateDeadline)
+      ? (this.#waitEstimateDeadline - now) / 1000 : null;
+    const earlyEta = Number.isFinite(earlyCountdown) && earlyCountdown > 0 ? earlyCountdown : null;
+    const etaSeconds = readinessEta ?? earlyEta;
     const cushionRemainingSeconds = Number.isFinite(reserve) && reserve > 0 && ahead !== null
       ? Math.max(0, reserve - ahead)
       : null;
@@ -61,7 +88,8 @@ export class WaitingModel {
 
     return {
       etaSeconds,
-      reason: readiness?.reason ?? "forecast-not-received",
+      reason: readinessEta !== null ? readiness?.reason ?? "forecast-not-received"
+        : earlyEta !== null ? "initial-playback-estimate" : readiness?.reason ?? "forecast-not-received",
       cushionPercent,
       cushionRemainingSeconds,
       encodeSpeedText: null
@@ -72,6 +100,10 @@ export class WaitingModel {
   reset() {
     this.#readiness = null;
     this.#readinessKey = null;
+    this.#waitEstimateKey = null;
+    this.#waitEstimateDeadline = null;
+    this.#waitEstimateId = null;
+    this.#waitEstimateRevision = -1;
     this.#bufferedAhead = null;
     this.#deadline = null;
   }

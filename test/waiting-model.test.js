@@ -14,6 +14,17 @@ function readiness(overrides = {}) {
   };
 }
 
+function waitEstimate(overrides = {}) {
+  return {
+    version: 1,
+    waitId: "wait-1",
+    revision: 1,
+    remainingSeconds: 8,
+    ageMs: 0,
+    ...overrides
+  };
+}
+
 test("does not invent an estimate before the proxy reports its forecast", () => {
   const model = new WaitingModel();
   const answer = model.update({});
@@ -21,6 +32,45 @@ test("does not invent an estimate before the proxy reports its forecast", () => 
   assert.equal(answer.etaSeconds, null);
   assert.equal(answer.cushionPercent, null);
   assert.equal(answer.cushionRemainingSeconds, null);
+});
+
+test("uses an initial wait estimate until the complete readiness forecast arrives", () => {
+  const model = new WaitingModel({ clock: () => 100 });
+  assert.equal(model.update({ waitEstimate: waitEstimate() }).etaSeconds, 8);
+  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: null }) }).etaSeconds, 8);
+  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 3 }) }).etaSeconds, 3);
+});
+
+test("applies measured age once and does not restart a duplicate wait estimate", () => {
+  let now = 100;
+  const model = new WaitingModel({ clock: () => now });
+  const initial = waitEstimate({ remainingSeconds: 8, ageMs: 750 });
+  assert.equal(model.update({ waitEstimate: initial }).etaSeconds, 7.25);
+  now += 1500;
+  assert.equal(model.update({ waitEstimate: { ...initial } }).etaSeconds, 5.75);
+});
+
+test("a new wait estimate revision replaces the countdown and invalid measurements are ignored", () => {
+  let now = 0;
+  const model = new WaitingModel({ clock: () => now });
+  model.update({ waitEstimate: waitEstimate({ remainingSeconds: 8 }) });
+  now = 1000;
+  assert.equal(model.update({ waitEstimate: waitEstimate({ revision: 2, remainingSeconds: 5 }) }).etaSeconds, 5);
+  assert.equal(model.update({ waitEstimate: waitEstimate({ revision: 3, remainingSeconds: NaN }) }).etaSeconds, 5);
+});
+
+test("an older revision cannot replace a newer estimate", () => {
+  let now = 0;
+  const model = new WaitingModel({ clock: () => now });
+  model.update({ waitEstimate: waitEstimate({ revision: 2, remainingSeconds: 5 }) });
+  now = 1000;
+  assert.equal(model.update({ waitEstimate: waitEstimate({ revision: 1, remainingSeconds: 30 }) }).etaSeconds, 4);
+});
+
+test("an explicit null wait estimate clears the prior action", () => {
+  const model = new WaitingModel();
+  model.update({ waitEstimate: waitEstimate() });
+  assert.equal(model.update({ waitEstimate: null }).etaSeconds, null);
 });
 
 test("shows the proxy's delay and the browser's current buffer", () => {

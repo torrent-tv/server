@@ -590,8 +590,16 @@ export class Player extends StateDerivedView {
   /** @param {CustomEvent} event */
   #onFileChosenForPoster = (event) => {
     // A new load of a file begins, so a new picture is chosen for it.
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const previousFileIndex = this.#activeFileIndex;
     this.#loadArt = null;
     this.#onActiveFileForPoster(event);
+    if (Number.isFinite(detail?.startedAt) &&
+      !(this.#awaitingFirstPresentedFrame && previousFileIndex === detail.fileIndex)) {
+      this.#waitSequence += 1;
+      this.#waitStartedAt = detail.startedAt;
+      this.#awaitingFirstPresentedFrame = true;
+    }
   };
 
   /** @param {CustomEvent} event */
