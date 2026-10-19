@@ -1,16 +1,15 @@
-# Alpine comes from Amazon's copy of Docker's official images (the same
-# digest), not from Docker Hub: Docker Hub refuses anonymous pulls past a
-# per-address limit, the CI runners share their addresses, and on
-# 2026-10-09 the release stopped twice on `429 Too Many Requests`.
+# Use Google's Docker Hub cache for Docker's official Alpine image. It returned
+# the same manifest digest as Amazon ECR Public on 2026-10-19, while ECR Public
+# rejected the server release twice after its data quota was exceeded.
 # Both stages take node from Alpine's own package; npm is installed only in
 # the stage that installs the production dependencies.
-FROM public.ecr.aws/docker/library/alpine:3 AS dependencies
+FROM mirror.gcr.io/library/alpine:3 AS dependencies
 RUN apk add --no-cache nodejs npm
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM public.ecr.aws/docker/library/alpine:3
+FROM mirror.gcr.io/library/alpine:3
 RUN apk add --no-cache nodejs \
  && addgroup -S app && adduser -S -G app app
 
