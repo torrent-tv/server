@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Keep the total-wait estimate instead of a local readiness delay, and do not show zero before the first presented frame (#ttv-185).
+
 ## 0.50.27
 
 - **Fix**: Send the pre-session client-link rate and sample age with the early source wait estimates (#ttv-185).

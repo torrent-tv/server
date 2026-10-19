@@ -34,11 +34,11 @@ test("does not invent an estimate before the proxy reports its forecast", () => 
   assert.equal(answer.cushionRemainingSeconds, null);
 });
 
-test("uses an initial wait estimate until the complete readiness forecast arrives", () => {
+test("keeps the full wait estimate when readiness reports only a next-segment delay", () => {
   const model = new WaitingModel({ clock: () => 100 });
   assert.equal(model.update({ waitEstimate: waitEstimate() }).etaSeconds, 8);
   assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: null }) }).etaSeconds, 8);
-  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 3 }) }).etaSeconds, 3);
+  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 0.035 }) }).etaSeconds, 8);
 });
 
 test("applies measured age once and does not restart a duplicate wait estimate", () => {
@@ -73,19 +73,19 @@ test("an explicit null wait estimate clears the prior action", () => {
   assert.equal(model.update({ waitEstimate: null }).etaSeconds, null);
 });
 
-test("shows the proxy's delay and the browser's current buffer", () => {
+test("does not treat the next-segment delay as the full wait and shows the current buffer", () => {
   const model = new WaitingModel();
   const answer = model.update({
     playbackReadiness: readiness(),
     bufferedAhead: 4
   });
 
-  assert.equal(answer.etaSeconds, 7.5);
+  assert.equal(answer.etaSeconds, null);
   assert.equal(answer.cushionPercent, 40);
   assert.equal(answer.cushionRemainingSeconds, 6);
 });
 
-test("keeps an unavailable proxy delay unknown in the waiting text", () => {
+test("keeps the total wait unknown when only a local playback delay is available", () => {
   const model = new WaitingModel();
   model.update({ playbackReadiness: readiness() });
   const answer = model.update({
@@ -98,55 +98,66 @@ test("keeps an unavailable proxy delay unknown in the waiting text", () => {
   assert.equal(model.update({ bufferedAhead: 4 }).etaSeconds, null);
 });
 
-test("accepts only finite nonnegative numeric delays", () => {
+test("does not expose local readiness delays as the full playback wait", () => {
   const model = new WaitingModel();
   for (const delaySeconds of [undefined, "0", "7.5", false, NaN, Infinity, -1]) {
     assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds }) }).etaSeconds, null);
   }
-  const answer = model.update({ playbackReadiness: readiness({ delaySeconds: 0, reason: "minimum-safe-delay" }) });
+  const answer = model.update({ playbackReadiness: readiness({ delaySeconds: 0.035, reason: "minimum-safe-delay" }) });
   assert.equal(answer.etaSeconds, null);
   assert.match(formatWaitingText({ etaSeconds: answer.etaSeconds, readinessReason: answer.reason }),
     /Playback readiness has not been confirmed/);
 });
 
-test("a full browser buffer does not override a proxy forecast that is not ready", () => {
+test("a full browser buffer does not create a total-wait estimate", () => {
   const model = new WaitingModel();
   const answer = model.update({
     playbackReadiness: readiness(),
     bufferedAhead: 10
   });
 
-  assert.equal(answer.etaSeconds, 7.5);
+  assert.equal(answer.etaSeconds, null);
   assert.equal(answer.cushionPercent, 100);
   assert.equal(answer.cushionRemainingSeconds, 0);
 });
 
-test("shows zero only when the proxy reports playback ready", () => {
+test("does not show zero until the first presented frame", () => {
   const model = new WaitingModel();
   const answer = model.update({ playbackReadiness: readiness({ ready: true, delaySeconds: 0 }) });
 
-  assert.equal(answer.etaSeconds, 0);
+  assert.equal(answer.etaSeconds, null);
   assert.equal(answer.cushionPercent, 100);
 });
 
-test("retains the proxy forecast when only the client buffer changes", () => {
+test("keeps counting down the full wait after proxy readiness until the estimate expires", () => {
+  let now = 0;
+  const model = new WaitingModel({ clock: () => now });
+  model.update({ waitEstimate: waitEstimate({ remainingSeconds: 0.2 }) });
+  now = 100;
+
+  assert.equal(model.update({ playbackReadiness: readiness({ ready: true, delaySeconds: 0 }) }).etaSeconds, 0.1);
+  now = 250;
+  assert.equal(model.update({}).etaSeconds, null);
+});
+
+test("retains the full wait estimate when only the client buffer changes", () => {
   const model = new WaitingModel({ clock: () => 0 });
-  model.update({ playbackReadiness: readiness(), bufferedAhead: 2 });
+  model.update({ waitEstimate: waitEstimate({ remainingSeconds: 7.5 }), playbackReadiness: readiness(), bufferedAhead: 2 });
   const answer = model.update({ bufferedAhead: 5 });
 
   assert.equal(answer.etaSeconds, 7.5);
   assert.equal(answer.cushionPercent, 50);
 });
 
-test("counts down in the local monotonic clock without depending on proxy clock alignment", () => {
+test("counts down the full wait in the local monotonic clock without proxy clock alignment", () => {
   let now = 100;
   const model = new WaitingModel({ clock: () => now });
-  assert.equal(model.update({ playbackReadiness: readiness({ measuredAt: -9000 }) }).etaSeconds, 7.5);
+  assert.equal(model.update({ waitEstimate: waitEstimate({ remainingSeconds: 7.5, ageMs: 0 }) }).etaSeconds, 7.5);
   now += 2500;
   assert.equal(model.update({}).etaSeconds, 5);
   now += 9000;
   assert.equal(model.update({}).etaSeconds, null);
-  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 3 }) }).etaSeconds, 3);
+  assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 3 }) }).etaSeconds, null);
 });
 
 test("reset forgets the previous proxy forecast and client buffer", () => {
@@ -160,28 +171,28 @@ test("reset forgets the previous proxy forecast and client buffer", () => {
   assert.equal(answer.cushionRemainingSeconds, null);
 });
 
-test("rendering the same cached observation does not postpone its deadline", () => {
+test("rendering the same wait estimate does not postpone its deadline", () => {
   let now = 0;
   const model = new WaitingModel({ clock: () => now });
-  const observation = readiness({ delaySeconds: 4 });
-  model.update({ playbackReadiness: observation });
+  const observation = waitEstimate({ remainingSeconds: 4 });
+  model.update({ waitEstimate: observation });
   now = 1500;
-  assert.equal(model.update({ playbackReadiness: observation }).etaSeconds, 2.5);
+  assert.equal(model.update({ waitEstimate: observation }).etaSeconds, 2.5);
 });
 
-test("a separately parsed duplicate measurement does not restart its deadline", () => {
+test("a separately parsed duplicate wait estimate does not restart its deadline", () => {
   let now = 0;
   const model = new WaitingModel({ clock: () => now });
-  const observation = readiness({ measuredAt: 1234, delaySeconds: 4 });
-  model.update({ playbackReadiness: observation });
+  const observation = waitEstimate({ remainingSeconds: 4 });
+  model.update({ waitEstimate: observation });
   now = 1500;
-  assert.equal(model.update({ playbackReadiness: { ...observation } }).etaSeconds, 2.5);
+  assert.equal(model.update({ waitEstimate: { ...observation } }).etaSeconds, 2.5);
 });
 
-test("a new measurement starts a new countdown even when its value is unchanged", () => {
+test("a new wait-estimate revision starts a new countdown even when its value is unchanged", () => {
   let now = 0;
   const model = new WaitingModel({ clock: () => now });
-  model.update({ playbackReadiness: readiness({ measuredAt: 1234, delaySeconds: 4 }) });
+  model.update({ waitEstimate: waitEstimate({ revision: 1, remainingSeconds: 4 }) });
   now = 1500;
-  assert.equal(model.update({ playbackReadiness: readiness({ measuredAt: 2234, delaySeconds: 4 }) }).etaSeconds, 4);
+  assert.equal(model.update({ waitEstimate: waitEstimate({ revision: 2, remainingSeconds: 4 }) }).etaSeconds, 4);
 });
