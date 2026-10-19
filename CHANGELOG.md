@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.25
 
 - **Fix**: Keep the open proxy transport when returning to the file picker, so another selection does not add a new connection delay to its countdown.
 
