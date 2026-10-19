@@ -1,5 +1,6 @@
 ## 0.50.26
 
+- **Fix**: Send the pre-session client-link rate and sample age with the early source wait estimates (#ttv-185).
 - **Fix**: Start first-frame wait measurements at the file selection or magnet submission, before local torrent parsing.
 - **Fix**: Attempt to reconnect after the proxy transport is lost while the viewer is at the file picker.
 

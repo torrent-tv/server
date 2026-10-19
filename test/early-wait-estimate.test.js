@@ -9,7 +9,7 @@ const end = source.indexOf("\n  }", start) + 4;
 const requestMethod = source.slice(start, end);
 
 function loading(document) {
-  const create = new Function("document", "CustomEvent", "PROXY_EVENTS", `return class {
+  const create = new Function("document", "CustomEvent", "PROXY_EVENTS", "getEarlyLinkEstimate", `return class {
     #session = { consumerId: "viewer", viewGeneration: 3, abortController: new AbortController() };
     #activeSourceKey = "source";
     #isAbortError(error) { return error?.name === "AbortError"; }
@@ -18,7 +18,8 @@ function loading(document) {
     changeGeneration(value) { this.#session.viewGeneration = value; }
     changeSource(value) { this.#activeSourceKey = value; }
   }`);
-  return new (create(document, CustomEvent, { MEASURED: "proxy-measured" }))();
+  return new (create(document, CustomEvent, { MEASURED: "proxy-measured" },
+    () => ({ linkMbps: 24, linkSampleAgeMs: 130 })))();
 }
 
 test("requests a first-frame estimate from the source before proxy metadata is ready", async () => {
@@ -38,7 +39,8 @@ test("requests a first-frame estimate from the source before proxy metadata is r
   const url = new URL(request.url, "http://proxy.invalid");
   assert.equal(url.pathname, "/api/sources/source/stats");
   assert.deepEqual(Object.fromEntries(url.searchParams), {
-    fileIndex: "0", consumer: "viewer", generation: "3", fileName: "Film.mkv", fileLength: "800"
+    fileIndex: "0", consumer: "viewer", generation: "3", fileName: "Film.mkv", fileLength: "800",
+    linkMbps: "24", linkSampleAgeMs: "130"
   });
   assert.equal(request.options.timeoutMs, 1000);
   assert.equal(events.length, 1);

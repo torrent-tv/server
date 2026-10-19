@@ -15,7 +15,7 @@ import {
   pauseWithoutIntent
 } from "../../domain/playback-intent.js";
 import { describeMediaFailure } from "../../domain/media-failure.js";
-import { measureLink, reportNow } from "../../domain/net-report.js";
+import { getEarlyLinkEstimate, measureLink, reportNow } from "../../domain/net-report.js";
 import { onProxyOutcome, outcomeBelongsTo } from "../../domain/proxy-outcome.js";
 import { describeFailure, viewerError } from "../../domain/viewer-failure.js";
 import { lastProxyRefusal } from "../../domain/proxy-refusal.js";
@@ -2585,9 +2585,17 @@ export class Loading extends StateDerivedView {
   async #askWhatIsInTheTorrent(transport, sourceKey, whileWaiting) {
     for (;;) {
       this.#throwIfCancelled();
+      const query = new URLSearchParams({
+        consumerId: this.#session.consumerId,
+        generation: String(this.#session.viewGeneration)
+      });
+      const link = getEarlyLinkEstimate();
+      if (link) {
+        query.set("linkMbps", String(link.linkMbps));
+        query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
+      }
       const response = await transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/files?consumerId=${encodeURIComponent(this.#session.consumerId)}` +
-          `&generation=${encodeURIComponent(String(this.#session.viewGeneration))}`,
+        `/api/sources/${encodeURIComponent(sourceKey)}/files?${query}`,
         { signal: this.#session.abortController.signal, timeoutMs: 0 }
       );
       this.#throwIfCancelled();
@@ -2623,6 +2631,11 @@ export class Loading extends StateDerivedView {
       fileName: file.name,
       fileLength: String(file.length)
     });
+    const link = getEarlyLinkEstimate();
+    if (link) {
+      query.set("linkMbps", String(link.linkMbps));
+      query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
+    }
     try {
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,

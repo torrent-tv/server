@@ -101,6 +101,19 @@ export function getLatestLinkReading() {
 }
 
 /**
+ * The client link measurements needed before a transcode session exists.
+ *
+ * @returns {{ linkMbps: number, linkSampleAgeMs: number } | null}
+ */
+export function getEarlyLinkEstimate() {
+  const latest = getLatestLinkReading();
+  const linkMbps = getEstimatedLinkMbps() ?? latest?.mbps ?? null;
+  if (!Number.isFinite(linkMbps) || linkMbps <= 0 || !Number.isFinite(latest?.at)) return null;
+  const now = performance.timeOrigin + performance.now();
+  return { linkMbps, linkSampleAgeMs: Math.max(0, now - latest.at) };
+}
+
+/**
  * Median link throughput over the sample window, or null when there is not
  * enough recent material to estimate.
  *
