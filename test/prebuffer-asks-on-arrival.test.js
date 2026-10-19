@@ -13,11 +13,32 @@ function method(name) {
   assert.ok(start >= 0, name);
   return source.slice(start, source.indexOf("\n  }\n", start) + 4);
 }
-const waitEstimateHelperStart = source.indexOf("function withProgressWaitEstimate(");
-const waitEstimateHelperEnd = source.indexOf("\n}", waitEstimateHelperStart) + 2;
+const waitEstimateHelperStart = source.indexOf("function waitEstimateForProgress(");
+const waitEstimateHelperEnd = source.indexOf("\n}", source.indexOf("function withProgressWaitEstimate(", waitEstimateHelperStart)) + 2;
 const waitEstimateHelper = source.slice(waitEstimateHelperStart, waitEstimateHelperEnd);
 
 class HTMLVideoElement { constructor() { this.paused = true; this.error = null; } }
+
+test("forwards the active estimate nested in playback readiness to the waiting overlay", () => {
+  const forward = new Function(`${waitEstimateHelper}\nreturn withProgressWaitEstimate;`)();
+  const estimate = { version: 1, waitId: "source:0:1", revision: 7, remainingSeconds: 3.5, ageMs: 125 };
+  const stats = { downloadSpeed: 100 };
+
+  assert.deepEqual(forward(stats, { playbackReadiness: { waitEstimate: estimate } }), {
+    ...stats,
+    waitEstimate: estimate
+  });
+});
+
+test("prefers the explicit progress estimate when both forms are present", () => {
+  const forward = new Function(`${waitEstimateHelper}\nreturn withProgressWaitEstimate;`)();
+  const explicit = { version: 1, waitId: "source:0:1", revision: 7, remainingSeconds: 3.5, ageMs: 125 };
+  const nested = { ...explicit, revision: 6 };
+
+  assert.deepEqual(forward(null, { waitEstimate: explicit, playbackReadiness: { waitEstimate: nested } }), {
+    waitEstimate: explicit
+  });
+});
 
 test("the page asks again as soon as a piece has arrived, after reporting it", async () => {
   const calls = [];
