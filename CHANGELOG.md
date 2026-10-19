@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: knip 6.41.0 → 6.42.0; 24 package(s) changed in the lock file.
+
 ## 0.50.30
 
 - **Fix**: Record separate cold-start phase durations and time from startup completion to the first audio-ready presented frame for the proxy's wait model (#ttv-185).
