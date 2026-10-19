@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.32
 
 - **Fix**: Show the proxy's active first-segment forecast while preparation is in progress (#ttv-185).
 - **Fix**: Build the server from the matching Alpine cache mirror when ECR Public's data quota is exceeded (#ttv-185).
