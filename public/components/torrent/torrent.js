@@ -85,7 +85,7 @@ export class Torrent extends StateDerivedView {
   /** @param {SubmitEvent} event */
   #onFormSubmit = (event) => {
     event.preventDefault();
-    this.#submitMagnetField();
+    this.#submitMagnetField(performance.now());
   };
 
   /**
@@ -101,7 +101,7 @@ export class Torrent extends StateDerivedView {
   };
 
   /** Start the magnet flow from the text field (button, Enter or auto-start). */
-  #submitMagnetField() {
+  #submitMagnetField(startedAt = performance.now()) {
     const value = this.#magnetInput.value.trim();
     if (value.length === 0) {
       return;
@@ -117,11 +117,11 @@ export class Torrent extends StateDerivedView {
     // Consistent with the file input: the field clears once the flow starts
     // (an instant retry would not help a no-peers failure anyway).
     this.#magnetInput.value = "";
-    this.#processMagnet(value);
+    this.#processMagnet(value, startedAt);
   }
 
-  /** @param {string} magnetUri */
-  #processMagnet(magnetUri) {
+  /** @param {string} magnetUri @param {number} startedAt */
+  #processMagnet(magnetUri, startedAt = performance.now()) {
     // Consume any pending position/file from a shared URL (one-shot).
     const currentTime = this.#pendingCurrentTime;
     const fileIndex = this.#pendingFileIndex;
@@ -129,7 +129,7 @@ export class Torrent extends StateDerivedView {
     this.#pendingFileIndex = null;
     document.dispatchEvent(
       new CustomEvent(TORRENT_EVENTS.MAGNET_READY, {
-        detail: { magnetUri, currentTime, fileIndex }
+        detail: { magnetUri, currentTime, fileIndex, startedAt }
       })
     );
   }
@@ -219,6 +219,7 @@ export class Torrent extends StateDerivedView {
   }
 
   async #loadFromUrl() {
+    const startedAt = performance.now();
     const params = new URLSearchParams(location.search);
 
     // Optional playback position (`&currentTime=<seconds>`) and file index
@@ -285,7 +286,7 @@ export class Torrent extends StateDerivedView {
     }
 
     const file = new File([bytes], "from-url.torrent", { type: "application/x-bittorrent" });
-    await this.#processIncomingFiles([file]);
+    await this.#processIncomingFiles([file], startedAt);
   }
 
   #setupElements() {
@@ -344,7 +345,7 @@ export class Torrent extends StateDerivedView {
    * @param {FileList | File[]} files
    * @returns {Promise<void>}
    */
-  async #processIncomingFiles(files) {
+  async #processIncomingFiles(files, startedAt = performance.now()) {
     const torrentFile = this.#pickFirstTorrentFile(files);
     if (!torrentFile) {
       document.dispatchEvent(
@@ -374,6 +375,7 @@ export class Torrent extends StateDerivedView {
             file: torrentFile,
             torrentBytes,
             meta,
+            startedAt,
             currentTime,
             fileIndex
           }
