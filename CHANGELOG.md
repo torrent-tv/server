@@ -1,7 +1,7 @@
 Warning: truncated output (original token count: 80973)
 Total output lines: 1858
 
-## Unreleased
+## 0.52.1
 
 - **Fix**: Bound chapter snapshot requests and show failed discovery as unavailable instead of leaving the panel in its reading state.
 
