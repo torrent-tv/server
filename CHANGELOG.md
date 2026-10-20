@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Persist opt-in playback process events through the client log to the proxy, including events emitted before its connection opens (#ttv-185).
+
 ## 0.52.2
 
 - **Chore**: Persist opt-in playback process events through the client log to the proxy, including events emitted before its connection opens (#ttv-185).
