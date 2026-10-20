@@ -272,12 +272,12 @@ export class Torrent extends StateDerivedView {
     let bytes;
     try {
       waitTrace.begin("torrent-address", startedAt);
-      bytes = waitTrace.run("A0.decode-address", () => {
+      bytes = waitTrace.run("A0.0.decode-address", () => {
         const binary = atob(torrentBase64);
         const decoded = new Uint8Array(binary.length);
         for (let index = 0; index < binary.length; index++) decoded[index] = binary.charCodeAt(index);
         return decoded;
-      });
+      }, { process: "A0.0" });
     } catch {
       // silent-ok: not silent at all — the viewer is shown the error screen
       // below, which is the loudest answer this app has.
@@ -366,8 +366,10 @@ export class Torrent extends StateDerivedView {
 
     try {
       if (waitTrace.current?.startedAt !== startedAt) waitTrace.begin("torrent-file", startedAt);
-      const torrentBytes = new Uint8Array(await waitTrace.run("A0.read-file", () => torrentFile.arrayBuffer()));
-      const meta = await waitTrace.run("A0.parse-and-hash", () => parseTorrentBytes(torrentBytes));
+      const torrentBytes = new Uint8Array(await waitTrace.run("A0.1.read-file", () => torrentFile.arrayBuffer(),
+        { process: "A0.1" }));
+      const meta = await waitTrace.run("A0.2.parse-and-hash", () => parseTorrentBytes(torrentBytes),
+        { process: "A0.2" });
       // Consume any pending position/file from a shared URL (one-shot).
       const currentTime = this.#pendingCurrentTime;
       const fileIndex = this.#pendingFileIndex;

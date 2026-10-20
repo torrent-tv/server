@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { WaitTrace, waitTrace, observeVideoWait } from "../public/domain/wait-trace.js";
+import { WaitTrace, waitTrace, observeHlsWait, observeVideoWait } from "../public/domain/wait-trace.js";
 
 test("a proxy retry retains the action origin and identifies each attempt", async () => {
   let now = 100;
@@ -18,6 +18,42 @@ test("a proxy retry retains the action origin and identifies each attempt", asyn
   assert.deepEqual(events.filter(event => event.event === "attempt").map(event => event.attempt), [1, 2]);
   assert.equal(events.find(event => event.event === "end").attempt, 1);
   assert.equal(request.headers["x-ttv-wait-operation"], "b1");
+  assert.equal(request.headers["x-ttv-wait-process"], "A12");
+  assert.equal(events.find(event => event.event === "begin").process, "A12");
+});
+
+test("HLS observations give separate spans to remux, buffer creation, init append and media append", () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  const listeners = new Map();
+  Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
+    current: null, sequence: 0 });
+  const hls = { on: (name, handler) => listeners.set(name, handler) };
+  const fire = (name, data = {}) => listeners.get(name)?.(name, data);
+  try {
+    waitTrace.begin("torrent-file");
+    waitTrace.attempt(0, 10, true);
+    const Events = Object.fromEntries(["MANIFEST_LOADING", "MANIFEST_PARSED", "LEVEL_LOADED", "AUDIO_TRACK_LOADED", "FRAG_LOADING",
+      "FRAG_LOADED", "FRAG_PARSING_INIT_SEGMENT", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING",
+      "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"].map(name => [name, name]));
+    observeHlsWait(hls, Events);
+    fire("MANIFEST_LOADING");
+    fire("MANIFEST_PARSED");
+    fire("FRAG_PARSING_INIT_SEGMENT", { type: "main", frag: { sn: 0 } });
+    fire("BUFFER_CODECS", { type: "main", frag: { sn: 0 } });
+    fire("BUFFER_CREATED", { tracks: { video: {}, audio: {} } });
+    fire("BUFFER_APPENDING", { type: "main", parent: "main", frag: { sn: 0 } });
+    fire("BUFFER_APPENDED", { type: "main", parent: "main", frag: { sn: 0 } });
+    fire("BUFFER_APPENDING", { type: "main", parent: "main", frag: { sn: 0 } });
+    fire("BUFFER_APPENDED", { type: "main", parent: "main", frag: { sn: 0 } });
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B8.v"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B5"));
+    assert.ok(events.some(event => event.event === "end" && event.process === "B5"));
+    assert.ok(events.some(event => event.event === "BUFFER_CREATED" && event.process === "B9"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B10.v"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B12.v"));
+    assert.equal(events.filter(event => event.event === "end" && ["B8.v", "B10.v", "B12.v"].includes(event.process)).length, 3);
+  } finally { Object.assign(waitTrace, saved); }
 });
 
 test("a file choice excludes the earlier time spent choosing", () => {

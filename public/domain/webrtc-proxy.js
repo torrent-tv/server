@@ -273,6 +273,10 @@ export class WebRtcProxy {
   #lostFired = false;
   /** @type {string | null} Signalling session id assigned by the server (== the proxy's `[webrtc] Session <id>`). */
   #signalSessionId = null;
+  #traceSignalEnd = null;
+  #traceMediaEnd = null;
+  #traceControlEnd = null;
+  #traceJoinEnd = null;
 
   /**
    * Called once when an ESTABLISHED connection is lost (data channel closed
@@ -429,6 +433,12 @@ export class WebRtcProxy {
       let settled = false;
       const settle = (err) => {
         if (settled) return;
+        const traceResult = { outcome: err ? "error" : "ready", error: err?.message };
+        this.#traceSignalEnd?.(traceResult);
+        this.#traceMediaEnd?.(traceResult);
+        this.#traceControlEnd?.(traceResult);
+        this.#traceJoinEnd?.(traceResult);
+        this.#traceSignalEnd = this.#traceMediaEnd = this.#traceControlEnd = this.#traceJoinEnd = null;
         finishConnect({ outcome: err ? "error" : "connected", error: err?.message });
         settled = true;
         clearTimeout(timer);
@@ -481,6 +491,7 @@ export class WebRtcProxy {
 
     if (this.#closedByUser) return;
     if (msg.type === "session") {
+      this.#traceSignalEnd = waitTrace.open("A2.2.signalling", { connection: msg.sessionId });
       // Record the session id and hand it to the log forwarder so browser logs
       // can be joined to the proxy's `[webrtc] Session <id>` lines.
       //
@@ -525,6 +536,9 @@ export class WebRtcProxy {
         if (this.#closedByUser || this.#pc !== pc) return;
         this.#pendingCandidates = [];
         waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId });
+        this.#traceSignalEnd?.({ outcome: "answer-applied" });
+        this.#traceSignalEnd = null;
+        this.#traceJoinEnd = waitTrace.open("A2.J.ready-join", { connection: this.#signalSessionId });
         if (msg.separateControl === 2) {
           this.#openSeparateControl(settle);
         } else if (!this.#controlChannel) {
@@ -600,6 +614,7 @@ export class WebRtcProxy {
    * @param {(err?: Error) => void} settle
    */
   async #createPeerConnection(_sessionId, settle) {
+    this.#traceMediaEnd = waitTrace.open("A2.2m.media-transport", { connection: this.#signalSessionId });
     this.#pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this.#channel = this.#pc.createDataChannel("proxy", { ordered: true });
 
@@ -634,6 +649,8 @@ export class WebRtcProxy {
 
     this.#channel.addEventListener("open", () => {
       waitTrace.event("A2.media-open", { connection: this.#signalSessionId });
+      this.#traceMediaEnd?.({ outcome: "open" });
+      this.#traceMediaEnd = null;
       // A silence is counted from the moment there was something to deliver on.
       this.#lastArrivalAt = performance.now();
       this.#announceViewer();
@@ -707,17 +724,27 @@ export class WebRtcProxy {
     if (!this.#controlNegotiated) return;
     if (this.#channel?.readyState !== "open") return;
     if (this.#controlLink && this.#controlChannel?.readyState !== "open") return;
-    if (!this.#connected) waitTrace.event("A2.both-open", { connection: this.#signalSessionId });
+    if (!this.#connected) {
+      this.#traceJoinEnd?.({ outcome: "ready", mediaOpen: true, controlReady: true });
+      this.#traceJoinEnd = null;
+      waitTrace.event("A2.both-open", { process: "A2.J", phase: "end", connection: this.#signalSessionId });
+    }
     this.#connected = true;
     settle();
   }
 
   #openLegacyControl() {
+    this.#traceControlEnd = waitTrace.open("A2.2c.control-transport", { connection: this.#signalSessionId,
+      mode: "legacy" });
     const channel = this.#pc.createDataChannel("proxy-control", { ordered: true });
     this.#controlChannel = channel;
     channel.binaryType = "arraybuffer";
     channel.addEventListener("message", event => this.#onChannelMessage(event.data, "proxy-control"));
-    channel.addEventListener("open", () => this.#announceViewer());
+    channel.addEventListener("open", () => {
+      this.#traceControlEnd?.({ outcome: "open" });
+      this.#traceControlEnd = null;
+      this.#announceViewer();
+    });
     const closed = () => {
       this.#rejectChannel(channel, new Error("Control data channel closed."));
       if (this.#controlChannel === channel) this.#controlChannel = null;
@@ -728,6 +755,8 @@ export class WebRtcProxy {
 
   #openSeparateControl(settle) {
     if (this.#controlLink) return;
+    this.#traceControlEnd = waitTrace.open("A2.2c.control-transport", { connection: this.#signalSessionId,
+      mode: "separate" });
     waitTrace.event("A2.control-start", { connection: this.#signalSessionId });
     this.#controlLink = new ControlConnection({
       proxyId: this.#proxyId,
@@ -742,6 +771,8 @@ export class WebRtcProxy {
       onMessage: raw => this.#onChannelMessage(raw, "proxy-control"),
       onOpen: channel => {
         waitTrace.event("A2.control-open", { connection: this.#signalSessionId });
+        this.#traceControlEnd?.({ outcome: "open" });
+        this.#traceControlEnd = null;
         this.#controlChannel = channel;
         this.#announceViewer();
         this.#settleConnected(settle);
@@ -1418,12 +1449,16 @@ export class WebRtcProxy {
    * @returns {Promise<number>} RTT in milliseconds.
    */
   async ping() {
+    const endTrace = waitTrace.open("A2.3.ping");
     if (!this.isOpen) {
-      return Promise.reject(new Error("Data channel is not open."));
+      const error = new Error("Data channel is not open.");
+      endTrace({ outcome: "error", error: error.message });
+      throw error;
     }
-    if (this.#controlLink) await this.#controlLink.wait();
-    if (!this.isOpen) throw new Error("Data channel is not open.");
-    const channel = this.#controlChannelFor();
+    try {
+      if (this.#controlLink) await this.#controlLink.wait();
+      if (!this.isOpen) throw new Error("Data channel is not open.");
+      const channel = this.#controlChannelFor();
 
     const id = crypto.randomUUID();
     const sentAt = performance.now();
@@ -1449,15 +1484,22 @@ export class WebRtcProxy {
       });
     });
 
-    try {
-      channel.send(JSON.stringify({ type: "ping", id }));
-      if (channel === this.#controlChannel) this.#controlLink?.noteRequest();
+      try {
+        channel.send(JSON.stringify({ type: "ping", id }));
+        if (channel === this.#controlChannel) this.#controlLink?.noteRequest();
+      } catch (error) {
+        const entry = this.#pending.get(`ping:${id}`);
+        this.#pending.delete(`ping:${id}`);
+        entry?.reject(error);
+      }
+      const rtt = await rttPromise;
+      endTrace({ outcome: "pong", rttMs: rtt });
+      return rtt;
     } catch (error) {
-      const entry = this.#pending.get(`ping:${id}`);
-      this.#pending.delete(`ping:${id}`);
-      entry?.reject(error);
+      endTrace({ outcome: error?.name === "AbortError" ? "cancelled" : "error",
+        error: String(error?.message ?? error) });
+      throw error;
     }
-    return rttPromise;
   }
 
   /**

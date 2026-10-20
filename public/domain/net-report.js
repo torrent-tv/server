@@ -351,6 +351,7 @@ export function startNetReporter({
     const sent = timed("net-report:fetch", () => transport.fetch(path, {
       signal: abortController.signal,
       method: "POST",
+      waitProcess: "B2",
       headers: { "Content-Type": "application/json" },
       body
     }));
