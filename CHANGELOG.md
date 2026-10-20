@@ -1,4 +1,4 @@
-## Unreleased
+## 0.51.1
 
 - **Fix**: Add opt-in playback wait observations with stable action identities across retries, operation boundaries and confirmation of advancing frames with decoded audio (#ttv-185).
 
