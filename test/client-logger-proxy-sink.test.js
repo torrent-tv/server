@@ -33,6 +33,16 @@ async function flushOnce() {
   }
 }
 
+test("wait trace emitted before proxy connection is replayed to the proxy log", async () => {
+  logger.recordWaitTrace({ version: 1, wait: "early", event: "action", process: "A0" });
+  /** @type {string[]} */
+  const toProxy = [];
+  logger.setProxySink({ isOpen: () => true, send: async (body) => { toProxy.push(body); return { ok: true }; } });
+  logger.recordWaitTrace({ version: 1, wait: "connected", event: "action", process: "A0" });
+  await flushOnce();
+  assert.ok(messagesOf(toProxy).some((msg) => msg.includes('"wait":"early"')));
+});
+
 test("a closed proxy connection is not tried, and a reconnect takes the lines again", async () => {
   let open = true;
   /** @type {string[]} */
@@ -47,6 +57,7 @@ test("a closed proxy connection is not tried, and a reconnect takes the lines ag
       return { ok: true };
     }
   });
+  console.info("a line written while the new proxy sink is open");
 
   await flushOnce();
   assert.ok(toProxy.length > 0, "while the connection is open the proxy takes the lines");

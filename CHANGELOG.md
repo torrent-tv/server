@@ -1,6 +1,6 @@
 ## 0.52.2
 
-- **Chore**: Add opt-in process boundary events for playback startup, torrent-file intake, requests, HLS loading and presentation validation (#ttv-185).
+- **Chore**: Persist opt-in playback process events through the client log to the proxy, including events emitted before its connection opens (#ttv-185).
 
 Warning: truncated output (original token count: 80973)
 Total output lines: 1858
