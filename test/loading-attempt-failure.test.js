@@ -58,6 +58,19 @@ test("source initialization cannot discard the current opening failure as stale"
   ]);
 });
 
+test("preparation reset does not finish the new action's diagnostic wait", async () => {
+  const saved = { ...waitTrace };
+  const records = [];
+  try {
+    Object.assign(waitTrace, { enabled: true, id: () => "new-action", emit: record => records.push(record) });
+    waitTrace.begin("file");
+    await loading([]).start(() => {});
+    assert.equal(waitTrace.current.wait, "new-action");
+    assert.ok(records.some(record => record.event === "preparation-reset"));
+    assert.ok(!records.some(record => record.event === "outcome"));
+  } finally { Object.assign(waitTrace, saved); }
+});
+
 test("a superseded opening failure stays cancelled while its replacement reports its own failure", async () => {
   const events = [];
   const component = loading(events);
