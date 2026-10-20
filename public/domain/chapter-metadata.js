@@ -1,6 +1,10 @@
 /** Selected-file metadata only; no chapter UI or automatic playback actions. */
 export class ChapterMetadata {
-  constructor(publish) { this.publish = publish; this.clear(); }
+  constructor(publish, { requestTimeoutMs = 15000 } = {}) {
+    this.publish = publish;
+    this.requestTimeoutMs = requestTimeoutMs;
+    this.clear();
+  }
 
   clear() {
     this.abort?.abort();
@@ -39,7 +43,8 @@ export class ChapterMetadata {
     const signal = this.abort.signal;
     const read = (async () => {
       try {
-        const response = await selected.transport.fetch(`/api/sources/${encodeURIComponent(selected.sourceKey)}/chapters?fileIndex=${selected.fileIndex}`, { signal, timeoutMs: 15000 });
+        const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)]);
+        const response = await selected.transport.fetch(`/api/sources/${encodeURIComponent(selected.sourceKey)}/chapters?fileIndex=${selected.fileIndex}`, { signal: requestSignal, timeoutMs: this.requestTimeoutMs });
         let answer;
         if (response.status === 404) {
           let body = null;
@@ -79,3 +84,4 @@ export class ChapterMetadata {
     }
   }
 }
+
