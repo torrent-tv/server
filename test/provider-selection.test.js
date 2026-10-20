@@ -50,12 +50,9 @@ test("announced provider tracks stay disabled, and a late download cannot undo O
     await playback.loadForVideo(0);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(downloads.length, 0);
-    assert.equal(menu.length, 2);
+    assert.equal(menu.length, 1, "a single provider option is selected from its language row");
     assert.equal(video.textTracks[0].mode, "disabled");
     const leaf = () => menu.find(item => item.kind === "radio");
-    const groupKey = menu.find(item => item.kind === "heading").key;
-    playback.select(groupKey);
-    assert.equal(video.textTracks[0].mode, "disabled", "a language group cannot select or turn off a track");
     playback.select(leaf().key);
     const pendingKey = leaf().key;
     document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: { work: { normalized: { kind: "movie" }, sources: { tmdb: { tmdbId: 2 } } } } }));

@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Show subtitle choices as language, source and known-team levels only when they distinguish alternatives; hide release names and technical details.
+
 ## 0.59.1
 
 - **Fix**: Hide the current chapter label when a file has no chapters or the current chapter title is empty (#ttv-216).
