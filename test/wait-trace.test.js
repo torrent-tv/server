@@ -33,15 +33,24 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 10, true);
-    const Events = Object.fromEntries(["MANIFEST_LOADING", "MANIFEST_PARSED", "LEVEL_LOADED", "AUDIO_TRACK_LOADED", "FRAG_LOADING",
+    const Events = Object.fromEntries(["MANIFEST_LOADING", "MANIFEST_LOADED", "MANIFEST_PARSED", "LEVEL_LOADING", "LEVEL_LOADED",
+      "AUDIO_TRACK_LOADING", "AUDIO_TRACK_LOADED", "FRAG_LOADING",
       "FRAG_LOADED", "FRAG_PARSING_INIT_SEGMENT", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING",
       "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"].map(name => [name, name]));
     observeHlsWait(hls, Events);
     fire("MANIFEST_LOADING");
+    fire("MANIFEST_LOADED");
     fire("MANIFEST_PARSED");
+    fire("LEVEL_LOADING");
+    fire("LEVEL_LOADED");
+    fire("AUDIO_TRACK_LOADING");
+    fire("AUDIO_TRACK_LOADED");
+    fire("FRAG_LOADING", { type: "main", frag: { sn: 0, level: 0 } });
+    fire("FRAG_LOADED", { type: "main", frag: { sn: 0, level: 0 }, payload: new Uint8Array(4) });
     fire("FRAG_PARSING_INIT_SEGMENT", { type: "main", frag: { sn: 0 } });
     fire("BUFFER_CODECS", { type: "main", frag: { sn: 0 } });
-    fire("BUFFER_CREATED", { tracks: { video: {}, audio: {} } });
+    fire("BUFFER_CODECS", { type: "audio", frag: { sn: 0 } });
+    fire("BUFFER_CREATED", { tracks: { main: {}, audio: {} } });
     fire("BUFFER_APPENDING", { type: "main", parent: "main", frag: { sn: 0 } });
     fire("BUFFER_APPENDED", { type: "main", parent: "main", frag: { sn: 0 } });
     fire("BUFFER_APPENDING", { type: "main", parent: "main", frag: { sn: 0 } });
@@ -49,10 +58,38 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     assert.ok(events.some(event => event.event === "begin" && event.process === "B8.v"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B5"));
     assert.ok(events.some(event => event.event === "end" && event.process === "B5"));
+    assert.ok(events.some(event => event.event === "begin" && event.name === "B5.level-playlist"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B6.a.p"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B7.v"));
+    assert.ok(events.some(event => event.event === "end" && event.process === "B7.v"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B9"));
+    assert.ok(events.some(event => event.event === "end" && event.process === "B9"));
     assert.ok(events.some(event => event.event === "BUFFER_CREATED" && event.process === "B9"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B10.v"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B12.v"));
     assert.equal(events.filter(event => event.event === "end" && ["B8.v", "B10.v", "B12.v"].includes(event.process)).length, 3);
+  } finally { Object.assign(waitTrace, saved); }
+});
+
+test("a recoverable HLS error closes only its failed fragment request", () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  const listeners = new Map();
+  Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
+    current: null, sequence: 0 });
+  const hls = { on: (name, handler) => listeners.set(name, handler) };
+  const fire = (name, data = {}) => listeners.get(name)?.(name, data);
+  try {
+    waitTrace.begin("torrent-file");
+    waitTrace.attempt(0, 10, true);
+    observeHlsWait(hls, Object.fromEntries(["FRAG_LOADING", "FRAG_LOADED", "ERROR"].map(name => [name, name])));
+    fire("FRAG_LOADING", { type: "main", frag: { sn: 1, level: 0 } });
+    fire("FRAG_LOADING", { type: "audio", frag: { sn: 1, level: 0 } });
+    fire("ERROR", { fatal: false, details: "fragLoadError", type: "main", frag: { sn: 1, level: 0 } });
+    const failed = events.filter(event => event.event === "end" && event.outcome === "error");
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].process, "B7.v");
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B7.a"));
   } finally { Object.assign(waitTrace, saved); }
 });
 
