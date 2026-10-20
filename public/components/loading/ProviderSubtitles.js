@@ -7,6 +7,8 @@ export class ProviderSubtitles {
   #file = null;
   #key = null;
   #abort = null;
+  #identityKey = null;
+  #identityAbort = null;
   #onItems;
 
   constructor(onItems) {
@@ -18,9 +20,17 @@ export class ProviderSubtitles {
     });
   }
 
-  clear() { this.#abort?.abort(); this.#abort = null; this.#file = null; this.#key = null; }
+  clear() {
+    this.#abort?.abort();
+    this.#identityAbort?.abort();
+    this.#abort = null;
+    this.#identityAbort = null;
+    this.#file = null;
+    this.#key = null;
+    this.#identityKey = null;
+  }
   start(fileIndex) { this.clear(); this.#file = fileIndex; void this.#search(); }
-  retry() { this.#key = null; void this.#search(); }
+  retry() { this.#key = null; this.#identityKey = null; void this.#search(); }
 
   async #search() {
     if (this.#file === null) return;
@@ -34,6 +44,9 @@ export class ProviderSubtitles {
       }
       return;
     }
+    const tmdb = this.#state?.work?.sources?.tmdb;
+    const uncertainWork = tmdb?.identification === "scored" || this.#state?.work?.identification === "scored";
+    if (uncertainWork && query.fingerprint && (query.tmdbId || query.imdbId)) this.#identifyByHash(query);
     const key = JSON.stringify(query);
     if (key === this.#key) return;
     this.#abort?.abort();
@@ -49,6 +62,7 @@ export class ProviderSubtitles {
       const data = await response.json();
       if (this.#abort !== abort || abort.signal.aborted) return;
       const offers = filterSubtitleOffers((data.providers ?? []).flatMap(p => p.items ?? []));
+      if (!query.tmdbId && !query.imdbId) this.#publishHashIdentity(offers.items, this.#state?.selection, this.#file, abort, false);
       const statuses = [...(data.providers ?? [])];
       if (offers.excludedLanguages.length) statuses.push({ provider: "Subtitle matching", status: "no-suitable", languages: offers.excludedLanguages });
       this.#onItems(offers.items, statuses);
@@ -57,6 +71,39 @@ export class ProviderSubtitles {
       console.warn("[subtitles] provider discovery unavailable", error);
       this.#onItems([], [{ provider: "Provider search", status: "unavailable" }]);
     }
+  }
+
+  #identifyByHash(query) {
+    const selection = this.#state?.selection;
+    const fileIndex = this.#file;
+    const fingerprint = query.fingerprint;
+    const key = `${selection}|${fileIndex}|${fingerprint.hash}|${fingerprint.size}`;
+    if (key === this.#identityKey) return;
+    this.#identityAbort?.abort();
+    const abort = new AbortController();
+    this.#identityAbort = abort;
+    this.#identityKey = key;
+    const body = { fingerprint, ...(query.query ? { query: query.query } : {}) };
+    void fetch("/api/subtitles/search", {
+      method: "POST", headers: requestHeaders(), body: JSON.stringify(body),
+      signal: AbortSignal.any([abort.signal, AbortSignal.timeout(35_000)])
+    }).then(async response => {
+      if (!response.ok) throw new Error(`hash identity search returned ${response.status}`);
+      const data = await response.json();
+      const items = (data.providers ?? []).flatMap(provider => provider.items ?? []);
+      this.#publishHashIdentity(items, selection, fileIndex, abort, true);
+    }).catch(error => {
+      if (abort.signal.aborted) return;
+      console.warn("[subtitles] hash identity search unavailable", error);
+    });
+  }
+
+  #publishHashIdentity(items, selection, fileIndex, abort, independent) {
+    const active = independent ? this.#identityAbort === abort : this.#abort === abort;
+    if (!active || abort.signal.aborted || selection !== this.#state?.selection || fileIndex !== this.#file) return;
+    const match = items.find(item => item.provider === "opensubtitles" && item.hashMatch === true && item.identity);
+    if (!match) return;
+    document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.HASH_IDENTITY, { detail: { selection, fileIndex, identity: match.identity } }));
   }
 
   async load(item, signal) {

@@ -122,6 +122,23 @@ test("a direct record lookup accepts no release names", async () => {
   assert.deepEqual(request.externalIds, { tmdb: { kind: "tv", id: 1437 } });
 });
 
+test("a hash identity lookup is rejected when its year or runtime conflicts with the file", async () => {
+  const work = { tmdbId: 377, kind: "movie", year: 2010, runtimeSeconds: 7200,
+    sources: { tmdb: { tmdbId: 377, kind: "movie", year: 2010, runtimeSeconds: 7200 } } };
+  const metadata = { identify: async () => ({ status: "identified", work }) };
+  const ask = async (names, durationSeconds) => {
+    const reply = { raw: { once() {} }, code(status) { reply.status = status; return reply; }, send(payload) { reply.body = payload; return reply; } };
+    await handleApiMetadataIdentifyPost({ body: {
+      names, kindHint: "movie", language: "en-US", record: { type: "tmdb", id: "377", kind: "movie" },
+      hashIdentity: true, ...(durationSeconds ? { durationSeconds } : {})
+    }, id: "r" }, reply, { metadata });
+    return reply.body;
+  };
+  assert.equal((await ask(["A.Nightmare.on.Elm.Street.1984.mkv"], 7200)).status, "not-found");
+  assert.equal((await ask(["A.Nightmare.on.Elm.Street.mkv"], 3600)).status, "not-found");
+  assert.equal((await ask(["A.Nightmare.on.Elm.Street.2010.mkv"], 7200)).status, "identified");
+});
+
 test("the page sends only what identification reads", () => {
   assert.deepEqual(containerEvidence({ title: "A", trackTitles: ["RUS"], chapterTitles: ["x"], cover: { type: "image/jpeg" }, outsideEdges: false, year: null }), { title: "A" });
   assert.equal(containerEvidence({ trackTitles: ["RUS"] }), null);

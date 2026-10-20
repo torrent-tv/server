@@ -73,6 +73,8 @@ export class MediaInfoController {
 
   /** The OpenSubtitles hash of each file the proxy has answered for. @type {Map<number, { hash: string, size: number }>} */
   #fingerprints = new Map();
+  #hashIdentityRequests = new Set();
+  #hashIdentityAccepted = false;
 
   /** Files whose identification was asked again once their hash arrived. @type {Set<number>} */
   #fingerprintRetried = new Set();
@@ -126,6 +128,7 @@ export class MediaInfoController {
     document.addEventListener(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, this.#onSubtitleEvidence);
     document.addEventListener(MEDIA_INFO_EVENTS.PROBED, this.#onProbed);
     document.addEventListener(MEDIA_INFO_EVENTS.FINGERPRINT, this.#onFingerprint);
+    document.addEventListener(MEDIA_INFO_EVENTS.HASH_IDENTITY, this.#onHashIdentity);
     document.addEventListener(MEDIA_INFO_EVENTS.CONTAINER, this.#onContainer);
     document.addEventListener(MEDIA_INFO_EVENTS.CONTAINER_COVER, this.#onContainerCover);
     document.addEventListener(MEDIA_INFO_EVENTS.SELECTED, this.#onSelected);
@@ -308,6 +311,55 @@ export class MediaInfoController {
     void this.#identifyRelease(this.#selection, this.#releaseRequest);
   };
 
+  /** A confirmed OpenSubtitles hash match supplies a direct catalogue lookup, independently of name search. */
+  #onHashIdentity = (event) => {
+    const detail = event instanceof CustomEvent ? event.detail : null;
+    const fileIndex = detail?.fileIndex;
+    const identity = detail?.identity;
+    if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !this.#filesByIndex.has(fileIndex) ||
+        !this.#releaseRequest || this.#hashIdentityAccepted) return;
+    const record = Number.isSafeInteger(identity?.tmdbId) && identity.tmdbId > 0 && ["movie", "series"].includes(identity.kind)
+      ? { type: "tmdb", id: String(identity.tmdbId), kind: identity.kind === "movie" ? "movie" : "tv" }
+      : typeof identity?.imdbId === "string" && /^tt\d{1,10}$/u.test(identity.imdbId)
+        ? { type: "imdb", id: identity.imdbId }
+        : null;
+    if (!record) return;
+    const key = `${fileIndex}|${record.type}|${record.id}|${record.kind ?? ""}`;
+    if (this.#hashIdentityRequests.has(key)) return;
+    this.#hashIdentityRequests.add(key);
+    void this.#identifyHashIdentity(this.#selection, fileIndex, record);
+  };
+
+  async #identifyHashIdentity(selection, fileIndex, record) {
+    const answer = await this.#post("/api/metadata/identify", {
+      ...this.#releaseRequest,
+      ...this.#evidence(fileIndex),
+      record,
+      hashIdentity: true,
+      language: METADATA_LANGUAGE,
+      ...(this.#durations.has(fileIndex) ? { durationSeconds: this.#durations.get(fileIndex) } : {})
+    });
+    if (selection !== this.#selection || answer?.status !== "identified") return;
+    const work = answer.work?.normalized ?? answer.work;
+    if (shapeOf(this.#contents) === "series" && !["series", "tv"].includes(work?.kind)) return;
+    if (["series", "tv"].includes(work?.kind) && (answer.work?.sources?.tmdb || work?.tmdbId) &&
+        !seasonsAgree([...this.#itemsByIndex.values()], work)) return;
+    const previous = this.#work;
+    const tmdbIdOf = one => one?.sources?.tmdb?.tmdbId ?? one?.tmdbId ?? null;
+    if (previous && tmdbIdOf(previous) !== tmdbIdOf(answer.work)) {
+      this.#askedSeasons = new Set();
+      this.#seasons = {};
+      for (const [key, episode] of Object.entries(this.#episodes)) {
+        if (episode?.source === "tmdb") delete this.#episodes[key];
+      }
+    }
+    this.#releaseSequence += 1;
+    this.#hashIdentityAccepted = true;
+    this.#work = answer.work;
+    this.#publish();
+    for (const index of this.#itemsByIndex.keys()) this.#askSeasonOf(index);
+  }
+
   /**
    * Ask once more when one file's duration is known and the service either
    * found nothing or chose among several works of one title: a film's runtime,
@@ -396,6 +448,8 @@ export class MediaInfoController {
     this.#recordFileIndex = -1;
     this.#category = null;
     this.#fingerprints = new Map();
+    this.#hashIdentityRequests = new Set();
+    this.#hashIdentityAccepted = false;
     this.#fingerprintRetried = new Set();
     this.#containers = new Map();
     for (const { url } of this.#covers.values()) URL.revokeObjectURL(url);

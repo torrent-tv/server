@@ -1,3 +1,8 @@
+## Unreleased
+
+- **New**: Use exact OpenSubtitles hash matches for a separate metadata ID lookup; reject hash identities that conflict with the stated year or a substantially different measured runtime.
+- **Fix**: Give stated year and measured runtime decisive weight when ranking metadata candidates.
+
 ## 0.56.0
 
 - **New**: Rank candidate works using scored release evidence, resolve identities by database record ID and keep the selected record in the page address.

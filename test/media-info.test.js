@@ -301,6 +301,32 @@ test("a release that is already identified is not asked again when its hash arri
   assert.deepEqual(published.at(-1).fingerprints, { 0: fingerprint });
 });
 
+test("a confirmed OpenSubtitles hash match starts a separate direct lookup and replaces fuzzy metadata only when it returns", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  const published = [];
+  target.addEventListener(MEDIA_INFO_EVENTS.CHANGED, event => published.push(event.detail));
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["A.Nightmare.on.Elm.Street.1984.mkv"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "A.Nightmare.on.Elm.Street.1984.mkv", shape: "single", items: [{ fileIndex: 0 }] }, files: [{ index: 0, relativePath: "A.Nightmare.on.Elm.Street.1984.mkv" }] });
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 377, title: "A Nightmare on Elm Street" } }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(published.at(-1).work.tmdbId, 377);
+  send(MEDIA_INFO_EVENTS.HASH_IDENTITY, { selection: 1, fileIndex: 0, identity: { kind: "movie", tmdbId: 23437 } });
+  assert.equal(pending.length, 3, "the metadata request is fire-and-forget");
+  assert.equal(published.at(-1).work.tmdbId, 377, "the existing answer stays visible while the direct lookup is pending");
+  assert.deepEqual(pending[2].body.record, { type: "tmdb", id: "23437", kind: "movie" });
+  assert.equal(pending[2].body.hashIdentity, true);
+  pending[2].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 23437, title: "A Nightmare on Elm Street" } }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(published.at(-1).work.tmdbId, 23437);
+});
+
 test("the address names the work of the open file: its database, number, kind, category and episode", async () => {
   const { addressRecord } = await import("../public/domain/media-info.js");
   const work = { sources: { tmdb: { kind: "tv", tmdbId: 67075, anime: true }, anilist: { id: 21662, format: "TV" } }, normalized: { isAnime: true } };

@@ -50,6 +50,8 @@ export const MEDIA_INFO_EVENTS = {
   SUBTITLE_EVIDENCE: "MEDIA_INFO:SUBTITLE_EVIDENCE",
   /** `{ selection, fileIndex, fingerprint: { hash, size } }` — the OpenSubtitles hash of a file, from the proxy. */
   FINGERPRINT: "MEDIA_INFO:FINGERPRINT",
+  /** `{ selection, fileIndex, identity }` — catalogue IDs from an exact OpenSubtitles file-hash match. */
+  HASH_IDENTITY: "MEDIA_INFO:HASH_IDENTITY",
   /** `{ selection, fileIndex, container }` — what a file states about its work, read by the proxy. */
   CONTAINER: "MEDIA_INFO:CONTAINER",
   /** `{ selection, fileIndex, cover: Blob }` — the cover image a file carries inside it. */
