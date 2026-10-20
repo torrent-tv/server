@@ -1,4 +1,4 @@
-## Unreleased
+## 0.57.0
 
 - **New**: Use exact OpenSubtitles hash matches for a separate metadata ID lookup; reject hash identities that conflict with the stated year or a substantially different measured runtime.
 - **Fix**: Give stated year and measured runtime decisive weight when ranking metadata candidates.
