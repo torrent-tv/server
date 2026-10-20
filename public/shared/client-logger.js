@@ -126,6 +126,9 @@ let film = { name: "", infoHash: "" };
 let proxySink = null;
 /** Whether the last flush found the proxy sink's connection open. */
 let proxySinkOpen = false;
+/** Wait events emitted before the proxy becomes available, replayed to its log. */
+const pendingWaitTrace = [];
+const MAX_PENDING_WAIT_TRACE = 5000;
 
 /**
  * Render a single console argument as a string.
@@ -345,6 +348,10 @@ function install() {
     setProxySink(sink) {
       proxySink = typeof sink?.send === "function" && typeof sink.isOpen === "function" ? sink : null;
       proxySinkOpen = proxySink !== null && proxySink.isOpen();
+      if (proxySinkOpen && pendingWaitTrace.length > 0) {
+        for (const line of pendingWaitTrace) record("debug", [line]);
+        pendingWaitTrace.length = 0;
+      }
     },
     /**
      * Name what is being watched, so the log file says which film it is.
@@ -364,6 +371,14 @@ function install() {
       }
       currentSignalSession = id.slice(0, 36);
       record("info", [`[client-logger] signal-session=${currentSignalSession}`]);
+    },
+    recordWaitTrace(value) {
+      const line = `[wait-trace] ${JSON.stringify(value)}`;
+      record("debug", [line]);
+      if (!proxySinkOpen) {
+        if (pendingWaitTrace.length >= MAX_PENDING_WAIT_TRACE) pendingWaitTrace.shift();
+        pendingWaitTrace.push(line);
+      }
     }
   };
 

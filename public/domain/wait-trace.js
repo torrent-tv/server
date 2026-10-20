@@ -1,7 +1,13 @@
 /** Actual operation boundaries, enabled only by ?waitTrace=1 (#ttv-185). */
 export class WaitTrace {
   constructor({ enabled = false, now = () => performance.now(), id = () => crypto.randomUUID(),
-    emit = value => console.debug(`[wait-trace] ${JSON.stringify(value)}`) } = {}) {
+    emit = value => {
+      if (typeof window === "object" && typeof window.__ttvClientLogger?.recordWaitTrace === "function") {
+        window.__ttvClientLogger.recordWaitTrace(value);
+      } else {
+        console.debug(`[wait-trace] ${JSON.stringify(value)}`);
+      }
+    } } = {}) {
     Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0 });
   }
 
