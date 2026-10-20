@@ -1,4 +1,4 @@
-## Unreleased
+## 0.54.1
 
 - **Fix**: Show the active film or series title in the shared scrolling area for both playlist and chapter views.
 
