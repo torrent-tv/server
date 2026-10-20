@@ -1,4 +1,4 @@
-## Unreleased
+## 0.51.2
 
 - **Fix**: Keep a diagnostic wait active when playback preparation resets its previous requests (#ttv-185).
 
