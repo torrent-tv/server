@@ -144,6 +144,10 @@
     white-space: nowrap;
   }
 
+  #player__current-chapter:empty {
+    display: none;
+  }
+
   /* The top bar carries only the close button; keep it flush left and
      transparent (the buttons bring their own background). */
   #player__top-bar {

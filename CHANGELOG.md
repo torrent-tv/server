@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Hide the current chapter label when a file has no chapters or the current chapter title is empty (#ttv-216).
+
 ## 0.59.0
 
 - **New**: Group subtitle choices in one menu with language and known-team headings; tracks without team metadata stay directly under their language (#ttv-118).
