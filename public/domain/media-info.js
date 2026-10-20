@@ -286,6 +286,8 @@ export function episodeLabel(match, { withSeason = null, releaseNumbers = null }
  * @typedef {object} MediaInfoState
  * @property {number} selection - Which choice of release this is about.
  * @property {object | null} work - The work the whole release is, when it is one.
+ * @property {{ sources: object, normalized: object | null, databaseSearches: object[], attempts: object[] }} [identification] -
+ *   Original source facts, the current normalized work, and bounded database search answers.
  * @property {Record<string, string>} seasons - Season number → the provider's name for it.
  * @property {Record<string, { season: number, episodes: Array<{ number: number, name: string, still: string | null }>, part: number | null }>} episodes -
  *   File index → the episode it was matched to. Only matches are here.

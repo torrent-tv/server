@@ -88,8 +88,10 @@ export class AniListProvider extends MetadataProvider {
     const queries = [...new Set(titles.filter(Boolean))].slice(0, 4);
     const matches = new Map();
     let incomplete = [...new Set(titles.filter(Boolean))].length > 4;
+    let searches = [];
+    const withSearches = value => ({ ...value, searches: [...(value.searches ?? []), ...searches] });
     try {
-      await Promise.all(queries.map(async title => {
+      searches = await Promise.all(queries.map(async title => {
         const result = await this.#search(title);
         incomplete ||= result.incomplete;
         for (const media of result.media) {
@@ -100,6 +102,20 @@ export class AniListProvider extends MetadataProvider {
           if (exact && Number.isInteger(media.id) && media.format &&
             (!request.kindHint || request.kindHint === kind) && (!answer.work?.kind || answer.work.kind === kind)) matches.set(media.id, media);
         }
+        return {
+          provider: "anilist",
+          query: title,
+          status: result.incomplete ? "capped" : "complete",
+          totalResults: result.media.length,
+          results: result.media.map(media => ({
+            id: media.id,
+            title: media.title,
+            synonyms: media.synonyms ?? [],
+            format: media.format,
+            episodes: media.episodes ?? null,
+            year: media.startDate?.year ?? null
+          }))
+        };
       }));
     } catch (error) {
       if (error instanceof MetadataUnavailableError) { providerFailure("anilist", "identify", error); return answer; }
@@ -114,22 +130,22 @@ export class AniListProvider extends MetadataProvider {
         const switched = await again({ ...request, externalIds: { ...request.externalIds, tmdb: { kind: agreeing.kind, id: agreeing.tmdbId } } });
         if (switched.status === "identified") {
           const tmdb = switched.records?.tmdb ? { tmdb: { ...switched.records.tmdb, identification: "anilist" } } : {};
-          return { ...switched, ranked: answer.ranked, work: { ...switched.work, identification: "anilist" }, records: { ...switched.records, ...tmdb, anilist: found[0] } };
+          return withSearches({ ...switched, ranked: answer.ranked, work: { ...switched.work, identification: "anilist" }, records: { ...switched.records, ...tmdb, anilist: found[0] } });
         }
       }
       const media = !incomplete && found.length === 1 && found.find(m =>
         Object.values(m.title ?? {}).some(n => n && [answer.work.title, answer.work.originalTitle].some(t => normalizeTitle(t) === normalizeTitle(n))));
-      return media ? { ...answer, records: { ...answer.records, anilist: media } } : answer;
+      return withSearches(media ? { ...answer, records: { ...answer.records, anilist: media } } : answer);
     }
-    if (!UNRESOLVED.includes(answer.status) || incomplete || found.length !== 1) return answer;
+    if (!UNRESOLVED.includes(answer.status) || incomplete || found.length !== 1) return withSearches(answer);
     const [media] = found;
     const kind = media.format === "MOVIE" ? "movie" : "tv";
     const names = [media.title.english, media.title.romaji, media.title.native].filter(Boolean).slice(0, 3);
     const mapped = await again({ ...request, names: names.map(n => [n, media.startDate?.year].filter(value => value != null).join(" ")), kindHint: kind });
-    if (mapped.status === "identified") return { ...mapped, records: { ...mapped.records, anilist: media } };
-    return { status: "identified", records: { anilist: media }, work: { source: "anilist", anilistId: media.id, anime: true, animeFormat: media.format,
+    if (mapped.status === "identified") return withSearches({ ...mapped, records: { ...mapped.records, anilist: media } });
+    return withSearches({ status: "identified", records: { anilist: media }, work: { source: "anilist", anilistId: media.id, anime: true, animeFormat: media.format,
       kind, title: media.title.english || media.title.romaji || media.title.native, originalTitle: media.title.native,
-      year: media.startDate?.year ?? null, seasons: [], poster: null, backdrop: null } };
+      year: media.startDate?.year ?? null, seasons: [], poster: null, backdrop: null } });
   }
 
   /**

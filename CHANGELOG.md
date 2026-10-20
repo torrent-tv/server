@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Re-run release identification with all newly available evidence and retain source facts, normalized identity, and bounded database search results.
+
 ## 0.58.0
 
 - **New**: Measure browser HLS manifest, selected-playlist, remux, SourceBuffer creation, and per-stream append spans for startup trace reconciliation (#ttv-185).

@@ -117,7 +117,7 @@ export function readContainerFacts(raw) {
 }
 
 /** Whether the facts say the file is an episode of a series. */
-const isEpisode = (facts) => facts.season !== undefined || facts.episode !== undefined || facts.seriesTitle !== undefined;
+const isEpisode = (facts) => facts.season > 0 || facts.episode > 0 || Boolean(facts.episodeTitle);
 
 export class ContainerMetadata extends MetadataProvider {
   constructor() {
@@ -131,6 +131,7 @@ export class ContainerMetadata extends MetadataProvider {
     return {
       names: [...new Set([facts.title, facts.seriesTitle, ...facts.otherTitles, facts.segmentTitle].filter(Boolean))],
       externalIds: facts.externalIds,
+      statedYears: [...new Set([facts.year, ...(!episode ? [facts.itemYear] : [])].filter(Number.isInteger))],
       season: facts.season,
       episode: facts.episode,
       episodeTitle: facts.episodeTitle,
@@ -148,7 +149,7 @@ export class ContainerMetadata extends MetadataProvider {
     return {
       kind: isEpisode(record) ? "series" : undefined,
       title,
-      year: record.year,
+      year: record.year ?? (!isEpisode(record) ? record.itemYear : undefined),
       overview: record.description
     };
   }

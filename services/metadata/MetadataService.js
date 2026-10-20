@@ -60,6 +60,21 @@ const MAX_INITIAL_RECORD_CHECKS = 8;
 /** Candidate feature values returned so the survey can replay the ranking. */
 const RANKED_REPORTED = MAX_RUNTIME_CHECKS;
 
+/** Search results retained with an identification answer. */
+const MAX_SEARCH_RESULTS_REPORTED = MAX_RUNTIME_CHECKS;
+
+function reportedSearches(searches) {
+  return searches.map(({ kind, query, status, results }) => ({
+    provider: "tmdb",
+    kind,
+    query,
+    status,
+    totalResults: results.length,
+    truncated: results.length > MAX_SEARCH_RESULTS_REPORTED,
+    results: results.slice(0, MAX_SEARCH_RESULTS_REPORTED)
+  }));
+}
+
 /**
  * The answer of the alternative-title stage joined with the episode stage's.
  * Episodes settle what the alternative titles left open: when those named two
@@ -222,7 +237,7 @@ export class MetadataService {
     }
   }
 
-  async identify({ names, kindHint, episodeEvidence = null, durationSeconds = null, torrentCreatedAt = null, episodeNumbers = [], audioLanguages = [], language, signal }) {
+  async identify({ names, kindHint, episodeEvidence = null, durationSeconds = null, torrentCreatedAt = null, episodeNumbers = [], audioLanguages = [], statedYears: sourceYears = [], language, signal }) {
     if (episodeEvidence) {
       episodeEvidence = { ...episodeEvidence, titles: episodeEvidence.titles.filter(title => parseReleaseName(title).titles.length > 0) };
       if (!episodeEvidence.titles.length) episodeEvidence = null;
@@ -237,7 +252,7 @@ export class MetadataService {
     const deadlineAt = this.#now() + (hasSupplementalEvidence ? EVIDENCE_REQUEST_BUDGET_MS : REQUEST_BUDGET_MS);
     const seriesEvidence = readings.some((reading) => reading.seriesEvidence);
     const kinds = kindHint ? [kindHint] : seriesEvidence ? ["tv"] : ["tv", "movie"];
-    const statedYears = [...new Set(readings.map((reading) => reading.years?.from).filter(Number.isInteger))];
+    const statedYears = [...new Set([...readings.map((reading) => reading.years?.from), ...sourceYears].filter(Number.isInteger))];
 
     // What is SENT is the spelling as written, apostrophes made plain: a
     // provider's own search may not find `christies` for `Christie's`. What is
@@ -311,7 +326,7 @@ export class MetadataService {
     }
     const pool = identity.candidates ?? [];
     if (pool.length === 0) {
-      return { status: identity.status };
+      return { status: identity.status, searches: reportedSearches(searches) };
     }
     const highestEpisode = new Map();
     for (const { season, episode } of episodeNumbers) {
@@ -341,6 +356,7 @@ export class MetadataService {
     if (consistent.length === 0) {
       return {
         status: "not-found",
+        searches: reportedSearches(searches),
         ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) => ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }))
       };
     }
@@ -352,6 +368,7 @@ export class MetadataService {
       return {
         status: "identified",
         work: { ...work, identification: pool.length > 1 ? "scored" : chosen.titleMatch },
+        searches: reportedSearches(searches),
         ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) =>
           ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }))
       };
