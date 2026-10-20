@@ -1,6 +1,6 @@
 ## 0.52.3
 
-- **Chore**: Persist opt-in playback process events through the client log to the proxy, including events emitted before its connection opens (#ttv-185).
+- **Chore**: Persist opt-in playback process events through the client log to the proxy, replaying the queued events when an existing connection opens (#ttv-185).
 
 ## 0.52.2
 

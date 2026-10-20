@@ -130,6 +130,12 @@ let proxySinkOpen = false;
 const pendingWaitTrace = [];
 const MAX_PENDING_WAIT_TRACE = 5000;
 
+/** Replay browser wait events recorded before the proxy connection opened. */
+function replayPendingWaitTrace() {
+  for (const line of pendingWaitTrace) record("debug", [line]);
+  pendingWaitTrace.length = 0;
+}
+
 /**
  * Render a single console argument as a string.
  *
@@ -210,6 +216,7 @@ function flush(useBeacon = false) {
     const viaProxy = proxySink !== null && proxySink.isOpen() ? proxySink : null;
     if (proxySink !== null && (viaProxy !== null) !== proxySinkOpen) {
       proxySinkOpen = viaProxy !== null;
+      if (proxySinkOpen && pendingWaitTrace.length > 0) replayPendingWaitTrace();
       record("info", [proxySinkOpen
         ? "[client-logger] the proxy connection is open; lines go to the proxy"
         : "[client-logger] the proxy connection is closed; lines go to the server until it opens"]);
@@ -349,8 +356,7 @@ function install() {
       proxySink = typeof sink?.send === "function" && typeof sink.isOpen === "function" ? sink : null;
       proxySinkOpen = proxySink !== null && proxySink.isOpen();
       if (proxySinkOpen && pendingWaitTrace.length > 0) {
-        for (const line of pendingWaitTrace) record("debug", [line]);
-        pendingWaitTrace.length = 0;
+        replayPendingWaitTrace();
       }
     },
     /**
