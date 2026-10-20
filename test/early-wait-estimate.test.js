@@ -74,9 +74,9 @@ test("sends the monotonic age of the original wait with early source requests", 
 });
 
 test("a single-file torrent starts the estimate request before waiting for the proxy file list", () => {
-  const registration = source.indexOf("const sourceKey = await this.#session.registerSourceOnProxy(transport);");
+  const registration = source.indexOf("this.#session.registerSourceOnProxy(transport)", source.indexOf("async #processPlayback("));
   const estimate = source.indexOf("void this.#requestEarlyWaitEstimate(transport, sourceKey, earlyFile);", registration);
-  const fileList = source.indexOf("const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey", registration);
+  const fileList = source.indexOf("this.#askWhatIsInTheTorrent(transport, sourceKey", registration);
 
   assert.ok(registration >= 0);
   assert.ok(estimate > registration && estimate < fileList);

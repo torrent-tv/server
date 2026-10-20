@@ -28,6 +28,7 @@
  * Use `transport.isHttp` to distinguish the two kinds.
  */
 
+import { waitTrace } from "./wait-trace.js";
 /** @import { WebRtcProxy } from './webrtc-proxy.js' */
 
 /**
@@ -137,7 +138,22 @@ export class ProxyTransport {
    * @returns {Promise<Response>}
    */
   fetch(path, options = {}) {
-    return this.#fetchFn(path, options);
+    if (!waitTrace.current || path.startsWith("/api/client-logs")) return this.#fetchFn(path, options);
+    const trace = waitTrace.request(path, options.method ?? "GET");
+    const headers = Object.fromEntries(new Headers(options.headers ?? {}).entries());
+    Object.assign(headers, trace.headers);
+    try {
+      return this.#fetchFn(path, { ...options, headers }).then(response => {
+        trace.end({ outcome: "response", status: response.status, bodyComplete: !this.isHttp });
+        return response;
+      }, error => {
+        trace.end({ outcome: error?.name === "AbortError" ? "cancelled" : "error", error: String(error?.message ?? error) });
+        throw error;
+      });
+    } catch (error) {
+      trace.end({ outcome: "error", error: String(error?.message ?? error) });
+      throw error;
+    }
   }
 
   /**

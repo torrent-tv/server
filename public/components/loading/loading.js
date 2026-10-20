@@ -1,4 +1,5 @@
 import { waitForMediaReady } from "../../domain/media-ready.js";
+import { waitTrace, observeVideoWait } from "../../domain/wait-trace.js";
 import { createHlsPlayer } from "../../domain/hls-player.js";
 import { SeekPosition } from "../../domain/seek-position.js";
 import { openingAudioTrack } from "../../domain/audio-opening.js";
@@ -787,6 +788,11 @@ export class Loading extends StateDerivedView {
     if (this.#diagnosticsAttached) {
       return;
     }
+    observeVideoWait(videoElement, mediaTime => {
+      const ranges = this.#hlsPlayer.getBufferedRanges(videoElement);
+      return { audioRequired: this.#audioRequired, audioBuffered: !this.#audioRequired ||
+        (Array.isArray(ranges?.audio) && ranges.audio.some(range => mediaTime >= range.start && mediaTime < range.end)) };
+    });
     this.#diagnosticsAttached = true;
     const log = (name) => {
       // UTC HH:MM:SS.mmm — same timezone as the proxy logger, so browser and
@@ -1670,12 +1676,14 @@ export class Loading extends StateDerivedView {
   };
 
   #runPlaybackTask(run, { preservePlayer = false } = {}) {
+    const traceId = waitTrace.current?.wait;
     let epoch = this.#playbackEpoch;
     return this.#playbackTasks.replace(async () => {
       epoch = this.#beginPlaybackAttempt();
       this.#cancelRequested = false;
       await run();
     }, () => {
+      if (traceId && waitTrace.current?.wait === traceId) waitTrace.finish("cancelled");
       this.#cancelRequested = true;
       this.#playbackEpoch += 1;
       this.#qualityPreparation?.abort();
@@ -1686,6 +1694,8 @@ export class Loading extends StateDerivedView {
         this.#subtitlePlayback.clear();
       }
     }).catch((error) => {
+      if (traceId && waitTrace.current?.wait === traceId) waitTrace.finish(this.#isAbortError(error) ? "cancelled" : "error", {
+        error: String(error?.message ?? error) });
       if (this.#isAbortError(error)) return;
       const message = error instanceof Error ? error.message : String(error);
       console.error("[torrent-tv] playback failed:", message, error);
@@ -2201,11 +2211,11 @@ export class Loading extends StateDerivedView {
       this.#subtitlePlayback.clear();
       this.#session.clear();
       this.#chapters.clear();
-      const parsed = this.#session.openParsedTorrentDetails({
+      const parsed = waitTrace.run("A1.source-details", () => this.#session.openParsedTorrentDetails({
         fileName: file.name,
         torrentBytes,
         meta
-      });
+      }));
       if (parsed.files.length === 1 || Number.isSafeInteger(payload?.fileIndex)) {
         const fileIndex = Number.isSafeInteger(payload?.fileIndex)
           ? payload.fileIndex : (Number.isSafeInteger(parsed.files[0]?.index) ? parsed.files[0].index : 0);
@@ -2237,26 +2247,26 @@ export class Loading extends StateDerivedView {
       // connection is being opened from the moment this page loads — see
       // `#connectEarly` — so by the time a file has been dropped it is usually
       // already there.
-      await this.#acquireTransport();
+      await waitTrace.run("A2.connect", () => this.#acquireTransport());
       this.#throwIfCancelled();
       // The film is known now and the torrent has not been handed to anybody
       // yet: the last moment at which changing proxy is still cheap.
-      await this.#useProxyThatHoldsTheFilm();
+      await waitTrace.run("A3.choose-holder", () => this.#useProxyThatHoldsTheFilm());
       this.#throwIfCancelled();
       const transport = await this.#acquireTransport();
       if (!transport) {
         throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
       }
-      const sourceKey = await this.#session.registerSourceOnProxy(transport);
+      const sourceKey = await waitTrace.run("A4.register", () => this.#session.registerSourceOnProxy(transport));
       this.#activeSourceKey = sourceKey;
       if (parsed.files.length === 1 || Number.isSafeInteger(payload?.fileIndex)) {
         const earlyFileIndex = Number.isSafeInteger(payload?.fileIndex) ? payload.fileIndex : parsed.files[0]?.index;
         const earlyFile = parsed.files.find(fileEntry => fileEntry?.index === earlyFileIndex);
         void this.#requestEarlyWaitEstimate(transport, sourceKey, earlyFile);
       }
-      const contents = await this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
+      const contents = await waitTrace.run("A6.files", () => this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
         this.setStatus(Loading.MESSAGES.readingMetadata);
-      });
+      }));
       const files = normalizeRemoteFileList(
         typeof contents?.name === "string" && contents.name.length > 0 ? contents.name : parsed.name,
         contents?.files
@@ -3440,6 +3450,7 @@ export class Loading extends StateDerivedView {
       throw viewerError(Loading.MESSAGES.selectedFileNotFound);
     }
     const waitStartedAt = this.#pendingOriginalWaitStartedAt ?? performance.now();
+    waitTrace.attempt(fileIndex, waitStartedAt, this.#pendingOriginalWaitStartedAt !== null);
     this.#pendingOriginalWaitStartedAt = null;
     this.#currentPlaybackWaitStartedAt = waitStartedAt;
     this.#openingFileIndex = fileIndex;
@@ -3474,7 +3485,7 @@ export class Loading extends StateDerivedView {
     }
 
     if (!hasWebseed) {
-      await this.#preferProxyFromFilename(fileIndex);
+      await waitTrace.run("A9.capacity", () => this.#preferProxyFromFilename(fileIndex));
       this.#throwIfCancelled();
     }
 
@@ -3517,9 +3528,9 @@ export class Loading extends StateDerivedView {
     this.#coldStartStages = null;
     // Honest status split: the pick is instant; the time is the WebRTC connect.
     // Relabel to "Connecting to proxy" once the selector starts the connect.
-    const transport = await this.#acquireTransport({
+    const transport = await waitTrace.run("A10.connect", () => this.#acquireTransport({
       onConnecting: () => this.setStatus(Loading.MESSAGES.connectingToProxy)
-    });
+    }));
     this.#throwIfCancelled();
     if (!transport) {
       throw viewerError(Loading.MESSAGES.noProxyAndNoWebseed);
@@ -3539,7 +3550,7 @@ export class Loading extends StateDerivedView {
     this.#setPhaseProgress(0, 20); // phase 0 floor; header download % (stats poll) drives the rest
     let earlySourceKey;
     try {
-      earlySourceKey = await this.#session.registerSourceOnProxy(transport);
+      earlySourceKey = await waitTrace.run("A10.register", () => this.#session.registerSourceOnProxy(transport));
       this.#activeSourceKey = earlySourceKey;
     } catch (registerError) {
       // See #isTransportClosedError: a transport death here must not become a
@@ -3565,10 +3576,10 @@ export class Loading extends StateDerivedView {
     try {
       this.#throwIfCancelled();
       try {
-        prepared = await this.#session.prepareProxyPlaybackPlan(fileIndex, transport, {
+        prepared = await waitTrace.run("A12.plan", () => this.#session.prepareProxyPlaybackPlan(fileIndex, transport, {
           positionSeconds: this.#resumePositionFor(fileIndex).position ?? 0,
           wantsToPlay: !viewerHasStopped(this.#videoElement)
-        });
+        }));
       } catch (planError) {
         if (this.#isTransportClosedError(planError)) {
           this.#logEvt("transport closed while preparing source declarations");
@@ -3581,6 +3592,7 @@ export class Loading extends StateDerivedView {
     }
 
     this.#coldStart.t2 = performance.now();
+    const finishTrackSetup = waitTrace.open("A13-A14.track-and-page-setup");
     this.#throwIfCancelled();
     if (Number.isFinite(prepared.durationSeconds) && prepared.durationSeconds > 0) {
       document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.PROBED, {
@@ -3661,10 +3673,11 @@ export class Loading extends StateDerivedView {
       typeof chosenAudioTrack?.codec === "string" && chosenAudioTrack.codec.length > 0
         ? chosenAudioTrack.codec
         : prepared.audioCodec;
-    const codecSupport = await this.#predictCodecSupport({
+    finishTrackSetup();
+    const codecSupport = await waitTrace.run("A15.codecs", () => this.#predictCodecSupport({
       audioCodec: chosenAudioCodec,
       videoCodec: prepared.videoCodec
-    });
+    }));
     // Decide per stream, independently: transcode the video track only if the
     // browser cannot decode the video codec, and the audio track only if it
     // cannot decode the audio codec.  The proxy's advisory `mode` is NOT used
@@ -5501,7 +5514,7 @@ export class Loading extends StateDerivedView {
     // The attempt this player belongs to. See `onUnrecoverable` below.
     const playerEpoch = this.#playbackEpoch;
     try {
-      await this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
+      await waitTrace.run("B1-B5.output-and-manifest", () => this.#session.streamFileToVideoWithAudioTranscode(fileIndex, this.#videoElement, {
         transport,
         sourceKey: typeof options.sourceKey === "string" ? options.sourceKey : "",
         transcodeVideo: options.transcodeVideo === true,
@@ -5542,7 +5555,7 @@ export class Loading extends StateDerivedView {
             attemptId: playerEpoch
           }),
         onTranscodeProgress: (progress) => this.#renderTranscodeProgress(progress)
-      });
+      }));
     } catch (error) {
       // THIS MACHINE HAS NO PLACE FOR IT NOW (roadmap item 97, step 14). Found
       // when the output is opened, before a frame is shown, so the viewer is
@@ -5578,8 +5591,8 @@ export class Loading extends StateDerivedView {
     const preparation = new AbortController();
     const stopProgressPoll = this.#startTranscodeProgressPoll(error => preparation.abort(error));
     try {
-      await this.#ensureVideoReady({ requireDecodedFrame: false,
-        signal: AbortSignal.any([this.#session.abortController.signal, preparation.signal]) });
+      await waitTrace.run("B11.metadata", () => this.#ensureVideoReady({ requireDecodedFrame: false,
+        signal: AbortSignal.any([this.#session.abortController.signal, preparation.signal]) }));
     } finally {
       // Stop the poll BEFORE pre-buffering, so only #waitForPrebuffer writes the
       // status during the cushion fill. Otherwise both write it (poll every ~1 s,
@@ -5592,7 +5605,7 @@ export class Loading extends StateDerivedView {
     // doesn't immediately stall. The video stays paused (player hidden) so hls.js
     // fills the buffer without draining it; #waitForPrebuffer is the only status
     // writer here.
-    await this.#waitForPrebuffer(this.#videoElement, playerEpoch);
+    await waitTrace.run("C1.prebuffer", () => this.#waitForPrebuffer(this.#videoElement, playerEpoch));
   }
 
   /**
@@ -5699,6 +5712,8 @@ export class Loading extends StateDerivedView {
       const readiness = holdsForSubtitles
         ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
         : proxyReadiness;
+      waitTrace.event("C1.gate", { ready: readiness?.ready, reason: readiness?.reason,
+        subtitleHold, bufferedAhead: ahead });
       const unified = this.#waitingModel.update({
         ...(waitEstimateForProgress(cachedProgress) ? { waitEstimate: waitEstimateForProgress(cachedProgress) } : {}),
         playbackReadiness: readiness,

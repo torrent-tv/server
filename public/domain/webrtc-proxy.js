@@ -21,6 +21,7 @@
  */
 
 import { CONNECT_TIMEOUT_MS } from "./connect-deadline.js";
+import { waitTrace } from "./wait-trace.js";
 import { ControlConnection } from "./transport/control-connection.js";
 import {
   deliveryDueWithinMs,
@@ -412,6 +413,7 @@ export class WebRtcProxy {
    */
   async connect(timeoutMs = CONNECT_TIMEOUT_MS, { signal } = {}) {
     if (signal?.aborted) throw new DOMException("Proxy connection was cancelled.", "AbortError");
+    const finishConnect = waitTrace.open("A2.connection-attempt", { proxyId: this.#proxyId });
     const wsUrl = `${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`;
     this.#ws = new WebSocket(wsUrl);
 
@@ -427,6 +429,7 @@ export class WebRtcProxy {
       let settled = false;
       const settle = (err) => {
         if (settled) return;
+        finishConnect({ outcome: err ? "error" : "connected", error: err?.message });
         settled = true;
         clearTimeout(timer);
         signal?.removeEventListener("abort", aborted);
@@ -510,6 +513,7 @@ export class WebRtcProxy {
 
     if (msg.type === "answer" && this.#pc) {
       try {
+        waitTrace.event("A2.media-answer", { connection: this.#signalSessionId });
         const pc = this.#pc;
         await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
         if (this.#closedByUser || this.#pc !== pc) return;
@@ -520,6 +524,7 @@ export class WebRtcProxy {
         }
         if (this.#closedByUser || this.#pc !== pc) return;
         this.#pendingCandidates = [];
+        waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId });
         if (msg.separateControl === 2) {
           this.#openSeparateControl(settle);
         } else if (!this.#controlChannel) {
@@ -628,6 +633,7 @@ export class WebRtcProxy {
     this.#channel.bufferedAmountLowThreshold = REQUEST_BUFFERED_LOW_BYTES;
 
     this.#channel.addEventListener("open", () => {
+      waitTrace.event("A2.media-open", { connection: this.#signalSessionId });
       // A silence is counted from the moment there was something to deliver on.
       this.#lastArrivalAt = performance.now();
       this.#announceViewer();
@@ -701,6 +707,7 @@ export class WebRtcProxy {
     if (!this.#controlNegotiated) return;
     if (this.#channel?.readyState !== "open") return;
     if (this.#controlLink && this.#controlChannel?.readyState !== "open") return;
+    if (!this.#connected) waitTrace.event("A2.both-open", { connection: this.#signalSessionId });
     this.#connected = true;
     settle();
   }
@@ -721,6 +728,7 @@ export class WebRtcProxy {
 
   #openSeparateControl(settle) {
     if (this.#controlLink) return;
+    waitTrace.event("A2.control-start", { connection: this.#signalSessionId });
     this.#controlLink = new ControlConnection({
       proxyId: this.#proxyId,
       iceServers: ICE_SERVERS,
@@ -733,6 +741,7 @@ export class WebRtcProxy {
       },
       onMessage: raw => this.#onChannelMessage(raw, "proxy-control"),
       onOpen: channel => {
+        waitTrace.event("A2.control-open", { connection: this.#signalSessionId });
         this.#controlChannel = channel;
         this.#announceViewer();
         this.#settleConnected(settle);

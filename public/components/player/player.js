@@ -1,5 +1,6 @@
 import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, signalApp } from "../../shared/events.js";
 import { playerArt } from "../../domain/media-info.js";
+import { waitTrace } from "../../domain/wait-trace.js";
 import {
   APP_VIEW,
   APP_EVENT,
@@ -258,7 +259,7 @@ export class Player extends StateDerivedView {
       // anything was shown. On iOS autoplay outside a user gesture is refused
       // and the viewer starts it from the play button, hence the catch.
       this.#logEvt("player.play reason=state");
-      const started = this.#video.play();
+      const started = waitTrace.run("C5.play", () => this.#video.play());
       if (started && typeof started.catch === "function") {
         started.catch((error) => {
           if (error?.name === "AbortError") return;

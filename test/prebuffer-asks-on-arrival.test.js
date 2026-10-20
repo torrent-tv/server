@@ -43,7 +43,7 @@ test("prefers the explicit progress estimate when both forms are present", () =>
 test("the page asks again as soon as a piece has arrived, after reporting it", async () => {
   const calls = [];
   const Component = new Function("HTMLVideoElement", "reportNow", "bufferedAheadSeconds", "bufferedEndSeconds",
-    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", `${waitEstimateHelper}
+    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", "waitTrace", `${waitEstimateHelper}
     return class {
     #playbackEpoch = 0; #coldStart = null; #lastBufferedAhead = 0; #lastDownloadStats = null;
     #browserBufferLimitSeconds = null; #progressPollFailing = false;
@@ -67,7 +67,7 @@ test("the page asks again as soon as a piece has arrived, after reporting it", a
     ${method("#waitForPrebuffer")}
     wait(video) { return this.#waitForPrebuffer(video); }
   }`)(HTMLVideoElement, () => calls.push({ what: "report", at: Date.now() }), () => 0, () => 0, () => {}, subtitleStartHold,
-    { MEASURED: "measured" }, 60_000, { dispatchEvent() {} }, class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls);
+    { MEASURED: "measured" }, 60_000, { dispatchEvent() {} }, class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls, { event() {} });
   const component = new Component();
   const startedAt = Date.now();
   await component.wait(new HTMLVideoElement());
