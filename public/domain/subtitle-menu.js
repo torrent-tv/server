@@ -76,10 +76,10 @@ export function subtitleMenuItems(entries, statuses = []) {
       const sources = groupBy(language.tracks, entry => textOf(entry.source) || "Subtitles")
         .sort((a, b) => sourceRank(a.name) - sourceRank(b.name));
       if (sources.length === 1) {
-        rows.push(...sourceItems(sources[0].items, language, false));
+        rows.push(...sourceItems(sources[0].items, language, "heading"));
       } else {
         for (const source of sources) {
-          rows.push(...sourceItems(source.items, language, true));
+          rows.push(...sourceItems(source.items, language, source.items.length === 1 ? "choice" : "heading"));
         }
       }
       return rows;
@@ -95,25 +95,25 @@ export function subtitleMenuItems(entries, statuses = []) {
   return [...grouped, ...actions];
 }
 
-function sourceItems(tracks, language, showSource) {
+function sourceItems(tracks, language, sourceMode) {
   const source = textOf(tracks[0]?.source) || "Subtitles";
-  const sources = showSource ? [heading(`source:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}`, source, "source")] : [];
+  if (sourceMode === "choice") {
+    return [trackItem(tracks[0], language.name, [], source, 1)];
+  }
+  const sources = [heading(`source:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}`, source, "source")];
   const teams = groupBy(tracks, entry => textOf(entry.team));
   if (teams.length === 1) {
     const team = teams[0].name;
-    if (tracks.length === 1 && showSource) {
-      return [trackItem(tracks[0], language.name, [], source, 1)];
-    }
-    return [...sources, ...trackItems(tracks, language, [...(showSource ? [source] : []), ...(team ? [team] : [])], showSource ? 2 : 1)];
+    return [...sources, ...trackItems(tracks, language, [source, ...(team ? [team] : [])], 2)];
   }
 
   const rows = [...sources];
   for (const group of teams) {
     if (group.items.length === 1) {
-      rows.push(trackItem(group.items[0], language.name, [source, group.name].filter(Boolean), group.name || "Subtitle", showSource ? 2 : 1));
+      rows.push(trackItem(group.items[0], language.name, [source, group.name].filter(Boolean), group.name || "Subtitle", 2));
     } else {
       if (group.name) rows.push(heading(`team:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}:${encodeURIComponent(group.name)}`, group.name, "team"));
-      rows.push(...trackItems(group.items, language, [source, ...(group.name ? [group.name] : [])], (showSource ? 2 : 1) + (group.name ? 1 : 0)));
+      rows.push(...trackItems(group.items, language, [source, ...(group.name ? [group.name] : [])], 2 + (group.name ? 1 : 0)));
     }
   }
   return rows;
