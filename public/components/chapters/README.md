@@ -11,6 +11,7 @@ snapshot. It does not request metadata or control playback directly.
 - Toggle nested chapters with a separate disclosure button. Selecting a chapter requests a seek through `PLAYER:REQUEST_SEEK` and closes the side panel.
 - Keep pending, unsupported and error states distinct from a complete chapter-free answer.
 - Show the list only when `PLAYER:PANEL_CHANGED` selects `chapters`.
+- Share the scrolling region and film or series heading with the playlist.
 
 ## Coupling
 

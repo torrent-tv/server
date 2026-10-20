@@ -15,9 +15,9 @@ This component owns playlist list rendering and playlist user interactions.
 
 ## Layout
 
-The playlist list is one of two mutually exclusive contents of `#player__panel`,
-beside `#player__controller`. The player owns the panel width, slide and focus
-restoration.
+The playlist is one of two mutually exclusive lists in the shared scrolling
+region of `#player__panel`, beside `#player__controller`. The player owns the
+panel width, work title, slide and focus restoration.
 
 ## Coupling
 
