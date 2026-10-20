@@ -1,4 +1,4 @@
-## Unreleased
+## 0.52.4
 
 - **Fix**: Replay queued playback process events when the proxy connection opens.
 
