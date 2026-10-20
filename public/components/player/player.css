@@ -60,6 +60,24 @@
     fill: none;
   }
 
+  #player__subtitle-menu > [data-subtitle-group="language"] {
+    padding: 0.55rem 0.75rem 0.25rem;
+    color: var(--media-primary-color, #eee);
+    font-weight: 600;
+  }
+
+  #player__subtitle-menu > [data-subtitle-group="team"] {
+    padding: 0.25rem 0.75rem 0.15rem 1.25rem;
+    color: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    opacity: 0.8;
+  }
+
+  #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key] {
+    padding-inline-start: 1.75rem;
+  }
+
   #player__controller {
     block-size: 100dvh;
     inline-size: 100dvw;

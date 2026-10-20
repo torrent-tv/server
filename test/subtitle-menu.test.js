@@ -6,23 +6,46 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { isTypingTarget, subtitleMenuItems, subtitleToggleKey } from "../public/domain/subtitle-menu.js";
 
-test("an item keeps its key when its label changes, and stays the one checked", () => {
-  const before = subtitleMenuItems([{ key: "1:embedded:0", label: "Unknown", showing: true }]);
-  const after = subtitleMenuItems([{ key: "1:embedded:0", label: "English", showing: true }]);
-  assert.deepEqual(before, [{ key: "1:embedded:0", text: "Unknown", checked: true }]);
-  assert.deepEqual(after, [{ key: "1:embedded:0", text: "English", checked: true }]);
+test("one menu shows language and team headings before a track while keeping its key", () => {
+  const items = subtitleMenuItems([{
+    key: "1:embedded:0", label: "Russian (Signs)", language: "ru", team: null,
+    variant: "Signs", details: ["Embedded", "ASS"], showing: true
+  }]);
+  assert.deepEqual(items.map(({ text, kind, level }) => [text, kind, level]), [
+    ["Russian", "heading", "language"],
+    ["Signs · Embedded · ASS", "radio", undefined]
+  ]);
+  assert.equal(items[1].key, "1:embedded:0");
+  assert.equal(items[1].accessibleText, "Russian, Signs · Embedded · ASS");
+  assert.equal(items[1].checked, true);
 });
 
-test("two tracks with one label are two items that cannot be confused", () => {
+test("known teams get headings; missing teams follow the language without an invented team", () => {
   const items = subtitleMenuItems([
-    { key: "1:embedded:0", label: "English", showing: false },
-    { key: "1:embedded:1", label: "English", showing: true },
-    { key: "1:sidecar:5", label: "Russian", showing: false }
+    { key: "a", language: "en", team: "Team A", variant: "Full", details: ["ASS"], order: 1 },
+    { key: "b", language: "en", team: "Team A", variant: "Full", details: ["ASS"], order: 2, showing: true },
+    { key: "c", language: "en", team: null, variant: "Signs", details: ["VTT"], order: 3 }
   ]);
-  assert.deepEqual(items.map((item) => [item.key, item.text, item.checked]), [
-    ["1:embedded:0", "English (1)", false],
-    ["1:embedded:1", "English (2)", true],
-    ["1:sidecar:5", "Russian", false]
+  assert.deepEqual(items.map(({ text, kind, level, key }) => [text, kind, level, key]), [
+    ["English", "heading", "language", "language:en"],
+    ["Team A", "heading", "team", "team:en:Team%20A"],
+    ["Full · ASS (1)", "radio", undefined, "a"],
+    ["Full · ASS (2)", "radio", undefined, "b"],
+    ["Signs · VTT", "radio", undefined, "c"]
+  ]);
+  assert.equal(items[2].accessibleText, "English, Team A, Full · ASS (1)");
+  assert.equal(items[4].accessibleText, "English, Signs · VTT");
+});
+
+test("regional language tags share a primary-language group and remain visible on the track", () => {
+  const items = subtitleMenuItems([
+    { key: "br", language: "pt-BR", variant: "Brazilian", order: 1 },
+    { key: "pt", language: "pt", variant: "General", order: 2 }
+  ]);
+  assert.deepEqual(items.map(({ text, kind, level, key }) => [text, kind, level, key]), [
+    ["Portuguese", "heading", "language", "language:pt"],
+    ["Brazilian · pt-BR", "radio", undefined, "br"],
+    ["General", "radio", undefined, "pt"]
   ]);
 });
 

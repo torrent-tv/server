@@ -53,6 +53,16 @@ test("a new label or a disabled item is written alone", () => {
   assert.deepEqual(result.set, [{ key: "t1", text: "Russian", disabled: true }]);
 });
 
+test("a late metadata refinement updates the spoken language and team without rebuilding the track", () => {
+  const result = menuUpdate(
+    [{ ...item("t1", "Signs · ASS"), accessibleText: "Unknown language, Signs · ASS" }],
+    [{ ...item("t1", "Signs · ASS"), accessibleText: "Russian, Acme, Signs · ASS" }]
+  );
+  assert.deepEqual(result.set, [{ key: "t1", accessibleText: "Russian, Acme, Signs · ASS" }]);
+  assert.deepEqual(result.create, []);
+  assert.deepEqual(result.remove, []);
+});
+
 test("items kept in another order ask for a reorder", () => {
   const result = menuUpdate([item(""), item("t1"), item("t2")], [item(""), item("t2"), item("t1")]);
   assert.equal(result.reorder, true);
@@ -61,11 +71,12 @@ test("items kept in another order ask for a reorder", () => {
 });
 
 test("Off is checked exactly when no track is", () => {
-  assert.deepEqual(subtitleMenuState([{ key: "t1", text: "English", checked: false }])[0], item("", "Off", true));
+  const off = subtitleMenuState([{ key: "t1", text: "English", checked: false }])[0];
+  assert.deepEqual({ key: off.key, text: off.text, checked: off.checked, kind: off.kind }, { key: "", text: "Off", checked: true, kind: "radio" });
   assert.deepEqual(subtitleMenuState([{ key: "t1", text: "English", checked: true }]), [
-    item("", "Off", false),
-    item("t1", "English", true)
+    { ...item("", "Off", false), kind: "radio" },
+    { ...item("t1", "English", true), kind: "radio" }
   ]);
-  assert.deepEqual(subtitleMenuState([{ key: "s", text: "os: search unavailable — retry", checked: false, disabled: true }])[1],
-    item("s", "os: search unavailable — retry", false, true));
+  assert.deepEqual(subtitleMenuState([{ key: "s", text: "os: search unavailable — retry", checked: false, disabled: true, kind: "radio" }])[1],
+    { ...item("s", "os: search unavailable — retry", false, true), kind: "radio" });
 });

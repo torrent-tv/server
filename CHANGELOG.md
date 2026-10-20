@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Group subtitle choices in one menu with language and known-team headings; tracks without team metadata stay directly under their language (#ttv-118).
+
 ## 0.58.1
 
 - **Fix**: Re-run release identification with all newly available evidence and retain source facts, normalized identity, and bounded database search results.

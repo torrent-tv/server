@@ -41,6 +41,21 @@ function isAbortError(error) {
     : error instanceof Error && error.name === "AbortError";
 }
 
+function providerDetails(item) {
+  const extension = typeof item.filename === "string" ? item.filename.match(/\.([^.\\/]+)$/u)?.[1]?.toLowerCase() : "";
+  const format = ["srt", "ass", "ssa", "vtt"].includes(extension) ? extension.toUpperCase() : "";
+  return [
+    item.provider === "opensubtitles" ? "OpenSubtitles" : item.provider === "jimaku" ? "Jimaku" : item.provider,
+    format,
+    item.forced ? "Forced" : "",
+    item.hearingImpaired ? "SDH" : "",
+    Number.isFinite(item.fps) ? `${item.fps} fps` : "",
+    item.hashMatch ? "File match" : "",
+    item.eligibility === "unknown" ? "Version unverified" : "",
+    item.episodeGuess ? "Episode inferred from filename" : ""
+  ].filter(Boolean);
+}
+
 /** Owns subtitle tracks, fetched files, cue delivery, and the viewer's choice. */
 export class SubtitlePlayback {
   #getVideoElement;
@@ -60,6 +75,7 @@ export class SubtitlePlayback {
    * @type {Map<string, { textTrack: TextTrack, planIndex: number | null }>}
    */
   #menuEntries = new Map();
+  #menuOrder = 0;
   /** @type {string | null} The key the viewer chose last in this file. */
   #lastChosenKey = null;
   /**
@@ -224,6 +240,7 @@ export class SubtitlePlayback {
   #providerStatuses = [];
   #providerAbort = null;
   #providerSelection = 0;
+  #providerLoadingKey = null;
   constructor({ getVideoElement, getTransport, getFiles, registerSourceOnProxy, getAbortSignal, getConsumerId, logEvent }) {
     this.#getVideoElement = getVideoElement;
     this.#getTransport = getTransport;
@@ -255,6 +272,7 @@ export class SubtitlePlayback {
     this.#providers.clear();
     this.#providerAbort?.abort();
     this.#providerSelection++;
+    this.#providerLoadingKey = null;
     this.#providerEntries.clear();
     this.#providerStatuses = [];
     this.#subtitleCancellation.abort(new DOMException("Subtitle file changed.", "AbortError"));
@@ -275,6 +293,7 @@ export class SubtitlePlayback {
     this.#subtitleEpoch += 1;
     this.#start = { state: "none" };
     this.#menuEntries.clear();
+    this.#menuOrder = 0;
     this.#lastChosenKey = null;
     this.#cuesById.clear();
     this.#embeddedTextTracks.clear();
@@ -315,12 +334,15 @@ export class SubtitlePlayback {
    */
   select(key) {
     if (typeof key === "string" && key.includes(":status:")) { this.#providers.retry(); return; }
+    if (key !== "" && !this.#menuEntries.has(key)) return;
     const selection = ++this.#providerSelection;
     this.#providerAbort?.abort();
+    this.#providerLoadingKey = null;
     const provider = this.#providerEntries.get(key);
     if (provider && !provider.loaded) {
       const abort = new AbortController();
       this.#providerAbort = abort;
+      this.#providerLoadingKey = key;
       void this.#loadProvider(key, provider, selection, abort);
       return;
     }
@@ -371,8 +393,8 @@ export class SubtitlePlayback {
    * @param {number | null} planIndex
    * @returns {void}
    */
-  #addMenuEntry(key, textTrack, planIndex, fileIndex = this.#subtitleContext?.fileIndex) {
-    this.#menuEntries.set(key, { textTrack, planIndex, fileIndex });
+  #addMenuEntry(key, textTrack, planIndex, fileIndex = this.#subtitleContext?.fileIndex, menu = {}) {
+    this.#menuEntries.set(key, { textTrack, planIndex, fileIndex, menu: { ...menu, order: this.#menuOrder++ } });
     this.#publishMenu();
   }
 
@@ -415,12 +437,17 @@ export class SubtitlePlayback {
     return { ...this.#start };
   }
 
-  /** @returns {Array<{ key: string, label: string, showing: boolean }>} */
+  /** @returns {Array<{ key: string, label: string, language: string, team: string | null, variant: string | null, details: string[], order: number, showing: boolean }>} */
   #menuEntriesNow() {
     const rank = key => key.includes(":embedded:") ? 0 : key.includes(":sidecar:") ? 1 : 2;
     return [...this.#menuEntries].sort(([a], [b]) => rank(a) - rank(b)).map(([key, entry]) => ({
       key,
       label: entry.textTrack.label,
+      language: entry.menu?.language ?? entry.textTrack.language ?? "und",
+      team: entry.menu?.team ?? null,
+      variant: entry.menu?.variant ?? null,
+      details: entry.menu?.details ?? [],
+      order: entry.menu?.order ?? 0,
       showing: entry.textTrack.mode === "showing"
     }));
   }
@@ -434,7 +461,7 @@ export class SubtitlePlayback {
    */
   #publishMenu() {
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, {
-      detail: { items: [...subtitleMenuItems(this.#menuEntriesNow()), ...this.#providerStatuses] }
+      detail: { items: subtitleMenuItems(this.#menuEntriesNow(), this.#providerStatuses) }
     }));
   }
 
@@ -513,7 +540,7 @@ export class SubtitlePlayback {
     for (const entry of this.#providerEntries.values()) {
       // A metadata refinement may start a new query. Keep a selected provider
       // track until the viewer changes it, but remove unselected old offers.
-      if (entry.element.track.mode === "showing") continue;
+      if (entry.element.track.mode === "showing" || entry.key === this.#providerLoadingKey) continue;
       entry.element.remove();
       this.#menuEntries.delete(entry.key);
       this.#providerEntries.delete(entry.key);
@@ -535,7 +562,18 @@ export class SubtitlePlayback {
       // offers one at a time are about four seconds of rebuilding — the page
       // stood still for seven while a film was opening (field 2026-10-07).
       // The menu is published once, below.
-      this.#menuEntries.set(key, { textTrack: element.track, planIndex: null, fileIndex: this.#subtitleContext?.fileIndex });
+      this.#menuEntries.set(key, {
+        textTrack: element.track,
+        planIndex: null,
+        fileIndex: this.#subtitleContext?.fileIndex,
+        menu: {
+          language: item.language,
+          team: null,
+          variant: item.release || item.filename?.replace(/^.*[\\/]/u, "").replace(/\.[^.]+$/u, "") || null,
+          details: providerDetails(item),
+          order: this.#menuOrder++
+        }
+      });
       // Provider variants without a confirmed translation identity must not
       // impersonate an embedded track of the same language on the next episode.
       this.#subtitleIdentities.set(element.track, null);
@@ -581,10 +619,12 @@ export class SubtitlePlayback {
       });
       if (epoch !== this.#subtitleEpoch || selection !== this.#providerSelection || abort.signal.aborted || this.#providerEntries.get(key) !== entry) return;
       entry.loaded = true;
+      this.#providerLoadingKey = null;
       entry.element.label = label;
       this.select(key);
     } catch (error) {
       if (epoch !== this.#subtitleEpoch) return;
+      if (this.#providerLoadingKey === key) this.#providerLoadingKey = null;
       entry.element.label = abort.signal.aborted ? label : `${label} (unavailable)`;
       if (!abort.signal.aborted) console.warn("[subtitles] selected provider file unavailable", error);
       this.#publishMenu();
@@ -728,7 +768,13 @@ export class SubtitlePlayback {
         this.#getVideoElement().appendChild(track);
         // What this track IS, for carrying a choice of it to the next episode.
         this.#subtitleIdentities.set(track.track, trackIdentity({ code: info.code, releaser: info.group }));
-        this.#addMenuEntry(`${epoch}:sidecar:${sub.fileIndex}`, track.track, null, sub.fileIndex);
+        const extension = sub.name?.match(/\.([^.]+)$/u)?.[1]?.toUpperCase() ?? "";
+        this.#addMenuEntry(`${epoch}:sidecar:${sub.fileIndex}`, track.track, null, sub.fileIndex, {
+          language: info.code,
+          team: sub.naming?.team ?? null,
+          variant: sub.naming?.title ?? (sub.naming?.team ? null : sub.naming?.releaser ?? null),
+          details: ["Torrent file", extension, info.isForced ? "Forced" : "", info.isHearingImpaired ? "SDH" : ""].filter(Boolean)
+        });
         // A subtitle FILE is never the container's choice, so `null` — and the
         // mode reading is registered here too, because a video with only
         // external files never reaches the embedded loader at all.
@@ -797,7 +843,11 @@ export class SubtitlePlayback {
       this.#getVideoElement().appendChild(el);
       this.#embeddedTextTracks.set(track.index, el.track);
       this.#embeddedTrackElements.set(track.index, el);
-      this.#addMenuEntry(`${epoch}:embedded:${track.index}`, el.track, track.index);
+      this.#addMenuEntry(`${epoch}:embedded:${track.index}`, el.track, track.index, undefined, {
+        language: trackLanguageTag(track),
+        variant: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null,
+        details: ["Embedded", track.codec ? String(track.codec).toUpperCase() : "", track.isForced ? "Forced" : "", track.isHearingImpaired ? "SDH" : ""].filter(Boolean)
+      });
       // What this track IS, for carrying a choice of it to the next episode.
       // Corrected in `#refineSubtitleLabel` if the container said nothing and
       // the cues answer later.
@@ -1096,6 +1146,8 @@ export class SubtitlePlayback {
     );
     element.label = label;
     element.srclang = detected.code;
+    const menuEntry = [...this.#menuEntries.values()].find((entry) => entry.textTrack === element.track);
+    if (menuEntry?.menu) menuEntry.menu.language = detected.code;
     // The menu names this track by its key, so its item keeps working; only
     // the words on it change.
     this.#publishMenu();

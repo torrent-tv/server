@@ -15,62 +15,137 @@
  * the tracks; the view renders these items and reports the key chosen.
  */
 
+import { languageName, trackLanguageCode } from "./track-language.js";
+
 /**
- * The subtitle menu as the view shows it: "Off" first, checked when no track
- * is, then the items in the order they were given.
+ * A single menu: "Off", visual language/team headings, then selectable tracks.
  *
- * @param {{ key: string, text?: string, checked?: boolean, disabled?: boolean }[]} items
+ * @param {{ key: string, text?: string, checked?: boolean, disabled?: boolean, kind?: string }[]} items
  * @returns {import("./menu-update.js").MenuItemState[]}
  */
 export function subtitleMenuState(items) {
   return [
-    { key: "", text: "Off", checked: !items.some((item) => item.checked === true), disabled: false },
+    { key: "", text: "Off", kind: "radio", checked: !hasChecked(items), disabled: false },
     ...items.map((item) => ({
+      ...item,
       key: String(item.key),
       text: String(item.text ?? ""),
+      kind: item.kind ?? "radio",
       checked: item.checked === true,
       disabled: item.disabled === true
     }))
   ];
 }
 
+function hasChecked(items) {
+  return Array.isArray(items) && items.some((item) => item.checked === true);
+}
+
 /**
  * @typedef {object} SubtitleMenuEntry
  * @property {string} key - Stable for the life of the track.
- * @property {string} label - What the track is called now.
+ * @property {string} label - Fallback display label for old metadata.
+ * @property {string} [language]
+ * @property {string} [team]
+ * @property {string} [variant]
+ * @property {string[]} [details]
+ * @property {number} [order]
  * @property {boolean} showing
  */
 
 /**
  * @typedef {object} SubtitleMenuItem
  * @property {string} key
- * @property {string} text - The label, with an ordinal where another item
- *   carries the same one, so two tracks never look like one.
+ * @property {string} text
  * @property {boolean} checked
+ * @property {"heading" | "radio"} kind
+ * @property {"language" | "team"} [level]
+ * @property {string} [accessibleText]
  */
 
 /**
- * The items, in the order the tracks were added, labels made distinct.
+ * Tracks are grouped in one menu by language and explicit team. Missing team
+ * metadata adds no team heading; the track follows its language heading.
  *
  * @param {SubtitleMenuEntry[]} entries
  * @returns {SubtitleMenuItem[]}
  */
-export function subtitleMenuItems(entries) {
+export function subtitleMenuItems(entries, statuses = []) {
   const list = Array.isArray(entries) ? entries : [];
-  const totals = new Map();
+  const languages = new Map();
   for (const entry of list) {
-    const label = labelOf(entry);
-    totals.set(label, (totals.get(label) ?? 0) + 1);
+    const language = languageParts(entry.language);
+    const group = languages.get(language.code) ?? { ...language, teams: new Map(), order: entry.order ?? languages.size };
+    const team = typeof entry.team === "string" && entry.team.trim() ? entry.team.trim() : "";
+    const tracks = group.teams.get(team) ?? [];
+    tracks.push(entry);
+    group.teams.set(team, tracks);
+    languages.set(language.code, group);
   }
+  const grouped = [...languages.values()]
+    .sort((a, b) => a.unknown - b.unknown || a.name.localeCompare(b.name) || a.code.localeCompare(b.code))
+    .flatMap((language) => {
+      const rows = [{
+        key: `language:${encodeURIComponent(language.code)}`,
+        text: language.name,
+        kind: "heading",
+        level: "language",
+        checked: false
+      }];
+      const teams = [...language.teams.entries()].sort(([a], [b]) => a === "" ? 1 : b === "" ? -1 : a.localeCompare(b));
+      for (const [team, tracks] of teams) {
+        if (team) rows.push({
+          key: `team:${encodeURIComponent(language.code)}:${encodeURIComponent(team)}`,
+          text: team,
+          kind: "heading",
+          level: "team",
+          checked: false
+        });
+        rows.push(...variantItems(tracks, language.name, team));
+      }
+      return rows;
+    });
+  const actions = Array.isArray(statuses) ? statuses.map((item) => ({
+    key: String(item.key),
+    text: String(item.text ?? ""),
+    kind: "radio",
+    checked: false,
+    disabled: item.disabled === true
+  })) : [];
+  return [...grouped, ...actions];
+}
+
+function languageParts(value) {
+  const tag = typeof value === "string" ? value.trim() : "";
+  const code = trackLanguageCode(tag) || "und";
+  const unknown = code === "und" || code === "";
+  const name = unknown ? "Unknown language" : languageName(code) || code;
+  return { code: unknown ? "und" : code, name, unknown: unknown ? 1 : 0 };
+}
+
+function variantItems(tracks, language, team) {
+  const ordered = [...tracks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const prepared = ordered.map((entry) => {
+    const details = Array.isArray(entry.details) ? entry.details.filter(Boolean) : [];
+    const tag = typeof entry.language === "string" ? entry.language.trim() : "";
+    if (tag && /[-_][a-z]{2}$/iu.test(tag)) details.push(tag);
+    const variant = typeof entry.variant === "string" ? entry.variant.trim() : "";
+    const text = [variant, ...details].filter(Boolean).join(" · ") || labelOf(entry);
+    return { entry, text };
+  });
+  const totals = new Map();
+  for (const item of prepared) totals.set(item.text, (totals.get(item.text) ?? 0) + 1);
   const seen = new Map();
-  return list.map((entry) => {
-    const label = labelOf(entry);
-    const ordinal = (seen.get(label) ?? 0) + 1;
-    seen.set(label, ordinal);
+  return prepared.map(({ entry, text }) => {
+    const ordinal = (seen.get(text) ?? 0) + 1;
+    seen.set(text, ordinal);
     return {
-      key: entry.key,
-      text: totals.get(label) > 1 ? `${label} (${ordinal})` : label,
-      checked: entry.showing === true
+      key: String(entry.key),
+      text: totals.get(text) > 1 ? `${text} (${ordinal})` : text,
+      accessibleText: [language, team, totals.get(text) > 1 ? `${text} (${ordinal})` : text].filter(Boolean).join(", "),
+      kind: "radio",
+      checked: entry.showing === true,
+      disabled: entry.disabled === true
     };
   });
 }

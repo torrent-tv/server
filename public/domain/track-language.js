@@ -19,7 +19,7 @@ export function trackLanguageTag(track) {
 
 /** @param {string} language */
 export function trackLanguageCode(language) {
-  const lang = typeof language === "string" ? language.toLowerCase() : "";
+  const lang = typeof language === "string" ? language.trim().toLowerCase().split(/[-_]/u)[0] : "";
   if (lang.length === 2) {
     return lang;
   }
