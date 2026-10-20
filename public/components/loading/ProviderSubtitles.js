@@ -1,5 +1,5 @@
 import { MEDIA_INFO_EVENTS } from "../../shared/events.js";
-import { providerSubtitleQuery } from "../../domain/provider-subtitles.js";
+import { filterSubtitleOffers, providerSubtitleQuery } from "../../domain/provider-subtitles.js";
 
 /** Provider discovery follows the active picture without delaying playback. */
 export class ProviderSubtitles {
@@ -48,7 +48,10 @@ export class ProviderSubtitles {
       if (!response.ok) throw new Error(`subtitle search returned ${response.status}`);
       const data = await response.json();
       if (this.#abort !== abort || abort.signal.aborted) return;
-      this.#onItems((data.providers ?? []).flatMap(p => p.items ?? []), data.providers ?? []);
+      const offers = filterSubtitleOffers((data.providers ?? []).flatMap(p => p.items ?? []));
+      const statuses = [...(data.providers ?? [])];
+      if (offers.excludedLanguages.length) statuses.push({ provider: "Subtitle matching", status: "no-suitable", languages: offers.excludedLanguages });
+      this.#onItems(offers.items, statuses);
     } catch (error) {
       if (abort.signal.aborted) return;
       console.warn("[subtitles] provider discovery unavailable", error);

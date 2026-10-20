@@ -7,13 +7,20 @@ const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 
 export function validateSubtitleQuery(body) {
-  if (!body || !["movie", "series"].includes(body.kind)) return null;
+  if (!body || (body.kind != null && !["movie", "series"].includes(body.kind))) return null;
   const positive = n => Number.isSafeInteger(n) && n > 0 && n <= 2147483647;
-  if (!positive(body.tmdbId) && !positive(body.anilistId)) return null;
+  const fingerprint = body.fingerprint;
+  const hasFingerprint = fingerprint && typeof fingerprint.hash === "string" && /^[0-9a-f]{16}$/u.test(fingerprint.hash) &&
+    Number.isSafeInteger(fingerprint.size) && fingerprint.size >= 131072;
+  if (!body.kind && (!hasFingerprint || body.tmdbId != null || body.anilistId != null)) return null;
+  if (!positive(body.tmdbId) && !positive(body.anilistId) && !hasFingerprint) return null;
   if (body.tmdbId != null && !positive(body.tmdbId)) return null;
   if (body.anilistId != null && !positive(body.anilistId)) return null;
   if (body.imdbId != null && (body.kind !== "movie" || !positive(body.tmdbId) || typeof body.imdbId !== "string" || !/^tt\d{1,12}$/u.test(body.imdbId))) return null;
-  const query = { kind: body.kind, tmdbId: body.tmdbId ?? null, anilistId: body.anilistId ?? null };
+  if (body.fingerprint != null && !hasFingerprint) return null;
+  if (body.query != null && (typeof body.query !== "string" || body.query.length === 0 || body.query.length > 300 || !hasFingerprint)) return null;
+  const query = { ...(body.kind ? { kind: body.kind } : {}), tmdbId: body.tmdbId ?? null, anilistId: body.anilistId ?? null,
+    ...(hasFingerprint ? { fingerprint: { hash: fingerprint.hash, size: fingerprint.size } } : {}), ...(body.query ? { query: body.query } : {}) };
   if (body.imdbId != null) query.imdbId = body.imdbId;
   if (body.kind === "series") {
     if (body.tmdbId && !(Number.isInteger(body.season) && body.season >= 0 && body.season <= 999 && positive(body.episode) && body.episode <= 9999)) return null;
@@ -57,7 +64,10 @@ export class SubtitleService {
   async search(query, signal) {
     const results = await Promise.all(this.#providers.map(async provider => {
       // Provider-specific keys omit inputs that cannot change that provider's answer.
-      const parameters = provider.name === "jimaku" ? [query.kind, query.anilistId, query.anilistEpisode ?? null] : [query.kind, query.tmdbId, query.imdbId ?? null, query.season ?? null, query.episode ?? null];
+      const parameters = provider.name === "jimaku"
+        ? [query.kind, query.anilistId, query.anilistEpisode ?? null]
+        : [query.kind ?? null, query.tmdbId, query.imdbId ?? null, query.season ?? null, query.episode ?? null,
+          query.fingerprint ?? null, query.query ?? null];
       const key = `list|${provider.name}|${JSON.stringify(parameters)}`;
       let answer = await this.#cache.get(key);
       const cacheHit = answer !== undefined;

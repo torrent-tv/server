@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Search OpenSubtitles with the selected file's hash before metadata identification completes, and mark exact hash matches with their catalogue identity evidence.
+
 ## 0.54.1
 
 - **Fix**: Show the active film or series title in the shared scrolling area for both playlist and chapter views.

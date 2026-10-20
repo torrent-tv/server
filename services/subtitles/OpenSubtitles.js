@@ -9,13 +9,26 @@ export class OpenSubtitles extends SubtitleProvider {
   }
 
   async search(query) {
-    if (!query.tmdbId) return { items: [], status: "not-applicable" };
-    const params = new URLSearchParams({ tmdb_id: String(query.tmdbId), type: query.kind === "movie" ? "movie" : "episode" });
-    if (query.kind !== "movie") { params.set("parent_tmdb_id", String(query.tmdbId)); params.delete("tmdb_id"); params.set("season_number", String(query.season)); params.set("episode_number", String(query.episode)); }
+    if (!query.tmdbId && !query.fingerprint) return { items: [], status: "not-applicable" };
+    const params = new URLSearchParams();
+    if (query.tmdbId && query.kind === "movie") {
+      params.set("tmdb_id", String(query.tmdbId));
+      params.set("type", "movie");
+    }
+    if (query.tmdbId && query.kind === "series" && Number.isInteger(query.season) && Number.isInteger(query.episode)) {
+      params.set("parent_tmdb_id", String(query.tmdbId));
+      params.set("season_number", String(query.season));
+      params.set("episode_number", String(query.episode));
+      params.set("type", "episode");
+    }
     if (query.kind === "movie" && query.imdbId) {
       params.delete("tmdb_id");
       params.set("imdb_id", String(Number(query.imdbId.slice(2))));
     }
+    if (query.fingerprint) params.set("moviehash", query.fingerprint.hash);
+    if (query.fingerprint && !query.tmdbId && query.query) params.set("query", query.query);
+    if (query.fingerprint && !query.tmdbId && query.kind === "movie") params.set("type", "movie");
+    if (query.fingerprint && !query.tmdbId && query.kind === "series") params.set("type", "episode");
     const items = [];
     const deadlineAt = Date.now() + 25_000;
     let pages = 1;
@@ -37,10 +50,37 @@ export class OpenSubtitles extends SubtitleProvider {
         if (!attr || attr.files?.length !== 1) continue;
         const file = attr.files[0];
         if (!Number.isSafeInteger(file.file_id) || !/^[a-z]{2,3}(?:-[A-Za-z]+)?$/u.test(attr.language ?? "")) continue;
-        items.push({ provider: this.name, id: String(file.file_id), language: attr.language,
+        const item = { provider: this.name, id: String(file.file_id), language: attr.language,
           filename: String(file.file_name ?? "subtitles.srt").slice(0, 500), release: String(attr.release ?? "").slice(0, 500),
           hearingImpaired: attr.hearing_impaired === true, forced: attr.foreign_parts_only === true,
-          downloads: Number(attr.download_count) || 0, rating: Number(attr.ratings) || 0 });
+          downloads: Number(attr.download_count) || 0, rating: Number(attr.ratings) || 0 };
+        if (query.fingerprint) {
+          item.eligibility = attr.moviehash_match === true ? "suitable" : "unknown";
+          item.eligibilityReason = attr.moviehash_match === true ? "OpenSubtitles reports a matching file hash." : "No exact file-hash match was reported.";
+          if (attr.moviehash_match === true) item.hashMatch = true;
+          if (Number.isFinite(attr.fps) && attr.fps > 0) item.fps = attr.fps;
+          if (typeof attr.hd === "boolean") item.hd = attr.hd;
+        }
+        const feature = attr.feature_details;
+        if (feature && typeof feature === "object") {
+          const number = value => Number.isSafeInteger(value) && value > 0 ? value : null;
+          const episode = feature.feature_type === "Episode";
+          const tmdbId = number(episode ? feature.parent_tmdb_id : feature.tmdb_id);
+          const imdbNumber = number(episode ? feature.parent_imdb_id : feature.imdb_id);
+          if (query.fingerprint && attr.moviehash_match === true && (tmdbId || imdbNumber)) {
+            item.identity = {
+              kind: episode ? "series" : "movie",
+              ...(tmdbId ? { tmdbId } : {}),
+              ...(imdbNumber ? { imdbId: `tt${imdbNumber}` } : {}),
+              ...(!episode && Number.isInteger(feature.year) && feature.year >= 1888 && feature.year <= 2100 ? { year: feature.year } : {}),
+              ...(typeof (episode ? feature.parent_title : feature.title) === "string"
+                ? { title: (episode ? feature.parent_title : feature.title).slice(0, 300) } : {}),
+              ...(episode && Number.isInteger(feature.season_number) && feature.season_number >= 0 ? { season: feature.season_number } : {}),
+              ...(episode && Number.isInteger(feature.episode_number) && feature.episode_number > 0 ? { episode: feature.episode_number } : {})
+            };
+          }
+        }
+        items.push(item);
       }
     }
     return { items, status: pages > readPages ? "partial" : "complete" };

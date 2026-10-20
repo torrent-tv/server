@@ -7,7 +7,7 @@ import { SubtitleProvider } from "../services/subtitles/SubtitleProvider.js";
 import { MetadataCache } from "../services/metadata/MetadataCache.js";
 import { ProviderHttp, retryAt } from "../services/subtitles/ProviderHttp.js";
 import { subtitleVtt } from "../services/subtitles/convert.js";
-import { providerSubtitleQuery } from "../public/domain/provider-subtitles.js";
+import { filterSubtitleOffers, providerSubtitleLabel, providerSubtitleQuery } from "../public/domain/provider-subtitles.js";
 import { RequestGate } from "../services/metadata/RequestGate.js";
 
 const query = { kind: "movie", tmdbId: 4935, anilistId: null };
@@ -48,22 +48,72 @@ test("failed discovery is not cached as an absent subtitle and one source cannot
   assert.equal((await service.search(query)).providers[0].status, "complete");
 });
 
+test("subtitle search cache keys include the file hash and fallback filename", async () => {
+  const asked = [];
+  const service = new SubtitleService({ cache: cache(), providers: [{ name: "fake", async search(query) {
+    asked.push([query.fingerprint.hash, query.query]);
+    return { status: "complete", items: [] };
+  } }] });
+  await service.search({ fingerprint: { hash: "0123456789abcdef", size: 200000 }, query: "first film" });
+  await service.search({ fingerprint: { hash: "fedcba9876543210", size: 200000 }, query: "second film" });
+  assert.deepEqual(asked, [["0123456789abcdef", "first film"], ["fedcba9876543210", "second film"]]);
+});
+
 test("movie IDs and episode coordinates are validated independently", () => {
   assert.deepEqual(validateSubtitleQuery(query), query);
+  assert.deepEqual(validateSubtitleQuery({ fingerprint: { hash: "0123456789abcdef", size: 200000 } }), {
+    tmdbId: null, anilistId: null, fingerprint: { hash: "0123456789abcdef", size: 200000 }
+  });
+  assert.equal(validateSubtitleQuery({ fingerprint: { hash: "0123456789ABCDEf", size: 200000 } }), null);
+  assert.equal(validateSubtitleQuery({ fingerprint: { hash: "0123456789abcdef", size: 1 } }), null);
+  assert.equal(validateSubtitleQuery({ tmdbId: 1 }), null);
   assert.equal(validateSubtitleQuery({ kind: "series", tmdbId: 1 }), null);
   assert.equal(validateSubtitleQuery({ kind: "movie", tmdbId: "1" }), null);
   assert.equal(validateSubtitleQuery({ kind: "series", anilistId: 1, anilistEpisode: -1 }), null);
 });
 
 test("provider queries use matched TMDB episodes and never transfer their numbers to AniList", () => {
-  const state = { work: { normalized: { kind: "series" }, sources: { tmdb: { tmdbId: 1 }, anilist: { id: 2 } } }, episodes: { 0: { season: 2, episodes: [{ number: 4 }], part: null } }, markers: { 0: { episodes: [16] } } };
-  assert.deepEqual(providerSubtitleQuery(state, 0), { kind: "series", tmdbId: 1, anilistId: null, season: 2, episode: 4 });
+  const fingerprint = { hash: "0123456789abcdef", size: 200000 };
+  const state = { work: { normalized: { kind: "series" }, sources: { tmdb: { tmdbId: 1 }, anilist: { id: 2 } } }, episodes: { 0: { season: 2, episodes: [{ number: 4 }], part: null } }, markers: { 0: { episodes: [16] } }, fingerprints: { 0: fingerprint } };
+  assert.deepEqual(providerSubtitleQuery(state, 0), { kind: "series", tmdbId: 1, anilistId: null, fingerprint, season: 2, episode: 4 });
   state.episodes[0].episodes.push({ number: 5 });
-  assert.equal(providerSubtitleQuery(state, 0), null);
+  assert.deepEqual(providerSubtitleQuery(state, 0), { fingerprint });
   delete state.work.sources.tmdb;
-  assert.deepEqual(providerSubtitleQuery(state, 0), { kind: "series", tmdbId: null, anilistId: 2, anilistEpisode: 16 });
+  assert.deepEqual(providerSubtitleQuery(state, 0), { kind: "series", tmdbId: null, anilistId: 2, fingerprint, anilistEpisode: 16 });
   state.markers[0].special = true;
-  assert.equal(providerSubtitleQuery(state, 0), null);
+  assert.deepEqual(providerSubtitleQuery(state, 0), { fingerprint });
+});
+
+test("a fingerprint alone searches providers before metadata has identified the work", () => {
+  const fingerprint = { hash: "0123456789abcdef", size: 200000 };
+  assert.deepEqual(providerSubtitleQuery({ fingerprints: { 2: fingerprint }, files: { 2: { relativePath: "Movies/Cowboy.Bebop.2021.mkv" } } }, 2), {
+    fingerprint, query: "cowboy bebop 2021"
+  });
+  assert.equal(providerSubtitleQuery({ fingerprints: { 2: { hash: "bad", size: 200000 } } }, 2), null);
+});
+
+test("a hash match makes the provider's catalogue identity visible for checking", () => {
+  const label = providerSubtitleLabel({ provider: "opensubtitles", language: "en", release: "release", hashMatch: true,
+    identity: { title: "Cowboy Bebop", year: 2021 } });
+  assert.match(label, /file hash match/u);
+  assert.match(label, /catalogue: Cowboy Bebop \(2021\)/u);
+  assert.match(providerSubtitleLabel({ provider: "opensubtitles", language: "en", eligibility: "unknown" }), /version unverified/u);
+});
+
+test("subtitle eligibility filters incompatible offers per language and keeps unknown fallback", () => {
+  const offers = [
+    { id: "en-good", language: "en", eligibility: "suitable" },
+    { id: "en-same-label", language: "en", release: "same release label", eligibility: "suitable" },
+    { id: "en-same-label-again", language: "en", release: "same release label", eligibility: "suitable" },
+    { id: "en-unknown", language: "en", eligibility: "unknown" },
+    { id: "en-wrong", language: "en", eligibility: "incompatible" },
+    { id: "ru-unknown", language: "ru", eligibility: "unknown" },
+    { id: "ru-wrong", language: "ru", eligibility: "incompatible" },
+    { id: "fr-wrong", language: "fr", eligibility: "incompatible" }
+  ];
+  assert.deepEqual(filterSubtitleOffers(offers), {
+    items: [offers[0], offers[1], offers[2], offers[3], offers[5]], excludedLanguages: ["fr"]
+  });
 });
 
 test("OpenSubtitles and Jimaku extend the shared provider contract", () => {
@@ -84,6 +134,37 @@ test("OpenSubtitles episode lookup sends the parent ID and does not offer a mult
   assert.equal(address.searchParams.has("page"), false);
   assert.equal(address.search, "?episode_number=3&parent_tmdb_id=99&season_number=2&type=episode");
   assert.equal(result.items.length, 1);
+});
+
+test("OpenSubtitles searches by file hash and exposes exact-match identity evidence", async () => {
+  let address;
+  const provider = new OpenSubtitles({ key: "fake", fetch: async url => {
+    address = url;
+    return json({ total_pages: 1, data: [{ attributes: {
+      language: "en", moviehash_match: true, release: "Cowboy Bebop 2021",
+      feature_details: { feature_type: "Episode", parent_tmdb_id: 84469, parent_imdb_id: 1267295, parent_title: "Cowboy Bebop", season_number: 1, episode_number: 1, year: 2021 },
+      files: [{ file_id: 7, file_name: "episode.srt" }]
+    } }] });
+  } });
+  const result = await provider.search({ fingerprint: { hash: "0123456789abcdef", size: 200000 }, query: "cowboy bebop 2021" });
+  assert.equal(address.searchParams.get("moviehash"), "0123456789abcdef");
+  assert.equal(address.searchParams.get("query"), "cowboy bebop 2021");
+  assert.equal(address.searchParams.has("type"), false);
+  assert.equal(result.items[0].hashMatch, true);
+  assert.equal(result.items[0].eligibility, "suitable");
+  assert.deepEqual(result.items[0].identity, {
+    kind: "series", tmdbId: 84469, imdbId: "tt1267295", title: "Cowboy Bebop", season: 1, episode: 1
+  });
+});
+
+test("an OpenSubtitles association without an exact hash match is not identity evidence", async () => {
+  const provider = new OpenSubtitles({ key: "fake", fetch: async () => json({ total_pages: 1, data: [{ attributes: {
+    language: "en", moviehash_match: false, feature_details: { feature_type: "Movie", tmdb_id: 377 }, files: [{ file_id: 7 }]
+  } }] }) });
+  const result = await provider.search({ fingerprint: { hash: "0123456789abcdef", size: 200000 } });
+  assert.equal(result.items[0].hashMatch, undefined);
+  assert.equal(result.items[0].eligibility, "unknown");
+  assert.equal(result.items[0].identity, undefined);
 });
 
 test("429 pauses shared provider requests and Retry-After dates are respected", async () => {

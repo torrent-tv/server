@@ -289,12 +289,16 @@ test("a release that is already identified is not asked again when its hash arri
   const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
   new MediaInfoController();
   const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  const published = [];
+  target.addEventListener(MEDIA_INFO_EVENTS.CHANGED, event => published.push(event.detail));
   send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Known.Film.1999.mkv"] });
   send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Known.Film.1999.mkv", shape: "single", items: [{ fileIndex: 0 }] }, files: [{ index: 0, relativePath: "Known.Film.1999.mkv" }] });
   pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 3, title: "Known Film" } }));
   await new Promise(resolve => setImmediate(resolve));
-  send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint: { hash: "8e245d9679d31e12", size: 1 } });
+  const fingerprint = { hash: "8e245d9679d31e12", size: 12909756 };
+  send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint });
   assert.equal(pending.length, 2);
+  assert.deepEqual(published.at(-1).fingerprints, { 0: fingerprint });
 });
 
 test("the address names the work of the open file: its database, number, kind, category and episode", async () => {

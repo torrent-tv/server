@@ -294,6 +294,7 @@ export class MediaInfoController {
     const fileIndex = detail?.fileIndex;
     if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !this.#filesByIndex.has(fileIndex)) return;
     this.#fingerprints.set(fileIndex, detail.fingerprint);
+    this.#publish();
     if (this.#fingerprintRetried.has(fileIndex)) return;
     this.#fingerprintRetried.add(fileIndex);
     if (shapeOf(this.#contents) === "undetermined") {
@@ -577,6 +578,7 @@ export class MediaInfoController {
           seasons: { ...this.#seasons },
           episodes: { ...this.#episodes },
           pictures: { ...this.#pictures },
+          fingerprints: Object.fromEntries(this.#fingerprints),
           containers: Object.fromEntries([...new Set([...this.#containers.keys(), ...this.#covers.keys()])].map((index) => [index, {
             ...(this.#containers.get(index) ?? {}),
             ...(this.#covers.has(index) ? { coverUrl: this.#covers.get(index).url, coverType: this.#covers.get(index).type } : {})
