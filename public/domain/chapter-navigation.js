@@ -5,6 +5,21 @@ export function navigableSections(sections) {
     .sort((left, right) => left.startSeconds - right.startSeconds || (left.order ?? 0) - (right.order ?? 0));
 }
 
+/** Build a tree only from parent identifiers declared by the media source. */
+export function chapterTree(sections) {
+  const nodes = navigableSections(sections).map((section) => ({ section, children: [] }));
+  const byId = new Map(nodes.map((node) => [node.section.id, node]));
+  const roots = [];
+
+  for (const node of nodes) {
+    const parent = byId.get(node.section.parentId);
+    if (parent && parent !== node) parent.children.push(node);
+    else roots.push(node);
+  }
+
+  return roots;
+}
+
 /** Return timeline intervals clipped to the known media duration. */
 export function playbackSectionIntervals(sections, duration) {
   if (!Number.isFinite(duration) || duration <= 0) return [];
@@ -26,7 +41,9 @@ export function playbackSectionIntervals(sections, duration) {
     const siblingEnd = Number.isFinite(nextSibling?.startSeconds) ? nextSibling.startSeconds : null;
     const parentEnd = Number.isFinite(parent?.endSeconds) && parent.endSeconds > startSeconds
       ? parent.endSeconds
-      : null;
+      : Number.isFinite(parent?.displayEndSeconds) && parent.displayEndSeconds > startSeconds
+        ? parent.displayEndSeconds
+        : null;
     const endSeconds = Math.min(
       duration,
       explicitEnd ?? displayEnd ?? siblingEnd ?? duration,
@@ -40,8 +57,30 @@ export function playbackSectionIntervals(sections, duration) {
 /** Return the section covering the viewer's current position, or null in a gap. */
 export function currentSectionId(sections, currentTime, duration) {
   if (!Number.isFinite(currentTime) || currentTime < 0) return null;
-  return playbackSectionIntervals(sections, duration)
-    .find((section) => section.startSeconds <= currentTime && currentTime < section.endSeconds)?.id ?? null;
+  const byId = new Map(navigableSections(sections).map((section) => [section.id, section]));
+  const depthOf = (section) => {
+    let depth = 0;
+    let parentId = section.parentId;
+    const visited = new Set([section.id]);
+    while (byId.has(parentId) && !visited.has(parentId)) {
+      visited.add(parentId);
+      parentId = byId.get(parentId).parentId;
+      depth++;
+    }
+    return depth;
+  };
+
+  let active = null;
+  let activeDepth = -1;
+  for (const section of playbackSectionIntervals(sections, duration)) {
+    if (section.startSeconds > currentTime || currentTime >= section.endSeconds) continue;
+    const depth = depthOf(section);
+    if (depth > activeDepth || (depth === activeDepth && section.startSeconds > active?.startSeconds)) {
+      active = section;
+      activeDepth = depth;
+    }
+  }
+  return active?.id ?? null;
 }
 
 /** Return the localized display title used by the chapter list and timeline. */

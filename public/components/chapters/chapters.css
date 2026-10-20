@@ -12,6 +12,13 @@
   color: #f2f2f2;
   font-family: system-ui, sans-serif;
 
+  > li,
+  .chapters__children > li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+  }
+
   button {
     display: flex;
     align-items: center;
@@ -43,6 +50,27 @@
       color: #fff;
     }
   }
+
+  button[data-chapter-id] {
+    grid-column: 1;
+  }
+
+  button[data-chapter-expand] {
+    grid-column: 2;
+    inline-size: 3rem;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .chapters__children {
+    grid-column: 1 / -1;
+    min-inline-size: 0;
+    margin: 0;
+    padding-inline-start: 1rem;
+    border-inline-start: 0.125rem solid #444;
+    list-style: none;
+    background: #141416;
+  }
 }
 
 .chapters__title {
@@ -52,27 +80,32 @@
   white-space: nowrap;
 }
 
-.chapters__details {
-  display: flex;
+.chapters__time {
   flex: 0 0 auto;
-  align-items: center;
-  gap: 0.75rem;
   color: #bbb;
   font-size: 0.8125rem;
   line-height: 1.4;
 }
 
-#chapters button:hover .chapters__details,
-#chapters button:focus-visible .chapters__details,
-#chapters button[aria-current="location"] .chapters__details {
+#chapters button:hover .chapters__time,
+#chapters button:focus-visible .chapters__time,
+#chapters button[aria-current="location"] .chapters__time {
   color: #fff;
 }
 
-.chapters__type {
-  max-inline-size: 8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.chapters__disclosure-icon {
+  inline-size: 1rem;
+  block-size: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 120ms ease;
+}
+
+#chapters button[data-chapter-expand][aria-expanded="true"] .chapters__disclosure-icon {
+  transform: rotate(90deg);
 }
 
 .chapters__message {
@@ -84,4 +117,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   #chapters button { scroll-behavior: auto; }
+  .chapters__disclosure-icon { transition: none; }
 }
