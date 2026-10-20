@@ -41,11 +41,20 @@ export class ChapterMetadata {
       try {
         const response = await selected.transport.fetch(`/api/sources/${encodeURIComponent(selected.sourceKey)}/chapters?fileIndex=${selected.fileIndex}`, { signal, timeoutMs: 15000 });
         let answer;
-        if (response.status === 404) answer = { state: "unsupported", reason: "chapter-endpoint-unavailable", complete: true };
+        if (response.status === 404) {
+          let body = null;
+          if (typeof response.json === "function") {
+            try { body = await response.json(); }
+            catch (error) { console.warn("Chapter metadata error response could not be parsed", error); }
+          }
+          answer = body?.code === "SOURCE_NOT_FOUND"
+            ? { capability: "supported", state: "error", reason: "source-not-found", complete: false }
+            : { capability: "unsupported", state: "unsupported", reason: "chapter-endpoint-unavailable", complete: true };
+        }
         else if (!response.ok) answer = { state: "error", reason: `chapter-http:${response.status}`, complete: false };
         else {
           answer = await response.json();
-          if (answer?.version !== 1) answer = { state: "unsupported", reason: "chapter-contract-version", complete: true };
+          if (answer?.version !== 1 || answer?.capability !== "supported") answer = { capability: "unsupported", state: "unsupported", reason: "chapter-contract-version", complete: true };
           else if (answer.sourceKey !== selected.sourceKey || answer.fileIndex !== selected.fileIndex) throw new Error("Chapter response does not match selected file");
         }
         if (this.selection !== selected || signal.aborted) return;

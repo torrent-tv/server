@@ -8,7 +8,7 @@ function deferred() {
   return { promise, resolve };
 }
 const response = (fileIndex, revision = 1) => ({ ok: true, status: 200,
-  json: async () => ({ version: 1, state: "available", sourceKey: "source", fileIndex, revision }) });
+  json: async () => ({ version: 1, capability: "supported", state: "available", sourceKey: "source", fileIndex, generation: "first", revision }) });
 
 test("deferred discovery waits until playback starts and activates only once", async () => {
   let calls = 0;
@@ -52,6 +52,17 @@ test("an old proxy gives an explicit unsupported endpoint result", async () => {
   await metadata.reading;
   assert.equal(metadata.snapshot.state, "unsupported");
   assert.equal(metadata.snapshot.reason, "chapter-endpoint-unavailable");
+  assert.equal(metadata.snapshot.capability, "unsupported");
+});
+
+test("a missing source remains an error instead of proving the proxy lacks chapter support", async () => {
+  const metadata = new ChapterMetadata(() => {});
+  metadata.select({ sourceKey: "source", fileIndex: 0, transport: { fetch: async () => ({ status: 404,
+    json: async () => ({ code: "SOURCE_NOT_FOUND", error: "Source key was not found." }) }) } });
+  await metadata.reading;
+  assert.equal(metadata.snapshot.state, "error");
+  assert.equal(metadata.snapshot.reason, "source-not-found");
+  assert.equal(metadata.snapshot.capability, "supported");
 });
 
 test("notification during a request triggers one additional read", async () => {
@@ -80,7 +91,7 @@ test("a new cache generation accepts its lower revision after expiry or proxy re
   let generation = "first", revision = 9;
   const metadata = new ChapterMetadata(() => {});
   metadata.select({ sourceKey: "source", fileIndex: 0, transport: { fetch: async () => ({ ok: true, status: 200,
-    json: async () => ({ version: 1, state: "available", sourceKey: "source", fileIndex: 0, generation, revision }) }) } });
+    json: async () => ({ version: 1, capability: "supported", state: "available", sourceKey: "source", fileIndex: 0, generation, revision }) }) } });
   await metadata.reading;
   generation = "second"; revision = 1;
   await metadata.refresh();
