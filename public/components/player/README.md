@@ -1,6 +1,8 @@
 # Player Component
 
 This component owns the visible video area, player menu controls, and the single side-panel state shared by the playlist and chapters.
+The panel's work title and selected list share one scrolling region. The title
+names the film or series; it does not name the selected panel.
 
 ## Responsibilities
 

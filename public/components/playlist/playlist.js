@@ -39,6 +39,7 @@ export class Playlist {
     this.#disablePlaylistMode();
     this.#videoFiles = [];
     this.#currentFileIndex = -1;
+    this.#media = null;
     this.#renderList();
   };
 
@@ -168,9 +169,6 @@ export class Playlist {
 
   #renderList() {
     this.#root.textContent = "";
-    const heading = document.createElement("li");
-    heading.id = "playlist__heading";
-    this.#root.append(heading);
     this.#summaries = new Map();
     /** Rows a viewer sees without opening anything. @type {number[]} */
     const inView = [];
@@ -214,12 +212,6 @@ export class Playlist {
    * Put the current names on the rows already built.
    */
   #applyNames() {
-    const heading = this.#root.querySelector("#playlist__heading");
-    if (heading) {
-      const activeWork = this.#media?.pictures?.[String(this.#currentFileIndex)] ?? this.#media?.work;
-      heading.textContent = (activeWork?.normalized ?? activeWork)?.title || this.#media?.releaseName || "";
-      heading.hidden = !heading.textContent;
-    }
     const labels = new Map();
     for (const row of playlistRows(this.#videoFiles, playlistNaming(this.#media))) {
       if (row.kind === "file") {

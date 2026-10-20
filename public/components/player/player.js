@@ -598,6 +598,7 @@ export class Player extends StateDerivedView {
     this.#media = event instanceof CustomEvent ? event.detail : null;
     // `null` starts a new release; nothing chosen for the last one applies.
     if (!this.#media) this.#loadArt = null;
+    this.#updatePanelTitle();
     this.#applyPoster();
   };
 
@@ -623,8 +624,15 @@ export class Player extends StateDerivedView {
     // The same load confirmed once it is ready keeps its picture.
     if (next !== this.#activeFileIndex) this.#loadArt = null;
     this.#activeFileIndex = next;
+    this.#updatePanelTitle();
     this.#applyPoster();
   };
+
+  #updatePanelTitle() {
+    const activeWork = this.#media?.pictures?.[String(this.#activeFileIndex)] ?? this.#media?.work;
+    this.#panelTitle.textContent = (activeWork?.normalized ?? activeWork)?.title || this.#media?.releaseName || "";
+    this.#panelTitle.hidden = !this.#panelTitle.textContent;
+  }
 
   /**
    * The picture shown until the first frame: work artwork in the player's
@@ -818,6 +826,7 @@ export class Player extends StateDerivedView {
     this.#bufferSamples = [];
     this.#media = null;
     this.#activeFileIndex = -1;
+    this.#updatePanelTitle();
     this.#buffering.hidden = !(this.onScreen && isWaiting(this.#state));
     this.#bufferingPeers.textContent = "";
     this.#applyPoster();
@@ -1099,11 +1108,11 @@ export class Player extends StateDerivedView {
     const previous = this.#activePanel;
     const restoreFocus = panel === null && this.#panel.contains(document.activeElement);
     this.#activePanel = panel;
+    if (panel !== previous) this.#panel.scrollTop = 0;
     if ((previous === null) !== (panel === null)) this.#animatePanel();
     this.#root.classList.toggle(Player.CLASSES.isPanelOpen, panel !== null);
     this.#panel.dataset.open = String(panel !== null);
     this.#panel.inert = panel === null;
-    this.#panelTitle.textContent = panel === "chapters" ? "Chapters" : "Playlist";
     this.#playlistToggle.setAttribute("aria-expanded", String(panel === "playlist"));
     this.#chaptersToggle.setAttribute("aria-expanded", String(panel === "chapters"));
     this.#controller.toggleAttribute("gesturesdisabled", panel !== null);

@@ -49,7 +49,9 @@ test("player resets source controls on close and replacement through its owning 
       send(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, { items: [{ key: "en", text: "English" }] });
       send(PLAYER_EVENTS.SET_MEDIA_FILES, { video: [{ index: 0 }, { index: 1 }] });
       send(PLAYER_EVENTS.SET_SHARE_LINK, { url: "https://example.test/?torrent=example" });
+      send(MEDIA_INFO_EVENTS.CHANGED, { work: { normalized: { title: "Sample Series" } } });
       send(PLAYER_EVENTS.OPEN_PLAYLIST);
+      node("#player__panel").scrollTop = 75;
       node("#player__chapters-toggle").hidden = true;
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "pending", complete: false, sections: [] });
       assert.equal(node("#player__chapters-toggle").hidden, true, "pending metadata does not provide navigable chapters");
@@ -60,7 +62,8 @@ test("player resets source controls on close and replacement through its owning 
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "available", complete: true, sections: [{ id: "one", startSeconds: 0 }] });
       assert.equal(node("#player__chapters-toggle").hidden, false);
       send(PLAYER_EVENTS.SET_PANEL, { panel: "chapters" });
-      assert.equal(node("#player__panel-title").textContent, "Chapters");
+      assert.equal(node("#player__panel-title").textContent, "Sample Series", "panel selection keeps the active work title");
+      assert.equal(node("#player__panel").scrollTop, 0, "switching lists returns the shared scroll region to the title");
       assert.equal(node("#player__chapters-toggle").getAttribute("aria-expanded"), "true");
       assert.equal(node("#player__playlist-toggle").getAttribute("aria-expanded"), "false");
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "pending", complete: false, sections: [] });
@@ -77,6 +80,7 @@ test("player resets source controls on close and replacement through its owning 
       node("#player__subtitle-menu").hidden = false;
       node("#player__share-menu").popover = true;
       send(resetEvent, { selection: 2, names: ["Next"] });
+      assert.equal(node("#player__panel-title").textContent, "", "source reset clears the previous work title");
       for (const selector of ["audio-button", "subtitle-button", "playlist-toggle", "chapters-toggle", "share", "audio-menu", "subtitle-menu"]) assert.equal(node("#player__" + selector).hidden, true, selector);
       assert.equal(node("#player__audio-menu").children.length, 0);
       assert.equal(node("#player__subtitle-menu").children.length, 0);

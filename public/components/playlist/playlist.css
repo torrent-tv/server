@@ -1,9 +1,7 @@
 #playlist {
-  flex: 1 1 auto;
-  min-block-size: 0;
+  flex: 0 0 auto;
   inline-size: 100%;
-  overflow-x: clip;
-  overflow-y: auto;
+  overflow: visible;
   padding: 0 0 1rem;
   margin: 0;
   list-style: none;
@@ -131,7 +129,5 @@
     }
   }
 }
-
-#playlist__heading { padding: .75rem 1rem 1.25rem; font-size: 1.375rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
 
 #playlist section > h2 { margin: 0; padding: .75rem 1rem; font-size: .875rem; font-weight: 600; color: #bbb; }

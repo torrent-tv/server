@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Show the active film or series title in the shared scrolling area for both playlist and chapter views.
+
 ## 0.54.0
 
 - **Fix**: Remove section-type labels from chapter rows and close the list after a chapter is selected.
