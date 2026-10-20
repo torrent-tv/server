@@ -43,6 +43,17 @@ test("wait trace emitted before proxy connection is replayed to the proxy log", 
   assert.ok(messagesOf(toProxy).some((msg) => msg.includes('"wait":"early"')));
 });
 
+test("wait trace is replayed when an existing proxy connection opens", async () => {
+  let open = false;
+  /** @type {string[]} */
+  const toProxy = [];
+  logger.setProxySink({ isOpen: () => open, send: async (body) => { toProxy.push(body); return { ok: true }; } });
+  logger.recordWaitTrace({ version: 1, wait: "opens-later", event: "action", process: "A0" });
+  open = true;
+  await flushOnce();
+  assert.ok(messagesOf(toProxy).some((msg) => msg.includes('"wait":"opens-later"')));
+});
+
 test("a closed proxy connection is not tried, and a reconnect takes the lines again", async () => {
   let open = true;
   /** @type {string[]} */
