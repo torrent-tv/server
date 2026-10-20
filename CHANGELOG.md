@@ -1,4 +1,4 @@
-## Unreleased
+## 0.52.5
 
 - **Fix**: Keep early playback trace events outside the ordinary log queue until they can be replayed to the proxy.
 
