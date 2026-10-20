@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Keep early playback trace events outside the ordinary log queue until they can be replayed to the proxy.
+
 ## 0.52.4
 
 - **Fix**: Preserve up to 5,000 playback process events until the proxy connection opens, including connections that open without a reconnect callback.
