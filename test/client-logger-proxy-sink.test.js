@@ -54,6 +54,20 @@ test("wait trace is replayed when an existing proxy connection opens", async () 
   assert.ok(messagesOf(toProxy).some((msg) => msg.includes('"wait":"opens-later"')));
 });
 
+test("replaying more than the ordinary log queue limit preserves every wait event", async () => {
+  let open = false;
+  /** @type {string[]} */
+  const toProxy = [];
+  logger.setProxySink({ isOpen: () => open, send: async (body) => { toProxy.push(body); return { ok: true }; } });
+  for (let index = 0; index < 700; index++) {
+    logger.recordWaitTrace({ version: 1, wait: "large-replay", event: "begin", process: `A${index}` });
+  }
+  open = true;
+  await flushOnce();
+  const replayed = messagesOf(toProxy).filter((msg) => msg.includes('"wait":"large-replay"'));
+  assert.equal(replayed.length, 700);
+});
+
 test("a closed proxy connection is not tried, and a reconnect takes the lines again", async () => {
   let open = true;
   /** @type {string[]} */

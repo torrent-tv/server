@@ -1,6 +1,6 @@
 ## 0.52.4
 
-- **Fix**: Replay queued playback process events when the proxy connection opens.
+- **Fix**: Preserve up to 5,000 playback process events until the proxy connection opens, including connections that open without a reconnect callback.
 
 ## 0.52.3
 
