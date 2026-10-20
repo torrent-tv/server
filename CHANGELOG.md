@@ -30,6 +30,7 @@
 
 ## 0.52.5
 
+- **New**: Record separate browser-clock spans for each HLS playlist and fragment request, plus the final codec-ready-to-SourceBuffer-created interval, in opt-in startup traces (#ttv-185).
 - **Fix**: Keep early playback trace events outside the ordinary log queue until they can be replayed to the proxy.
 
 ## 0.52.4
