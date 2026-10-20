@@ -1,4 +1,4 @@
-## Unreleased
+## 0.59.1
 
 - **Fix**: Hide the current chapter label when a file has no chapters or the current chapter title is empty (#ttv-216).
 
