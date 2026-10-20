@@ -24,9 +24,9 @@ import { normalizeTitle } from "./title.js";
 /**
  * Year and runtime dominate the score when the release states them. A year
  * mismatch beyond one year, or a runtime below 70% of the measured duration,
- * is also a contradiction and cannot identify a candidate. All values remain
- * provisional until the labelled survey is fitted with
- * `tools/metadata-survey/fit-weights.mjs` (torrent-tv/meta#172).
+ * is also a contradiction and cannot identify a candidate. A 300-release
+ * IMDb-labelled survey retained these weights after a train/holdout fit;
+ * feature coverage and the measured result are recorded in torrent-tv/meta#172.
  */
 const WEIGHTS = Object.freeze({ title: 8, year: 32, runtime: 24, episodes: 2, russianTitle: 1, releaseCount: 1, episodeTitles: 1, language: 1 });
 
