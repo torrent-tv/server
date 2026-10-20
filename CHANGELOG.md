@@ -1,4 +1,4 @@
-## Unreleased
+## 0.50.33
 
 - **Chore**: Update dependencies: knip 6.42.0 → 6.42.1; 5 package(s) changed in the lock file.
 
