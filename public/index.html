@@ -100,10 +100,8 @@
           </button>
         </media-control-bar>
 
-        <!-- The subtitle menu. A plain media-chrome menu, like the soundtrack
-             menu below: its items name tracks by a key this page keeps, because
-             media-chrome's captions menu found a track again by its label and
-             a label changes once the text has been read (field 2026-10-01). -->
+        <!-- One subtitle menu uses non-interactive language/team headings;
+             only track rows carry stable keys back to SubtitlePlayback. -->
         <media-chrome-menu id="player__subtitle-menu" hidden anchor="player__subtitle-button"></media-chrome-menu>
         <!-- The soundtrack menu, opened by the button beside the captions
              button. A plain media-chrome menu: the tracks are the proxy's, not

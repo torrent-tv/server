@@ -31,8 +31,13 @@ test("announced provider tracks stay disabled, and a late download cannot undo O
   globalThis.CustomEvent = class extends Event { constructor(type, options) { super(type); this.detail = options.detail; } };
   globalThis.window = { setInterval, clearInterval, setTimeout };
   const downloads = [];
+  let searches = 0;
   globalThis.fetch = async path => {
-    if (path.endsWith("/search")) return new Response(JSON.stringify({ providers: [{ provider: "opensubtitles", status: "complete", items: [{ provider: "opensubtitles", id: "1", language: "en", release: "Film", token: "fake" }] }] }));
+    if (path.endsWith("/search")) {
+      searches += 1;
+      return new Response(JSON.stringify({ providers: [{ provider: "opensubtitles", status: "complete", items: searches === 2
+        ? [] : [{ provider: "opensubtitles", id: "1", language: "en", release: "Film", token: "fake" }] }] }));
+    }
     return new Promise(resolve => downloads.push(resolve));
   };
   let playback;
@@ -45,21 +50,29 @@ test("announced provider tracks stay disabled, and a late download cannot undo O
     await playback.loadForVideo(0);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(downloads.length, 0);
-    assert.equal(menu.length, 1);
+    assert.equal(menu.length, 2);
     assert.equal(video.textTracks[0].mode, "disabled");
-    playback.select(menu[0].key);
+    const leaf = () => menu.find(item => item.kind === "radio");
+    const groupKey = menu.find(item => item.kind === "heading").key;
+    playback.select(groupKey);
+    assert.equal(video.textTracks[0].mode, "disabled", "a language group cannot select or turn off a track");
+    playback.select(leaf().key);
+    const pendingKey = leaf().key;
+    document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: { work: { normalized: { kind: "movie" }, sources: { tmdb: { tmdbId: 2 } } } } }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(leaf().key, pendingKey, "a search refresh keeps the provider track whose download is pending");
     playback.select("");
     downloads[0](new Response("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n"));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(video.textTracks[0].mode, "disabled");
-    playback.select(menu[0].key);
+    playback.select(leaf().key);
     downloads[1](new Response("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n"));
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(video.textTracks[0].mode, "showing");
     await playback.loadForVideo(1);
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(video.textTracks[0].mode, "disabled");
-    playback.select(menu[0].key);
+    assert.equal(video.textTracks[0].mode, "disabled", "the next search offers a fresh provider track");
+    playback.select(leaf().key);
     const pendingResetDownload = downloads.at(-1);
     playback.reset();
     assert.equal(menu.length, 0);

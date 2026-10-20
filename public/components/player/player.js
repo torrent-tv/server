@@ -796,7 +796,7 @@ export class Player extends StateDerivedView {
     document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
     this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
     document.addEventListener(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, this.#onSetSubtitleTracks);
-    this.#subtitleMenu.addEventListener("click", this.#onSubtitleMenuClick);
+    this.#subtitleMenu.addEventListener("change", this.#onSubtitleMenuChange, true);
     this.#controller.addEventListener("keydown", this.#onControllerKeydown);
   }
 
@@ -833,7 +833,7 @@ export class Player extends StateDerivedView {
   };
 
   #clearTrackMenu(menu, button, hide = true) {
-    for (const item of menu.querySelectorAll("media-chrome-menu-item")) item.remove();
+    for (const item of [...(menu.children ?? [])]) item.remove();
     if (hide) menu.hidden = true;
     button.hidden = true;
   }
@@ -886,52 +886,94 @@ export class Player extends StateDerivedView {
       return;
     }
     this.#subtitleButton.hidden = false;
-    const elements = new Map();
-    const current = [];
-    for (const element of this.#subtitleMenu.querySelectorAll("media-chrome-menu-item[data-subtitle-key]")) {
-      const key = element.dataset.subtitleKey ?? "";
-      elements.set(key, element);
-      current.push({ key, text: element.textContent ?? "", checked: element.hasAttribute("checked"), disabled: element.hasAttribute("disabled") });
-    }
     const wanted = subtitleMenuState(items);
-    const { remove, set, create, reorder } = menuUpdate(current, wanted);
-    for (const key of remove) {
-      elements.get(key)?.remove();
-      elements.delete(key);
-    }
-    for (const change of set) {
-      const element = elements.get(change.key);
-      if ("text" in change) element.textContent = change.text;
-      if ("checked" in change) element.toggleAttribute("checked", change.checked);
-      if ("disabled" in change) element.toggleAttribute("disabled", change.disabled);
-    }
-    for (const { item, before } of create) {
-      const element = document.createElement("media-chrome-menu-item");
-      element.setAttribute("type", "radio");
-      element.dataset.subtitleKey = item.key;
-      element.toggleAttribute("checked", item.checked);
-      element.toggleAttribute("disabled", item.disabled);
-      element.textContent = item.text;
-      this.#subtitleMenu.insertBefore(element, before === null ? null : elements.get(before) ?? null);
-      elements.set(item.key, element);
-    }
-    if (reorder) {
-      for (const item of wanted) this.#subtitleMenu.appendChild(elements.get(item.key));
-    }
+    this.#reconcileSubtitleMenu(this.#subtitleMenu, wanted);
   };
 
-  /** @param {MouseEvent} event */
-  #onSubtitleMenuClick = (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const item = target.closest("media-chrome-menu-item[data-subtitle-key]");
-    if (!item || item.hasAttribute("disabled")) return;
+  #reconcileSubtitleMenu(menu, wanted) {
+    const elements = new Map();
+    const current = [...menu.children].filter((element) => element.dataset?.subtitleNodeKey !== undefined).map((element) => {
+      const key = element.dataset.subtitleNodeKey;
+      elements.set(key, element);
+      return {
+        key,
+        text: element.querySelector?.("[data-subtitle-label]")?.textContent ?? "",
+        checked: element.checked === true,
+        disabled: element.hasAttribute?.("disabled") === true,
+        accessibleText: element.getAttribute?.("aria-label") ?? ""
+      };
+    });
+    const comparable = wanted.map((item) => ({
+      key: item.key,
+      text: item.text,
+      checked: item.kind === "radio" && item.checked,
+      disabled: item.disabled === true,
+      accessibleText: item.accessibleText ?? ""
+    }));
+    const wantedByKey = new Map(wanted.map((item) => [item.key, item]));
+    const { remove, set, create, reorder } = menuUpdate(current, comparable);
+    for (const key of remove) elements.get(key)?.remove();
+    for (const change of set) {
+      const element = elements.get(change.key);
+      if ("text" in change) element.querySelector("[data-subtitle-label]").textContent = change.text;
+      if ("checked" in change && "checked" in element) element.checked = change.checked;
+      if ("disabled" in change) element.toggleAttribute("disabled", change.disabled);
+      if ("accessibleText" in change) {
+        if (change.accessibleText) element.setAttribute("aria-label", change.accessibleText);
+        else element.removeAttribute("aria-label");
+      }
+    }
+    for (const { item, before } of create) {
+      const element = this.#createSubtitleMenuNode(wantedByKey.get(item.key));
+      menu.insertBefore(element, before === null ? null : elements.get(before) ?? null);
+      elements.set(item.key, element);
+    }
+    if (reorder) for (const item of wanted) menu.appendChild(elements.get(item.key));
+    // media-chrome initializes an empty radio group by checking its first item
+    // as each row connects. Reapply the published state after all rows exist.
+    for (const item of wanted) {
+      const element = elements.get(item.key);
+      if (item.kind === "radio" && element.checked !== item.checked) element.checked = item.checked;
+    }
+  }
+
+  #createSubtitleMenuNode(item) {
+    const heading = item.kind === "heading";
+    const element = document.createElement(heading ? "div" : "media-chrome-menu-item");
+    element.dataset.subtitleNodeKey = item.key;
+    const label = document.createElement("span");
+    label.dataset.subtitleLabel = "";
+    label.textContent = item.text;
+    element.appendChild(label);
+    if (heading) {
+      element.dataset.subtitleGroup = item.level;
+      element.setAttribute("role", "presentation");
+      return element;
+    }
+    element.type = item.kind === "radio" ? "radio" : "";
+    element.value = item.key;
+    element.dataset.subtitleKey = item.key;
+    if (item.accessibleText) element.setAttribute("aria-label", item.accessibleText);
+    element.checked = item.kind === "radio" && item.checked === true;
+    element.toggleAttribute("disabled", item.disabled === true);
+    return element;
+  }
+
+  #closeSubtitleMenu() {
     this.#subtitleMenu.hidden = true;
-    document.dispatchEvent(
-      new CustomEvent(PLAYER_EVENTS.SELECT_SUBTITLE_TRACK, {
-        detail: { key: item.dataset.subtitleKey ?? "" }
-      })
-    );
+    this.#subtitleButton.focus();
+  }
+
+  #selectSubtitleMenuItem(key) {
+    this.#closeSubtitleMenu();
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SELECT_SUBTITLE_TRACK, { detail: { key } }));
+  }
+
+  #onSubtitleMenuChange = (event) => {
+    const menu = event.composedPath().find((node) => node?.localName === "media-chrome-menu");
+    const item = menu?.checkedItems?.[0];
+    if (!item || item.dataset?.subtitleKey === undefined || item.hasAttribute("disabled")) return;
+    this.#selectSubtitleMenuItem(item.dataset.subtitleKey);
   };
 
   /**

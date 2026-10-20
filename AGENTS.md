@@ -29,11 +29,11 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
     loading, embedded cue delivery, reconnect subscription, remembered
     subtitle choice, the report of the track a file opens with (which the
     start of playback waits for, `domain/subtitle-start.js`), and the
-    subtitle menu's items. Each item names its track
-    by a key kept for the life of the track (`domain/subtitle-menu.js`), never
-    by its label: a label changes once the text has been read. It is the only
-    thing that changes a track's mode; the player draws the menu and reports
-    the key chosen, and the subtitles key `c` is this page's, not media-chrome's
+    single subtitle menu. Each track row names its track by a key kept for the
+    life of the track (`domain/subtitle-menu.js`), never by its label: a label
+    changes once the text has been read. It is the only thing that changes a
+    track's mode; the player draws the menu and reports the selected leaf key,
+    and the subtitles key `c` is this page's, not media-chrome's
     (`hotkeys="noc"`).
   - `domain/torrent-session.js` — proxy registration, playback plan, HLS start.
     Seeking is server-side (no client-side session restart).

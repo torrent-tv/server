@@ -21,6 +21,7 @@
  * @property {string} text
  * @property {boolean} checked
  * @property {boolean} disabled
+ * @property {string} [accessibleText]
  */
 
 /**
@@ -66,6 +67,7 @@ export function menuUpdate(current, wanted) {
     if (now.text !== item.text) change.text = item.text;
     if (now.checked !== item.checked) change.checked = item.checked;
     if (now.disabled !== item.disabled) change.disabled = item.disabled;
+    if ((now.accessibleText ?? "") !== (item.accessibleText ?? "")) change.accessibleText = item.accessibleText ?? "";
     if (Object.keys(change).length > 1) set.push(change);
   }
   return { remove, set, create, reorder };
