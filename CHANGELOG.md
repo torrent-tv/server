@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Mark playback sections on the timeline and show their titles on hover or keyboard focus.
+
 ## 0.52.5
 
 - **Fix**: Keep early playback trace events outside the ordinary log queue until they can be replayed to the proxy.

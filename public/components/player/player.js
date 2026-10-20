@@ -2,6 +2,7 @@ import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVE
 import { playerArt } from "../../domain/media-info.js";
 import { waitTrace } from "../../domain/wait-trace.js";
 import { navigableSections } from "../../domain/chapter-navigation.js";
+import { ChapterTimeline } from "./chapter-timeline.js";
 import {
   APP_VIEW,
   APP_EVENT,
@@ -32,6 +33,8 @@ export class Player extends StateDerivedView {
   static SELECTOR = {
     root: "#player",
     controller: "#player__controller",
+    timeRange: "#player__time-range",
+    currentChapter: "#player__current-chapter",
     panel: "#player__panel",
     panelTitle: "#player__panel-title",
     video: "#player__video",
@@ -60,6 +63,9 @@ export class Player extends StateDerivedView {
 
   #root;
   #controller;
+  #chapterTimeline;
+  #currentChapter;
+  #keyboardModeObserver;
   #panel;
   #panelTitle;
   #video;
@@ -669,9 +675,12 @@ export class Player extends StateDerivedView {
   /** @param {CustomEvent} event */
   #onChaptersSnapshot = (event) => {
     const snapshot = event instanceof CustomEvent ? event.detail : null;
+    this.#chapterTimeline.setSnapshot(snapshot);
     const sections = Array.isArray(snapshot?.sections) ? snapshot.sections : [];
     const hasNavigation = navigableSections(sections).length > 0;
+    const unsupported = snapshot?.state === "unsupported" || snapshot?.capability === "unsupported";
     const completeAbsence = snapshot?.state === "absent" ||
+      unsupported ||
       (snapshot?.state === "available" && snapshot.complete === true && !hasNavigation);
     this.#chaptersToggle.hidden = snapshot === null || completeAbsence;
     if (this.#chaptersToggle.hidden && this.#activePanel === "chapters") this.#closePlaylist();
@@ -681,6 +690,8 @@ export class Player extends StateDerivedView {
     super((state) => viewForState(state) === APP_VIEW.PLAYER);
     this.#root = document.querySelector(Player.SELECTOR.root);
     this.#controller = document.querySelector(Player.SELECTOR.controller);
+    const timeRange = document.querySelector(Player.SELECTOR.timeRange);
+    this.#currentChapter = document.querySelector(Player.SELECTOR.currentChapter);
     this.#panel = document.querySelector(Player.SELECTOR.panel);
     this.#panelTitle = document.querySelector(Player.SELECTOR.panelTitle);
     this.#video = document.querySelector(Player.SELECTOR.video);
@@ -695,9 +706,11 @@ export class Player extends StateDerivedView {
       // same event triggers is taken — otherwise the first sample of the new
       // position is compared against the old one across the flush.
       this.#video.addEventListener("seeking", this.#onSeeking);
-      for (const name of ["timeupdate", "seeked", "loadedmetadata"]) {
+      for (const name of ["timeupdate", "seeked"]) {
         this.#video.addEventListener(name, this.#onMediaPosition);
       }
+      this.#video.addEventListener("loadedmetadata", this.#onMediaMetadata);
+      this.#video.addEventListener("durationchange", this.#onMediaMetadata);
       this.#video.addEventListener("play", this.#onPlayAttempt);
       this.#video.addEventListener("playing", () => {
         this.#playbackStarted = true;
@@ -722,13 +735,20 @@ export class Player extends StateDerivedView {
     this.#shareMenu = document.querySelector(Player.SELECTOR.shareMenu);
 
     if (
-      !this.#root || !this.#controller || !this.#panel || !this.#panelTitle || !this.#video || !this.#playButton || !this.#playlistToggle || !this.#chaptersToggle ||
+      !this.#root || !this.#controller || !timeRange || !this.#currentChapter || !this.#panel || !this.#panelTitle || !this.#video || !this.#playButton || !this.#playlistToggle || !this.#chaptersToggle ||
       !this.#closeButton || !this.#audioButton || !this.#audioMenu ||
       !this.#subtitleButton || !this.#subtitleMenu ||
       !this.#buffering || !this.#bufferingPeers ||
       !this.#share || !this.#shareMenu
     ) {
       throw new Error(Player.MESSAGES.missingDomNodes);
+    }
+
+    this.#chapterTimeline = new ChapterTimeline(this.#video, timeRange, this.#currentChapter);
+    this.#syncChapterLiveRegion();
+    if (typeof MutationObserver === "function") {
+      this.#keyboardModeObserver = new MutationObserver(this.#syncChapterLiveRegion);
+      this.#keyboardModeObserver.observe(this.#controller, { attributes: true, attributeFilter: ["keyboardcontrol"] });
     }
 
     this.#setupEventHandlers();
@@ -786,6 +806,7 @@ export class Player extends StateDerivedView {
     }
     this.#clearTrackMenu(this.#audioMenu, this.#audioButton);
     this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton);
+    this.#chapterTimeline.clear();
     this.#playlistToggle.hidden = true;
     this.#chaptersToggle.hidden = true;
     this.#closePlaylist();
@@ -1116,9 +1137,20 @@ export class Player extends StateDerivedView {
 
   #onMediaPosition = () => {
     if (!(this.#video instanceof HTMLVideoElement) || !Number.isFinite(this.#video.currentTime)) return;
+    this.#chapterTimeline.setCurrentTime(this.#video.currentTime);
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.POSITION_CHANGED, {
-      detail: { currentTime: this.#video.currentTime }
+      detail: { currentTime: this.#video.currentTime, duration: this.#video.duration }
     }));
+  };
+
+  #onMediaMetadata = () => {
+    this.#chapterTimeline.setDuration(this.#video.duration);
+    this.#onMediaPosition();
+  };
+
+  #syncChapterLiveRegion = () => {
+    if (!this.#currentChapter || !this.#controller) return;
+    this.#currentChapter.setAttribute("aria-live", this.#controller.hasAttribute("keyboardcontrol") ? "polite" : "off");
   };
 
   #onFocusPlaylistToggle = () => {

@@ -54,7 +54,9 @@ test("player resets source controls on close and replacement through its owning 
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "pending", complete: false, sections: [] });
       assert.equal(node("#player__chapters-toggle").hidden, false, "pending metadata does not prove there are no chapters");
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "unsupported", complete: true, sections: [] });
-      assert.equal(node("#player__chapters-toggle").hidden, false, "unsupported metadata does not prove there are no chapters");
+      assert.equal(node("#player__chapters-toggle").hidden, true, "unsupported chapter metadata does not provide a chapter list");
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "absent", complete: true, sections: [] });
+      assert.equal(node("#player__chapters-toggle").hidden, true, "an empty chapter list does not show its control");
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "available", complete: true, sections: [{ id: "one", startSeconds: 0 }] });
       assert.equal(node("#player__chapters-toggle").hidden, false);
       send(PLAYER_EVENTS.SET_PANEL, { panel: "chapters" });
