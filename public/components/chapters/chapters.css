@@ -1,0 +1,87 @@
+#chapters {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  inline-size: 100%;
+  overflow-x: clip;
+  overflow-y: auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 0 1rem;
+  list-style: none;
+  background: #141416;
+  color: #f2f2f2;
+  font-family: system-ui, sans-serif;
+
+  button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    box-sizing: border-box;
+    inline-size: 100%;
+    min-block-size: 3rem;
+    padding: 0.5rem 1rem;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+
+    &:hover {
+      background: #c00;
+      color: #fff;
+    }
+
+    &:focus-visible {
+      outline: 0.125rem solid #fff;
+      outline-offset: -0.125rem;
+    }
+
+    &[aria-current="location"] {
+      background: color-mix(in srgb, #c00 90%, #000 10%);
+      color: #fff;
+    }
+  }
+}
+
+.chapters__title {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chapters__details {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.75rem;
+  color: #bbb;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+#chapters button:hover .chapters__details,
+#chapters button:focus-visible .chapters__details,
+#chapters button[aria-current="location"] .chapters__details {
+  color: #fff;
+}
+
+.chapters__type {
+  max-inline-size: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chapters__message {
+  padding: 0.75rem 1rem;
+  color: #bbb;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #chapters button { scroll-behavior: auto; }
+}

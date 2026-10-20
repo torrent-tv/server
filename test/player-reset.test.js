@@ -18,6 +18,9 @@ test("player resets source controls on close and replacement through its owning 
     toggleAttribute(name, enabled) { if (enabled) this.setAttribute(name, ""); else this.removeAttribute(name); }
     hasAttribute(name) { return this.attributes.has(name); }
     querySelectorAll() { return [...this.children]; }
+    contains(child) { return child === this || this.children.some(node => node.contains(child)); }
+    focus() { document.activeElement = this; }
+    dispatchEvent(event) { this.lastEvent = event; return super.dispatchEvent(event); }
     appendChild(child) { this.insertBefore(child, null); }
     insertBefore(child, before) {
       if (child.parent) child.parent.children = child.parent.children.filter(other => other !== child);
@@ -47,16 +50,34 @@ test("player resets source controls on close and replacement through its owning 
       send(PLAYER_EVENTS.SET_MEDIA_FILES, { video: [{ index: 0 }, { index: 1 }] });
       send(PLAYER_EVENTS.SET_SHARE_LINK, { url: "https://example.test/?torrent=example" });
       send(PLAYER_EVENTS.OPEN_PLAYLIST);
+      node("#player__chapters-toggle").hidden = true;
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "pending", complete: false, sections: [] });
+      assert.equal(node("#player__chapters-toggle").hidden, false, "pending metadata does not prove there are no chapters");
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "unsupported", complete: true, sections: [] });
+      assert.equal(node("#player__chapters-toggle").hidden, false, "unsupported metadata does not prove there are no chapters");
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "available", complete: true, sections: [{ id: "one", startSeconds: 0 }] });
+      assert.equal(node("#player__chapters-toggle").hidden, false);
+      send(PLAYER_EVENTS.SET_PANEL, { panel: "chapters" });
+      assert.equal(node("#player__panel-title").textContent, "Chapters");
+      assert.equal(node("#player__chapters-toggle").getAttribute("aria-expanded"), "true");
+      assert.equal(node("#player__playlist-toggle").getAttribute("aria-expanded"), "false");
+      send(PLAYER_EVENTS.REQUEST_SEEK, { positionSeconds: 42 });
+      assert.equal(node("#player__controller").lastEvent.type, "mediaseekrequest");
+      assert.equal(node("#player__controller").lastEvent.detail, 42);
+      send(PLAYER_EVENTS.REQUEST_SEEK, { positionSeconds: Number.NaN });
+      assert.equal(node("#player__controller").lastEvent.detail, 42);
       node("#player__audio-menu").hidden = false;
       node("#player__subtitle-menu").hidden = false;
       node("#player__share-menu").popover = true;
       send(resetEvent, { selection: 2, names: ["Next"] });
-      for (const selector of ["audio-button", "subtitle-button", "playlist-toggle", "share", "audio-menu", "subtitle-menu"]) assert.equal(node("#player__" + selector).hidden, true, selector);
+      for (const selector of ["audio-button", "subtitle-button", "playlist-toggle", "chapters-toggle", "share", "audio-menu", "subtitle-menu"]) assert.equal(node("#player__" + selector).hidden, true, selector);
       assert.equal(node("#player__audio-menu").children.length, 0);
       assert.equal(node("#player__subtitle-menu").children.length, 0);
       assert.equal(node("#player__share-menu").popover, false);
       assert.equal(node("#player__playlist-toggle").getAttribute("aria-expanded"), "false");
-      assert.equal(node("#player").classList.contains("player--playlist"), false);
+      assert.equal(node("#player").classList.contains("player--panel"), false);
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "available", complete: true, sections: [] });
+      assert.equal(node("#player__chapters-toggle").hidden, true, "a complete response without navigable chapters hides the control");
     }
     player.reset();
     send(APP_EVENTS.STATE_CHANGED, { state: "OPENING" });

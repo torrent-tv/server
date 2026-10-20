@@ -4,26 +4,22 @@ This component owns playlist list rendering and playlist user interactions.
 
 ## Responsibilities
 
-- Render the list of available video files from `PLAYER:SET_MEDIA_FILES`.
-- Fold the files of one folder (a season, usually) into a `<details>` group, as
-  laid out by `domain/playlist-groups.js`: a folder becomes a group when it holds
-  at least two pictures and not all of them. The order stays the proxy's.
-- Open the group holding the active file; groups the viewer opened stay open.
-- Track currently active file from `PLAYER:SET_ACTIVE_MEDIA_FILE`.
-- React to `PLAYER:OPEN_PLAYLIST` / `PLAYER:CLOSE_PLAYLIST` for playlist panel visibility state.
-- Emit `PLAYER:SELECT_MEDIA_FILE` when user clicks a different file in the playlist.
-- If user clicks the currently active file, only close playlist without reloading playback.
-- Emit `PLAYER:CLOSE_PLAYLIST` after list click handling.
-- If focus is inside playlist during close, emit `PLAYER:FOCUS_PLAYLIST_TOGGLE` before making playlist inert.
-- On `LOADING:SHOW`, close playlist but keep rendered file list.
+- Render the available video files from `PLAYER:SET_MEDIA_FILES`.
+- Group files from one folder into a `<details>` section when the folder contains a proper subset of the files.
+- Open the group containing the active file and retain groups the viewer opened.
+- Track the active file from `PLAYER:SET_ACTIVE_MEDIA_FILE`.
+- Show the list only when `PLAYER:PANEL_CHANGED` selects `playlist`.
+- Emit `PLAYER:SELECT_MEDIA_FILE` when the viewer selects a different file.
+- Close the panel after selecting a file; selecting the active file closes it without reloading playback.
+- Close the list on `LOADING:SHOW` while retaining its rendered contents.
 
-## Layout Rules
+## Layout
 
-- Playlist panel is a sibling of `#player__video`.
-- Mobile: panel width is `80vw`.
-- Desktop: panel width is content-driven with upper bounds.
+The playlist list is one of two mutually exclusive contents of `#player__panel`,
+beside `#player__controller`. The player owns the panel width, slide and focus
+restoration.
 
-## Coupling Rule
+## Coupling
 
-- This component must not mutate player-owned DOM (`#player__video`, player buttons) directly.
-- All cross-component effects are event-driven via `public/shared/events.js`.
+This component does not mutate player-owned DOM such as the video element or
+player controls. Cross-component effects use events from `public/shared/events.js`.

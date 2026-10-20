@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="components/torrent/torrent.css" layer="components">
     <link rel="stylesheet" href="components/player/player.css" layer="components" >
     <link rel="stylesheet" href="components/playlist/playlist.css" layer="components" >
+    <link rel="stylesheet" href="components/chapters/chapters.css" layer="components">
   </head>
   <body>
 
@@ -155,7 +156,6 @@
             id="player__playlist-toggle"
             class="player__button"
             type="button"
-            aria-haspopup="true"
             aria-expanded="false"
             aria-controls="playlist"
             aria-label="Playlist">
@@ -164,6 +164,18 @@
               <circle cx="4" cy="6" r="1.2" fill="currentColor" stroke="none"/>
               <circle cx="4" cy="12" r="1.2" fill="currentColor" stroke="none"/>
               <circle cx="4" cy="18" r="1.2" fill="currentColor" stroke="none"/>
+            </svg>
+          </button>
+          <button
+            id="player__chapters-toggle"
+            class="player__button"
+            type="button"
+            aria-expanded="false"
+            aria-controls="chapters"
+            aria-label="Chapters"
+            hidden>
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M4 6h16M4 12h16M4 18h16M8 4v4M15 10v4M11 16v4"/>
             </svg>
           </button>
           <media-fullscreen-button></media-fullscreen-button>
@@ -180,12 +192,11 @@
         <button type="button" data-share="start">Copy link from start</button>
       </menu>
 
-      <ul
-        id="playlist"
-        aria-label="Video playlist"
-        data-open="false"
-        inert>
-      </ul>
+      <nav id="player__panel" aria-label="Playback navigation" data-open="false" inert>
+        <h2 id="player__panel-title">Playlist</h2>
+        <ul id="playlist" aria-label="Video playlist" data-open="false" inert></ul>
+        <ul id="chapters" aria-label="Playback chapters" data-open="false" inert hidden tabindex="-1"></ul>
+      </nav>
     </main>
 
     <script>
@@ -249,6 +260,7 @@
     <script type="module" src="./components/error/error.js"></script>
     <script type="module" src="./components/player/player.js"></script>
     <script type="module" src="./components/playlist/playlist.js"></script>
+    <script type="module" src="./components/chapters/chapters.js"></script>
     <script type="module" src="./components/media-session/media-session.js"></script>
     <script type="module" src="./components/media-info/media-info.js"></script>
     <script type="module" src="./components/media-info/page-title.js"></script>

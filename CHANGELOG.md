@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Navigate the selected file's chapters from the player side panel, which now switches between the playlist and chapter list.
+
 ## 0.51.2
 
 - **Fix**: Keep a diagnostic wait active when playback preparation resets its previous requests (#ttv-185).

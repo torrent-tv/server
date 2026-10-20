@@ -1,6 +1,7 @@
-import { APP_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, signalApp } from "../../shared/events.js";
+import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, signalApp } from "../../shared/events.js";
 import { playerArt } from "../../domain/media-info.js";
 import { waitTrace } from "../../domain/wait-trace.js";
+import { navigableSections } from "../../domain/chapter-navigation.js";
 import {
   APP_VIEW,
   APP_EVENT,
@@ -31,10 +32,13 @@ export class Player extends StateDerivedView {
   static SELECTOR = {
     root: "#player",
     controller: "#player__controller",
+    panel: "#player__panel",
+    panelTitle: "#player__panel-title",
     video: "#player__video",
     playButton: "#player__play",
     closeButton: "#player__close",
     playlistToggle: "#player__playlist-toggle",
+    chaptersToggle: "#player__chapters-toggle",
     audioButton: "#player__audio-button",
     audioMenu: "#player__audio-menu",
     subtitleButton: "#player__subtitle-button",
@@ -46,7 +50,7 @@ export class Player extends StateDerivedView {
   };
 
   static CLASSES = {
-    isPlaylistOpen: "player--playlist",
+    isPanelOpen: "player--panel",
     isAnimated: "player--animated",
   };
 
@@ -56,9 +60,12 @@ export class Player extends StateDerivedView {
 
   #root;
   #controller;
+  #panel;
+  #panelTitle;
   #video;
   #playButton;
   #playlistToggle;
+  #chaptersToggle;
   #closeButton;
   #audioButton;
   #audioMenu;
@@ -77,6 +84,7 @@ export class Player extends StateDerivedView {
   #waitStartedAt = null;
   #awaitingFirstPresentedFrame = false;
   #firstFrameCallbackId = null;
+  #activePanel = null;
 
   /**
    * Recent buffer readings, for the fill rate. Held here because this component
@@ -559,7 +567,6 @@ export class Player extends StateDerivedView {
 
   #onBackToPlaylist = () => {
     this.visible = true;
-    this.#root.classList.add(Player.CLASSES.isAnimated);
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
   };
 
@@ -656,13 +663,26 @@ export class Player extends StateDerivedView {
     // the video count alone; audio and subtitles do not provide another choice.
     const videoCount = Array.isArray(detail?.video) ? detail.video.length : 0;
     this.#playlistToggle.hidden = videoCount < 2;
-    if (videoCount < 2) this.#closePlaylist();
+    if (videoCount < 2 && this.#activePanel === "playlist") this.#closePlaylist();
+  };
+
+  /** @param {CustomEvent} event */
+  #onChaptersSnapshot = (event) => {
+    const snapshot = event instanceof CustomEvent ? event.detail : null;
+    const sections = Array.isArray(snapshot?.sections) ? snapshot.sections : [];
+    const hasNavigation = navigableSections(sections).length > 0;
+    const completeAbsence = snapshot?.state === "absent" ||
+      (snapshot?.state === "available" && snapshot.complete === true && !hasNavigation);
+    this.#chaptersToggle.hidden = snapshot === null || completeAbsence;
+    if (this.#chaptersToggle.hidden && this.#activePanel === "chapters") this.#closePlaylist();
   };
 
   constructor() {
     super((state) => viewForState(state) === APP_VIEW.PLAYER);
     this.#root = document.querySelector(Player.SELECTOR.root);
     this.#controller = document.querySelector(Player.SELECTOR.controller);
+    this.#panel = document.querySelector(Player.SELECTOR.panel);
+    this.#panelTitle = document.querySelector(Player.SELECTOR.panelTitle);
     this.#video = document.querySelector(Player.SELECTOR.video);
     if (this.#video instanceof HTMLVideoElement) {
       // Every event after which the buffer can differ. `progress` covers data
@@ -675,6 +695,9 @@ export class Player extends StateDerivedView {
       // same event triggers is taken — otherwise the first sample of the new
       // position is compared against the old one across the flush.
       this.#video.addEventListener("seeking", this.#onSeeking);
+      for (const name of ["timeupdate", "seeked", "loadedmetadata"]) {
+        this.#video.addEventListener(name, this.#onMediaPosition);
+      }
       this.#video.addEventListener("play", this.#onPlayAttempt);
       this.#video.addEventListener("playing", () => {
         this.#playbackStarted = true;
@@ -687,6 +710,7 @@ export class Player extends StateDerivedView {
     }
     this.#playButton = document.querySelector(Player.SELECTOR.playButton);
     this.#playlistToggle = document.querySelector(Player.SELECTOR.playlistToggle);
+    this.#chaptersToggle = document.querySelector(Player.SELECTOR.chaptersToggle);
     this.#closeButton = document.querySelector(Player.SELECTOR.closeButton);
     this.#audioButton = document.querySelector(Player.SELECTOR.audioButton);
     this.#audioMenu = document.querySelector(Player.SELECTOR.audioMenu);
@@ -698,7 +722,7 @@ export class Player extends StateDerivedView {
     this.#shareMenu = document.querySelector(Player.SELECTOR.shareMenu);
 
     if (
-      !this.#root || !this.#controller || !this.#video || !this.#playButton || !this.#playlistToggle ||
+      !this.#root || !this.#controller || !this.#panel || !this.#panelTitle || !this.#video || !this.#playButton || !this.#playlistToggle || !this.#chaptersToggle ||
       !this.#closeButton || !this.#audioButton || !this.#audioMenu ||
       !this.#subtitleButton || !this.#subtitleMenu ||
       !this.#buffering || !this.#bufferingPeers ||
@@ -719,11 +743,16 @@ export class Player extends StateDerivedView {
     document.addEventListener(APP_EVENTS.BACK_TO_PLAYLIST, this.#onBackToPlaylist);
     document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
     document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
+    document.addEventListener(PLAYER_EVENTS.SET_PANEL, this.#onSetPanel);
+    document.addEventListener(PLAYER_EVENTS.REQUEST_SEEK, this.#onRequestedSeek);
+    document.addEventListener(MEDIA_INFO_EVENTS.CHAPTERS, this.#onChaptersSnapshot);
     document.addEventListener(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE, this.#onFocusPlaylistToggle);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(PLAYER_EVENTS.SET_SHARE_LINK, this.#onSetShareLink);
     document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfo);
     document.addEventListener(LOADING_EVENTS.FILE_CHOSEN, this.#onFileChosenForPoster);
+    document.addEventListener(LOADING_EVENTS.SHOW, this.#onPlaylistClose);
+    document.addEventListener(ERROR_EVENTS.SHOW, this.#onPlaylistClose);
     document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onActiveFileForPoster);
     this.#share.addEventListener("click", this.#onShareClick);
     this.#shareMenu.addEventListener("click", this.#onShareMenuClick);
@@ -736,6 +765,7 @@ export class Player extends StateDerivedView {
     this.#sendTheWholePageFullscreen();
     this.#closeButton.addEventListener("click", this.#closeHandler);
     this.#playlistToggle.addEventListener("click", this.#togglePlaylist);
+    this.#chaptersToggle.addEventListener("click", this.#toggleChapters);
     this.#controller.addEventListener("click", this.#onControllerClick);
     this.#controller.addEventListener("mediaplayrequest", this.#onPlaybackRequest, true);
     this.#controller.addEventListener("mediapauserequest", this.#onPlaybackRequest, true);
@@ -757,6 +787,7 @@ export class Player extends StateDerivedView {
     this.#clearTrackMenu(this.#audioMenu, this.#audioButton);
     this.#clearTrackMenu(this.#subtitleMenu, this.#subtitleButton);
     this.#playlistToggle.hidden = true;
+    this.#chaptersToggle.hidden = true;
     this.#closePlaylist();
     this.#root.classList.remove(Player.CLASSES.isAnimated);
     this.#shareUrl = "";
@@ -1007,12 +1038,12 @@ export class Player extends StateDerivedView {
     // Keep the click from reaching #onControllerClick, which would treat it as
     // a click-outside and immediately re-close the playlist being opened.
     event.stopPropagation();
-    const isPlaylistOpen = this.#root.classList.contains(Player.CLASSES.isPlaylistOpen);
-    this.#root.classList.add(Player.CLASSES.isAnimated);
-    const nextEvent = isPlaylistOpen
-      ? new CustomEvent(PLAYER_EVENTS.CLOSE_PLAYLIST)
-      : new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST);
-    document.dispatchEvent(nextEvent);
+    this.#requestPanel(this.#activePanel === "playlist" ? null : "playlist");
+  };
+
+  #toggleChapters = (event) => {
+    event.stopPropagation();
+    this.#requestPanel(this.#activePanel === "chapters" ? null : "chapters");
   };
 
   /**
@@ -1021,24 +1052,73 @@ export class Player extends StateDerivedView {
    * the duration, so the click cannot also toggle play/pause.
    */
   #onControllerClick = () => {
-    if (!this.#root.classList.contains(Player.CLASSES.isPlaylistOpen)) return;
-    this.#root.classList.add(Player.CLASSES.isAnimated);
+    if (this.#activePanel === null) return;
     this.#closePlaylist();
   };
 
   #onPlaylistOpen = () => {
     if (this.#playlistToggle.hidden) return;
-    this.#root.classList.toggle(Player.CLASSES.isPlaylistOpen, true);
-    this.#playlistToggle.setAttribute("aria-expanded", "true");
-    // Suppress the tap-to-pause gesture so a click that closes the drawer does
-    // not also pause playback.
-    this.#controller.setAttribute("gesturesdisabled", "");
+    this.#setPanel("playlist");
   };
 
   #onPlaylistClose = () => {
-    this.#root.classList.toggle(Player.CLASSES.isPlaylistOpen, false);
-    this.#playlistToggle.setAttribute("aria-expanded", "false");
-    this.#controller.removeAttribute("gesturesdisabled");
+    this.#setPanel(null);
+  };
+
+  #onSetPanel = (event) => {
+    const panel = event instanceof CustomEvent ? event.detail?.panel : null;
+    if (panel === null || panel === "playlist" || panel === "chapters") this.#setPanel(panel);
+  };
+
+  #requestPanel(panel) {
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_PANEL, { detail: { panel } }));
+  }
+
+  #setPanel(panel) {
+    if (panel === this.#activePanel) return;
+    if (panel === "playlist" && this.#playlistToggle.hidden) return;
+    if (panel === "chapters" && this.#chaptersToggle.hidden) return;
+
+    const previous = this.#activePanel;
+    const restoreFocus = panel === null && this.#panel.contains(document.activeElement);
+    this.#activePanel = panel;
+    if ((previous === null) !== (panel === null)) this.#animatePanel();
+    this.#root.classList.toggle(Player.CLASSES.isPanelOpen, panel !== null);
+    this.#panel.dataset.open = String(panel !== null);
+    this.#panel.inert = panel === null;
+    this.#panelTitle.textContent = panel === "chapters" ? "Chapters" : "Playlist";
+    this.#playlistToggle.setAttribute("aria-expanded", String(panel === "playlist"));
+    this.#chaptersToggle.setAttribute("aria-expanded", String(panel === "chapters"));
+    this.#controller.toggleAttribute("gesturesdisabled", panel !== null);
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.PANEL_CHANGED, { detail: { panel } }));
+
+    if (restoreFocus) {
+      const toggle = previous === "chapters" ? this.#chaptersToggle : this.#playlistToggle;
+      if (!toggle.hidden) toggle.focus({ preventScroll: true });
+      else this.#playButton.focus({ preventScroll: true });
+    }
+  }
+
+  #animatePanel() {
+    if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    this.#root.classList.add(Player.CLASSES.isAnimated);
+  }
+
+  #onRequestedSeek = (event) => {
+    const positionSeconds = event instanceof CustomEvent ? event.detail?.positionSeconds : null;
+    if (!Number.isFinite(positionSeconds) || positionSeconds < 0) return;
+    this.#controller.dispatchEvent(new CustomEvent("mediaseekrequest", {
+      bubbles: true,
+      composed: true,
+      detail: positionSeconds
+    }));
+  };
+
+  #onMediaPosition = () => {
+    if (!(this.#video instanceof HTMLVideoElement) || !Number.isFinite(this.#video.currentTime)) return;
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.POSITION_CHANGED, {
+      detail: { currentTime: this.#video.currentTime }
+    }));
   };
 
   #onFocusPlaylistToggle = () => {
@@ -1046,11 +1126,7 @@ export class Player extends StateDerivedView {
   };
 
   #closePlaylist = () => {
-    if (this.#root.classList.contains(Player.CLASSES.isPlaylistOpen)) {
-      this.#root.classList.add(Player.CLASSES.isAnimated);
-      this.#root.classList.remove(Player.CLASSES.isPlaylistOpen);
-    }
-    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.CLOSE_PLAYLIST));
+    this.#requestPanel(null);
   };
 
   #emitReady() {

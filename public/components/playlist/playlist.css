@@ -1,22 +1,13 @@
 #playlist {
-  background: #141416;
-  color: #f2f2f2;
-  font-family: system-ui, sans-serif;
-
-  block-size: 100dvh;
-  inline-size: min(80dvw, 48rem);
+  flex: 1 1 auto;
+  min-block-size: 0;
+  inline-size: 100%;
   overflow-x: clip;
   overflow-y: auto;
-  padding-block: 1rem;
+  padding: 0 0 1rem;
+  margin: 0;
+  list-style: none;
   box-sizing: border-box;
-
-  @media (min-width: 64rem) {
-    inline-size: min(50dvw, 48rem);
-  }
-
-  @media (min-width: 90rem) {
-    inline-size: min(33dvw, 52rem);
-  }
 
   button {
     all: unset;
@@ -45,7 +36,7 @@
     }
 
     &:focus-visible {
-      outline: 0.125rem solid #c00;
+      outline: 0.125rem solid #fff;
       outline-offset: -0.125rem;
     }
 
@@ -112,7 +103,7 @@
     }
 
     &:focus-visible {
-      outline: 0.125rem solid #c00;
+      outline: 0.125rem solid #fff;
       outline-offset: -0.125rem;
     }
   }
