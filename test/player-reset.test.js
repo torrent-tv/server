@@ -52,7 +52,7 @@ test("player resets source controls on close and replacement through its owning 
       send(PLAYER_EVENTS.OPEN_PLAYLIST);
       node("#player__chapters-toggle").hidden = true;
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "pending", complete: false, sections: [] });
-      assert.equal(node("#player__chapters-toggle").hidden, false, "pending metadata does not prove there are no chapters");
+      assert.equal(node("#player__chapters-toggle").hidden, true, "pending metadata does not provide navigable chapters");
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "unsupported", complete: true, sections: [] });
       assert.equal(node("#player__chapters-toggle").hidden, true, "unsupported chapter metadata does not provide a chapter list");
       send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "absent", complete: true, sections: [] });
@@ -63,6 +63,11 @@ test("player resets source controls on close and replacement through its owning 
       assert.equal(node("#player__panel-title").textContent, "Chapters");
       assert.equal(node("#player__chapters-toggle").getAttribute("aria-expanded"), "true");
       assert.equal(node("#player__playlist-toggle").getAttribute("aria-expanded"), "false");
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "pending", complete: false, sections: [] });
+      assert.equal(node("#player__chapters-toggle").hidden, true);
+      assert.equal(node("#player__chapters-toggle").getAttribute("aria-expanded"), "false");
+      assert.equal(node("#player").classList.contains("player--panel"), false, "a panel with no chapters is closed");
+      send(MEDIA_INFO_EVENTS.CHAPTERS, { state: "available", complete: true, sections: [{ id: "one", startSeconds: 0 }] });
       send(PLAYER_EVENTS.REQUEST_SEEK, { positionSeconds: 42 });
       assert.equal(node("#player__controller").lastEvent.type, "mediaseekrequest");
       assert.equal(node("#player__controller").lastEvent.detail, 42);
