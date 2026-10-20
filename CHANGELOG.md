@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: knip 6.42.0 → 6.42.1; 5 package(s) changed in the lock file.
+
 ## 0.50.32
 
 - **Fix**: Show the proxy's active first-segment forecast while preparation is in progress (#ttv-185).
