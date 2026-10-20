@@ -74,7 +74,12 @@ export class MetadataRegistry {
     if (answer.status !== "identified") return answer;
     // The candidates the choice was made among, with their scores: public film
     // data, returned so the choice can be read back (and measured).
-    return { status: "identified", work: this.#merge(records ?? {}, evidenced), ...(answer.ranked ? { ranked: answer.ranked } : {}) };
+    return {
+      status: "identified",
+      work: this.#merge(records ?? {}, evidenced),
+      ...(answer.ranked ? { ranked: answer.ranked } : {}),
+      ...(answer.searches ? { searches: answer.searches } : {})
+    };
   }
 
   /** The episodes of one season, from the first source that answers them. */
@@ -150,6 +155,7 @@ export class MetadataRegistry {
       const added = {};
       if (evidence.names?.length) added.names = [...new Set([...(next.names ?? []), ...evidence.names])];
       if (evidence.externalIds && Object.keys(evidence.externalIds).length > 0) added.externalIds = { ...next.externalIds, ...evidence.externalIds };
+      if (evidence.statedYears?.length) added.statedYears = [...new Set([...(next.statedYears ?? []), ...evidence.statedYears])];
       // A season or episode the file states is typed, so it outranks a kind read
       // from names (meta#136: trust per field).
       for (const key of ["season", "episode", "episodeTitle", "kindHint"]) if (evidence[key] !== undefined) added[key] = evidence[key];

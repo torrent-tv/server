@@ -33,15 +33,15 @@ import {
  *  - **what a file states about its work only adds** (meta#139). The proxy
  *    reads it from the opened file's edges, typically a minute after the name
  *    was shown. It fills what is empty — an episode title, a year, a
- *    description, a cover where there is no poster — and asks again only when
- *    the names did not establish the work; a contradiction is logged;
- *  - **the work shown may change once more** (torrent-tv/meta#172): when the
- *    service chose among several works of one title, the file's duration and
- *    audio languages are sent again once known, and the answer replaces the
- *    card. The card is shown as early as possible rather than held back;
+ *    description, a cover where there is no poster — and every changed source
+ *    fact triggers identification again with accumulated evidence;
+ *  - **the work shown may change as evidence arrives** (torrent-tv/meta#172):
+ *    each answer and its database searches are retained with the original
+ *    source facts, and a later answer replaces the card when it identifies a
+ *    different work. The card is shown as early as possible rather than held back;
  *  - **a work the address names is looked up, not searched for**: a refresh
  *    or a shared link carries `id` and `type`, and they are sent as `record`;
- *  - **the first answer is only a preparation.** What is known when a release
+ *  - **the first answer is a retained preparation.** What is known when a release
  *    is chosen — the `.torrent` file's name, a magnet's `dn` — is sent at once,
  *    so the service has searched by the time the proxy says what is in the
  *    release. It is not shown: the release is identified from everything known
@@ -50,13 +50,12 @@ import {
  */
 export class MediaInfoController {
   #releaseRequest = null;
-  #releaseStatus = null;
   #subtitleEvidence = null;
-  #subtitleRetried = false;
   #selection = 0;
   #releaseSequence = 0;
   #durations = new Map();
-  #durationRetried = false;
+  #identificationAttempts = [];
+  #databaseSearches = new Map();
 
   /** The audio languages of each file the proxy has probed. @type {Map<number, string[]>} */
   #audioLanguages = new Map();
@@ -76,17 +75,11 @@ export class MediaInfoController {
   #hashIdentityRequests = new Set();
   #hashIdentityAccepted = false;
 
-  /** Files whose identification was asked again once their hash arrived. @type {Set<number>} */
-  #fingerprintRetried = new Set();
-
   /** What each file states about its work, from the proxy or kept by the server. @type {Map<number, object>} */
   #containers = new Map();
 
   /** The `blob:` address of each file's own cover, revoked with the choice. @type {Map<number, { url: string, type: string }>} */
   #covers = new Map();
-
-  /** Files whose identification was asked again once their container metadata arrived. @type {Set<number>} */
-  #containerRetried = new Set();
 
   /** @type {AbortController | null} */
   #abort = null;
@@ -149,7 +142,7 @@ export class MediaInfoController {
     const names = boundedNames(Array.isArray(detail?.names) ? detail.names : []);
     if (names.length > 0) {
       // Preparation only; see the class comment.
-      void this.#post("/api/metadata/identify", { names, kindHint: null, language: METADATA_LANGUAGE, ...this.#evidence() });
+      void this.#identifyPreparation(this.#selection, { names, kindHint: null, language: METADATA_LANGUAGE, ...this.#evidence() });
     }
     this.#selectionNames = names;
   };
@@ -157,32 +150,31 @@ export class MediaInfoController {
   /** @param {Event} event */
   #onSubtitleEvidence = (event) => {
     const detail = event instanceof CustomEvent ? event.detail : null;
-    if (!this.#releaseRequest || !this.#filesByIndex.has(detail?.fileIndex) || this.#work || this.#subtitleRetried) return;
+    if (!this.#releaseRequest || !this.#filesByIndex.has(detail?.fileIndex) || this.#hashIdentityAccepted) return;
     const evidence = subtitleEvidenceOf(detail?.vtt, this.#releaseRequest.kindHint);
     if (!evidence) return;
     const previous = this.#subtitleEvidence ?? { titles: [], years: [] };
-    this.#subtitleEvidence = {
+    const merged = {
       titles: [...new Set([...previous.titles, ...evidence.titles])].slice(0, 4),
       years: [...new Set([...previous.years, ...evidence.years])].slice(0, 4)
     };
-    this.#retryWithSubtitles();
-  };
-
-  #retryWithSubtitles() {
-    if (this.#releaseStatus !== "not-found" || !this.#subtitleEvidence || this.#subtitleRetried) return;
-    this.#subtitleRetried = true;
-    void this.#identifyRelease(this.#selection, { ...this.#releaseRequest, subtitleEvidence: this.#subtitleEvidence });
+    if (JSON.stringify(merged) === JSON.stringify(previous)) return;
+    this.#subtitleEvidence = merged;
+    void this.#identifyRelease(this.#selection, this.#releaseRequest);
   }
 
   #onProbed = event => {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (detail?.selection !== this.#selection || !this.#filesByIndex.has(detail?.fileIndex) ||
         !Number.isFinite(detail?.durationSeconds) || detail.durationSeconds <= 0) return;
+    const oldDuration = this.#durations.get(detail.fileIndex);
+    const oldLanguages = this.#audioLanguages.get(detail.fileIndex) ?? [];
     this.#durations.set(detail.fileIndex, detail.durationSeconds);
     if (Array.isArray(detail.audioLanguages)) {
       this.#audioLanguages.set(detail.fileIndex, detail.audioLanguages.filter((code) => typeof code === "string").slice(0, 16));
     }
-    this.#retryWithDuration();
+    const nextLanguages = this.#audioLanguages.get(detail.fileIndex) ?? [];
+    if (oldDuration !== detail.durationSeconds || JSON.stringify(oldLanguages) !== JSON.stringify(nextLanguages)) this.#retryWithDuration();
   };
 
   /**
@@ -215,6 +207,8 @@ export class MediaInfoController {
       ...(this.#createdAt ? { torrentCreatedAt: this.#createdAt } : {}),
       ...(episodeNumbers.length > 0 ? { episodeNumbers } : {}),
       ...(audioLanguages.length > 0 ? { audioLanguages } : {}),
+      ...(fileIndex !== undefined && this.#durations.has(fileIndex) ? { durationSeconds: this.#durations.get(fileIndex) } : {}),
+      ...(this.#subtitleEvidence ? { subtitleEvidence: this.#subtitleEvidence } : {}),
       ...(record ? { record: { type: record.type, id: record.id, ...(record.kind ? { kind: record.kind } : {}) } } : {})
     };
   }
@@ -225,18 +219,13 @@ export class MediaInfoController {
     const fileIndex = detail?.fileIndex;
     if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !this.#filesByIndex.has(fileIndex) ||
         !detail.container || typeof detail.container !== "object") return;
-    this.#keepContainer(fileIndex, detail.container);
-    if (this.#containerRetried.has(fileIndex)) return;
-    this.#containerRetried.add(fileIndex);
-    // Asked again only where the names did not establish the work; asked with
-    // what the file states, the server also keeps it for the next viewer.
+    const changed = this.#keepContainer(fileIndex, detail.container);
+    if (!changed) return;
     if (shapeOf(this.#contents) === "undetermined") {
-      if (!this.#pictures[String(fileIndex)]) {
-        this.#askedPictures.delete(fileIndex);
-        void this.#identifyPicture(this.#selection, fileIndex);
-        return;
-      }
-    } else if (this.#releaseRequest && !this.#work && this.#itemsByIndex.has(fileIndex)) {
+      this.#askedPictures.delete(fileIndex);
+      void this.#identifyPicture(this.#selection, fileIndex);
+      return;
+    } else if (this.#releaseRequest && !this.#hashIdentityAccepted && this.#itemsByIndex.has(fileIndex)) {
       void this.#identifyRelease(this.#selection, this.#releaseRequest);
       return;
     }
@@ -262,6 +251,7 @@ export class MediaInfoController {
    * @param {object} container
    */
   #keepContainer(fileIndex, container) {
+    const changed = JSON.stringify(this.#containers.get(fileIndex)) !== JSON.stringify(container);
     this.#containers.set(fileIndex, container);
     const key = String(fileIndex);
     const stated = containerEpisode(container, this.#itemsByIndex.get(fileIndex)?.episode);
@@ -273,6 +263,7 @@ export class MediaInfoController {
       console.info(`[media-info] file ${fileIndex} states the year ${container.year}, the work shown has ${work.year}`);
     }
     this.#publish();
+    return changed;
   }
 
   /**
@@ -296,18 +287,18 @@ export class MediaInfoController {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const fileIndex = detail?.fileIndex;
     if (detail?.selection !== this.#selection || !Number.isInteger(fileIndex) || !this.#filesByIndex.has(fileIndex)) return;
+    const previous = this.#fingerprints.get(fileIndex);
+    if (previous?.hash === detail.fingerprint?.hash && previous?.size === detail.fingerprint?.size) return;
     this.#fingerprints.set(fileIndex, detail.fingerprint);
     this.#publish();
-    if (this.#fingerprintRetried.has(fileIndex)) return;
-    this.#fingerprintRetried.add(fileIndex);
+    if (this.#hashIdentityAccepted) return;
     if (shapeOf(this.#contents) === "undetermined") {
-      if (this.#pictures[String(fileIndex)]) return;
       this.#askedPictures.delete(fileIndex);
       void this.#identifyPicture(this.#selection, fileIndex);
       return;
     }
     const [item] = this.#contents?.items ?? [];
-    if (!this.#releaseRequest || this.#work || item?.fileIndex !== fileIndex) return;
+    if (!this.#releaseRequest || item?.fileIndex !== fileIndex) return;
     void this.#identifyRelease(this.#selection, this.#releaseRequest);
   };
 
@@ -331,14 +322,16 @@ export class MediaInfoController {
   };
 
   async #identifyHashIdentity(selection, fileIndex, record) {
-    const answer = await this.#post("/api/metadata/identify", {
+    const body = {
       ...this.#releaseRequest,
       ...this.#evidence(fileIndex),
       record,
       hashIdentity: true,
       language: METADATA_LANGUAGE,
       ...(this.#durations.has(fileIndex) ? { durationSeconds: this.#durations.get(fileIndex) } : {})
-    });
+    };
+    const answer = await this.#post("/api/metadata/identify", body);
+    if (selection === this.#selection) this.#rememberIdentification("hash-identity", fileIndex, body, answer);
     if (selection !== this.#selection || answer?.status !== "identified") return;
     const work = answer.work?.normalized ?? answer.work;
     if (shapeOf(this.#contents) === "series" && !["series", "tv"].includes(work?.kind)) return;
@@ -366,15 +359,8 @@ export class MediaInfoController {
    * or an episode's, tells such works apart. The answer may change the card.
    */
   #retryWithDuration() {
-    const chosenAmong = (this.#work?.sources?.tmdb ?? this.#work)?.identification === "scored";
-    if (!this.#releaseRequest || (this.#work && !chosenAmong) || this.#durationRetried ||
-        !["single", "series"].includes(shapeOf(this.#contents)) ||
-        !(chosenAmong || ["ambiguous", "undetermined", "unavailable", "not-found"].includes(this.#releaseStatus))) return;
-    const item = (this.#contents.items ?? []).find((one) => this.#durations.has(one.fileIndex));
-    const durationSeconds = this.#durations.get(item?.fileIndex);
-    if (!durationSeconds) return;
-    this.#durationRetried = true;
-    void this.#identifyRelease(this.#selection, { ...this.#releaseRequest, durationSeconds });
+    if (!this.#releaseRequest || this.#hashIdentityAccepted || !["single", "series"].includes(shapeOf(this.#contents))) return;
+    void this.#identifyRelease(this.#selection, this.#releaseRequest);
   }
 
   #onContents = (event) => {
@@ -436,12 +422,11 @@ export class MediaInfoController {
     this.#selection = Number.isInteger(selection) ? selection : this.#selection + 1;
     this.#selectionNames = [];
     this.#releaseRequest = null;
-    this.#releaseStatus = null;
     this.#subtitleEvidence = null;
-    this.#subtitleRetried = false;
     this.#releaseSequence += 1;
     this.#durations = new Map();
-    this.#durationRetried = false;
+    this.#identificationAttempts = [];
+    this.#databaseSearches = new Map();
     this.#audioLanguages = new Map();
     this.#createdAt = null;
     this.#record = null;
@@ -450,11 +435,9 @@ export class MediaInfoController {
     this.#fingerprints = new Map();
     this.#hashIdentityRequests = new Set();
     this.#hashIdentityAccepted = false;
-    this.#fingerprintRetried = new Set();
     this.#containers = new Map();
     for (const { url } of this.#covers.values()) URL.revokeObjectURL(url);
     this.#covers = new Map();
-    this.#containerRetried = new Set();
     this.#contents = null;
     this.#filesByIndex = new Map();
     this.#itemsByIndex = new Map();
@@ -479,13 +462,21 @@ export class MediaInfoController {
     // A series is one work: what any of its episodes states (the series' own
     // title, its season) is evidence for all of them.
     const stating = single ?? [...this.#containers.keys()].find((index) => this.#itemsByIndex.has(index)) ?? firstItem?.fileIndex;
-    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(stating) });
+    const body = { ...request, language: METADATA_LANGUAGE, ...this.#evidence(stating) };
+    const answer = await this.#post("/api/metadata/identify", body);
+    if (selection === this.#selection) this.#rememberIdentification("release", stating, body, answer);
     if (selection !== this.#selection || sequence !== this.#releaseSequence) return;
-    this.#takeKept(stating, answer);
-    this.#releaseStatus = answer?.status ?? null;
+    if (this.#takeKept(stating, answer)) {
+      void this.#identifyRelease(selection, request);
+      return;
+    }
     if (answer?.status !== "identified") {
-      this.#retryWithDuration();
-      this.#retryWithSubtitles();
+      if (answer?.status === "not-found" && answer.ranked?.length > 0 && answer.ranked.every(candidate => candidate.contradiction)) {
+        this.#work = null;
+        this.#seasons = {};
+        this.#episodes = Object.fromEntries(Object.entries(this.#episodes).filter(([, episode]) => episode?.source !== "tmdb"));
+        this.#publish();
+      }
       return;
     }
     // A series that the service identifies as a film is a contradiction, not
@@ -515,7 +506,6 @@ export class MediaInfoController {
       }
     }
     this.#publish();
-    this.#retryWithDuration();
     for (const fileIndex of this.#wanted) {
       this.#askSeasonOf(fileIndex);
     }
@@ -530,8 +520,8 @@ export class MediaInfoController {
    * @param {{ container?: object | null } | null} answer
    */
   #takeKept(fileIndex, answer) {
-    if (!Number.isInteger(fileIndex) || !answer?.container || this.#containers.has(fileIndex)) return;
-    this.#keepContainer(fileIndex, answer.container);
+    if (!Number.isInteger(fileIndex) || !answer?.container || this.#containers.has(fileIndex)) return false;
+    return this.#keepContainer(fileIndex, answer.container);
   }
 
   /**
@@ -547,9 +537,15 @@ export class MediaInfoController {
     if (request.names.length === 0) {
       return;
     }
-    const answer = await this.#post("/api/metadata/identify", { ...request, language: METADATA_LANGUAGE, ...this.#evidence(fileIndex) });
+    const body = { ...request, language: METADATA_LANGUAGE, ...this.#evidence(fileIndex) };
+    const answer = await this.#post("/api/metadata/identify", body);
+    if (selection === this.#selection) this.#rememberIdentification("picture", fileIndex, body, answer);
     if (selection !== this.#selection) return;
-    this.#takeKept(fileIndex, answer);
+    if (this.#takeKept(fileIndex, answer)) {
+      this.#askedPictures.delete(fileIndex);
+      void this.#identifyPicture(selection, fileIndex);
+      return;
+    }
     if (answer?.status !== "identified") {
       return;
     }
@@ -629,6 +625,23 @@ export class MediaInfoController {
         detail: {
           selection: this.#selection,
           work: this.#work,
+          identification: {
+            sources: {
+              selectionNames: [...this.#selectionNames],
+              contents: this.#contents,
+              files: Object.fromEntries(this.#filesByIndex),
+              torrentCreatedAt: this.#createdAt,
+              category: this.#category,
+              containers: Object.fromEntries(this.#containers),
+              fingerprints: Object.fromEntries(this.#fingerprints),
+              durations: Object.fromEntries(this.#durations),
+              audioLanguages: Object.fromEntries(this.#audioLanguages),
+              subtitleEvidence: this.#subtitleEvidence
+            },
+            normalized: this.#work?.normalized ?? this.#work ?? null,
+            databaseSearches: [...this.#databaseSearches.values()],
+            attempts: [...this.#identificationAttempts]
+          },
           seasons: { ...this.#seasons },
           episodes: { ...this.#episodes },
           pictures: { ...this.#pictures },
@@ -643,6 +656,35 @@ export class MediaInfoController {
         }
       })
     );
+  }
+
+  async #identifyPreparation(selection, body) {
+    const answer = await this.#post("/api/metadata/identify", body);
+    if (selection !== this.#selection) return;
+    this.#rememberIdentification("preparation", undefined, body, answer);
+  }
+
+  #rememberIdentification(phase, fileIndex, request, answer) {
+    const searchKeys = [];
+    for (const search of answer?.searches ?? []) {
+      const key = `${search.provider ?? "unknown"}|${search.kind ?? ""}|${search.query ?? ""}`;
+      this.#databaseSearches.set(key, search);
+      searchKeys.push(key);
+    }
+    this.#identificationAttempts.push({
+      phase,
+      fileIndex: Number.isInteger(fileIndex) ? fileIndex : null,
+      request: JSON.parse(JSON.stringify(request)),
+      status: answer?.status ?? "unavailable",
+      normalized: answer?.work?.normalized ?? answer?.work ?? null,
+      databaseRecords: answer?.work?.sources ?? {},
+      ranked: answer?.ranked ?? [],
+      searchKeys,
+      searches: answer?.searches ?? []
+    });
+    if (this.#identificationAttempts.length > 16) this.#identificationAttempts.shift();
+    if (this.#databaseSearches.size > 128) this.#databaseSearches.delete(this.#databaseSearches.keys().next().value);
+    this.#publish();
   }
 
   /**

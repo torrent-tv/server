@@ -110,6 +110,25 @@ test("a search is cached per language, and a repeated question asks nothing", as
   assert.ok(source.asked.length > afterFirst);
 });
 
+test("identification retains bounded database search results and scores a container item year", async () => {
+  const source = fakeSource({ "movie|A Nightmare on Elm Street": [
+    { id: 377, name: "A Nightmare on Elm Street", year: 1984 },
+    { id: 23437, name: "A Nightmare on Elm Street", year: 2010 }
+  ] }, { works: { "movie|377": { runtimeSeconds: 5460 }, "movie|23437": { runtimeSeconds: 6600 } } });
+  const answer = await service(source).identify({
+    names: ["A.Nightmare.on.Elm.Street"], kindHint: null, statedYears: [1984], durationSeconds: 5479, language: "en-US"
+  });
+  assert.equal(answer.work.tmdbId, 377);
+  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 23437).contradiction, "year-mismatch");
+  assert.deepEqual(answer.searches.find(search => search.kind === "movie"), {
+    provider: "tmdb", kind: "movie", query: "a nightmare on elm street", status: "complete", totalResults: 2, truncated: false,
+    results: [
+      { id: 377, name: "A Nightmare on Elm Street", originalName: "A Nightmare on Elm Street", year: 1984 },
+      { id: 23437, name: "A Nightmare on Elm Street", originalName: "A Nightmare on Elm Street", year: 2010 }
+    ]
+  });
+});
+
 test("a transliterated title is identified by the provider's alternative titles", async () => {
   const source = fakeSource(
     { "movie|Trudno byt Bogom": [{ id: 110402, name: "Hard to Be a God", year: 2014 }] },

@@ -198,8 +198,121 @@ test("an answer for a replaced choice of release changes nothing on screen", asy
   assert.equal(published.at(-1), null);
 });
 
+test("late container and duration evidence rerun a completed card while preserving source facts and database searches", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  const published = [];
+  target.addEventListener(MEDIA_INFO_EVENTS.CHANGED, event => published.push(event.detail));
+  const movie = { kind: "movie", tmdbId: 377, title: "A Nightmare on Elm Street", year: 1984 };
+  const movieSearch = { provider: "tmdb", kind: "movie", query: "a nightmare on elm street", status: "complete", totalResults: 1, truncated: false,
+    results: [{ id: 377, name: movie.title, originalName: movie.title, year: 1984 }] };
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["A.Nightmare.on.Elm.Street.720p.rus.LostFilm.TV.mp4"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, {
+    selection: 1,
+    contents: { name: "A.Nightmare.on.Elm.Street.720p.rus.LostFilm.TV.mp4", infoHash: "0123456789abcdef0123456789abcdef01234567", shape: "single", items: [{ fileIndex: 0 }] },
+    files: [{ index: 0, relativePath: "A.Nightmare.on.Elm.Street.720p.rus.LostFilm.TV.mp4" }]
+  });
+  pending[0].resolve(Response.json({ status: "identified", work: movie, searches: [movieSearch] }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(published.at(-1).work, null, "the preparation is retained but does not identify the pictures before their shape is known");
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "tv", tmdbId: 25879, title: "A Nightmare on Elm Street: Real Nightmares", identification: "prefix" } }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(published.at(-1).work.tmdbId, 25879);
 
-test("subtitle metadata retries only after not-found and only once", async () => {
+  const container = { title: "Кошмар на улице Вязов", seriesTitle: "Кошмар на улице Вязов", itemYear: 1984, season: 0, episode: 0 };
+  send(MEDIA_INFO_EVENTS.CONTAINER, { selection: 1, fileIndex: 0, container });
+  assert.equal(pending.length, 3, "new container evidence re-identifies an already shown work");
+  assert.deepEqual(pending[2].body.container, container);
+  assert.equal(pending[2].body.source.fileIndex, 0);
+  pending[2].resolve(Response.json({ status: "identified", work: movie, searches: [movieSearch], ranked: [{ tmdbId: 377, year: 1984, score: 40 }] }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(published.at(-1).work.tmdbId, 377);
+
+  send(MEDIA_INFO_EVENTS.PROBED, { selection: 1, fileIndex: 0, durationSeconds: 5479, audioLanguages: ["rus"] });
+  assert.equal(pending.length, 4, "measured duration re-identifies an already shown work");
+  assert.equal(pending[3].body.durationSeconds, 5479);
+  assert.deepEqual(pending[3].body.container, container);
+  pending[3].resolve(Response.json({ status: "identified", work: movie, searches: [movieSearch] }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  const identification = published.at(-1).identification;
+  assert.equal(identification.sources.containers[0].itemYear, 1984);
+  assert.equal(identification.sources.durations[0], 5479);
+  assert.equal(identification.normalized.tmdbId, 377);
+  assert.equal(identification.databaseSearches[0].results[0].id, 377);
+  assert.ok(identification.attempts.some(attempt => attempt.phase === "preparation"));
+  assert.ok(identification.attempts.some(attempt => attempt.ranked.length === 1));
+});
+
+test("container facts restored by the server trigger a fresh identification before the card is updated", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  const published = [];
+  target.addEventListener(MEDIA_INFO_EVENTS.CHANGED, event => published.push(event.detail));
+  const container = { title: "A Nightmare on Elm Street", itemYear: 1984, season: 0, episode: 0 };
+
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["A.Nightmare.on.Elm.Street.mkv"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, {
+    selection: 1,
+    contents: { name: "A.Nightmare.on.Elm.Street.mkv", infoHash: "0123456789abcdef0123456789abcdef01234567", shape: "single", items: [{ fileIndex: 0 }] },
+    files: [{ index: 0, relativePath: "A.Nightmare.on.Elm.Street.mkv" }]
+  });
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "tv", tmdbId: 25879, title: "Wrong result" }, container }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(pending.length, 3);
+  assert.deepEqual(pending[2].body.container, container);
+  assert.equal(published.at(-1).work, null, "the answer without restored container evidence is not shown");
+  pending[2].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 377, title: "A Nightmare on Elm Street" } }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(published.at(-1).work.tmdbId, 377);
+  assert.equal(published.at(-1).identification.sources.containers[0].itemYear, 1984);
+});
+
+test("a new evidence result that rejects every candidate clears the stale work from the card", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  const published = [];
+  target.addEventListener(MEDIA_INFO_EVENTS.CHANGED, event => published.push(event.detail));
+
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["A.Nightmare.on.Elm.Street.mkv"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, {
+    selection: 1,
+    contents: { name: "A.Nightmare.on.Elm.Street.mkv", shape: "single", items: [{ fileIndex: 0 }] },
+    files: [{ index: 0, relativePath: "A.Nightmare.on.Elm.Street.mkv" }]
+  });
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 23437, title: "Wrong result" } }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(published.at(-1).work.tmdbId, 23437);
+
+  send(MEDIA_INFO_EVENTS.PROBED, { selection: 1, fileIndex: 0, durationSeconds: 5479 });
+  pending[2].resolve(Response.json({ status: "not-found", ranked: [{ tmdbId: 23437, contradiction: "duration-mismatch" }] }));
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(published.at(-1).work, null);
+});
+
+
+test("subtitle evidence arriving after a work is found reruns identification and is retained", async () => {
   const target = new EventTarget();
   globalThis.document = target;
   const pending = [];
@@ -211,12 +324,12 @@ test("subtitle metadata retries only after not-found and only once", async () =>
   send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Princessa.Mononoke.mkv"] });
   send(MEDIA_INFO_EVENTS.CONTENTS, { selection: 1, contents: { name: "Princessa.Mononoke.mkv", shape: "single", items: [{ fileIndex: 0, episode: null }] }, files: [{ index: 0, relativePath: "Princessa.Mononoke.mkv" }] });
   const vtt = `WEBVTT\n\nNOTE TORRENT-TV-METADATA\n${JSON.stringify({ titles: ["Princess Mononoke"], years: [1997] })}\n\n`;
-  send(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, { fileIndex: 0, vtt });
-  assert.equal(pending.length, 2, "subtitle arrival does not race the first identification");
-  pending[1].resolve(Response.json({ status: "not-found" }));
+  pending[1].resolve(Response.json({ status: "identified", work: { kind: "movie", tmdbId: 1, title: "Wrong" } }));
   await new Promise(resolve => setImmediate(resolve));
+  send(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, { fileIndex: 0, vtt });
   assert.equal(pending.length, 3);
   assert.deepEqual(pending[2].body.subtitleEvidence, { titles: ["Princess Mononoke"], years: [1997] });
+  assert.equal(pending[2].body.durationSeconds, undefined);
   send(MEDIA_INFO_EVENTS.SUBTITLE_EVIDENCE, { fileIndex: 0, vtt });
   assert.equal(pending.length, 3);
   send(MEDIA_INFO_EVENTS.SELECTED, { selection: 2, names: ["Another.2000.mkv"] });
@@ -280,7 +393,7 @@ test("the category a torrent states is sent with every request, and the hash ask
   assert.equal(pending[3].body.category, undefined, "the next choice does not inherit the category");
 });
 
-test("a release that is already identified is not asked again when its hash arrives", async () => {
+test("a release is identified again when its fingerprint arrives after the first answer", async () => {
   const target = new EventTarget();
   globalThis.document = target;
   const pending = [];
@@ -297,7 +410,8 @@ test("a release that is already identified is not asked again when its hash arri
   await new Promise(resolve => setImmediate(resolve));
   const fingerprint = { hash: "8e245d9679d31e12", size: 12909756 };
   send(MEDIA_INFO_EVENTS.FINGERPRINT, { selection: 1, fileIndex: 0, fingerprint });
-  assert.equal(pending.length, 2);
+  assert.equal(pending.length, 3);
+  assert.deepEqual(pending[2].body.fingerprint, fingerprint);
   assert.deepEqual(published.at(-1).fingerprints, { 0: fingerprint });
 });
 

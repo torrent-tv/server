@@ -14,6 +14,7 @@ import { MetadataService } from "../services/metadata/MetadataService.js";
 import { MetadataCache } from "../services/metadata/MetadataCache.js";
 import { SharedFetches } from "../services/metadata/SharedFetches.js";
 import { MetadataUnavailableError } from "../services/metadata/RequestGate.js";
+import { ContainerMetadata } from "../services/metadata/ContainerMetadata.js";
 import { ContainerRecords, fileOf } from "../services/metadata/ContainerRecords.js";
 import { handleApiMetadataIdentifyPost } from "../routes/api/metadata/identify/post.js";
 import { handleApiMetadataContainerPost } from "../routes/api/metadata/container/post.js";
@@ -142,6 +143,16 @@ test("a hash identity lookup is rejected when its year or runtime conflicts with
 test("the page sends only what identification reads", () => {
   assert.deepEqual(containerEvidence({ title: "A", trackTitles: ["RUS"], chapterTitles: ["x"], cover: { type: "image/jpeg" }, outsideEdges: false, year: null }), { title: "A" });
   assert.equal(containerEvidence({ trackTitles: ["RUS"] }), null);
+});
+
+test("placeholder series tags do not force a film into TV search, and item year remains work evidence", () => {
+  const provider = new ContainerMetadata();
+  const facts = { title: "Кошмар на улице Вязов", seriesTitle: "Кошмар на улице Вязов", itemYear: 1984, season: 0, episode: 0 };
+  const evidence = provider.evidenceFrom({ container: facts });
+  assert.equal(evidence.kindHint, undefined);
+  assert.deepEqual(evidence.statedYears, [1984]);
+  assert.equal(provider.fields(facts).kind, undefined);
+  assert.equal(provider.fields(facts).year, 1984);
 });
 
 test("an episode the file states fills only when it states its title and a number", () => {
@@ -284,7 +295,7 @@ test("what a file states is kept even when the work was established without it",
   assert.equal((await ask({ source: { infoHash: INFO_HASH, fileIndex: 0 }, container: "x" })).status, 400);
 });
 
-test("the page tells the server to keep what a file states when its work is already established", async () => {
+test("new container evidence re-identifies the work and keeps the source facts", async () => {
   const target = new EventTarget();
   globalThis.document = target;
   const pending = [];
@@ -300,6 +311,7 @@ test("the page tells the server to keep what a file states when its work is alre
   await new Promise((resolve) => setImmediate(resolve));
   send(MEDIA_INFO_EVENTS.CONTAINER, { selection: 1, fileIndex: 0, container: { segmentTitle: "Mortal.Kombat.2021.BDRip-1080p", trackTitles: ["RUS"] } });
   assert.equal(pending.length, 3);
-  assert.equal(pending[2].url, "/api/metadata/container");
-  assert.deepEqual(pending[2].body, { source: { infoHash: INFO_HASH, fileIndex: 0 }, container: { segmentTitle: "Mortal.Kombat.2021.BDRip-1080p" } });
+  assert.equal(pending[2].url, "/api/metadata/identify");
+  assert.equal(pending[2].body.container.segmentTitle, "Mortal.Kombat.2021.BDRip-1080p");
+  assert.deepEqual(pending[2].body.source, { infoHash: INFO_HASH, fileIndex: 0 });
 });

@@ -56,6 +56,7 @@ test("not-found consults AniList and can identify an anime without inventing sea
   assert.equal(result.work.sources.anilist.id, 1);
   assert.deepEqual(result.work.normalized.seasons, []);
   assert.equal(result.work.sources.tmdb, undefined);
+  assert.equal(result.searches.find(search => search.provider === "anilist").results[0].id, 1);
 });
 
 test("a year-bearing AniList synonym identifies the supplied 2026 series", async () => {
