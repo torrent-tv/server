@@ -1683,7 +1683,7 @@ export class Loading extends StateDerivedView {
       this.#cancelRequested = false;
       await run();
     }, () => {
-      if (traceId && waitTrace.current?.wait === traceId) waitTrace.finish("cancelled");
+      if (traceId && waitTrace.current?.wait === traceId) waitTrace.event("preparation-reset");
       this.#cancelRequested = true;
       this.#playbackEpoch += 1;
       this.#qualityPreparation?.abort();
@@ -1694,7 +1694,7 @@ export class Loading extends StateDerivedView {
         this.#subtitlePlayback.clear();
       }
     }).catch((error) => {
-      if (traceId && waitTrace.current?.wait === traceId) waitTrace.finish(this.#isAbortError(error) ? "cancelled" : "error", {
+      if (!this.#isAbortError(error) && traceId && waitTrace.current?.wait === traceId) waitTrace.finish("error", {
         error: String(error?.message ?? error) });
       if (this.#isAbortError(error)) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -2087,6 +2087,7 @@ export class Loading extends StateDerivedView {
   }
 
   #onCancelClick = () => {
+    waitTrace.finish("cancelled-by-viewer");
     this.#qualityPreparation?.abort();
     this.#audioPreparation?.abort();
     this.#playbackTasks.invalidate();
