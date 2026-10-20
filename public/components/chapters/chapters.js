@@ -78,11 +78,11 @@ export class Chapters {
 
   #statusMessage() {
     if (!this.#snapshot) return "";
-    if (this.#snapshot.state === "pending" || this.#snapshot.complete === false) return "Reading chapters…";
+    if (this.#snapshot.state === "error") return "Chapter information is unavailable.";
     if (this.#snapshot.state === "unsupported" || this.#snapshot.capability === "unsupported") {
       return "Chapter information is not supported by this proxy.";
     }
-    if (this.#snapshot.state === "error") return "Chapter information is unavailable.";
+    if (this.#snapshot.state === "pending" || this.#snapshot.complete === false) return "Reading chapters…";
     return "";
   }
 
@@ -134,3 +134,4 @@ function bootstrapChapters() {
 
 if (document.readyState !== "loading") bootstrapChapters();
 else document.addEventListener("DOMContentLoaded", bootstrapChapters, { once: true });
+

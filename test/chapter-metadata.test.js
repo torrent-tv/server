@@ -112,3 +112,17 @@ test("a transport error remains recoverable", async () => {
   failed = false; await metadata.refresh();
   assert.equal(metadata.snapshot.state, "available");
 });
+
+test("a request that never receives a response becomes a recoverable error", async () => {
+  let requestSignal;
+  const metadata = new ChapterMetadata(() => {}, { requestTimeoutMs: 10 });
+  metadata.select({ sourceKey: "source", fileIndex: 0, transport: { fetch: (_, options) => {
+    requestSignal = options.signal;
+    return new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+  } } });
+  await metadata.reading;
+  assert.equal(requestSignal.aborted, true);
+  assert.equal(metadata.snapshot.state, "error");
+  assert.equal(metadata.snapshot.complete, false);
+});
+
