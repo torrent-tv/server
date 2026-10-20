@@ -8,6 +8,7 @@ import { MetadataCache } from "../services/metadata/MetadataCache.js";
 import { ProviderHttp, retryAt } from "../services/subtitles/ProviderHttp.js";
 import { subtitleVtt } from "../services/subtitles/convert.js";
 import { filterSubtitleOffers, providerSubtitleLabel, providerSubtitleQuery } from "../public/domain/provider-subtitles.js";
+import { ProviderSubtitles } from "../public/components/loading/ProviderSubtitles.js";
 import { RequestGate } from "../services/metadata/RequestGate.js";
 
 const query = { kind: "movie", tmdbId: 4935, anilistId: null };
@@ -98,6 +99,75 @@ test("a hash match makes the provider's catalogue identity visible for checking"
   assert.match(label, /file hash match/u);
   assert.match(label, /catalogue: Cowboy Bebop \(2021\)/u);
   assert.match(providerSubtitleLabel({ provider: "opensubtitles", language: "en", eligibility: "unknown" }), /version unverified/u);
+});
+
+test("an exact hash identity is published after discovery returns without waiting in the caller", async () => {
+  const target = new EventTarget();
+  const previousDocument = globalThis.document;
+  const previousFetch = globalThis.fetch;
+  globalThis.document = target;
+  let resolveSearch;
+  globalThis.fetch = () => new Promise(resolve => { resolveSearch = resolve; });
+  try {
+    const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+    const fingerprint = { hash: "0123456789abcdef", size: 200000 };
+    const found = [];
+    target.addEventListener(MEDIA_INFO_EVENTS.HASH_IDENTITY, event => found.push(event.detail));
+    const subtitles = new ProviderSubtitles(() => {});
+    target.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: {
+      selection: 4, fingerprints: { 0: fingerprint }, files: { 0: { relativePath: "Film.2025.mkv" } }
+    } }));
+    assert.equal(subtitles.start(0), undefined);
+    assert.deepEqual(found, [], "starting the subtitle query does not wait for OpenSubtitles");
+    resolveSearch(Response.json({ providers: [{ provider: "opensubtitles", status: "complete", items: [
+      { provider: "opensubtitles", language: "en", hashMatch: true, eligibility: "suitable",
+        identity: { kind: "movie", tmdbId: 1062722, title: "Film", year: 2025 } }
+    ] }] }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(found, [{ selection: 4, fileIndex: 0, identity: { kind: "movie", tmdbId: 1062722, title: "Film", year: 2025 } }]);
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("a known but potentially wrong metadata ID does not constrain the separate hash identity search", async () => {
+  const target = new EventTarget();
+  const previousDocument = globalThis.document;
+  const previousFetch = globalThis.fetch;
+  globalThis.document = target;
+  const searches = [];
+  globalThis.fetch = (url, init) => new Promise(resolve => searches.push({ url, body: JSON.parse(init.body), resolve }));
+  try {
+    const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+    const fingerprint = { hash: "0123456789abcdef", size: 200000 };
+    const found = [];
+    target.addEventListener(MEDIA_INFO_EVENTS.HASH_IDENTITY, event => found.push(event.detail));
+    const subtitles = new ProviderSubtitles(() => {});
+    target.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: {
+      selection: 5, work: { normalized: { kind: "movie" }, sources: { tmdb: { tmdbId: 377, identification: "scored" } } },
+      fingerprints: { 0: fingerprint }, files: { 0: { relativePath: "Film.2025.mkv" } }
+    } }));
+    subtitles.start(0);
+    assert.equal(searches.length, 2, "subtitle offers and identity evidence start independently");
+    assert.ok(searches.some(search => JSON.stringify(search.body).includes('"tmdbId":377')));
+    assert.ok(searches.some(search => JSON.stringify(search.body) === JSON.stringify({ fingerprint })));
+    const subtitleSearch = searches.find(search => search.body.tmdbId === 377);
+    subtitleSearch.resolve(Response.json({ providers: [{ provider: "opensubtitles", items: [
+      { provider: "opensubtitles", language: "en", hashMatch: true, identity: { kind: "movie", tmdbId: 377 } }
+    ] }] }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(found, [], "a TMDB-constrained subtitle result is not used as independent identity evidence");
+    const identitySearch = searches.find(search => search.body.tmdbId === undefined);
+    identitySearch.resolve(Response.json({ providers: [{ provider: "opensubtitles", items: [
+      { provider: "opensubtitles", language: "en", hashMatch: true, identity: { kind: "movie", tmdbId: 23437 } }
+    ] }] }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(found.map(answer => answer.identity.tmdbId), [23437]);
+  } finally {
+    globalThis.document = previousDocument;
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test("subtitle eligibility filters incompatible offers per language and keeps unknown fallback", () => {

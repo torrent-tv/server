@@ -7,7 +7,8 @@
  *         category?: "adult" | null, fingerprint?: { hash: string, size: number },
  *         container?: object | null, source?: { infoHash: string, fileIndex: number } | null,
  *         durationSeconds?: number, torrentCreatedAt?: number, episodeNumbers?: { season: number | null, episode }[],
- *         audioLanguages?: string[], record?: { type: "tmdb" | "imdb" | "anilist", id: string, kind?: "movie" | "tv" } }
+ *         audioLanguages?: string[], record?: { type: "tmdb" | "imdb" | "anilist", id: string, kind?: "movie" | "tv" },
+ *         hashIdentity?: boolean }
  *
  * `record` is a work the page already knows (its address carries it): it is
  * looked up, not searched for. `torrentCreatedAt`, `episodeNumbers` and
@@ -74,6 +75,19 @@ function recordIds(record) {
   return null;
 }
 
+/** Reject an exact-hash catalogue link when it conflicts with a stated year or measured runtime. */
+function conflictsWithHashIdentity(answer, names, durationSeconds) {
+  const work = answer.work?.sources?.tmdb ?? answer.work?.normalized ?? answer.work;
+  const statedYears = names.map(name => parseReleaseName(name).years?.from).filter(Number.isInteger);
+  if (Number.isInteger(work?.year) && statedYears.length > 0 &&
+      Math.min(...statedYears.map(year => Math.abs(year - work.year))) > 1) return true;
+  const runtime = work?.runtimeSeconds;
+  if (Number.isFinite(durationSeconds) && durationSeconds > 0 && Number.isFinite(runtime) && runtime > 0) {
+    return Math.min(durationSeconds / runtime, runtime / durationSeconds) < 0.7;
+  }
+  return false;
+}
+
 /**
  * @param {import("fastify").FastifyRequest} req
  * @param {import("fastify").FastifyReply} reply
@@ -88,6 +102,12 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
   const record = recordIds(body.record);
   if (body.record != null && !record) {
     return reply.code(400).send({ error: "record must be { type: tmdb | imdb | anilist, id, kind?: movie | tv }; a tmdb record needs its kind." });
+  }
+  if (body.hashIdentity !== undefined && typeof body.hashIdentity !== "boolean") {
+    return reply.code(400).send({ error: "hashIdentity must be a boolean." });
+  }
+  if (body.hashIdentity === true && !record) {
+    return reply.code(400).send({ error: "hashIdentity requires a record ID." });
   }
   const names = body.names === undefined && record ? [] : Array.isArray(body.names) ? body.names : null;
   if (!names || names.length > MAX_NAMES || (names.length === 0 && !record)) {
@@ -168,7 +188,7 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
   if (!(Array.isArray(audioLanguages) && audioLanguages.length <= 16 && audioLanguages.every((code) => typeof code === "string" && /^[a-z]{2,3}$/u.test(code)))) {
     return reply.code(400).send({ error: "audioLanguages must hold at most 16 ISO 639 codes." });
   }
-  const answer = await withProviderContext(req, () => metadata.identify({
+  let answer = await withProviderContext(req, () => metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
     durationSeconds,
@@ -185,6 +205,9 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
     language: body.language,
     signal: signalOfRequest(reply)
   }));
+  if (body.hashIdentity === true && answer.status === "identified" && conflictsWithHashIdentity(answer, names, durationSeconds)) {
+    answer = { status: "not-found" };
+  }
   // Counts and the outcome only: the names themselves are not logged.
   withProviderContext(req, () => providerOutcome("metadata", "identify", { status: answer.status, names: names.length,
     container: statedContainer ? "stated" : container ? "kept" : null,

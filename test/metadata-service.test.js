@@ -131,15 +131,17 @@ test("without a stated year alternative titles still identify the work", async (
   assert.ok(source.asked.some((line) => line.startsWith("alternative|")));
 });
 
-test("First Blood is identified by its Rambo alias with missing or differing years", async () => {
-  for (const name of ["Rambo.First.Blood.1080p.rus.LostFilm.TV.mkv", "Rambo.First.Blood.2026.1080p.mkv"]) {
-    const source = fakeSource({ "movie|Rambo First Blood": [{ id: 1368, name: "First Blood", year: 1982 }] },
-      { alternative: { "movie|1368": ["Rambo: First Blood"] } });
-    const answer = await service(source).identify({ names: [name], kindHint: null, language: "en-US" });
-    assert.equal(answer.status, "identified");
-    assert.equal(answer.work.tmdbId, 1368);
-    assert.ok(source.asked.includes("alternative|movie|1368"));
-  }
+test("First Blood is identified by its Rambo alias when no year is stated, but a conflicting year is rejected", async () => {
+  const source = fakeSource({ "movie|Rambo First Blood": [{ id: 1368, name: "First Blood", year: 1982 }] },
+    { alternative: { "movie|1368": ["Rambo: First Blood"] } });
+  const metadata = service(source);
+  const withoutYear = await metadata.identify({ names: ["Rambo.First.Blood.1080p.rus.LostFilm.TV.mkv"], kindHint: null, language: "en-US" });
+  assert.equal(withoutYear.status, "identified");
+  assert.equal(withoutYear.work.tmdbId, 1368);
+  assert.ok(source.asked.includes("alternative|movie|1368"));
+
+  const withDifferentYear = await metadata.identify({ names: ["Rambo.First.Blood.2026.1080p.mkv"], kindHint: null, language: "en-US" });
+  assert.equal(withDifferentYear.status, "not-found");
 });
 
 test("duration distinguishes First Blood from the Rambo III record sharing its alias", async () => {

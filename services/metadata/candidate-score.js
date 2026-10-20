@@ -22,11 +22,15 @@
 import { normalizeTitle } from "./title.js";
 
 /**
- * Seed values preserve the existing title/year/runtime/episode/language
- * balance. All eight values remain provisional until the labelled survey is
- * fitted with `tools/metadata-survey/fit-weights.mjs` (torrent-tv/meta#172).
+ * Year and runtime dominate the score when the release states them. A year
+ * mismatch beyond one year, or a runtime below 70% of the measured duration,
+ * is also a contradiction and cannot identify a candidate. All values remain
+ * provisional until the labelled survey is fitted with
+ * `tools/metadata-survey/fit-weights.mjs` (torrent-tv/meta#172).
  */
-const WEIGHTS = Object.freeze({ title: 8, year: 2, runtime: 4, episodes: 2, russianTitle: 1, releaseCount: 1, episodeTitles: 1, language: 1 });
+const WEIGHTS = Object.freeze({ title: 8, year: 32, runtime: 24, episodes: 2, russianTitle: 1, releaseCount: 1, episodeTitles: 1, language: 1 });
+
+const MIN_RUNTIME_SHARE = 0.7;
 
 /** The share a title match gives, by how the candidate was found. */
 const TITLE_SHARE = Object.freeze({ exact: 1, prefix: 0.5, alternative: 0.5, episodes: 0 });
@@ -105,9 +109,16 @@ function episodeCountOf(record, season) {
  */
 function contradiction(candidate, record, evidence) {
   if (evidence.series && candidate.kind === "movie") return "film-for-episodes";
+  if (Number.isInteger(candidate.year) && evidence.statedYears?.length > 0 &&
+      Math.min(...evidence.statedYears.map(year => Math.abs(year - candidate.year))) > 1) return "year-mismatch";
   if (Number.isInteger(evidence.createdYear) && Number.isInteger(candidate.year) && candidate.year > evidence.createdYear) {
     return "after-torrent";
   }
+  const duration = evidence.durationSeconds;
+  const runtimes = record ? (candidate.kind === "movie" ? [record.runtimeSeconds] : record.episodeRuntimeSeconds ?? []) : [];
+  if (Number.isFinite(duration) && duration > 0 && runtimes.some(runtime => Number.isFinite(runtime) && runtime > 0) &&
+      Math.max(...runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0)
+        .map(runtime => Math.min(duration / runtime, runtime / duration))) < MIN_RUNTIME_SHARE) return "runtime-mismatch";
   for (const [season, highest] of evidence.highestEpisode ?? []) {
     const count = episodeCountOf(record, season);
     if (count !== null && highest > count) return "episode-beyond-season";

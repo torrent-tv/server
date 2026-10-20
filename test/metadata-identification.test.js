@@ -101,6 +101,28 @@ test("a remake is two candidates, and the stated year scores the right one first
   assert.equal(rankCandidates(identity.candidates, new Map(), {})[0].tmdbId, 1);
 });
 
+test("the stated year outweighs an exact-title advantage and a different year is a contradiction", () => {
+  const candidates = [
+    { kind: "movie", tmdbId: 1, title: "Title", year: 1984, titleMatch: "exact", order: 0 },
+    { kind: "movie", tmdbId: 2, title: "Title: Recut", year: 2025, titleMatch: "prefix", order: 1 }
+  ];
+  const ranked = rankCandidates(candidates, new Map(), { statedYears: [2025] });
+  assert.equal(ranked[0].tmdbId, 2);
+  assert.equal(ranked[1].contradiction, "year-mismatch");
+  assert.equal(rankCandidates(candidates, new Map(), { statedYears: [2024] })[0].tmdbId, 2, "a one-year catalogue difference remains eligible");
+});
+
+test("a runtime far below the measured file duration is a contradiction", () => {
+  const candidates = [
+    { kind: "movie", tmdbId: 1, title: "Title", year: 2025, titleMatch: "exact", order: 0 },
+    { kind: "movie", tmdbId: 2, title: "Title", year: 2025, titleMatch: "exact", order: 1 }
+  ];
+  const records = new Map([["movie:1", { runtimeSeconds: 3600 }], ["movie:2", { runtimeSeconds: 7200 }]]);
+  const ranked = rankCandidates(candidates, records, { durationSeconds: 7200 });
+  assert.equal(ranked[0].tmdbId, 2);
+  assert.equal(ranked[1].contradiction, "runtime-mismatch");
+});
+
 test("the score combines localized title, release count and exact episode-title evidence", () => {
   const candidates = [
     { kind: "tv", tmdbId: 1, title: "Drifters", year: 2016, titleMatch: "exact", order: 0 },
