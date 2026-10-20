@@ -1,4 +1,4 @@
-## Unreleased
+## 0.58.0
 
 - **New**: Measure browser HLS manifest, selected-playlist, remux, SourceBuffer creation, and per-stream append spans for startup trace reconciliation (#ttv-185).
 
