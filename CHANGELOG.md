@@ -1,4 +1,4 @@
-## Unreleased
+## 0.52.2
 
 - **Chore**: Add opt-in process boundary events for playback startup, torrent-file intake, requests, HLS loading and presentation validation (#ttv-185).
 
