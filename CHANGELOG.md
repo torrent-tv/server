@@ -1,4 +1,4 @@
-## Unreleased
+## 0.53.1
 
 - **Fix**: Hide the chapter control until the selected file has navigable chapters.
 
