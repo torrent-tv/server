@@ -7,9 +7,8 @@
  *
  * 1. **A candidate that contradicts a fact of the release is set aside**: a
  *    film offered for a release of numbered episodes, a work that started after
- *    the torrent was created, an episode number beyond the season's count.
- *    When every candidate contradicts something, the facts are not trusted over
- *    the search and all of them stay.
+ *    the torrent was created, an episode number beyond the season's count. If
+ *    every candidate contradicts something, no work is identified.
  * 2. **The rest are ranked by a score**: each feature gives a share from 0 to 1,
  *    an unknown feature gives 0 and takes nothing away, and the shares are
  *    weighted and added. A sum, not an order of features: an order lets a small
@@ -20,15 +19,14 @@
  * Pure: the records are fetched by the caller.
  */
 
+import { normalizeTitle } from "./title.js";
+
 /**
- * What each feature is worth. The title and year weights keep the ratio of
- * Jellyfin's `TmdbUtils.FindBestMatch` (exact title 8, whole-word prefix 4,
- * exact year 2, one year off 1), where any title match outranks any year match.
- * The runtime, episode and language weights are provisional: they are to be
- * derived from the labelled set of test releases (torrent-tv/meta#172) and are
- * replaced by its result.
+ * Seed values preserve the existing title/year/runtime/episode/language
+ * balance. All eight values remain provisional until the labelled survey is
+ * fitted with `tools/metadata-survey/fit-weights.mjs` (torrent-tv/meta#172).
  */
-const WEIGHTS = Object.freeze({ title: 8, year: 2, runtime: 4, episodes: 2, language: 1 });
+const WEIGHTS = Object.freeze({ title: 8, year: 2, runtime: 4, episodes: 2, russianTitle: 1, releaseCount: 1, episodeTitles: 1, language: 1 });
 
 /** The share a title match gives, by how the candidate was found. */
 const TITLE_SHARE = Object.freeze({ exact: 1, prefix: 0.5, alternative: 0.5, episodes: 0 });
@@ -64,6 +62,9 @@ const LANGUAGE_639_1 = Object.freeze({
  *   release; `null` for numbers that name no season (`Drifters - 01`), counted across every season.
  * @property {number | null} [durationSeconds] - One picture's measured duration.
  * @property {string[]} [audioLanguages] - ISO 639-2 or 639-1 codes of the audio tracks.
+ * @property {number} [releaseEpisodeCount] - Distinct numbered episodes in the release.
+ * @property {string[]} [episodeTitles] - Titles stated by episode files.
+ * @property {string[]} [russianTitles] - Russian title spellings stated by release names.
  */
 
 /**
@@ -118,9 +119,9 @@ function contradiction(candidate, record, evidence) {
  * Each feature's share for one candidate, from 0 to 1.
  *
  * @param {ScoredCandidate} candidate
- * @param {{ kind?: string, runtimeSeconds?: number | null, episodeRuntimeSeconds?: number[], seasons?: Array<{ number: number, episodeCount: number }>, originalLanguage?: string | null } | null} record
+ * @param {{ kind?: string, runtimeSeconds?: number | null, episodeRuntimeSeconds?: number[], seasons?: Array<{ number: number, episodeCount: number }>, originalLanguage?: string | null, russianTitle?: string, episodeTitles?: string[], totalEpisodeCount?: number | null } | null} record
  * @param {ReleaseEvidence} evidence
- * @returns {{ title: number, year: number, runtime: number, episodes: number, language: number }}
+ * @returns {{ title: number, year: number, runtime: number, episodes: number, russianTitle: number, releaseCount: number, episodeTitles: number, language: number }}
  */
 function shares(candidate, record, evidence) {
   const years = evidence.statedYears ?? [];
@@ -140,11 +141,24 @@ function shares(candidate, record, evidence) {
   });
   const original = record?.originalLanguage ? language639_1(record.originalLanguage) : "";
   const spoken = (evidence.audioLanguages ?? []).map(language639_1);
+  const normalizedRussian = (evidence.russianTitles ?? []).map(normalizeTitle);
+  const russianTitle = normalizeTitle(record?.russianTitle ?? "");
+  const releaseCount = Number.isFinite(evidence.releaseEpisodeCount) && Number.isFinite(record?.totalEpisodeCount) && evidence.releaseEpisodeCount > 0 && record.totalEpisodeCount > 0
+    ? Math.min(evidence.releaseEpisodeCount / record.totalEpisodeCount, record.totalEpisodeCount / evidence.releaseEpisodeCount)
+    : 0;
+  const episodeNames = (record?.episodeTitles ?? []).map(normalizeTitle);
+  const wantedEpisodeNames = (evidence.episodeTitles ?? []).map(normalizeTitle);
+  const episodeTitles = wantedEpisodeNames.length > 0
+    ? wantedEpisodeNames.filter((title) => episodeNames.includes(title)).length / wantedEpisodeNames.length
+    : 0;
   return {
     title: TITLE_SHARE[candidate.titleMatch] ?? 0,
     year: yearGap === 0 ? 1 : yearGap === 1 ? 0.5 : 0,
     runtime: closeness,
     episodes: fits ? 1 : 0,
+    russianTitle: russianTitle && normalizedRussian.includes(russianTitle) ? 1 : 0,
+    releaseCount,
+    episodeTitles,
     language: original && spoken.includes(original) ? 1 : 0
   };
 }
@@ -164,9 +178,6 @@ export function rankCandidates(candidates, records, evidence) {
     const score = Object.entries(WEIGHTS).reduce((sum, [feature, weight]) => sum + weight * parts[feature], 0);
     return { ...candidate, shares: parts, score, contradiction: contradiction(candidate, record, evidence) };
   });
-  const consistent = scored.filter((one) => one.contradiction === null);
-  const pool = consistent.length > 0 ? consistent : scored;
-  const rest = scored.filter((one) => !pool.includes(one));
   const byScore = (left, right) => right.score - left.score || left.order - right.order;
-  return [...pool.sort(byScore), ...rest.sort(byScore)];
+  return scored.sort((left, right) => (right.contradiction === null) - (left.contradiction === null) || byScore(left, right));
 }

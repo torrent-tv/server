@@ -192,7 +192,7 @@ test("a record the address names is looked up, not searched for", async () => {
   assert.equal(searched.length, 0);
   // An AniList id: the record, then the TMDB work of its title and year.
   const byAnilist = await new MetadataRegistry({ providers: [anilistFrom({ byId: { 21662: drifters2016 } }), tmdb] })
-    .identify({ names: ["Drifters"], kindHint: "tv", externalIds: { anilist: 21662 } });
+    .identify({ names: [], externalIds: { anilist: 21662 }, language: "en-US" });
   assert.equal(byAnilist.work.sources.anilist.id, 21662);
   assert.equal(byAnilist.work.sources.tmdb.year, 2016);
   assert.ok(searched.some((names) => names.includes("Drifters 2016")));

@@ -191,6 +191,12 @@ export class TmdbSource {
     };
   }
 
+  /** A work title in one language, without the larger image and keyword fields. */
+  async localizedTitle(kind, id, language, options) {
+    const body = await this.#get(`/${kind}/${id}`, { language }, MAX_WORK_BYTES, options);
+    return String((kind === "tv" ? body?.name : body?.title) ?? "");
+  }
+
   /**
    * Every alternative title the provider holds for one work — the spellings it
    * was released or transliterated under (`Trudno byt' bogom`, `Hauru no Ugoku

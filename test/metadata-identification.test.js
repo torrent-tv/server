@@ -101,6 +101,35 @@ test("a remake is two candidates, and the stated year scores the right one first
   assert.equal(rankCandidates(identity.candidates, new Map(), {})[0].tmdbId, 1);
 });
 
+test("the score combines localized title, release count and exact episode-title evidence", () => {
+  const candidates = [
+    { kind: "tv", tmdbId: 1, title: "Drifters", year: 2016, titleMatch: "exact", order: 0 },
+    { kind: "tv", tmdbId: 2, title: "Drifters", year: 2016, titleMatch: "exact", order: 1 }
+  ];
+  const records = new Map([
+    ["tv:1", { seasons: [{ number: 1, episodeCount: 12 }], totalEpisodeCount: 12, russianTitle: "Скитальцы", episodeTitles: ["First encounter", "Second encounter"] }],
+    ["tv:2", { seasons: [{ number: 1, episodeCount: 12 }], totalEpisodeCount: 24, russianTitle: "Дрифтеры", episodeTitles: ["Pilot"] }]
+  ]);
+  const [best, next] = rankCandidates(candidates, records, {
+    russianTitles: ["Скитальцы"], releaseEpisodeCount: 12,
+    highestEpisode: new Map([[1, 12]]), episodeTitles: ["First.encounter", "Second.encounter"]
+  });
+  assert.equal(best.tmdbId, 1);
+  assert.deepEqual(best.shares, { title: 1, year: 0, runtime: 0, episodes: 1, russianTitle: 1, releaseCount: 1, episodeTitles: 1, language: 0 });
+  assert.equal(next.shares.releaseCount, 0.5);
+  assert.equal(next.shares.episodeTitles, 0);
+});
+
+test("contradictory candidates sort after every consistent candidate", () => {
+  const candidates = [
+    { kind: "movie", tmdbId: 1, title: "Title", year: 2000, titleMatch: "exact", order: 0 },
+    { kind: "tv", tmdbId: 2, title: "Title", year: 2000, titleMatch: "exact", order: 1 }
+  ];
+  const ranked = rankCandidates(candidates, new Map(), { series: true });
+  assert.equal(ranked[0].tmdbId, 2);
+  assert.equal(ranked[1].contradiction, "film-for-episodes");
+});
+
 test("a missing catalogue date does not exclude an exact title", () => {
   const identity = decideIdentity({ searches: [search("tv", "The Continental", [[19069, "The Continental", null]])], statedYears: [] });
   assert.equal(identity.status, "identified");

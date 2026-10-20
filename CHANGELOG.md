@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Rank candidate works using scored release evidence, resolve identities by database record ID and keep the selected record in the page address.
+
 ## 0.55.0
 
 - **New**: Search OpenSubtitles with the selected file's hash before metadata identification completes, and mark exact hash matches with their catalogue identity evidence.

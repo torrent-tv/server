@@ -410,6 +410,8 @@ export function addressRecord(state, fileIndex) {
   let record = null;
   if (tmdb && Number.isInteger(tmdb.tmdbId) && (tmdb.kind === "tv" || tmdb.kind === "movie")) {
     record = { type: "tmdb", id: String(tmdb.tmdbId), kind: tmdb.kind };
+  } else if (typeof tmdb?.imdbId === "string" && /^tt\d{1,10}$/u.test(tmdb.imdbId)) {
+    record = { type: "imdb", id: tmdb.imdbId, kind: tmdb.kind === "tv" || tmdb.kind === "movie" ? tmdb.kind : null };
   } else if (anilist && Number.isInteger(anilist.id)) {
     record = { type: "anilist", id: String(anilist.id), kind: anilist.format === "MOVIE" ? "movie" : "tv" };
   }

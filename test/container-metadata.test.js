@@ -112,6 +112,16 @@ test("the route keeps what a file states and gives it to the next request for th
   assert.equal((await ask({ names: ["x"], kindHint: null, language: "en-US", container: [] })).status, 400);
 });
 
+test("a direct record lookup accepts no release names", async () => {
+  let request;
+  const metadata = { identify: async (value) => { request = value; return { status: "identified", work: { tmdbId: 1437 } }; } };
+  const reply = { raw: { once() {}, writableEnded: false }, code(status) { reply.status = status; return reply; }, send(payload) { reply.body = payload; return reply; } };
+  await handleApiMetadataIdentifyPost({ body: { record: { type: "tmdb", id: "1437", kind: "tv" }, language: "en-US" }, id: "r" }, reply, { metadata });
+  assert.equal(reply.status, undefined);
+  assert.deepEqual(request.names, []);
+  assert.deepEqual(request.externalIds, { tmdb: { kind: "tv", id: 1437 } });
+});
+
 test("the page sends only what identification reads", () => {
   assert.deepEqual(containerEvidence({ title: "A", trackTitles: ["RUS"], chapterTitles: ["x"], cover: { type: "image/jpeg" }, outsideEdges: false, year: null }), { title: "A" });
   assert.equal(containerEvidence({ trackTitles: ["RUS"] }), null);
