@@ -12,13 +12,14 @@
   display: flex;
   flex-wrap: nowrap;
   block-size: 100dvh;
-  --playlist-shift: max(-80vw, -48rem);
+  --panel-width: min(80dvw, 48rem);
+  --panel-shift: calc(-1 * var(--panel-width));
 
   @media (min-width: 64rem) {
-    --playlist-shift: max(-50vw, -48rem);
+    --panel-width: min(50dvw, 48rem);
   }
   @media (min-width: 90rem) {
-    --playlist-shift: max(-33vw, -52rem);
+    --panel-width: min(33dvw, 52rem);
   }
 
   &.player--animated {
@@ -30,20 +31,24 @@
     }
   }
 
-  inline-size: calc(100dvw + min(80dvw, 48rem));
-  @media (min-width: 64rem) {
-    inline-size: calc(100dvw + min(50dvw, 48rem));
-  }
-  @media (min-width: 90rem) {
-    inline-size: calc(100dvw + min(33dvw, 52rem));
+  @media (prefers-reduced-motion: reduce) {
+    &.player--animated {
+      transition: none;
+
+      #player__close {
+        transition: none;
+      }
+    }
   }
 
-  &:is(.player--playlist) {
-    translate: var(--playlist-shift) 0;
+  inline-size: calc(100dvw + var(--panel-width));
+
+  &:is(.player--panel) {
+    translate: var(--panel-shift) 0;
 
     /* Stay in the controller's top slot so auto-hide remains shared. */
     #player__close {
-      translate: calc(-1 * var(--playlist-shift)) 0;
+      translate: calc(-1 * var(--panel-shift)) 0;
     }
   }
 
@@ -60,6 +65,29 @@
     inline-size: 100dvw;
     flex-shrink: 0;
     flex-grow: 0;
+  }
+
+  #player__panel {
+    display: flex;
+    flex: 0 0 var(--panel-width);
+    flex-direction: column;
+    box-sizing: border-box;
+    inline-size: var(--panel-width);
+    block-size: 100dvh;
+    overflow: hidden;
+    background: #141416;
+    color: #f2f2f2;
+    font-family: system-ui, sans-serif;
+  }
+
+  #player__panel-title {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 1rem 1rem 0.75rem;
+    color: #f2f2f2;
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.4;
   }
 
   #player__video {

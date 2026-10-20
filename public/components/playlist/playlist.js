@@ -91,8 +91,7 @@ export class Playlist {
     document.addEventListener(PLAYER_EVENTS.SET_ACTIVE_MEDIA_FILE, this.#onSetActiveMediaFile);
     document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfo);
     document.addEventListener(APP_EVENTS.RESET_TO_PICKER, this.#onAppReset);
-    document.addEventListener(PLAYER_EVENTS.OPEN_PLAYLIST, this.#onPlaylistOpen);
-    document.addEventListener(PLAYER_EVENTS.CLOSE_PLAYLIST, this.#onPlaylistClose);
+    document.addEventListener(PLAYER_EVENTS.PANEL_CHANGED, this.#onPanelChanged);
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onPlaylistClose);
     // On error only CLOSE the drawer — do not clear the file list: the error
     // screen's "Choose File" action returns the user to this playlist.
@@ -100,26 +99,26 @@ export class Playlist {
     this.#root.addEventListener("click", this.#onListClick);
   }
 
-  #onPlaylistOpen = () => {
+  #onPanelChanged = (event) => {
+    const panel = event instanceof CustomEvent ? event.detail?.panel : null;
+    if (panel !== "playlist") {
+      this.#disablePlaylistMode();
+      return;
+    }
     if (this.#videoFiles.length < 2) return;
-    this.#root.removeAttribute('inert');
-    this.#root.setAttribute('data-open', true);
-    
+    this.#root.hidden = false;
+    this.#root.inert = false;
+    this.#root.dataset.open = "true";
     const first = this.#root.querySelector(Playlist.SELECTOR.firstFocusable);
     if (first instanceof HTMLElement) first.focus({ preventScroll: true });
   };
 
-  #onPlaylistClose = () => {
-    this.#disablePlaylistMode();
-  };
+  #onPlaylistClose = () => this.#disablePlaylistMode();
 
   #disablePlaylistMode() {
-    const activeElement = document.activeElement;
-    if (activeElement instanceof Node && this.#root.contains(activeElement)) {
-      document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.FOCUS_PLAYLIST_TOGGLE));
-    }
-    this.#root.setAttribute('inert', true);
-    this.#root.setAttribute('data-open', false);
+    this.#root.hidden = true;
+    this.#root.inert = true;
+    this.#root.dataset.open = "false";
   }
 
   /**

@@ -84,6 +84,14 @@ export const PLAYER_EVENTS = {
   REQUEST_READY: "PLAYER:REQUEST_READY",
   OPEN_PLAYLIST: "PLAYER:OPEN_PLAYLIST",
   CLOSE_PLAYLIST: "PLAYER:CLOSE_PLAYLIST",
+  /** `{ panel: "playlist" | "chapters" | null }` — the one visible player side panel. */
+  SET_PANEL: "PLAYER:SET_PANEL",
+  /** `{ panel: "playlist" | "chapters" | null }` — applied side-panel state. */
+  PANEL_CHANGED: "PLAYER:PANEL_CHANGED",
+  /** `{ positionSeconds }` — a request to seek through the existing media path. */
+  REQUEST_SEEK: "PLAYER:REQUEST_SEEK",
+  /** `{ currentTime }` — the media element's playback position. */
+  POSITION_CHANGED: "PLAYER:POSITION_CHANGED",
   FOCUS_PLAYLIST_TOGGLE: "PLAYER:FOCUS_PLAYLIST_TOGGLE",
   SET_AUDIO_TRACKS: "PLAYER:SET_AUDIO_TRACKS",
   SELECT_AUDIO_TRACK: "PLAYER:SELECT_AUDIO_TRACK",
