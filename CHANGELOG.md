@@ -1,4 +1,4 @@
-## Unreleased
+## 0.52.0
 
 - **New**: Navigate the selected file's chapters from the player side panel, which now switches between the playlist and chapter list.
 
