@@ -1,4 +1,4 @@
-## Unreleased
+## 0.51.0
 
 - **New**: Fetch selected-file chapter snapshots after playback begins and distinguish unsupported proxies from missing sources (torrent-tv/meta#110).
 
