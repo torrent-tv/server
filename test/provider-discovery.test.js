@@ -73,3 +73,32 @@ test("metadata that withdraws a work match cancels its pending subtitle discover
     controller.clear();
   } finally { Object.assign(globalThis, originals); }
 });
+
+test("a newly available file hash starts an OpenSubtitles query while the work is unknown", async () => {
+  const originals = { document: globalThis.document, CustomEvent: globalThis.CustomEvent, fetch: globalThis.fetch };
+  globalThis.document = new EventTarget();
+  globalThis.CustomEvent = class extends Event { constructor(type, options) { super(type); this.detail = options.detail; } };
+  const requests = [];
+  globalThis.fetch = (path, options) => new Promise(resolve => requests.push({ path, options, resolve }));
+  try {
+    const answers = [];
+    const controller = new ProviderSubtitles((items, statuses) => answers.push({ items, statuses }));
+    document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: {
+      files: { 2: { relativePath: "Movies/Cowboy.Bebop.2021.mkv" } }
+    } }));
+    controller.start(2);
+    assert.equal(requests.length, 0);
+    document.dispatchEvent(new CustomEvent(MEDIA_INFO_EVENTS.CHANGED, { detail: {
+      files: { 2: { relativePath: "Movies/Cowboy.Bebop.2021.mkv" } },
+      fingerprints: { 2: { hash: "0123456789abcdef", size: 200000 } }
+    } }));
+    assert.equal(requests.length, 1);
+    assert.deepEqual(JSON.parse(requests[0].options.body), {
+      fingerprint: { hash: "0123456789abcdef", size: 200000 }, query: "cowboy bebop 2021"
+    });
+    requests[0].resolve(new Response(JSON.stringify({ providers: [{ provider: "opensubtitles", items: [{ id: "7", language: "en", eligibility: "suitable" }] }] })));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(answers[0].items[0].id, "7");
+    controller.clear();
+  } finally { Object.assign(globalThis, originals); }
+});

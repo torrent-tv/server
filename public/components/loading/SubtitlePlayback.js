@@ -540,8 +540,11 @@ export class SubtitlePlayback {
       // impersonate an embedded track of the same language on the next episode.
       this.#subtitleIdentities.set(element.track, null);
     }
-    this.#providerStatuses = statuses.filter(p => ["unavailable", "partial", "ambiguous"].includes(p.status)).map(p => ({
-      key: `${epoch}:status:${p.provider}`, text: `${p.provider}: ${p.status === "partial" ? "showing partial results" : "search unavailable — retry"}`, checked: false, disabled: p.status === "partial"
+    this.#providerStatuses = statuses.filter(p => ["unavailable", "partial", "ambiguous", "no-suitable"].includes(p.status)).map(p => ({
+      key: `${epoch}:status:${p.provider}:${p.status}`, text: p.status === "no-suitable"
+        ? `No suitable subtitles for ${p.languages.join(", ")}`
+        : `${p.provider}: ${p.status === "partial" ? "showing partial results" : "search unavailable — retry"}`,
+      checked: false, disabled: p.status === "partial" || p.status === "no-suitable"
     }));
     this.#watchSubtitleModes();
     this.#publishMenu();
