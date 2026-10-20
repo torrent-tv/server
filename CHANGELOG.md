@@ -1,4 +1,4 @@
-## Unreleased
+## 0.56.0
 
 - **New**: Rank candidate works using scored release evidence, resolve identities by database record ID and keep the selected record in the page address.
 
