@@ -3,6 +3,7 @@
 import { getDebugState } from "../../shared/debug-state.js";
 import { requestHeaders } from "../../shared/request-headers.js";
 import { viewerError } from "../../domain/viewer-failure.js";
+import { waitTrace } from "../../domain/wait-trace.js";
 import { WebRtcProxy } from "../../domain/webrtc-proxy.js";
 
 // Same-LAN public-only connect budget. When the browser and proxy share a
@@ -42,7 +43,7 @@ export class ProxySelector {
    * @returns {Promise<{ chosen: ChosenProxy | null, candidates: object[], narrowedBy: string }>}
    */
   async #choose({ infoHash = "", onlyIds = null, tried = [], current = "" } = {}) {
-    const response = await fetch("/api/proxy-clients/choose", {
+    const response = await waitTrace.run("A2.1.choose", () => fetch("/api/proxy-clients/choose", {
       method: "POST",
       headers: requestHeaders(),
       body: JSON.stringify({
@@ -51,7 +52,7 @@ export class ProxySelector {
         ...(tried.length > 0 ? { tried } : {}),
         ...(current ? { current } : {})
       })
-    });
+    }));
     if (!response.ok) {
       throw new Error(`Proxy choice request failed (${response.status}).`);
     }

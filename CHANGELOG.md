@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Add opt-in playback wait observations with stable action identities across retries, operation boundaries and confirmation of advancing frames with decoded audio (#ttv-185).
+
 ## 0.51.0
 
 - **New**: Fetch selected-file chapter snapshots after playback begins and distinguish unsupported proxies from missing sources (torrent-tv/meta#110).

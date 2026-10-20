@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { PlaybackTasks } from "../public/domain/playback-tasks.js";
+import { waitTrace } from "../public/domain/wait-trace.js";
 import { waitForMediaReady } from "../public/domain/media-ready.js";
 import { describeFailure, VIEWER_FAILURE_MESSAGES, viewerError } from "../public/domain/viewer-failure.js";
 
@@ -15,7 +16,7 @@ function method(name) {
 }
 
 function loading(events, logged = []) {
-  const create = new Function("PlaybackTasks", "document", "CustomEvent", "LOADING_EVENTS", "PLAYER_EVENTS", "waitForMediaReady", "describeFailure", "lastProxyRefusal", "logged", `return class {
+  const create = new Function("PlaybackTasks", "document", "CustomEvent", "LOADING_EVENTS", "PLAYER_EVENTS", "waitForMediaReady", "describeFailure", "lastProxyRefusal", "logged", "waitTrace", `return class {
     #playbackEpoch = 0;
     #playbackTasks = new PlaybackTasks();
     #cancelRequested = false;
@@ -45,7 +46,7 @@ function loading(events, logged = []) {
     }); }
   }`);
   return new (create(PlaybackTasks, { dispatchEvent: event => { events.push(event); } },
-    CustomEvent, { PLAYBACK_FAILED: "failed" }, {}, waitForMediaReady, describeFailure, () => "", logged))();
+    CustomEvent, { PLAYBACK_FAILED: "failed" }, {}, waitForMediaReady, describeFailure, () => "", logged, waitTrace))();
 }
 
 test("source initialization cannot discard the current opening failure as stale", async () => {

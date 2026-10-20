@@ -10,6 +10,7 @@
 /** @import { HlsLoaderClass } from './webrtc-hls-loader.js' */
 
 import { bufferedAheadSeconds, bufferedBehindSeconds, bufferedEndSeconds, MAX_BUFFER_HOLE_SECONDS } from "./buffer-metrics.js";
+import { observeHlsWait } from "./wait-trace.js";
 import { PLAYER_EVENTS } from "../shared/events.js";
 import { describeEndedSource, describeMediaFailure, ELEMENT_RECOVERY_STEP, elementRecoveryStep } from "./media-failure.js";
 import { constrainOutputLevel, fixedOutputErrorController } from "./hls-load-control.js";
@@ -1005,6 +1006,7 @@ export function createHlsPlayer(onLog) {
           autoStartLoad: false
         };
         const instance = new HlsClass(hlsConfig);
+        observeHlsWait(instance, HlsClass.Events);
         constrainOutputLevel(instance, () => desiredLevel);
         hlsInstance = instance;
         startCushionSampler(instance, videoElement, forwardBufferCeiling, options.attemptId);

@@ -1,5 +1,6 @@
 import { APP_EVENTS, ERROR_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
 import { parseTorrentBytes } from "../../domain/torrent-parser.js";
+import { waitTrace } from "../../domain/wait-trace.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 
@@ -122,6 +123,7 @@ export class Torrent extends StateDerivedView {
 
   /** @param {string} magnetUri @param {number} startedAt */
   #processMagnet(magnetUri, startedAt = performance.now()) {
+    waitTrace.begin("magnet", startedAt);
     // Consume any pending position/file from a shared URL (one-shot).
     const currentTime = this.#pendingCurrentTime;
     const fileIndex = this.#pendingFileIndex;
@@ -269,11 +271,13 @@ export class Torrent extends StateDerivedView {
 
     let bytes;
     try {
-      const binary = atob(torrentBase64);
-      bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index++) {
-        bytes[index] = binary.charCodeAt(index);
-      }
+      waitTrace.begin("torrent-address", startedAt);
+      bytes = waitTrace.run("A0.decode-address", () => {
+        const binary = atob(torrentBase64);
+        const decoded = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) decoded[index] = binary.charCodeAt(index);
+        return decoded;
+      });
     } catch {
       // silent-ok: not silent at all — the viewer is shown the error screen
       // below, which is the loudest answer this app has.
@@ -361,8 +365,9 @@ export class Torrent extends StateDerivedView {
     }
 
     try {
-      const torrentBytes = new Uint8Array(await torrentFile.arrayBuffer());
-      const meta = await parseTorrentBytes(torrentBytes);
+      if (waitTrace.current?.startedAt !== startedAt) waitTrace.begin("torrent-file", startedAt);
+      const torrentBytes = new Uint8Array(await waitTrace.run("A0.read-file", () => torrentFile.arrayBuffer()));
+      const meta = await waitTrace.run("A0.parse-and-hash", () => parseTorrentBytes(torrentBytes));
       // Consume any pending position/file from a shared URL (one-shot).
       const currentTime = this.#pendingCurrentTime;
       const fileIndex = this.#pendingFileIndex;
@@ -382,6 +387,7 @@ export class Torrent extends StateDerivedView {
         })
       );
     } catch (_error) {
+      waitTrace.finish("error", { phase: "torrent-parse", error: String(_error?.message ?? _error) });
       // silent-ok: as above — the failure reaches the viewer as the error
       // screen dispatched below.
       document.dispatchEvent(
