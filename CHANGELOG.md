@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Fetch selected-file chapter snapshots after playback begins and distinguish unsupported proxies from missing sources (torrent-tv/meta#110).
+
 ## 0.50.33
 
 - **Chore**: Update dependencies: knip 6.42.0 → 6.42.1; 5 package(s) changed in the lock file.
@@ -252,8 +256,6 @@
 - **Fix**: During opening, viewer reports retain the chosen destination until preparation finishes. A media element temporarily at zero after reading metadata cannot move source preparation and playback readiness back to the beginning.
 
 - **Fix**: Source registration requires the proxy's map playback contract before preparation. A page assigned to an older proxy reports that it needs an update instead of silently using unsupported preparation requests.
-
-- **New**: Receive file chapter metadata separately from playback preparation, refresh it on proxy notifications and discard responses from previously selected files. Older proxies report unsupported chapter metadata explicitly (torrent-tv/meta#110).
 
 - **Fix**: Resetting source controls during opening preserves the waiting indicator derived from the current application state.
 
