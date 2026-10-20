@@ -24,7 +24,9 @@ import { LogQueue, MAX_BATCH_BYTES } from "./log-queue.js";
 
 const ENDPOINT = "/api/client-logs";
 const FLUSH_INTERVAL_MS = 2000;
-const MAX_BUFFER = 500; // queue cap; oldest dropped past this, and counted
+const MAX_BUFFER = 500; // ordinary log queue reserve
+const MAX_PENDING_WAIT_TRACE = 5000;
+const MAX_LOG_BUFFER = MAX_BUFFER + MAX_PENDING_WAIT_TRACE;
 const MAX_MSG_LEN = 2000; // per-line cap (server also caps)
 
 // Keep original references so internal failures never re-enter the patched
@@ -128,7 +130,6 @@ let proxySink = null;
 let proxySinkOpen = false;
 /** Wait events emitted before the proxy becomes available, replayed to its log. */
 const pendingWaitTrace = [];
-const MAX_PENDING_WAIT_TRACE = 5000;
 
 /** Replay browser wait events recorded before the proxy connection opened. */
 function replayPendingWaitTrace() {
@@ -162,7 +163,7 @@ function renderArg(arg) {
  * took but could not acknowledge, sent to the server as well.
  */
 const queue = new LogQueue({
-  capacity: MAX_BUFFER,
+  capacity: MAX_LOG_BUFFER,
   frame: (lines, seq) => JSON.stringify({
     sessionId, tag, userAgent, signalSessionId: currentSignalSession, seq, lines,
     startedAt, torrentName: film.name, infoHash: film.infoHash
@@ -380,11 +381,12 @@ function install() {
     },
     recordWaitTrace(value) {
       const line = `[wait-trace] ${JSON.stringify(value)}`;
-      record("debug", [line]);
       if (!proxySinkOpen) {
         if (pendingWaitTrace.length >= MAX_PENDING_WAIT_TRACE) pendingWaitTrace.shift();
         pendingWaitTrace.push(line);
+        return;
       }
+      record("debug", [line]);
     }
   };
 
