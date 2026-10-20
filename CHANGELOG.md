@@ -1,4 +1,4 @@
-## Unreleased
+## 0.53.0
 
 - **New**: Mark playback sections on the timeline and show their titles on hover or keyboard focus.
 
