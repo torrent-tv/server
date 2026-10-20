@@ -1,4 +1,4 @@
-## Unreleased
+## 0.55.0
 
 - **New**: Search OpenSubtitles with the selected file's hash before metadata identification completes, and mark exact hash matches with their catalogue identity evidence.
 
