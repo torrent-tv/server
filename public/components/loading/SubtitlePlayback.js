@@ -41,21 +41,6 @@ function isAbortError(error) {
     : error instanceof Error && error.name === "AbortError";
 }
 
-function providerDetails(item) {
-  const extension = typeof item.filename === "string" ? item.filename.match(/\.([^.\\/]+)$/u)?.[1]?.toLowerCase() : "";
-  const format = ["srt", "ass", "ssa", "vtt"].includes(extension) ? extension.toUpperCase() : "";
-  return [
-    item.provider === "opensubtitles" ? "OpenSubtitles" : item.provider === "jimaku" ? "Jimaku" : item.provider,
-    format,
-    item.forced ? "Forced" : "",
-    item.hearingImpaired ? "SDH" : "",
-    Number.isFinite(item.fps) ? `${item.fps} fps` : "",
-    item.hashMatch ? "File match" : "",
-    item.eligibility === "unknown" ? "Version unverified" : "",
-    item.episodeGuess ? "Episode inferred from filename" : ""
-  ].filter(Boolean);
-}
-
 /** Owns subtitle tracks, fetched files, cue delivery, and the viewer's choice. */
 export class SubtitlePlayback {
   #getVideoElement;
@@ -75,7 +60,6 @@ export class SubtitlePlayback {
    * @type {Map<string, { textTrack: TextTrack, planIndex: number | null }>}
    */
   #menuEntries = new Map();
-  #menuOrder = 0;
   /** @type {string | null} The key the viewer chose last in this file. */
   #lastChosenKey = null;
   /**
@@ -293,7 +277,6 @@ export class SubtitlePlayback {
     this.#subtitleEpoch += 1;
     this.#start = { state: "none" };
     this.#menuEntries.clear();
-    this.#menuOrder = 0;
     this.#lastChosenKey = null;
     this.#cuesById.clear();
     this.#embeddedTextTracks.clear();
@@ -394,7 +377,7 @@ export class SubtitlePlayback {
    * @returns {void}
    */
   #addMenuEntry(key, textTrack, planIndex, fileIndex = this.#subtitleContext?.fileIndex, menu = {}) {
-    this.#menuEntries.set(key, { textTrack, planIndex, fileIndex, menu: { ...menu, order: this.#menuOrder++ } });
+    this.#menuEntries.set(key, { textTrack, planIndex, fileIndex, menu });
     this.#publishMenu();
   }
 
@@ -437,17 +420,15 @@ export class SubtitlePlayback {
     return { ...this.#start };
   }
 
-  /** @returns {Array<{ key: string, label: string, language: string, team: string | null, variant: string | null, details: string[], order: number, showing: boolean }>} */
+  /** @returns {Array<{ key: string, language: string, source: string, team: string | null, forced: boolean, hearingImpaired: boolean, showing: boolean }>} */
   #menuEntriesNow() {
-    const rank = key => key.includes(":embedded:") ? 0 : key.includes(":sidecar:") ? 1 : 2;
-    return [...this.#menuEntries].sort(([a], [b]) => rank(a) - rank(b)).map(([key, entry]) => ({
+    return [...this.#menuEntries].map(([key, entry]) => ({
       key,
-      label: entry.textTrack.label,
       language: entry.menu?.language ?? entry.textTrack.language ?? "und",
+      source: entry.menu?.source ?? "Subtitles",
       team: entry.menu?.team ?? null,
-      variant: entry.menu?.variant ?? null,
-      details: entry.menu?.details ?? [],
-      order: entry.menu?.order ?? 0,
+      forced: entry.menu?.forced === true,
+      hearingImpaired: entry.menu?.hearingImpaired === true,
       showing: entry.textTrack.mode === "showing"
     }));
   }
@@ -568,10 +549,10 @@ export class SubtitlePlayback {
         fileIndex: this.#subtitleContext?.fileIndex,
         menu: {
           language: item.language,
+          source: item.provider === "opensubtitles" ? "OpenSubtitles" : item.provider === "jimaku" ? "Jimaku" : item.provider,
           team: null,
-          variant: item.release || item.filename?.replace(/^.*[\\/]/u, "").replace(/\.[^.]+$/u, "") || null,
-          details: providerDetails(item),
-          order: this.#menuOrder++
+          forced: item.forced === true,
+          hearingImpaired: item.hearingImpaired === true
         }
       });
       // Provider variants without a confirmed translation identity must not
@@ -768,12 +749,12 @@ export class SubtitlePlayback {
         this.#getVideoElement().appendChild(track);
         // What this track IS, for carrying a choice of it to the next episode.
         this.#subtitleIdentities.set(track.track, trackIdentity({ code: info.code, releaser: info.group }));
-        const extension = sub.name?.match(/\.([^.]+)$/u)?.[1]?.toUpperCase() ?? "";
         this.#addMenuEntry(`${epoch}:sidecar:${sub.fileIndex}`, track.track, null, sub.fileIndex, {
           language: info.code,
+          source: "In torrent",
           team: sub.naming?.team ?? null,
-          variant: sub.naming?.title ?? (sub.naming?.team ? null : sub.naming?.releaser ?? null),
-          details: ["Torrent file", extension, info.isForced ? "Forced" : "", info.isHearingImpaired ? "SDH" : ""].filter(Boolean)
+          forced: info.isForced,
+          hearingImpaired: info.isHearingImpaired
         });
         // A subtitle FILE is never the container's choice, so `null` — and the
         // mode reading is registered here too, because a video with only
@@ -845,8 +826,10 @@ export class SubtitlePlayback {
       this.#embeddedTrackElements.set(track.index, el);
       this.#addMenuEntry(`${epoch}:embedded:${track.index}`, el.track, track.index, undefined, {
         language: trackLanguageTag(track),
-        variant: typeof track.title === "string" && track.title.trim() ? track.title.trim() : null,
-        details: ["Embedded", track.codec ? String(track.codec).toUpperCase() : "", track.isForced ? "Forced" : "", track.isHearingImpaired ? "SDH" : ""].filter(Boolean)
+        source: "In container",
+        team: null,
+        forced: track.isForced === true,
+        hearingImpaired: track.isHearingImpaired === true
       });
       // What this track IS, for carrying a choice of it to the next episode.
       // Corrected in `#refineSubtitleLabel` if the container said nothing and

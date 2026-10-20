@@ -900,7 +900,8 @@ export class Player extends StateDerivedView {
         text: element.querySelector?.("[data-subtitle-label]")?.textContent ?? "",
         checked: element.checked === true,
         disabled: element.hasAttribute?.("disabled") === true,
-        accessibleText: element.getAttribute?.("aria-label") ?? ""
+        accessibleText: element.getAttribute?.("aria-label") ?? "",
+        depth: Number(element.dataset.subtitleDepth) || 0
       };
     });
     const comparable = wanted.map((item) => ({
@@ -908,7 +909,8 @@ export class Player extends StateDerivedView {
       text: item.text,
       checked: item.kind === "radio" && item.checked,
       disabled: item.disabled === true,
-      accessibleText: item.accessibleText ?? ""
+      accessibleText: item.accessibleText ?? "",
+      depth: item.depth ?? 0
     }));
     const wantedByKey = new Map(wanted.map((item) => [item.key, item]));
     const { remove, set, create, reorder } = menuUpdate(current, comparable);
@@ -922,6 +924,7 @@ export class Player extends StateDerivedView {
         if (change.accessibleText) element.setAttribute("aria-label", change.accessibleText);
         else element.removeAttribute("aria-label");
       }
+      if ("depth" in change) element.dataset.subtitleDepth = String(change.depth);
     }
     for (const { item, before } of create) {
       const element = this.#createSubtitleMenuNode(wantedByKey.get(item.key));
@@ -941,6 +944,7 @@ export class Player extends StateDerivedView {
     const heading = item.kind === "heading";
     const element = document.createElement(heading ? "div" : "media-chrome-menu-item");
     element.dataset.subtitleNodeKey = item.key;
+    element.dataset.subtitleDepth = String(item.depth ?? 0);
     const label = document.createElement("span");
     label.dataset.subtitleLabel = "";
     label.textContent = item.text;

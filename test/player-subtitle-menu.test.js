@@ -68,21 +68,38 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     new Player();
     const publish = entries => document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, { detail: { items: subtitleMenuItems(entries) } }));
     const menu = node("#player__subtitle-menu");
+    const row = key => menu.children.find(child => child.dataset.subtitleKey === key);
+    const labelOf = child => child.querySelector("[data-subtitle-label]").textContent;
+    const russian = { key: "ru", language: "ru", source: "In container" };
+    publish([russian]);
+    assert.equal(labelOf(row("ru")), "Russian");
+    assert.equal(row("ru").dataset.subtitleDepth, "0");
+    publish([russian, { key: "ru-provider", language: "ru", source: "OpenSubtitles" }]);
+    assert.equal(labelOf(row("ru")), "In container");
+    assert.equal(row("ru").dataset.subtitleDepth, "1");
+    publish([russian]);
+    assert.equal(labelOf(row("ru")), "Russian");
+    assert.equal(row("ru").dataset.subtitleDepth, "0");
     const entries = [
-      { key: "ru", language: "ru", variant: "Signs", details: ["Embedded", "ASS"], order: 0 },
-      ...Array.from({ length: 330 }, (_, n) => ({ key: `p${n}`, language: "en", team: "Team A", variant: `Offer ${n}`, details: ["OpenSubtitles", "SRT"], order: n + 1 }))
+      { ...russian, order: 0 },
+      { key: "local", language: "en", source: "In container", order: 1 },
+      ...Array.from({ length: 330 }, (_, n) => ({ key: `p${n}`, language: "en", source: "OpenSubtitles", order: n + 2 }))
     ];
 
     publish(entries);
     assert.equal(menu.children[0].dataset.subtitleKey, "");
-    assert.equal(menu.children[1].querySelector("[data-subtitle-label]").textContent, "English");
+    assert.equal(labelOf(row("ru")), "Russian");
+    assert.equal(row("ru").dataset.subtitleDepth, "0");
+    assert.equal(labelOf(menu.children[1]), "English");
     assert.equal(menu.children[1].dataset.subtitleGroup, "language");
-    assert.equal(menu.children[2].querySelector("[data-subtitle-label]").textContent, "Team A");
-    assert.equal(menu.children[2].dataset.subtitleGroup, "team");
-    assert.equal(menu.children.at(-1).querySelector("[data-subtitle-label]").textContent, "Signs · Embedded · ASS");
-    assert.equal(menu.children.at(-1).dataset.subtitleKey, "ru");
+    assert.equal(labelOf(row("local")), "In container");
+    assert.equal(row("local").dataset.subtitleDepth, "1");
+    assert.equal(labelOf(menu.children[3]), "OpenSubtitles");
+    assert.equal(menu.children[3].dataset.subtitleGroup, "source");
+    assert.equal(labelOf(menu.children.at(-1)), "Russian");
+    assert.equal(labelOf(row("p329")), "Subtitle (330)");
     assert.equal(menu.querySelectorAll("media-chrome-menu[slot='submenu']").length, 0);
-    assert.equal(menu.children.length, 335, "language/team headings and track rows share one menu");
+    assert.equal(menu.children.length, 335, "language/source headings and selectable rows share one menu");
     assert.equal(createdNames.includes("media-settings-menu-item"), false, "the subtitle list does not create expandable groups");
     assert.equal(menu.children.filter(child => child.type === "radio").every(child => !child.checked || child.dataset.subtitleKey === ""), true,
       "only the Off row is checked when subtitles are off");

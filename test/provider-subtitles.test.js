@@ -93,12 +93,11 @@ test("a fingerprint alone searches providers before metadata has identified the 
   assert.equal(providerSubtitleQuery({ fingerprints: { 2: { hash: "bad", size: 200000 } } }, 2), null);
 });
 
-test("a hash match makes the provider's catalogue identity visible for checking", () => {
+test("provider track labels keep language but omit release and verification metadata", () => {
   const label = providerSubtitleLabel({ provider: "opensubtitles", language: "en", release: "release", hashMatch: true,
     identity: { title: "Cowboy Bebop", year: 2021 } });
-  assert.match(label, /file hash match/u);
-  assert.match(label, /catalogue: Cowboy Bebop \(2021\)/u);
-  assert.match(providerSubtitleLabel({ provider: "opensubtitles", language: "en", eligibility: "unknown" }), /version unverified/u);
+  assert.equal(label, "English");
+  assert.equal(providerSubtitleLabel({ provider: "opensubtitles", language: "en", eligibility: "unknown", fps: 25 }), "English");
 });
 
 test("an exact hash identity is published after discovery returns without waiting in the caller", async () => {

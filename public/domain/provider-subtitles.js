@@ -42,20 +42,13 @@ export function providerSubtitleQuery(state, fileIndex) {
 }
 
 export function providerSubtitleLabel(item) {
-  const name = { opensubtitles: "OpenSubtitles", jimaku: "Jimaku" }[item.provider] ?? item.provider;
   let language;
   try { language = item.language === "und" ? "Unknown language" : new Intl.DisplayNames(["en"], { type: "language" }).of(item.language); }
   catch {
     // silent-ok: an unknown provider language tag is displayed as supplied.
     language = item.language;
   }
-  const identity = item.hashMatch && typeof item.identity?.title === "string"
-    ? `catalogue: ${item.identity.title}${Number.isInteger(item.identity.year) ? ` (${item.identity.year})` : ""}`
-    : null;
-  const details = [item.hashMatch ? "file hash match" : null, item.eligibility === "unknown" ? "version unverified" : null,
-    identity, item.forced ? "forced" : null,
-    item.hearingImpaired ? "SDH" : null, item.episodeGuess ? "episode from filename" : null].filter(Boolean);
-  return `${language} · ${name}${item.release ? ` · ${item.release}` : ""}${details.length ? ` (${details.join(", ")})` : ""}`;
+  return language;
 }
 
 /** Keep unsuitable releases out per language, with unknown offers as fallback. */
