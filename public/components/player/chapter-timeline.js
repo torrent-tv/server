@@ -36,7 +36,7 @@ export class ChapterTimeline {
   setCurrentTime(currentTime) {
     const nextId = currentSectionId(this.#sections, currentTime, this.#duration);
     const section = this.#sections.find((item) => item.id === nextId);
-    const label = section ? sectionLabel(section) : "";
+    const label = section && hasSectionTitle(section) ? sectionLabel(section) : "";
     if (nextId === this.#currentId && label === this.#currentDisplay.textContent) return;
     this.#currentId = nextId;
     this.#currentDisplay.textContent = label;
@@ -66,6 +66,10 @@ export class ChapterTimeline {
     }
     this.#range.mediaChaptersCues = cues;
   }
+}
+
+function hasSectionTitle(section) {
+  return section?.titles?.some((entry) => typeof entry?.text === "string" && entry.text.trim()) ?? false;
 }
 
 function escapeCueText(text) {

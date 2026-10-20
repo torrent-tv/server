@@ -81,3 +81,33 @@ test("unsupported chapter metadata clears the timeline", () => {
   assert.deepEqual(range.mediaChaptersCues, []);
   assert.equal(currentDisplay.textContent, "");
 });
+
+test("chapter timeline hides the current label when its title is empty", () => {
+  const video = {
+    currentTime: 10,
+    duration: 120,
+    ownerDocument: { defaultView: { VTTCue: FakeCue } },
+    addTextTrack() { return new FakeTextTrack(); }
+  };
+  const currentDisplay = { textContent: "" };
+  const timeline = new ChapterTimeline(video, {}, currentDisplay);
+  timeline.setDuration(video.duration);
+
+  timeline.setSnapshot({ state: "available", sections: [{
+    id: "untitled",
+    startSeconds: 0,
+    endSeconds: 120,
+    titles: [{ text: "  " }]
+  }] });
+
+  assert.equal(currentDisplay.textContent, "");
+
+  timeline.setSnapshot({ state: "available", sections: [{
+    id: "named",
+    startSeconds: 0,
+    endSeconds: 120,
+    titles: [{ text: "Named chapter" }]
+  }] });
+
+  assert.equal(currentDisplay.textContent, "Named chapter");
+});
