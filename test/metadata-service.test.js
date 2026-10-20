@@ -34,9 +34,14 @@ function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {}, alt
       const results = (table[`${kind}|${query}`] ?? []).map((one) => ({ ...one, originalName: one.name }));
       return { results: page === 1 ? results : [], totalPages };
     },
-    async work(kind, id) {
+    async work(kind, id, language) {
       asked.push(`work|${kind}|${id}`);
-      return { kind, tmdbId: id, title: "T", originalTitle: "T", year: 2000, overview: "", poster: null, backdrop: null, seasons: [], ...works[`${kind}|${id}`] };
+      const work = { kind, tmdbId: id, title: "T", originalTitle: "T", year: 2000, overview: "", poster: null, backdrop: null, seasons: [], ...works[`${kind}|${id}`] };
+      return language === "ru-RU" && work.russianTitle ? { ...work, title: work.russianTitle } : work;
+    },
+    async localizedTitle(kind, id) {
+      asked.push(`title|${kind}|${id}|ru-RU`);
+      return works[`${kind}|${id}`]?.russianTitle ?? "";
     },
     async alternativeTitles(kind, id) {
       asked.push(`alternative|${kind}|${id}`);
@@ -180,6 +185,15 @@ test("the runtime closer by ratio wins, with no allowance to fall outside", asyn
   assert.equal(answer.work.identification, "scored");
 });
 
+test("supplemental evidence can select a candidate beyond the first eight records", async () => {
+  const results = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, name: "Title", year: 2000 }));
+  const works = Object.fromEntries(results.map(({ id }) => [`movie|${id}`, { runtimeSeconds: id === 10 ? 6000 : 2400 }]));
+  const source = fakeSource({ "movie|Title": results }, { works });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 6000, language: "en-US" });
+  assert.equal(answer.work.tmdbId, 10);
+  assert.ok(source.asked.includes("work|movie|10"));
+});
+
 test("Drifters: a later work, a season too short and the audio language each set the wrong series aside", async () => {
   const results = [{ id: 281558, name: "Drifters", year: 2019 }, { id: 67075, name: "Drifters", year: 2016 }, { id: 60853, name: "Drifters", year: 2013 }];
   const works = {
@@ -207,10 +221,46 @@ test("Drifters: a later work, a season too short and the audio language each set
   assert.equal(unnumbered.work.tmdbId, 67075);
 });
 
-test("when every candidate contradicts something the facts do not empty the choice", async () => {
+test("Russian release title and episode titles contribute to candidate ranking", async () => {
+  const source = fakeSource({ "tv|Drifters": [
+    { id: 1, name: "Drifters", year: 2016 }, { id: 2, name: "Drifters", year: 2016 }
+  ] }, {
+    works: {
+      "tv|1": { russianTitle: "Скитальцы", seasons: [{ number: 1, episodeCount: 2 }] },
+      "tv|2": { russianTitle: "Дрифтеры", seasons: [{ number: 1, episodeCount: 2 }] }
+    },
+    seasons: { "1|1": ["First encounter", "Second encounter"], "2|1": ["Pilot"] }
+  });
+  const answer = await service(source).identify({
+    names: ["Скитальцы Drifters 2016"], kindHint: "tv", episodeNumbers: [{ season: 1, episode: 1 }, { season: 1, episode: 2 }],
+    episodeEvidence: { season: 1, titles: ["First encounter", "Second encounter"] }, language: "en-US"
+  });
+  assert.equal(answer.work.tmdbId, 1);
+  assert.equal(answer.ranked[0].shares.russianTitle, 1);
+  assert.equal(answer.ranked[0].shares.episodeTitles, 1);
+  assert.equal(answer.ranked[0].shares.releaseCount, 1);
+  assert.equal(answer.work.russianTitle, undefined);
+  assert.equal(answer.work.totalEpisodeCount, undefined);
+  assert.ok(source.asked.includes("title|tv|1|ru-RU"));
+});
+
+test("release tags after an episode number are not queried as episode titles", async () => {
+  const source = fakeSource({ "tv|Reacher": [{ id: 1, name: "Reacher", year: 2022 }] });
+  const answer = await service(source).identify({
+    names: ["Reacher"],
+    kindHint: "tv",
+    episodeEvidence: { season: 4, titles: ["1080p.rus.LostFilm.TV"] },
+    language: "en-US"
+  });
+  assert.equal(answer.status, "identified");
+  assert.equal(source.asked.some((request) => request.startsWith("season|")), false);
+});
+
+test("when every candidate contradicts a release fact no work is identified", async () => {
   const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2030 }] }, { works: { "movie|1": { year: 2030 } } });
   const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", torrentCreatedAt: Date.UTC(2016, 0, 1) / 1000, language: "en-US" });
-  assert.equal(answer.work.tmdbId, 1);
+  assert.equal(answer.status, "not-found");
+  assert.equal(answer.ranked[0].contradiction, "after-torrent");
 });
 
 test("a shortened series title is identified by the episode names of its files", async () => {
@@ -358,6 +408,16 @@ test("a 429 whose pause outlasts the deadline is unavailable, not retried", asyn
   const source = new TmdbSource({ token: "test", gate: new RequestGate({ concurrency: 2, perSecond: Infinity, queueLimit: 8 }), fetch });
   await assert.rejects(source.search("tv", "T", "en-US", 1, { deadlineAt: Date.now() + 1000 }), MetadataUnavailableError);
   assert.equal(calls, 1);
+});
+
+test("a localized title lookup reads only the requested-language title", async () => {
+  let asked;
+  const source = new TmdbSource({ token: "test", gate: new RequestGate({ concurrency: 1, perSecond: Infinity, queueLimit: 2 }),
+    fetch: async (url) => { asked = new URL(url); return Response.json({ name: "Скитальцы", seasons: [{ episode_count: 20 }] }); } });
+  assert.equal(await source.localizedTitle("tv", 67075, "ru-RU", { deadlineAt: Date.now() + 1000 }), "Скитальцы");
+  assert.equal(asked.pathname, "/3/tv/67075");
+  assert.equal(asked.searchParams.get("language"), "ru-RU");
+  assert.equal(asked.searchParams.has("append_to_response"), false);
 });
 
 test("the image fetcher serves only TMDB images and passes their caching headers on", async () => {

@@ -27,7 +27,7 @@ import { providerFailure } from "./provider-diagnostics.js";
 import { normalizeTitle } from "./title.js";
 import { matchesRussianTransliteration, russianSearchSpellings, russianTitleSpellings } from "./russian-transliteration.js";
 
-/** How long one browser request may take, including its waits. A stated limit. */
+/** Base request budget when scoring needs no supplemental catalogue evidence. */
 const REQUEST_BUDGET_MS = 4_000;
 
 /** How long one shared fetch may run; longer than a request, so its answer can reach the cache. */
@@ -48,16 +48,17 @@ const MAX_ALTERNATIVE_CHECKS = 5;
 /** Expanded discovery only when a measured file duration can distinguish titles. */
 const MAX_RUNTIME_SEARCH_PAGES = 20;
 const MAX_RUNTIME_CHECKS = 60;
-const RUNTIME_REQUEST_BUDGET_MS = 15_000;
+/** Extended budget for reading supplemental evidence across the candidate set. */
+const EVIDENCE_REQUEST_BUDGET_MS = 20_000;
 
 /**
- * Candidates whose record is read to score their seasons, runtime and language
- * when no duration is known, the best by title and year first. A stated limit.
+ * Candidates whose record is read when no supplemental fact can distinguish
+ * them. Evidence-bearing requests inspect up to MAX_RUNTIME_CHECKS candidates.
  */
-const MAX_RECORD_CHECKS = 8;
+const MAX_INITIAL_RECORD_CHECKS = 8;
 
-/** Ranked candidates returned beside the work. */
-const RANKED_REPORTED = 5;
+/** Candidate feature values returned so the survey can replay the ranking. */
+const RANKED_REPORTED = MAX_RUNTIME_CHECKS;
 
 /**
  * The answer of the alternative-title stage joined with the episode stage's.
@@ -230,8 +231,10 @@ export class MetadataService {
       return { status: "unavailable" };
     }
     const hasDuration = Number.isFinite(durationSeconds) && durationSeconds > 0;
-    const deadlineAt = this.#now() + (hasDuration ? RUNTIME_REQUEST_BUDGET_MS : REQUEST_BUDGET_MS);
     const readings = names.map(parseReleaseName);
+    const hasSupplementalEvidence = Boolean(hasDuration || episodeNumbers.length || audioLanguages.length || episodeEvidence ||
+      readings.some((reading) => reading.titles.some((title) => /\p{Script=Cyrillic}/u.test(title))));
+    const deadlineAt = this.#now() + (hasSupplementalEvidence ? EVIDENCE_REQUEST_BUDGET_MS : REQUEST_BUDGET_MS);
     const seriesEvidence = readings.some((reading) => reading.seriesEvidence);
     const kinds = kindHint ? [kindHint] : seriesEvidence ? ["tv"] : ["tv", "movie"];
     const statedYears = [...new Set(readings.map((reading) => reading.years?.from).filter(Number.isInteger))];
@@ -314,28 +317,43 @@ export class MetadataService {
     for (const { season, episode } of episodeNumbers) {
       highestEpisode.set(season, Math.max(highestEpisode.get(season) ?? 0, episode));
     }
+    const russianTitles = [...new Set(readings.flatMap((reading) => reading.titles).filter((title) => /\p{Script=Cyrillic}/u.test(title)))];
+    const releaseEpisodeCount = new Set(episodeNumbers.map(({ season, episode }) => `${season ?? "?"}:${episode}`)).size;
     const evidence = {
       statedYears,
       createdYear: Number.isFinite(torrentCreatedAt) && torrentCreatedAt > 0 ? new Date(torrentCreatedAt * 1000).getUTCFullYear() : null,
       series: episodeNumbers.length > 0,
       highestEpisode,
+      releaseEpisodeCount,
+      russianTitles,
+      episodeTitles: episodeEvidence?.titles ?? [],
+      episodeSeason: episodeEvidence?.season ?? null,
       durationSeconds: hasDuration ? durationSeconds : null,
       audioLanguages
     };
     // The records are read for the best by title and year first; with a
     // measured duration every candidate's runtime is worth reading.
-    const read = rankCandidates(pool, new Map(), evidence).slice(0, hasDuration ? MAX_RUNTIME_CHECKS : MAX_RECORD_CHECKS);
-    const records = await this.#records(read, { language, deadlineAt, signal });
+    const recordLimit = hasDuration || (hasSupplementalEvidence && pool.length > 1) ? MAX_RUNTIME_CHECKS : MAX_INITIAL_RECORD_CHECKS;
+    const read = rankCandidates(pool, new Map(), evidence).slice(0, recordLimit);
+    const records = await this.#records(read, { language, deadlineAt, signal, evidence });
     const ranked = rankCandidates(read, records, evidence);
-    const [chosen] = ranked;
+    const consistent = ranked.filter((candidate) => candidate.contradiction === null);
+    if (consistent.length === 0) {
+      return {
+        status: "not-found",
+        ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) => ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }))
+      };
+    }
+    const [chosen] = consistent;
     try {
-      const work = records.get(`${chosen.kind}:${chosen.tmdbId}`) ?? await this.#cached(`work|v3|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS,
+      const scoredWork = records.get(`${chosen.kind}:${chosen.tmdbId}`) ?? await this.#cached(`work|v3|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS,
         (fetchDeadline) => this.#source.work(chosen.kind, chosen.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+      const { russianTitle: _russianTitle, totalEpisodeCount: _totalEpisodeCount, episodeTitles: _episodeTitles, ...work } = scoredWork;
       return {
         status: "identified",
         work: { ...work, identification: pool.length > 1 ? "scored" : chosen.titleMatch },
-        ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction }) =>
-          ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction }))
+        ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) =>
+          ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }))
       };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) {
@@ -351,17 +369,41 @@ export class MetadataService {
    * result states.
    *
    * @param {Array<{ kind: "tv" | "movie", tmdbId: number }>} candidates
-   * @param {{ language: string, deadlineAt: number, signal?: AbortSignal }} wait
+   * @param {{ language: string, deadlineAt: number, signal?: AbortSignal, evidence: object }} wait
    * @returns {Promise<Map<string, import("./TmdbSource.js").Work>>}
    */
-  async #records(candidates, { language, deadlineAt, signal }) {
+  async #records(candidates, { language, deadlineAt, signal, evidence }) {
     const records = new Map();
     // Match source concurrency rather than filling its shared request queue.
     for (let offset = 0; offset < candidates.length; offset += 4) {
       await Promise.all(candidates.slice(offset, offset + 4).map(async (candidate) => {
         try {
-          const work = await this.#cached(`work|v3|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
+          let work = await this.#cached(`work|v3|${candidate.kind}|${candidate.tmdbId}|${language}`, () => FOUND_TTL_MS,
             (fetchDeadline) => this.#source.work(candidate.kind, candidate.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+          if (evidence.russianTitles?.length) {
+            try {
+              const russianTitle = await this.#cached(`title|${candidate.kind}|${candidate.tmdbId}|ru-RU`, () => FOUND_TTL_MS,
+                (fetchDeadline) => this.#source.localizedTitle
+                  ? this.#source.localizedTitle(candidate.kind, candidate.tmdbId, "ru-RU", { deadlineAt: fetchDeadline })
+                  : this.#source.work(candidate.kind, candidate.tmdbId, "ru-RU", { deadlineAt: fetchDeadline }).then(translated => translated.title), { deadlineAt, signal });
+              work = { ...work, russianTitle };
+            } catch (error) {
+              if (!(error instanceof MetadataUnavailableError)) throw error;
+            }
+          }
+          if (candidate.kind === "tv") {
+            work = { ...work, totalEpisodeCount: work.seasons.filter((season) => season.number > 0).reduce((sum, season) => sum + Math.max(0, season.episodeCount), 0) };
+            if (evidence.episodeTitles?.length && Number.isInteger(evidence.episodeSeason)) {
+              const episodeLanguage = evidence.episodeTitles.some((title) => /\p{Script=Cyrillic}/u.test(title)) ? "ru-RU" : language;
+              try {
+                const season = await this.#cached(`season|${candidate.tmdbId}|${evidence.episodeSeason}|${episodeLanguage}`, () => FOUND_TTL_MS,
+                  (fetchDeadline) => this.#source.season(candidate.tmdbId, evidence.episodeSeason, episodeLanguage, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
+                work = { ...work, episodeTitles: season.episodes.map((episode) => episode.name) };
+              } catch (error) {
+                if (!(error instanceof MetadataUnavailableError)) throw error;
+              }
+            }
+          }
           records.set(`${candidate.kind}:${candidate.tmdbId}`, work);
         } catch (error) {
           if (!(error instanceof MetadataUnavailableError)) throw error;

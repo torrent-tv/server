@@ -85,9 +85,13 @@ function recordIds(record) {
  */
 export async function handleApiMetadataIdentifyPost(req, reply, { metadata, containerRecords }) {
   const body = req.body ?? {};
-  const names = Array.isArray(body.names) ? body.names : null;
-  if (!names || names.length === 0 || names.length > MAX_NAMES) {
-    return reply.code(400).send({ error: `names must hold 1 to ${MAX_NAMES} strings.` });
+  const record = recordIds(body.record);
+  if (body.record != null && !record) {
+    return reply.code(400).send({ error: "record must be { type: tmdb | imdb | anilist, id, kind?: movie | tv }; a tmdb record needs its kind." });
+  }
+  const names = body.names === undefined && record ? [] : Array.isArray(body.names) ? body.names : null;
+  if (!names || names.length > MAX_NAMES || (names.length === 0 && !record)) {
+    return reply.code(400).send({ error: `names must hold 1 to ${MAX_NAMES} strings unless record is supplied.` });
   }
   if (names.some((name) => typeof name !== "string" || name.length > MAX_NAME_LENGTH)) {
     return reply.code(400).send({ error: `every name must be a string of at most ${MAX_NAME_LENGTH} characters.` });
@@ -163,10 +167,6 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
   const audioLanguages = body.audioLanguages ?? [];
   if (!(Array.isArray(audioLanguages) && audioLanguages.length <= 16 && audioLanguages.every((code) => typeof code === "string" && /^[a-z]{2,3}$/u.test(code)))) {
     return reply.code(400).send({ error: "audioLanguages must hold at most 16 ISO 639 codes." });
-  }
-  const record = recordIds(body.record);
-  if (body.record != null && !record) {
-    return reply.code(400).send({ error: "record must be { type: tmdb | imdb | anilist, id, kind?: movie | tv }; a tmdb record needs its kind." });
   }
   const answer = await withProviderContext(req, () => metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),

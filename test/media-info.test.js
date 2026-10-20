@@ -312,6 +312,8 @@ test("the address names the work of the open file: its database, number, kind, c
   assert.equal(addressRecord(pack, 5), null);
   // Only AniList knows it.
   assert.equal(addressRecord({ work: { sources: { anilist: { id: 21662, format: "MOVIE" } } } }, 0).type, "anilist");
+  const imdbOnly = { work: { sources: { tmdb: { kind: "movie", imdbId: "tt0111161" } } } };
+  assert.deepEqual(addressRecord(imdbOnly, 0), { type: "imdb", id: "tt0111161", kind: "movie", category: null, season: null, episode: null });
   assert.equal(addressRecord(null, 0), null);
 });
 
