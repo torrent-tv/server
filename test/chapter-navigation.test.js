@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  chapterTree,
   currentSectionId,
   formatChapterTime,
   navigableSections,
@@ -17,6 +18,20 @@ const sections = [
 
 test("chapter navigation filters invalid entries and sorts by media time", () => {
   assert.deepEqual(navigableSections(sections).map(({ id }) => id), ["first", "middle", "late"]);
+});
+
+test("chapter tree follows declared parents and leaves flat or orphaned chapters at the root", () => {
+  const tree = chapterTree([
+    { id: "child-b", parentId: "parent", startSeconds: 20, order: 3 },
+    { id: "flat", startSeconds: 12, order: 2 },
+    { id: "parent", startSeconds: 0, order: 0 },
+    { id: "orphan", parentId: "missing", startSeconds: 30, order: 4 },
+    { id: "child-a", parentId: "parent", startSeconds: 5, order: 1 }
+  ]);
+
+  assert.deepEqual(tree.map(({ section, children }) => [section.id, children.map(({ section: child }) => child.id)]), [
+    ["parent", ["child-a", "child-b"]], ["flat", []], ["orphan", []]
+  ]);
 });
 
 test("current chapter follows the last start at or before playback time", () => {
@@ -54,7 +69,24 @@ test("chapter intervals respect a declared parent end and keep short final secti
   assert.deepEqual(intervals.map(({ id, startSeconds, endSeconds }) => [id, startSeconds, endSeconds]), [
     ["parent", 0, 20], ["child-a", 5, 10], ["child-b", 10, 20], ["post", 29.5, 30]
   ]);
+  assert.equal(currentSectionId(source, 4, 30), "parent");
+  assert.equal(currentSectionId(source, 5, 30), "child-a");
+  assert.equal(currentSectionId(source, 10, 30), "child-b");
   assert.equal(sectionLabel(source[3]), "Post-credits: Untitled chapter");
+});
+
+test("nested intervals stop at the parent's inferred display end", () => {
+  const source = [
+    { id: "parent", startSeconds: 0, displayEndSeconds: 12, order: 0 },
+    { id: "child", parentId: "parent", startSeconds: 5, displayEndSeconds: 20, order: 1 },
+    { id: "next", startSeconds: 12, displayEndSeconds: 30, order: 2 }
+  ];
+
+  assert.deepEqual(
+    playbackSectionIntervals(source, 30).map(({ id, startSeconds, endSeconds }) => [id, startSeconds, endSeconds]),
+    [["parent", 0, 12], ["child", 5, 12], ["next", 12, 30]]
+  );
+  assert.equal(currentSectionId(source, 12, 30), "next");
 });
 
 test("invalid intervals are omitted and unknown duration produces no timeline cues", () => {

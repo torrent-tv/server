@@ -1,18 +1,21 @@
-import { currentSectionId, formatChapterTime, navigableSections, sectionTitle, sectionTypeLabel } from "../../domain/chapter-navigation.js";
+import { chapterTree, currentSectionId, formatChapterTime, navigableSections, sectionTitle } from "../../domain/chapter-navigation.js";
 import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
 /** Render and navigate the selected file's chapter list. */
 export class Chapters {
   static SELECTOR = {
     root: "#chapters",
-    firstChapter: "button[data-chapter-id]"
+    firstChapter: "button[data-chapter-id]",
+    expandChapter: "button[data-chapter-expand]"
   };
 
   #root;
   #snapshot = null;
   #sections = [];
+  #expandedSectionIds = new Set();
   #currentTime = 0;
   #duration = NaN;
+  #activeSectionId = null;
 
   constructor() {
     this.#root = document.querySelector(Chapters.SELECTOR.root);
@@ -24,7 +27,10 @@ export class Chapters {
   }
 
   #onSnapshot = (event) => {
-    this.#snapshot = event instanceof CustomEvent ? event.detail : null;
+    const snapshot = event instanceof CustomEvent ? event.detail : null;
+    if (!snapshot || snapshot.sourceKey !== this.#snapshot?.sourceKey || snapshot.fileIndex !== this.#snapshot?.fileIndex ||
+      snapshot.generation !== this.#snapshot?.generation) this.#expandedSectionIds.clear();
+    this.#snapshot = snapshot;
     this.#sections = navigableSections(this.#snapshot?.sections);
     this.#render();
   };
@@ -34,7 +40,9 @@ export class Chapters {
     if (!Number.isFinite(currentTime)) return;
     this.#currentTime = currentTime;
     this.#duration = event.detail.duration;
+    const previousActiveSectionId = this.#activeSectionId;
     this.#updateCurrent();
+    if (this.#root.dataset.open === "true" && this.#activeSectionId !== previousActiveSectionId) this.#expandCurrentAncestors();
   };
 
   #onPanelChanged = (event) => {
@@ -44,6 +52,7 @@ export class Chapters {
     this.#root.inert = !open;
     this.#root.dataset.open = String(open);
     if (!open) return;
+    this.#expandCurrentAncestors();
     const current = this.#root.querySelector('button[aria-current="location"]');
     const first = this.#root.querySelector(Chapters.SELECTOR.firstChapter);
     (current ?? first ?? this.#root).focus({ preventScroll: true });
@@ -51,19 +60,38 @@ export class Chapters {
 
   #onClick = (event) => {
     const target = event.target;
-    const button = target instanceof Element ? target.closest(Chapters.SELECTOR.firstChapter) : null;
+    if (!(target instanceof Element)) return;
+    const expandButton = target.closest(Chapters.SELECTOR.expandChapter);
+    if (expandButton instanceof HTMLButtonElement) {
+      const children = Array.from(expandButton.parentElement?.children ?? [])
+        .find((element) => element.matches("ul.chapters__children"));
+      if (!(children instanceof HTMLUListElement)) return;
+      const expanded = expandButton.getAttribute("aria-expanded") !== "true";
+      expandButton.setAttribute("aria-expanded", String(expanded));
+      children.hidden = !expanded;
+      const chapterButton = Array.from(expandButton.parentElement.children)
+        .find((element) => element.matches(Chapters.SELECTOR.firstChapter));
+      if (chapterButton instanceof HTMLButtonElement) {
+        if (expanded) this.#expandedSectionIds.add(chapterButton.dataset.chapterId);
+        else this.#expandedSectionIds.delete(chapterButton.dataset.chapterId);
+      }
+      return;
+    }
+
+    const button = target.closest(Chapters.SELECTOR.firstChapter);
     if (!(button instanceof HTMLButtonElement)) return;
     const section = this.#sections.find((item) => item.id === button.dataset.chapterId);
     if (!section) return;
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.REQUEST_SEEK, {
       detail: { positionSeconds: section.startSeconds }
     }));
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_PANEL, { detail: { panel: null } }));
   };
 
   #render() {
     this.#root.replaceChildren();
     if (this.#sections.length > 0) {
-      for (const section of this.#sections) this.#root.append(this.#sectionItem(section));
+      chapterTree(this.#sections).forEach((node, index) => this.#root.append(this.#sectionItem(node, String(index))));
       this.#updateCurrent();
       return;
     }
@@ -85,32 +113,76 @@ export class Chapters {
     return "";
   }
 
-  #sectionItem(section) {
+  #sectionItem(node, path) {
+    const { section, children } = node;
     const item = document.createElement("li");
     const button = document.createElement("button");
     const title = document.createElement("span");
-    const details = document.createElement("span");
-    const type = document.createElement("span");
     const time = document.createElement("time");
     const seconds = section.startSeconds;
 
     button.type = "button";
     button.dataset.chapterId = section.id;
+    button.className = "chapters__select";
     title.className = "chapters__title";
     title.textContent = sectionTitle(section);
-    details.className = "chapters__details";
-    type.className = "chapters__type";
-    type.textContent = sectionTypeLabel(section.type);
+    time.className = "chapters__time";
     time.dateTime = `PT${String(Number(seconds.toFixed(3)))}S`;
     time.textContent = formatChapterTime(seconds);
-    details.append(type, time);
-    button.append(title, details);
+    button.append(title, time);
     item.append(button);
+
+    if (children.length > 0) {
+      const expand = document.createElement("button");
+      const childList = document.createElement("ul");
+      const expanded = this.#expandedSectionIds.has(section.id);
+      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      const pathElement = document.createElementNS("http://www.w3.org/2000/svg", "path");
+
+      expand.type = "button";
+      expand.dataset.chapterExpand = "";
+      expand.setAttribute("aria-label", `Toggle subchapters for ${sectionTitle(section)}`);
+      expand.setAttribute("aria-expanded", String(expanded));
+      expand.setAttribute("aria-controls", `chapters-children-${path}`);
+      icon.setAttribute("class", "chapters__disclosure-icon");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("aria-hidden", "true");
+      pathElement.setAttribute("d", "m9 5 7 7-7 7");
+      icon.append(pathElement);
+      expand.append(icon);
+
+      childList.className = "chapters__children";
+      childList.id = `chapters-children-${path}`;
+      childList.hidden = !expanded;
+      children.forEach((child, index) => childList.append(this.#sectionItem(child, `${path}-${index}`)));
+      item.append(expand, childList);
+    }
+
     return item;
+  }
+
+  #expandCurrentAncestors() {
+    let item = this.#root.querySelector('button[aria-current="location"]')?.parentElement;
+    while (item) {
+      const childList = item.parentElement;
+      if (!(childList instanceof HTMLUListElement) || !childList.classList.contains("chapters__children")) return;
+      const parentItem = childList.parentElement;
+      if (!(parentItem instanceof HTMLLIElement)) return;
+      const expand = Array.from(parentItem.children)
+        .find((element) => element.matches(Chapters.SELECTOR.expandChapter));
+      if (!(expand instanceof HTMLButtonElement)) return;
+      childList.hidden = false;
+      expand.setAttribute("aria-expanded", "true");
+      const parentButton = Array.from(parentItem.children)
+        .find((element) => element.matches(Chapters.SELECTOR.firstChapter));
+      if (parentButton instanceof HTMLButtonElement) this.#expandedSectionIds.add(parentButton.dataset.chapterId);
+      item = parentItem;
+    }
   }
 
   #updateCurrent() {
     const activeId = currentSectionId(this.#sections, this.#currentTime, this.#duration);
+    this.#activeSectionId = activeId;
     for (const button of this.#root.querySelectorAll(Chapters.SELECTOR.firstChapter)) {
       if (button.dataset.chapterId === activeId) button.setAttribute("aria-current", "location");
       else button.removeAttribute("aria-current");

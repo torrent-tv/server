@@ -1,5 +1,7 @@
 ## 0.53.1
 
+- **Fix**: Remove section-type labels from chapter rows and close the list after a chapter is selected.
+- **New**: Show nested chapters as expandable groups, highlight the most specific current chapter, and distinguish the control with a numbered-list icon.
 - **Fix**: Hide the chapter control until the selected file has navigable chapters.
 
 ## 0.53.0
