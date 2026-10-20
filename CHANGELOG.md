@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Measure browser HLS manifest, selected-playlist, remux, SourceBuffer creation, and per-stream append spans for startup trace reconciliation (#ttv-185).
+
 ## 0.57.0
 
 - **New**: Use exact OpenSubtitles hash matches for a separate metadata ID lookup; reject hash identities that conflict with the stated year or a substantially different measured runtime.
