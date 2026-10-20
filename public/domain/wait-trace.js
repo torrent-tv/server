@@ -10,7 +10,7 @@ export class WaitTrace {
     if (this.current) this.finish("superseded");
     this.current = { wait: this.id(), attempt: 0, startedAt, fileIndex: null };
     this.emitMs = 0;
-    this.event("action", { kind, startedAt });
+    this.event("action", { kind, process: "A0", phase: "begin", startedAt });
   }
 
   attempt(fileIndex, startedAt, originalOpen) {
@@ -35,12 +35,16 @@ export class WaitTrace {
     if (!context) return () => {};
     const operation = `b${++this.sequence}`;
     const start = this.now();
-    this.event("begin", { operation, name, ...fields }, context);
+    const process = fields.process ?? name.match(/^[A-Z][0-9]+(?:\.(?:[0-9]+[a-z]?|[va]))?/i)?.[0] ?? null;
+    this.event("begin", { operation, name, process, phase: "begin", ...fields }, context);
     let ended = false;
     const end = (result = {}) => {
       if (ended) return;
       ended = true;
-      this.event("end", { operation, name, start, duration: this.now() - start, ...result }, context);
+      const actualEnd = this.now();
+      const endedAt = Number.isFinite(result.endedAt) ? result.endedAt : actualEnd;
+      this.event("end", { operation, name, process, phase: "end", start, endedAt,
+        duration: endedAt - start, ...result }, context);
     };
     end.context = context;
     end.operation = operation;
@@ -62,15 +66,32 @@ export class WaitTrace {
     }
   }
 
-  request(path, method) {
-    const end = this.open("proxy-response", { path, method });
+  request(path, method, processOverride = null) {
+    const process = processOverride ?? processForRequest(path);
+    const end = this.open("proxy-response", { path, method, process });
     return { end, headers: end.context ? { "x-ttv-wait-trace": end.context.wait,
-      "x-ttv-wait-attempt": String(end.context.attempt), "x-ttv-wait-operation": end.operation } : {} };
+      "x-ttv-wait-attempt": String(end.context.attempt), "x-ttv-wait-operation": end.operation,
+      "x-ttv-wait-process": process ?? "" } : {} };
+  }
+
+  async fetch(path, options = {}, process = null) {
+    const request = this.request(path, options.method ?? "GET", process);
+    try {
+      const headers = new Headers(options.headers ?? {});
+      for (const [name, value] of Object.entries(request.headers)) headers.set(name, value);
+      const response = await fetch(path, { ...options, headers });
+      request.end({ outcome: "response", status: response.status, bodyComplete: false });
+      return response;
+    } catch (error) {
+      request.end({ outcome: error?.name === "AbortError" ? "cancelled" : "error",
+        error: String(error?.message ?? error) });
+      throw error;
+    }
   }
 
   finish(outcome, fields = {}) {
     if (!this.current) return;
-    this.event("outcome", { outcome, startedAt: this.current.startedAt,
+    this.event("outcome", { outcome, process: "A0", phase: "end", startedAt: this.current.startedAt,
       elapsed: this.now() - this.current.startedAt, emitMs: this.emitMs, ...fields });
     this.current = null;
   }
@@ -79,16 +100,81 @@ export class WaitTrace {
 export const waitTrace = new WaitTrace({ enabled: typeof location !== "undefined" &&
   new URLSearchParams(location.search).get("waitTrace") === "1" });
 
+if (waitTrace.enabled && typeof PerformanceObserver === "function") {
+  try {
+    const observer = new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        waitTrace.event("R6.long-task", { process: "R6", phase: "event", startedAt: entry.startTime,
+          durationMs: entry.duration, taskName: entry.name });
+      }
+    });
+    observer.observe({ type: "longtask", buffered: true });
+  } catch {
+    // silent-ok: this browser does not support long-task entries.
+  }
+}
+
 /** hls.js events are observations, not inferred durations of decoding or append. */
 export function observeHlsWait(instance, Events) {
   if (!waitTrace.enabled) return;
-  for (const name of ["MANIFEST_PARSED", "LEVEL_LOADED", "AUDIO_TRACK_LOADED", "FRAG_LOADING", "FRAG_LOADED",
+  const appends = new Map();
+  const remuxes = new Map();
+  const initialized = new Set();
+  let manifestEnd = null;
+  for (const name of ["MANIFEST_LOADING", "MANIFEST_PARSED", "LEVEL_LOADED", "AUDIO_TRACK_LOADED", "FRAG_LOADING", "FRAG_LOADED",
     "FRAG_PARSING_INIT_SEGMENT", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING", "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"]) {
-    if (Events[name]) instance.on(Events[name], (_event, data) => waitTrace.event(name, {
-      type: data?.type ?? data?.frag?.type, segment: data?.frag?.sn, level: data?.frag?.level,
-      tracks: data?.tracks ? Object.keys(data.tracks) : undefined, details: data?.details
-    }));
+    if (!Events[name]) continue;
+    instance.on(Events[name], (_event, data) => {
+      if (name === "MANIFEST_LOADING") manifestEnd = waitTrace.open("B5.manifest");
+      if (name === "MANIFEST_PARSED") manifestEnd?.({ outcome: "parsed" });
+      const type = data?.type ?? data?.frag?.type ?? "main";
+      const stream = type === "audio" ? "B8.a" : "B8.v";
+      const appendKey = `${type}:${data?.parent ?? "media"}`;
+      const mediaAppend = initialized.has(appendKey);
+      const appendProcess = mediaAppend
+        ? (type === "audio" ? "B12.a" : "B12.v")
+        : (type === "audio" ? "B10.a" : "B10.v");
+      if (name === "FRAG_PARSING_INIT_SEGMENT") remuxes.set(type, waitTrace.open(stream, { stream: type,
+        segment: data?.frag?.sn, level: data?.frag?.level }));
+      if (name === "BUFFER_CODECS") {
+        waitTrace.event(name, { process: "B8", type, segment: data?.frag?.sn });
+        remuxes.get(type)?.({ outcome: "codecs-ready" });
+        remuxes.delete(type);
+      }
+      if (name === "BUFFER_CREATED") waitTrace.event(name, { process: "B9", phase: "event",
+        tracks: data?.tracks ? Object.keys(data.tracks) : undefined });
+      if (name === "BUFFER_APPENDING") {
+        appends.set(appendKey, waitTrace.open(appendProcess, { stream: type, parent: data?.parent ?? null,
+          segment: data?.frag?.sn }));
+      }
+      if (name === "BUFFER_APPENDED") {
+        appends.get(appendKey)?.({ outcome: "updateend-or-hls-ack" });
+        appends.delete(appendKey);
+        initialized.add(appendKey);
+      }
+      waitTrace.event(name, { process: name === "MANIFEST_PARSED" ? "B5" : undefined, phase: "event",
+        type, segment: data?.frag?.sn, level: data?.frag?.level,
+        tracks: data?.tracks ? Object.keys(data.tracks) : undefined, details: data?.details });
+    });
   }
+}
+
+function processForRequest(path) {
+  if (path === "/api/proxy-clients/choose") return "A2.1";
+  if (path === "/api/sources") return "A4";
+  if (/\/api\/sources\/[^/]+\/files(?:\?|$)/.test(path)) return "A6";
+  if (/\/api\/sources\/[^/]+\/stats(?:\?|$)/.test(path)) return "A5";
+  if (path === "/api/playback-plan") return "A12";
+  if (/\/api\/transcode-sessions(?:\?|$)/.test(path)) return "B1";
+  if (/\/api\/transcode-sessions\/[^/]+\/net-report(?:\?|$)/.test(path)) return "B2";
+  if (/\/api\/transcode-sessions\/[^/]+\/seek(?:\?|$)/.test(path)) return "B4";
+  if (/\/transcode\/.*\.m3u8(?:\?|$)/.test(path)) return "B3";
+  if (/\/transcode\/.*(?:init|\.mp4)(?:\?|$)/.test(path)) return "B6";
+  if (/\/transcode\/.*(?:\.m4s|\.ts)(?:\?|$)/.test(path)) return "B7";
+  if (/\/api\/session-progress(?:\?|$)/.test(path)) return "P14";
+  if (/\/api\/sources\/[^/]+\/(?:fingerprint|container-metadata|audio|cover)(?:\?|$)/.test(path)) return "A13";
+  if (/\/api\/sources\/[^/]+\/subtitles(?:\?|$)/.test(path)) return "A14";
+  return null;
 }
 
 /** Confirm media-time advance separately from the existing single-frame record. */
@@ -114,7 +200,7 @@ export function observeVideoWait(video, readAudio) {
       expectedDisplayTime: metadata.expectedDisplayTime, presentationTime: metadata.presentationTime,
       audioDecodedBytes: Number.isFinite(video.webkitAudioDecodedByteCount) ? video.webkitAudioDecodedByteCount : null,
       ...audio };
-    if (!previous) waitTrace.event("first-frame", current);
+    if (!previous) waitTrace.event("first-frame", { process: "C6", phase: "event", ...current });
     if (!video.paused && previous && metadata.mediaTime > previous.mediaTime &&
       current.audioRequired && current.audioDecodedBytes === null) {
       waitTrace.finish("advancing-audio-output-unverified", current);
@@ -125,7 +211,10 @@ export function observeVideoWait(video, readAudio) {
       metadata.presentedFrames > previous.presentedFrames && current.audioBuffered &&
       previous.audioBuffered && (!current.audioRequired ||
         (current.audioDecodedBytes > 0 && previous.audioDecodedBytes > 0))) {
-      endPresentation?.({ outcome: "advancing-with-decoded-audio" });
+      endPresentation?.({ outcome: "advancing-with-decoded-audio", endedAt: previous.at, confirmedAt: at });
+      waitTrace.event("C7.audio-ready", { process: "C7", phase: "event", at: previous.at,
+        confirmedAt: at, audioRequired: current.audioRequired, audioBuffered: current.audioBuffered,
+        audioDecodedBytes: current.audioDecodedBytes });
       waitTrace.finish("advancing-with-decoded-audio", { firstAdvancingFrameAt: previous.at,
         confirmedAt: at, frameInterval: at - previous.at, ...current });
       return;
@@ -135,7 +224,9 @@ export function observeVideoWait(video, readAudio) {
   };
   for (const name of ["loadedmetadata", "loadeddata", "canplay", "play", "playing", "pause", "seeking", "seeked", "waiting", "stalled", "error"]) {
     video.addEventListener(name, () => {
-      waitTrace.event(`media-${name}`, { mediaTime: video.currentTime, readyState: video.readyState, paused: video.paused });
+      waitTrace.event(`media-${name}`, { process: name === "play" || name === "playing" ? "C5" : undefined,
+        phase: name === "play" ? "begin" : name === "playing" ? "end" : "event", mediaTime: video.currentTime,
+        readyState: video.readyState, paused: video.paused });
       if (name === "playing" && waitTrace.current?.attempt > 0) {
         if (callback !== null) video.cancelVideoFrameCallback?.(callback);
         previous = null;

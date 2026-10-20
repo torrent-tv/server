@@ -382,6 +382,8 @@ export class Loading extends StateDerivedView {
   #activeFileIndex = -1;
   /** @type {string} Proxy source currently supplying the active file. */
   #activeSourceKey = "";
+  /** Ends the separately timed wait for a viewer to choose a file. */
+  #playlistChoiceEnd = null;
   /** @type {number} Invalidates late sidecar metadata responses after a file switch. */
   #audioMetadataRefreshSeq = 0;
   /**
@@ -642,7 +644,8 @@ export class Loading extends StateDerivedView {
       await this.#seekPosition.move(position, {
       stopLoad: () => this.#hlsPlayer.stopLoad(),
       reportSeek: async (target) => {
-        const answer = await this.#session.reportSeek(target);
+        const answer = await waitTrace.run("B4.position-restatement", () => this.#session.reportSeek(target),
+          { process: "B4" });
         reportedAt = performance.now();
         return answer;
       },
@@ -2314,6 +2317,9 @@ export class Loading extends StateDerivedView {
       if (videoCount <= 0) {
         throw viewerError(Loading.MESSAGES.noVideoFile);
       }
+      if (videoCount > 1 && this.#sharedVideoFileIndex() == null) {
+        this.#playlistChoiceEnd = waitTrace.open("A7.playlist-choice", { process: "A7", videoCount });
+      }
       // Start the torrent NOW, before the viewer has picked an episode. None of
       // what a cold torrent must do first depends on which file is wanted:
       // announce to the trackers, connect to peers, be unchoked by them. On a
@@ -2343,6 +2349,8 @@ export class Loading extends StateDerivedView {
       }
 
       this.setProgress(100);
+      waitTrace.event("C4.playback-ready", { process: "C4", phase: "end",
+        viewerWantsPlayback: this.#viewerWantsPlayback() });
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
           detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
         }));
@@ -2677,7 +2685,7 @@ export class Loading extends StateDerivedView {
     try {
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
-        { signal: this.#session.abortController.signal, timeoutMs: 1_000 }
+        { signal: this.#session.abortController.signal, timeoutMs: 1_000, waitProcess: "A5" }
       );
       if (!response.ok) return;
       const stats = await response.json();
@@ -2708,6 +2716,7 @@ export class Loading extends StateDerivedView {
 
   #warmSourceInBackground(fileIndex, positionSeconds = 0) {
     const epoch = this.#playbackEpoch;
+    const endTrace = waitTrace.open("A8.warm-up", { fileIndex });
     void (async () => {
       try {
         const transport = await this.#acquireTransport();
@@ -2717,14 +2726,17 @@ export class Loading extends StateDerivedView {
         // request — and the two are indistinguishable in the log.
         if (epoch !== this.#playbackEpoch) {
           this.#logEvt(`warm-up abandoned before registering: a newer attempt began (file ${fileIndex ?? "-"})`);
+          endTrace({ outcome: "superseded", phase: "before-register" });
           return;
         }
         const sourceKey = await this.#session.registerSourceOnProxy(transport);
         if (epoch !== this.#playbackEpoch) {
           this.#logEvt(`warm-up abandoned after registering: a newer attempt began (file ${fileIndex ?? "-"})`);
+          endTrace({ outcome: "superseded", phase: "after-register" });
           return;
         }
         this.#logEvt(`source ${sourceKey} registered for viewer-owned preparation`);
+        endTrace({ outcome: "registered", sourceKey });
       } catch (error) {
         if (this.#isAbortError(error)) {
           // Abandoned work says so. An aborted warm-up is ordinary — the viewer
@@ -2732,9 +2744,11 @@ export class Loading extends StateDerivedView {
           // happened and never explained itself reads afterwards as a proxy
           // that ignored the request.
           this.#logEvt("warm-up abandoned: the attempt was cancelled");
+          endTrace({ outcome: "cancelled" });
           return;
         }
         this.#logEvt(`warm-up skipped: ${error instanceof Error ? error.message : String(error)}`);
+        endTrace({ outcome: "error", error: String(error?.message ?? error) });
       }
     })();
   }
@@ -3451,6 +3465,8 @@ export class Loading extends StateDerivedView {
       throw viewerError(Loading.MESSAGES.selectedFileNotFound);
     }
     const waitStartedAt = this.#pendingOriginalWaitStartedAt ?? performance.now();
+    this.#playlistChoiceEnd?.({ outcome: "chosen", fileIndex });
+    this.#playlistChoiceEnd = null;
     waitTrace.attempt(fileIndex, waitStartedAt, this.#pendingOriginalWaitStartedAt !== null);
     this.#pendingOriginalWaitStartedAt = null;
     this.#currentPlaybackWaitStartedAt = waitStartedAt;
@@ -3608,8 +3624,10 @@ export class Loading extends StateDerivedView {
         }
       }));
     }
-    void this.#announceFingerprint(metadataSelection, fileIndex, transport, earlySourceKey);
-    void this.#announceContainerMetadata(metadataSelection, fileIndex, transport, earlySourceKey);
+    void waitTrace.run("A13.fingerprint", () =>
+      this.#announceFingerprint(metadataSelection, fileIndex, transport, earlySourceKey));
+    void waitTrace.run("A13.container-metadata", () =>
+      this.#announceContainerMetadata(metadataSelection, fileIndex, transport, earlySourceKey));
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
     this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 
@@ -3708,7 +3726,7 @@ export class Loading extends StateDerivedView {
       if (this.#proxy?.proxyId) {
         this.#refusedProxiesForThisOpen.add(this.#proxy.proxyId);
       }
-      const elsewhere = (await this.#proxiesThatCanServe(prepared.mediaInfoForOffer))
+      const elsewhere = (await this.#proxiesThatCanServe(prepared.mediaInfoForOffer, { process: "A16" }))
         .filter((id) => !this.#refusedProxiesForThisOpen.has(id));
       if (elsewhere.length > 0) {
         this.#debug("retrying the file on another proxy that can serve it", {
@@ -3934,16 +3952,16 @@ export class Loading extends StateDerivedView {
    * @param {object | null | undefined} mediaInfo
    * @returns {Promise<string[]>}
    */
-  async #proxiesThatCanServe(mediaInfo, { includeCurrent = false } = {}) {
+  async #proxiesThatCanServe(mediaInfo, { includeCurrent = false, process = "A9" } = {}) {
     if (!mediaInfo || typeof mediaInfo !== "object") {
       return [];
     }
     try {
-      const response = await fetch("/api/proxy-clients/can-serve", {
+      const response = await waitTrace.fetch("/api/proxy-clients/can-serve", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mediaInfo, exclude: includeCurrent ? "" : (this.#proxy?.proxyId ?? "") })
-      });
+      }, process);
       if (!response.ok) {
         return [];
       }
@@ -4123,7 +4141,7 @@ export class Loading extends StateDerivedView {
       // figure used to come only from segments of the film itself, so it did
       // not exist until playback had begun — after every decision that wants
       // it. Best-effort and unawaited: nothing here waits on it.
-      void measureLink(transport);
+      void waitTrace.run("A2.5.link-probe", () => measureLink(transport), { process: "A2.5" });
       return transport;
     }).finally(() => {
       // Only if it is still ours: an abandoned attempt was replaced long ago
@@ -4548,23 +4566,29 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<boolean>}
    */
   async #tryPlayDirectUrl(directUrl, options) {
+    const endTrace = waitTrace.open("A17.direct-play");
     this.setStatus(options.statusMessage);
     this.setProgress(options.progress);
-    await this.#session.playFromUrl(this.#videoElement, directUrl);
     try {
+      await this.#session.playFromUrl(this.#videoElement, directUrl);
       await this.#ensureVideoReady();
+      endTrace({ outcome: "supported" });
       return true;
     } catch (error) {
       if (!this.#isUnsupportedError(error)) {
+        endTrace({ outcome: "error", error: String(error?.message ?? error) });
         throw error;
       }
+      endTrace({ outcome: "unsupported" });
       return false;
     }
   }
 
   /** @param {number} fileIndex */
   #startSubtitlesForVideo(fileIndex) {
-    void this.#subtitlePlayback.loadForVideo(fileIndex).catch((e) => {
+    const endTrace = waitTrace.open("A14.start-subtitles", { fileIndex });
+    void this.#subtitlePlayback.loadForVideo(fileIndex).then(() => endTrace({ outcome: "reported" }), e => {
+      endTrace({ outcome: this.#isAbortError(e) ? "cancelled" : "error", error: String(e?.message ?? e) });
       if (!this.#isAbortError(e)) {
         console.warn("[torrent-tv][subtitles] load failed:", e);
       }
@@ -5567,7 +5591,7 @@ export class Loading extends StateDerivedView {
         if (this.#proxy?.proxyId) {
           this.#refusedProxiesForThisOpen.add(this.#proxy.proxyId);
         }
-        const elsewhere = (await this.#proxiesThatCanServe(this.#mediaInfoForOffer))
+        const elsewhere = (await this.#proxiesThatCanServe(this.#mediaInfoForOffer, { process: "A16" }))
           .filter((id) => !this.#refusedProxiesForThisOpen.has(id));
         if (elsewhere.length > 0) {
           this.#debug("retrying the file on another proxy that can serve it", { fileIndex, candidates: elsewhere });
@@ -6069,7 +6093,7 @@ export class Loading extends StateDerivedView {
           const requestStartedAt = performance.now();
           const resp = await transport.fetch(
             `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
-            { cache: "no-store" }
+            { cache: "no-store", waitProcess: "A11" }
           );
           if (!stopped && resp.ok) {
             let stats = await resp.json();

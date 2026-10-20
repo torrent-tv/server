@@ -138,12 +138,13 @@ export class ProxyTransport {
    * @returns {Promise<Response>}
    */
   fetch(path, options = {}) {
-    if (!waitTrace.current || path.startsWith("/api/client-logs")) return this.#fetchFn(path, options);
-    const trace = waitTrace.request(path, options.method ?? "GET");
-    const headers = Object.fromEntries(new Headers(options.headers ?? {}).entries());
+    const { waitProcess = null, ...fetchOptions } = options;
+    if (!waitTrace.current || path.startsWith("/api/client-logs")) return this.#fetchFn(path, fetchOptions);
+    const trace = waitTrace.request(path, options.method ?? "GET", waitProcess);
+    const headers = Object.fromEntries(new Headers(fetchOptions.headers ?? {}).entries());
     Object.assign(headers, trace.headers);
     try {
-      return this.#fetchFn(path, { ...options, headers }).then(response => {
+      return this.#fetchFn(path, { ...fetchOptions, headers }).then(response => {
         trace.end({ outcome: "response", status: response.status, bodyComplete: !this.isHttp });
         return response;
       }, error => {

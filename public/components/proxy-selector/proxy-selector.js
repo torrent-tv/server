@@ -42,8 +42,8 @@ export class ProxySelector {
    * @param {{ infoHash?: string, onlyIds?: string[] | null, tried?: Array<{ id: string, error: string }>, current?: string }} about
    * @returns {Promise<{ chosen: ChosenProxy | null, candidates: object[], narrowedBy: string }>}
    */
-  async #choose({ infoHash = "", onlyIds = null, tried = [], current = "" } = {}) {
-    const response = await waitTrace.run("A2.1.choose", () => fetch("/api/proxy-clients/choose", {
+  async #choose({ infoHash = "", onlyIds = null, tried = [], current = "", process = "A2.1" } = {}) {
+    const response = await waitTrace.run(`${process}.choose`, () => waitTrace.fetch("/api/proxy-clients/choose", {
       method: "POST",
       headers: requestHeaders(),
       body: JSON.stringify({
@@ -52,7 +52,7 @@ export class ProxySelector {
         ...(tried.length > 0 ? { tried } : {}),
         ...(current ? { current } : {})
       })
-    }));
+    }, process));
     if (!response.ok) {
       throw new Error(`Proxy choice request failed (${response.status}).`);
     }
@@ -88,7 +88,7 @@ export class ProxySelector {
    */
   async betterProxyIdFor(about = {}) {
     try {
-      const { chosen } = await this.#choose(about);
+      const { chosen } = await this.#choose({ ...about, process: "A3" });
       return chosen && chosen.id !== about.current && chosen.holdsThisFilm ? chosen.id : "";
     } catch {
       // silent-ok: a question that cannot be answered leaves the connection in

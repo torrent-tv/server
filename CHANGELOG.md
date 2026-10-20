@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Add opt-in process boundary events for playback startup, torrent-file intake, requests, HLS loading and presentation validation (#ttv-185).
+
 Warning: truncated output (original token count: 80973)
 Total output lines: 1858
 
