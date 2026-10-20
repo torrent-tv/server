@@ -678,11 +678,7 @@ export class Player extends StateDerivedView {
     this.#chapterTimeline.setSnapshot(snapshot);
     const sections = Array.isArray(snapshot?.sections) ? snapshot.sections : [];
     const hasNavigation = navigableSections(sections).length > 0;
-    const unsupported = snapshot?.state === "unsupported" || snapshot?.capability === "unsupported";
-    const completeAbsence = snapshot?.state === "absent" ||
-      unsupported ||
-      (snapshot?.state === "available" && snapshot.complete === true && !hasNavigation);
-    this.#chaptersToggle.hidden = snapshot === null || completeAbsence;
+    this.#chaptersToggle.hidden = !hasNavigation;
     if (this.#chaptersToggle.hidden && this.#activePanel === "chapters") this.#closePlaylist();
   };
 
