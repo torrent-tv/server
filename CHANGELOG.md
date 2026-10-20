@@ -1,4 +1,4 @@
-## Unreleased
+## 0.60.0
 
 - **New**: Show subtitle choices as language, source and known-team levels only when they distinguish alternatives; hide release names and technical details.
 
