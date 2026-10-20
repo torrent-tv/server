@@ -1,4 +1,4 @@
-import { currentSectionId, formatChapterTime, navigableSections } from "../../domain/chapter-navigation.js";
+import { currentSectionId, formatChapterTime, navigableSections, sectionTitle, sectionTypeLabel } from "../../domain/chapter-navigation.js";
 import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
 /** Render and navigate the selected file's chapter list. */
@@ -12,6 +12,7 @@ export class Chapters {
   #snapshot = null;
   #sections = [];
   #currentTime = 0;
+  #duration = NaN;
 
   constructor() {
     this.#root = document.querySelector(Chapters.SELECTOR.root);
@@ -32,6 +33,7 @@ export class Chapters {
     const currentTime = event instanceof CustomEvent ? event.detail?.currentTime : null;
     if (!Number.isFinite(currentTime)) return;
     this.#currentTime = currentTime;
+    this.#duration = event.detail.duration;
     this.#updateCurrent();
   };
 
@@ -79,9 +81,6 @@ export class Chapters {
   #statusMessage() {
     if (!this.#snapshot) return "";
     if (this.#snapshot.state === "error") return "Chapter information is unavailable.";
-    if (this.#snapshot.state === "unsupported" || this.#snapshot.capability === "unsupported") {
-      return "Chapter information is not supported by this proxy.";
-    }
     if (this.#snapshot.state === "pending" || this.#snapshot.complete === false) return "Reading chapters…";
     return "";
   }
@@ -98,10 +97,10 @@ export class Chapters {
     button.type = "button";
     button.dataset.chapterId = section.id;
     title.className = "chapters__title";
-    title.textContent = chapterTitle(section);
+    title.textContent = sectionTitle(section);
     details.className = "chapters__details";
     type.className = "chapters__type";
-    type.textContent = chapterType(section.type);
+    type.textContent = sectionTypeLabel(section.type);
     time.dateTime = `PT${String(Number(seconds.toFixed(3)))}S`;
     time.textContent = formatChapterTime(seconds);
     details.append(type, time);
@@ -111,21 +110,12 @@ export class Chapters {
   }
 
   #updateCurrent() {
-    const activeId = currentSectionId(this.#sections, this.#currentTime);
+    const activeId = currentSectionId(this.#sections, this.#currentTime, this.#duration);
     for (const button of this.#root.querySelectorAll(Chapters.SELECTOR.firstChapter)) {
       if (button.dataset.chapterId === activeId) button.setAttribute("aria-current", "location");
       else button.removeAttribute("aria-current");
     }
   }
-}
-
-function chapterTitle(section) {
-  const title = section.titles?.find((entry) => typeof entry?.text === "string" && entry.text.trim());
-  return title?.text.trim() || "Untitled chapter";
-}
-
-function chapterType(type) {
-  return ({ opening: "Opening", ending: "Ending", credits: "Credits", "post-credits": "Post-credits" })[type] ?? "Chapter";
 }
 
 function bootstrapChapters() {

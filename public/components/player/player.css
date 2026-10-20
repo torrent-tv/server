@@ -95,6 +95,35 @@
     inline-size: 100%;
   }
 
+  #player__time-range {
+    --media-range-segments-gap: 0.125rem;
+  }
+
+  #player__time-range::part(current-box) {
+    visibility: hidden;
+  }
+
+  media-controller[keyboardcontrol] #player__time-range::part(current-box) {
+    visibility: visible;
+  }
+
+  media-controller[keyboardcontrol] #player__current-chapter {
+    visibility: visible;
+  }
+
+  #player__current-chapter {
+    display: block;
+    max-inline-size: 12rem;
+    overflow: hidden;
+    visibility: hidden;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--media-control-background, rgb(20 20 30 / 0.7));
+    color: var(--media-primary-color, rgb(238 238 238));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* The top bar carries only the close button; keep it flush left and
      transparent (the buttons bring their own background). */
   #player__top-bar {

@@ -116,7 +116,9 @@
           <media-mute-button></media-mute-button>
           <media-volume-range></media-volume-range>
           <media-time-display showduration></media-time-display>
-          <media-time-range></media-time-range>
+          <media-time-range id="player__time-range">
+            <span id="player__current-chapter" slot="current" role="status" aria-live="off" aria-atomic="true"></span>
+          </media-time-range>
           <media-chrome-menu-button
             id="player__subtitle-button"
             invoketarget="player__subtitle-menu"
