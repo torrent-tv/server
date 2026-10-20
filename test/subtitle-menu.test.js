@@ -47,6 +47,7 @@ test("only distinguishing Forced and SDH characteristics appear; repeated option
   ]);
   assert.deepEqual(items.map(({ text, kind }) => [text, kind]), [
     ["Russian", "heading"],
+    ["OpenSubtitles", "heading"],
     ["Forced", "radio"],
     ["SDH", "radio"],
     ["Subtitle (1)", "radio"],
@@ -55,13 +56,14 @@ test("only distinguishing Forced and SDH characteristics appear; repeated option
   assert.equal(items.some(item => /release|\.ass|srt|fps|unverified/iu.test(item.text)), false);
 });
 
-test("a source level is omitted when it does not distinguish subtitle alternatives", () => {
+test("the source heading contains its alternative tracks even when it is the only source", () => {
   const items = subtitleMenuItems([
     { key: "pt-br", language: "pt-BR", source: "OpenSubtitles", forced: true },
     { key: "pt", language: "pt", source: "OpenSubtitles", hearingImpaired: true }
   ]);
   assert.deepEqual(items.map(({ text, kind, level }) => [text, kind, level]), [
     ["Portuguese", "heading", "language"],
+    ["OpenSubtitles", "heading", "source"],
     ["Forced", "radio", undefined],
     ["SDH", "radio", undefined]
   ]);
