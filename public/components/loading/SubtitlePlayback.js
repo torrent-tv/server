@@ -11,7 +11,12 @@ import {
   offeredSubtitleTracks,
   subtitleStartChoice
 } from "../../domain/subtitle-start.js";
-import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
+import {
+  trackLanguageTag,
+  trackLanguageCode,
+  languageName,
+  subtitleLanguageInfo
+} from "../../domain/track-language.js";
 
 import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
@@ -420,11 +425,12 @@ export class SubtitlePlayback {
     return { ...this.#start };
   }
 
-  /** @returns {Array<{ key: string, language: string, source: string, team: string | null, forced: boolean, hearingImpaired: boolean, showing: boolean }>} */
+  /** @returns {Array<{ key: string, language: string, provider: string, source: string, team: string | null, forced: boolean, hearingImpaired: boolean, showing: boolean }>} */
   #menuEntriesNow() {
     return [...this.#menuEntries].map(([key, entry]) => ({
       key,
       language: entry.menu?.language ?? entry.textTrack.language ?? "und",
+      provider: entry.menu?.provider ?? "",
       source: entry.menu?.source ?? "Subtitles",
       team: entry.menu?.team ?? null,
       forced: entry.menu?.forced === true,
@@ -549,6 +555,7 @@ export class SubtitlePlayback {
         fileIndex: this.#subtitleContext?.fileIndex,
         menu: {
           language: item.language,
+          provider: item.provider,
           source: item.provider === "opensubtitles" ? "OpenSubtitles" : item.provider === "jimaku" ? "Jimaku" : item.provider,
           team: null,
           forced: item.forced === true,
@@ -561,7 +568,9 @@ export class SubtitlePlayback {
     }
     this.#providerStatuses = statuses.filter(p => ["unavailable", "partial", "ambiguous", "no-suitable"].includes(p.status)).map(p => ({
       key: `${epoch}:status:${p.provider}:${p.status}`, text: p.status === "no-suitable"
-        ? `No suitable subtitles for ${p.languages.join(", ")}`
+        ? `No suitable subtitles for ${p.languages
+          .map(language => subtitleLanguageInfo(language, p.provider).name)
+          .join(", ")}`
         : `${p.provider}: ${p.status === "partial" ? "showing partial results" : "search unavailable — retry"}`,
       checked: false, disabled: p.status === "partial" || p.status === "no-suitable"
     }));

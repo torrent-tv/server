@@ -2,7 +2,7 @@
  * @file The subtitle menu names tracks by key; labels are only what is shown.
  */
 
-import { languageName, trackLanguageCode } from "./track-language.js";
+import { subtitleLanguageInfo } from "./track-language.js";
 
 /**
  * A single menu: "Off" and the supplied language, source, team and track rows.
@@ -34,6 +34,7 @@ function hasChecked(items) {
  * @property {string} [language]
  * @property {string} [source]
  * @property {string} [team]
+ * @property {string} [provider]
  * @property {boolean} [forced]
  * @property {boolean} [hearingImpaired]
  * @property {boolean} showing
@@ -60,7 +61,7 @@ function hasChecked(items) {
 export function subtitleMenuItems(entries, statuses = []) {
   const languages = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
-    const language = languageParts(entry.language);
+    const language = languageParts(entry);
     const group = languages.get(language.code) ?? { ...language, tracks: [] };
     group.tracks.push(entry);
     languages.set(language.code, group);
@@ -72,14 +73,14 @@ export function subtitleMenuItems(entries, statuses = []) {
       if (language.tracks.length === 1) {
         return [trackItem(language.tracks[0], language.name, [], language.name, 0)];
       }
-      const rows = [heading(`language:${language.code}`, language.name, "language")];
+      const rows = [heading(`language:${language.code}`, language.name, "language", 0)];
       const sources = groupBy(language.tracks, entry => textOf(entry.source) || "Subtitles")
         .sort((a, b) => sourceRank(a.name) - sourceRank(b.name));
       if (sources.length === 1) {
-        rows.push(...sourceItems(sources[0].items, language, "heading"));
+        rows.push(...sourceItems(sources[0].items, language, false));
       } else {
         for (const source of sources) {
-          rows.push(...sourceItems(source.items, language, source.items.length === 1 ? "choice" : "heading"));
+          rows.push(...sourceItems(source.items, language, source.items.length !== 1));
         }
       }
       return rows;
@@ -95,25 +96,28 @@ export function subtitleMenuItems(entries, statuses = []) {
   return [...grouped, ...actions];
 }
 
-function sourceItems(tracks, language, sourceMode) {
+function sourceItems(tracks, language, showSource) {
   const source = textOf(tracks[0]?.source) || "Subtitles";
-  if (sourceMode === "choice") {
+  if (!showSource && tracks.length === 1) {
     return [trackItem(tracks[0], language.name, [], source, 1)];
   }
-  const sources = [heading(`source:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}`, source, "source")];
+  const parentLabels = showSource ? [source] : [];
+  const sourceDepth = showSource ? 1 : 0;
+  const sources = showSource
+    ? [heading(`source:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}`, source, "source", 1)]
+    : [];
   const teams = groupBy(tracks, entry => textOf(entry.team));
   if (teams.length === 1) {
-    const team = teams[0].name;
-    return [...sources, ...trackItems(tracks, language, [source, ...(team ? [team] : [])], 2)];
+    return [...sources, ...trackItems(tracks, language, parentLabels, sourceDepth + 1)];
   }
 
   const rows = [...sources];
   for (const group of teams) {
     if (group.items.length === 1) {
-      rows.push(trackItem(group.items[0], language.name, [source, group.name].filter(Boolean), group.name || "Subtitle", 2));
+      rows.push(trackItem(group.items[0], language.name, [...parentLabels, group.name].filter(Boolean), group.name || "Subtitle", sourceDepth + 1));
     } else {
-      if (group.name) rows.push(heading(`team:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}:${encodeURIComponent(group.name)}`, group.name, "team"));
-      rows.push(...trackItems(group.items, language, [source, ...(group.name ? [group.name] : [])], 2 + (group.name ? 1 : 0)));
+      if (group.name) rows.push(heading(`team:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}:${encodeURIComponent(group.name)}`, group.name, "team", sourceDepth + 1));
+      rows.push(...trackItems(group.items, language, [...parentLabels, ...(group.name ? [group.name] : [])], sourceDepth + 1 + (group.name ? 1 : 0)));
     }
   }
   return rows;
@@ -153,8 +157,8 @@ function trackItem(entry, language, parentLabels, text, depth) {
   };
 }
 
-function heading(key, text, level) {
-  return { key, text, kind: "heading", level, checked: false };
+function heading(key, text, level, depth) {
+  return { key, text, kind: "heading", level, depth, checked: false };
 }
 
 function groupBy(items, nameOf) {
@@ -176,12 +180,9 @@ function sourceRank(source) {
   return source === "In container" ? 0 : source === "In torrent" ? 1 : 2;
 }
 
-function languageParts(value) {
-  const tag = typeof value === "string" ? value.trim() : "";
-  const code = trackLanguageCode(tag) || "und";
-  const unknown = code === "und" || code === "";
-  const name = unknown ? "Unknown language" : languageName(code) || code;
-  return { code: unknown ? "und" : code, name, unknown: unknown ? 1 : 0 };
+function languageParts(entry) {
+  const info = subtitleLanguageInfo(entry.language, entry.provider);
+  return { ...info, unknown: info.unknown ? 1 : 0 };
 }
 
 /**

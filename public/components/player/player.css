@@ -60,14 +60,37 @@
     fill: none;
   }
 
+  #player__subtitle-menu {
+    --subtitle-menu-indent: 0.75rem;
+    --subtitle-menu-step: 1rem;
+    --subtitle-menu-indicator: 1.25rem;
+  }
+
+  #player__subtitle-menu > media-chrome-menu-item {
+    --media-menu-item-indicator-height: var(--subtitle-menu-indicator);
+    padding-inline-start: var(--subtitle-menu-indent);
+  }
+
+  #player__subtitle-menu > [data-subtitle-group][data-subtitle-depth="0"] {
+    padding-inline-start: calc(var(--subtitle-menu-indent) + var(--subtitle-menu-indicator) + 0.5ch);
+  }
+
+  #player__subtitle-menu > [data-subtitle-group][data-subtitle-depth="1"] {
+    padding-inline-start: calc(var(--subtitle-menu-indent) + var(--subtitle-menu-step) + var(--subtitle-menu-indicator) + 0.5ch);
+  }
+
+  #player__subtitle-menu > [data-subtitle-group][data-subtitle-depth="2"] {
+    padding-inline-start: calc(var(--subtitle-menu-indent) + 2 * var(--subtitle-menu-step) + var(--subtitle-menu-indicator) + 0.5ch);
+  }
+
   #player__subtitle-menu > [data-subtitle-group="language"] {
-    padding: 0.55rem 0.75rem 0.25rem;
+    padding-block: 0.55rem 0.25rem;
     color: var(--media-primary-color, #eee);
     font-weight: 600;
   }
 
   #player__subtitle-menu > [data-subtitle-group="source"] {
-    padding: 0.25rem 0.75rem 0.15rem 1.25rem;
+    padding-block: 0.25rem 0.15rem;
     color: inherit;
     font-size: 0.875rem;
     font-weight: 500;
@@ -75,7 +98,7 @@
   }
 
   #player__subtitle-menu > [data-subtitle-group="team"] {
-    padding: 0.25rem 0.75rem 0.15rem 2rem;
+    padding-block: 0.25rem 0.15rem;
     color: inherit;
     font-size: 0.875rem;
     font-weight: 500;
@@ -83,19 +106,19 @@
   }
 
   #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="0"] {
-    padding-inline-start: 0.75rem;
+    padding-inline-start: var(--subtitle-menu-indent);
   }
 
   #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="1"] {
-    padding-inline-start: 1.75rem;
+    padding-inline-start: calc(var(--subtitle-menu-indent) + var(--subtitle-menu-step));
   }
 
   #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="2"] {
-    padding-inline-start: 2.75rem;
+    padding-inline-start: calc(var(--subtitle-menu-indent) + 2 * var(--subtitle-menu-step));
   }
 
   #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="3"] {
-    padding-inline-start: 3.5rem;
+    padding-inline-start: calc(var(--subtitle-menu-indent) + 3 * var(--subtitle-menu-step));
   }
 
   #player__controller {

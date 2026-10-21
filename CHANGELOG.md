@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Keep subtitle language variants separate, hide a sole source heading, and align visible menu levels consistently (#ttv-223).
+
 ## 0.60.2
 
 - **Fix**: Preserve bounded per-provider and per-stage identification diagnostics across unsuccessful fallback attempts (#ttv-220).

@@ -1,3 +1,5 @@
+import { subtitleLanguageInfo } from "./track-language.js";
+
 /** Use confirmed catalogue episodes, never equate TMDB and AniList numbering. */
 function subtitleSearchText(file) {
   const path = typeof file?.relativePath === "string" ? file.relativePath : file?.name;
@@ -42,13 +44,7 @@ export function providerSubtitleQuery(state, fileIndex) {
 }
 
 export function providerSubtitleLabel(item) {
-  let language;
-  try { language = item.language === "und" ? "Unknown language" : new Intl.DisplayNames(["en"], { type: "language" }).of(item.language); }
-  catch {
-    // silent-ok: an unknown provider language tag is displayed as supplied.
-    language = item.language;
-  }
-  return language;
+  return subtitleLanguageInfo(item.language, item.provider).name;
 }
 
 /** Keep unsuitable releases out per language, with unknown offers as fallback. */
