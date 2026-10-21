@@ -1,5 +1,8 @@
-## 0.62.2
+## Unreleased
 
+- **Fix**: Measure first-frame elapsed time from the original traced action for startup and seek observations.
+
+## 0.62.2
 - **Fix**: Measure the full seek command from `#moveToPosition` entry, including its synchronous setup.
 
 ## 0.62.1
