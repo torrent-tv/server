@@ -551,50 +551,57 @@ export class Loading extends StateDerivedView {
 
   async #moveToPosition(position) {
     if (!Number.isFinite(position) || position < 0) return;
-    if (this.#seekReportTimer !== null) {
-      clearTimeout(this.#seekReportTimer);
-      this.#seekIntentTraceEnd?.({ outcome: "superseded", targetSeconds: position });
-      this.#seekIntentTraceEnd = null;
-    }
-    this.#seekReportTimer = null;
-    this.#pendingCurrentTime = this.#isProcessing && !this.#hlsPlayer.isActive() ? position : null;
-    this.#seekEventPosition = position;
-    this.#writeHistory("replace", { ...readUrlState(location.search), currentTime: position });
-    this.#waitingModel.reset();
-    this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
-    const epoch = this.#playbackEpoch;
-    // Held from the seek itself: the frame arriving must not start the picture
-    // before the forecast for this position has been read.
-    const hold = this.#playbackLive ? this.#holds.beginSeek() : null;
+    const endSeekCommand = waitTrace.open("S1.seek-command", { process: "S1", targetSeconds: position });
+    let outcome = "completed";
     try {
-      let reportedAt = Number.POSITIVE_INFINITY;
-      await waitTrace.run("S1.seek-command", () => this.#seekPosition.move(position, {
-      stopLoad: () => this.#hlsPlayer.stopLoad(),
-      reportSeek: async (target) => {
-        const answer = await waitTrace.run("B4.position-restatement", () => this.#session.reportSeek(target),
-          { process: "B4" });
-        reportedAt = performance.now();
-        return answer;
-      },
-      startLoad: (target) => this.#hlsPlayer.seekTo(target, this.#videoElement)
-      }), { process: "S1", targetSeconds: position });
-      if (hold !== null) {
-        if (epoch === this.#playbackEpoch && Number.isFinite(reportedAt)) {
-          void waitTrace.run("S2.seek-readiness-gate", () => this.#holdSeekUntilReady(hold, epoch, reportedAt),
-            { process: "S2", targetSeconds: position });
-        }
-        else this.#holds.releaseSeek(hold);
+      if (this.#seekReportTimer !== null) {
+        clearTimeout(this.#seekReportTimer);
+        this.#seekIntentTraceEnd?.({ outcome: "superseded", targetSeconds: position });
+        this.#seekIntentTraceEnd = null;
       }
-    } catch (error) {
-      if (hold !== null) this.#holds.releaseSeek(hold);
-      if (epoch !== this.#playbackEpoch) return;
-      const description = error instanceof Error ? error.message : String(error);
-      waitTrace.finish("seek-error", { targetSeconds: position, error: description });
-      this.#logEvt(`seek failed: ${description}`);
-      const canRetry = this.#activeFileIndex >= 0;
-      this.#logEvt(`seek to ${position}s failed (retry ${canRetry ? "offered" : "impossible"}): ${description}`);
-      if (canRetry) this.#armRetryableStall(this.#activeFileIndex);
-      this.#failWith(epoch, error, { canRetry });
+      this.#seekReportTimer = null;
+      this.#pendingCurrentTime = this.#isProcessing && !this.#hlsPlayer.isActive() ? position : null;
+      this.#seekEventPosition = position;
+      this.#writeHistory("replace", { ...readUrlState(location.search), currentTime: position });
+      this.#waitingModel.reset();
+      this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
+      const epoch = this.#playbackEpoch;
+      // Held from the seek itself: the frame arriving must not start the picture
+      // before the forecast for this position has been read.
+      const hold = this.#playbackLive ? this.#holds.beginSeek() : null;
+      try {
+        let reportedAt = Number.POSITIVE_INFINITY;
+        await this.#seekPosition.move(position, {
+          stopLoad: () => this.#hlsPlayer.stopLoad(),
+          reportSeek: async (target) => {
+            const answer = await waitTrace.run("B4.position-restatement", () => this.#session.reportSeek(target),
+              { process: "B4" });
+            reportedAt = performance.now();
+            return answer;
+          },
+          startLoad: (target) => this.#hlsPlayer.seekTo(target, this.#videoElement)
+        });
+        if (hold !== null) {
+          if (epoch === this.#playbackEpoch && Number.isFinite(reportedAt)) {
+            void waitTrace.run("S2.seek-readiness-gate", () => this.#holdSeekUntilReady(hold, epoch, reportedAt),
+              { process: "S2", targetSeconds: position });
+          }
+          else this.#holds.releaseSeek(hold);
+        }
+      } catch (error) {
+        outcome = "error";
+        if (hold !== null) this.#holds.releaseSeek(hold);
+        if (epoch !== this.#playbackEpoch) return;
+        const description = error instanceof Error ? error.message : String(error);
+        waitTrace.finish("seek-error", { targetSeconds: position, error: description });
+        this.#logEvt(`seek failed: ${description}`);
+        const canRetry = this.#activeFileIndex >= 0;
+        this.#logEvt(`seek to ${position}s failed (retry ${canRetry ? "offered" : "impossible"}): ${description}`);
+        if (canRetry) this.#armRetryableStall(this.#activeFileIndex);
+        this.#failWith(epoch, error, { canRetry });
+      }
+    } finally {
+      endSeekCommand?.({ outcome });
     }
   }
   /**
