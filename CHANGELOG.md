@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Preserve bounded per-provider and per-stage identification diagnostics across unsuccessful fallback attempts (#ttv-220).
+
 ## 0.60.1
 
 - **Fix**: Keep a subtitle source heading when it contains multiple choices; collapse a one-track source into its selectable row.

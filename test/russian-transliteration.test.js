@@ -5,6 +5,7 @@ import { MetadataService } from "../services/metadata/MetadataService.js";
 import { MetadataCache } from "../services/metadata/MetadataCache.js";
 import { SharedFetches } from "../services/metadata/SharedFetches.js";
 import { subtitleEvidenceOf } from "../public/domain/subtitle-evidence.js";
+import { MetadataUnavailableError } from "../services/metadata/RequestGate.js";
 
 const RU = "\u041f\u0440\u0438\u043d\u0446\u0435\u0441\u0441\u0430 \u041c\u043e\u043d\u043e\u043d\u043e\u043a\u044d";
 test("Russian transliteration requires the complete title", () => {
@@ -25,7 +26,7 @@ function fixture({ count = 1, year = 1997, capped = false } = {}) {
     async work(kind, id, language) { return { kind, tmdbId: id, title: language === "ru-RU" ? RU : "Princess Mononoke", year: 1997 }; },
     async alternativeTitles() { return [RU]; }
   };
-  return { calls, service: new MetadataService({ source, cache: new MetadataCache({ budgetBytes: 1048576, maxEntryBytes: 65536 }), fetches: new SharedFetches({ waiterLimit: 64 }) }) };
+  return { calls, source, service: new MetadataService({ source, cache: new MetadataCache({ budgetBytes: 1048576, maxEntryBytes: 65536 }), fetches: new SharedFetches({ waiterLimit: 64 }) }) };
 }
 const request = { names: ["Princessa.Mononoke.1997.BDRip.1080p.envy.mkv"], kindHint: "movie", language: "en-US" };
 test("word discovery plus the Russian catalog title identifies Mononoke", async () => {
@@ -33,6 +34,18 @@ test("word discovery plus the Russian catalog title identifies Mononoke", async 
   const answer = await service.identifyTransliterated(request);
   assert.equal(answer.work.tmdbId, 128);
   assert.ok(calls.some(call => call[1] === "mononoke"));
+  assert.equal(answer.diagnostics.selection.tmdbId, 128);
+  assert.ok(answer.diagnostics.searches.some(search => search.query === "mononoke" && search.pagesFetched === 1));
+  assert.equal(answer.diagnostics.checked[0].status, "admitted");
+  assert.ok(answer.diagnostics.checked[0].matchedReleaseTitles.includes("princessa mononoke"));
+});
+test("transliteration diagnostics retain failed record reads", async () => {
+  const { source } = fixture();
+  source.work = async () => { throw new MetadataUnavailableError("record unavailable"); };
+  const service = new MetadataService({ source, cache: new MetadataCache({ budgetBytes: 1048576, maxEntryBytes: 65536 }), fetches: new SharedFetches({ waiterLimit: 64 }) });
+  const answer = await service.identifyTransliterated(request);
+  assert.equal(answer.status, "unavailable");
+  assert.deepEqual(answer.diagnostics.checked[0].recordReads, [{ language: "ru-RU", status: "failed" }]);
 });
 test("differing years allow transliteration while ambiguity and incomplete searches remain unresolved", async () => {
   assert.equal((await fixture({ year: 2007 }).service.identifyTransliterated(request)).status, "identified");
