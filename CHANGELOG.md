@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.1
 
 - **New**: Trace seek input, debounced command, readiness hold and first advancing frame under one wait identity (#ttv-185).
 
