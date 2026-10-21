@@ -1,6 +1,7 @@
 ## 0.60.3
 
 - **Fix**: Keep subtitle language variants separate, hide a sole source heading, and align visible menu levels consistently (#ttv-223).
+- **Chore**: Record when progress polling receives a wait estimate and when the waiting overlay accepts it, so missing or stale forecast updates can be localized in field traces (#ttv-185).
 
 ## 0.60.2
 

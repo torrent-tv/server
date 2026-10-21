@@ -33,6 +33,7 @@ function loading(events, logged = []) {
     #subtitlePlayback = { clear() {}, reset() {} };
     #logEvt(line) { logged.push(line); }
     #progressPollFailing = false;
+    #lastProgressEstimateTraceKey = null;
     #renderTranscodeProgress(progress) { this.#assertTranscodeProgress(progress); }
     ${["#runPlaybackTask", "#beginPlaybackAttempt", "#resetSourceState", "#failWith", "#failPlayback", "#isAbortError",
       "#assertTranscodeProgress", "#startTranscodeProgressPoll"].map(method).join("\n")}
