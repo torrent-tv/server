@@ -13,6 +13,10 @@ const helperEnd = source.indexOf("\n}", helperStart) + 2;
 const waitEstimateHelper = source.slice(helperStart, helperEnd);
 const publishMethod = method("#publishTranscodeMeasurements(progress) {");
 const holdMethod = method("async #holdSeekUntilReady(seq, epoch, reportedAt) {");
+const waitingSource = readFileSync(new URL("../public/components/waiting/waiting.js", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+const receivedStart = waitingSource.indexOf("  #onProxyMeasured = (event) => {");
+const receivedEnd = waitingSource.indexOf("\n  };", receivedStart) + 5;
+const receivedMethod = waitingSource.slice(receivedStart, receivedEnd);
 
 function publisher(events) {
   const Component = new Function("document", "CustomEvent", "PROXY_EVENTS", "waitEstimateForProgress", `
@@ -49,4 +53,30 @@ test("a readiness answer without an estimate clears the waiting overlay's prior 
 
 test("each seek-hold progress answer is sent through the waiting overlay event", () => {
   assert.match(holdMethod, /this\.#publishTranscodeMeasurements\(progress\);/);
+});
+
+test("the active seek estimate is accepted after the startup wait has ended", () => {
+  const modelInputs = [];
+  const FakeCustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+  const Overlay = new Function("CustomEvent", "modelInputs", `
+    return class {
+      #awaitingFirstPresentedFrame = false;
+      #waitSequence = 1;
+      #lastWaitEstimateTraceKey = null;
+      #bufferedAhead = null;
+      #measurements = {};
+      #model = { update: facts => { modelInputs.push(facts); return { etaSeconds: facts.waitEstimate?.remainingSeconds ?? null }; } };
+      #applyStep() {}
+      #render() {}
+      ${receivedMethod}
+      receive(event) { this.#onProxyMeasured(event); }
+    };
+  `)(FakeCustomEvent, modelInputs);
+  const estimate = { version: 1, waitId: "source:0:1", revision: 1, remainingSeconds: 3.6, ageMs: 0 };
+  const overlay = new Overlay();
+  overlay.receive(new FakeCustomEvent("measured", {
+    detail: { downloadStats: { waitEstimate: estimate }, playbackReadiness: { waitEstimate: estimate } }
+  }));
+
+  assert.deepEqual(modelInputs[0].waitEstimate, estimate);
 });
