@@ -6,6 +6,7 @@ This component owns playlist list rendering and playlist user interactions.
 
 - Render the available video files from `PLAYER:SET_MEDIA_FILES`.
 - Group files from one folder into a `<details>` section when the folder contains a proper subset of the files.
+- Expand the first identified season when several seasons are grouped and no file is selected.
 - Open the group containing the active file and retain groups the viewer opened.
 - Track the active file from `PLAYER:SET_ACTIVE_MEDIA_FILE`.
 - Show the list only when `PLAYER:PANEL_CHANGED` selects `playlist`.

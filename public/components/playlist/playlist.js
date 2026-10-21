@@ -1,5 +1,5 @@
 
-import { playlistRows } from "../../domain/playlist-groups.js";
+import { initialOpenSeason, playlistRows } from "../../domain/playlist-groups.js";
 import { playlistNaming } from "../../domain/media-info.js";
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
 
@@ -174,6 +174,7 @@ export class Playlist {
     const inView = [];
     const rows = playlistRows(this.#videoFiles, playlistNaming(this.#media));
     const singleSeason = rows.filter(r => r.kind === "group" && r.folder.startsWith("season:")).length === 1;
+    const initiallyOpenSeason = initialOpenSeason(rows, this.#currentFileIndex);
     for (const row of rows) {
       if (row.kind === "file") {
         this.#root.append(this.#fileItem(row.file, row.label));
@@ -183,6 +184,8 @@ export class Playlist {
       const item = document.createElement("li");
       const fixed = singleSeason && row.folder.startsWith("season:");
       const group = document.createElement(fixed ? "section" : "details");
+      const initiallyOpen = row.folder === initiallyOpenSeason;
+      if (initiallyOpen) group.open = true;
       const summary = document.createElement(fixed ? "h2" : "summary");
       summary.textContent = row.label;
       this.#summaries.set(row.folder, summary);
@@ -198,7 +201,7 @@ export class Playlist {
           this.#wantNames(memberIndexes);
         }
       });
-      if (fixed) inView.push(...memberIndexes);
+      if (fixed || initiallyOpen) inView.push(...memberIndexes);
       group.append(summary, files);
       item.append(group);
       this.#root.append(item);
