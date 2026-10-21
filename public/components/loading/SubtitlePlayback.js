@@ -570,6 +570,7 @@ export class SubtitlePlayback {
           aiTranslated: item.aiTranslated === true,
           machineTranslated: item.machineTranslated === true,
           release: item.release,
+          downloads: Number.isSafeInteger(item.downloads) ? item.downloads : null,
           uploaderName: item.uploaderName,
           uploadDate: item.uploadDate,
           cueCount: null

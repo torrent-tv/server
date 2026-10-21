@@ -40,6 +40,7 @@ function hasChecked(items) {
  * @property {string} [uploaderName]
  * @property {string} [uploadDate]
  * @property {number | null} [cueCount]
+ * @property {number | null} [downloads]
  * @property {boolean} [aiTranslated]
  * @property {boolean} [forced]
  * @property {boolean} [hearingImpaired]
@@ -147,6 +148,7 @@ function trackDetails(entry, comparison, includeTeam, includeSource) {
   ];
   const fallbackFields = [
     ["uploader", item => textOf(item.uploaderName) ? `Uploaded by ${textOf(item.uploaderName)}` : "", false],
+    ["downloads", item => Number.isSafeInteger(item.downloads) && item.downloads >= 0 ? `${item.downloads.toLocaleString()} downloads` : "", true],
     ["date", item => uploadDateLabel(item.uploadDate), false],
     ["source", item => textOf(item.source) && item.source !== "In container" && item.source !== "In torrent" ? textOf(item.source) : "", false]
   ];
