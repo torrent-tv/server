@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Use OpenSubtitles download counts to distinguish otherwise identical provider choices (#ttv-223).
+
 ## 0.61.1
 
 - **Fix**: Show useful subtitle distinctions while collapsing single-option menu levels (#ttv-223).
