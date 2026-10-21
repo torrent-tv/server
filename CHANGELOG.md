@@ -1,7 +1,10 @@
+## Unreleased
+
+- **Fix**: Accept the current estimate from active progress events after the startup wait has ended, so later seeks can display a numeric wait estimate (#ttv-185).
+
 ## 0.60.6
 
 - **Fix**: Publish readiness estimates from the active seek wait to the waiting overlay, so a seek's updated estimate is visible while the picture is held (#ttv-185).
-- **Fix**: Accept the current estimate from active progress events after the startup wait has ended, so later seeks can display a numeric wait estimate (#ttv-185).
 
 ## 0.60.5
 
