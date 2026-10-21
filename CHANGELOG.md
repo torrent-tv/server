@@ -1,4 +1,4 @@
-## Unreleased
+## 0.60.6
 
 - **Fix**: Publish readiness estimates from the active seek wait to the waiting overlay, so a seek's updated estimate is visible while the picture is held (#ttv-185).
 
