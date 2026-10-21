@@ -1,10 +1,13 @@
+## Unreleased
+
+- **Fix**: Publish readiness estimates from the active seek wait to the waiting overlay, so a seek's updated estimate is visible while the picture is held (#ttv-185).
+
 ## 0.60.5
 
 - **Chore**: Update dependencies: 2 package(s) changed in the lock file.
 
 ## 0.60.4
 
-- **Fix**: Publish readiness estimates from the active seek wait to the waiting overlay, so a seek's updated estimate is visible while the picture is held (#ttv-185).
 - **Chore**: Record when progress polling receives a wait estimate and when the waiting overlay accepts it, so missing or stale forecast updates can be localized in field traces (#ttv-185).
 
 ## 0.60.3
