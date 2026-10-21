@@ -52,6 +52,7 @@ export class WaitingOverlay {
   #wasWaiting = false;
   #awaitingFirstPresentedFrame = false;
   #lastRenderedText = null;
+  #lastWaitEstimateTraceKey = null;
 
 
   /**
@@ -97,6 +98,23 @@ export class WaitingOverlay {
     const hasCurrentWaitEstimate = this.#awaitingFirstPresentedFrame && downloadStats &&
       Object.hasOwn(downloadStats, "waitEstimate");
     const earlyWaitEstimate = downloadStats?.waitEstimate;
+    const nestedWaitEstimate = readiness?.waitEstimate;
+    const traceKey = JSON.stringify([
+      this.#awaitingFirstPresentedFrame,
+      hasCurrentWaitEstimate ? earlyWaitEstimate?.waitId : null,
+      hasCurrentWaitEstimate ? earlyWaitEstimate?.revision : null,
+      nestedWaitEstimate?.waitId ?? null,
+      nestedWaitEstimate?.revision ?? null,
+      readiness?.reason ?? null
+    ]);
+    if (traceKey !== this.#lastWaitEstimateTraceKey) {
+      this.#lastWaitEstimateTraceKey = traceKey;
+      console.debug(`[wait-estimate-received] wait=${this.#waitSequence} awaiting=${this.#awaitingFirstPresentedFrame} ` +
+        `accepted=${Boolean(hasCurrentWaitEstimate)} ` +
+        `top=${earlyWaitEstimate?.waitId ?? "-"}:${earlyWaitEstimate?.revision ?? "-"} ` +
+        `nested=${nestedWaitEstimate?.waitId ?? "-"}:${nestedWaitEstimate?.revision ?? "-"} ` +
+        `reason=${readiness?.reason ?? "-"}`);
+    }
     const unified = this.#model.update({
       ...(hasCurrentWaitEstimate ? { waitEstimate: earlyWaitEstimate } : {}),
       ...(detail && Object.hasOwn(detail, "playbackReadiness") ? { playbackReadiness: readiness } : {}),
@@ -227,6 +245,7 @@ export class WaitingOverlay {
     this.#waitFileIndex = fileIndex;
     this.#awaitingFirstPresentedFrame = true;
     this.#lastRenderedText = null;
+    this.#lastWaitEstimateTraceKey = null;
     console.debug(`[wait-start] wait=${this.#waitSequence} startedAt=${this.#waitStartedAt.toFixed(3)}ms ` +
       `fileIndex=${fileIndex ?? "-"}${detail?.originalOpen === true ? " originalOpen=true" : ""}`);
   };

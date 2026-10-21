@@ -606,6 +606,8 @@ export class Loading extends StateDerivedView {
 
   /** Same, for the transcode-progress polls. */
   #progressPollFailing = false;
+  /** Last wait estimate state logged by the progress poll. */
+  #lastProgressEstimateTraceKey = null;
 
   /** Same, for the metadata poll under the waiting interface. */
   #metadataPollFailing = false;
@@ -5859,6 +5861,7 @@ export class Loading extends StateDerivedView {
    */
   #startTranscodeProgressPoll(onFailure) {
     let stopped = false;
+    this.#lastProgressEstimateTraceKey = null;
     const tick = async () => {
       while (!stopped) {
         try {
@@ -5905,9 +5908,19 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#assertTranscodeProgress(progress);
+    const waitEstimate = waitEstimateForProgress(progress);
+    const estimateTraceKey = waitEstimate
+      ? `${waitEstimate.waitId}:${waitEstimate.revision}`
+      : `missing:${progress.playbackReadiness?.reason ?? "no-readiness"}`;
+    if (estimateTraceKey !== this.#lastProgressEstimateTraceKey) {
+      this.#lastProgressEstimateTraceKey = estimateTraceKey;
+      console.debug(`[wait-estimate-source] ${waitEstimate
+        ? `waitId=${waitEstimate.waitId} revision=${waitEstimate.revision} remainingSeconds=${waitEstimate.remainingSeconds} ageMs=${waitEstimate.ageMs}`
+        : `estimate=missing readinessReason=${progress.playbackReadiness?.reason ?? "no-readiness"}`}`);
+    }
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
-      ...(waitEstimateForProgress(progress) ? { waitEstimate: waitEstimateForProgress(progress) } : {}),
+      ...(waitEstimate ? { waitEstimate } : {}),
       playbackReadiness: progress.playbackReadiness
     });
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
