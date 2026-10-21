@@ -30,7 +30,7 @@ Task: [meta#103](https://github.com/torrent-tv/meta/issues/103).
    leaves the current track showing; Off, another choice and a file switch defeat
    its late result. Provider errors appear in the subtitle menu and never change
    video playback state. Failed discovery can be retried from the menu. Choices
-   appear in one menu, grouped by primary language and explicit team when
+   appear in one menu, grouped by full language variant and explicit team when
    available. A language, source or team level appears only when it separates
    choices; otherwise the choices are shown directly at the next useful level.
    Region and script variants remain separate language choices. Track labels
