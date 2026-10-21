@@ -74,6 +74,11 @@ test("provider differences use edition, uploader and date, never filename or arb
   ]);
   assert.match(sameUploader[1].text, /^Uploaded /u);
   assert.match(sameUploader[2].text, /^Uploaded /u);
+  const downloads = subtitleMenuItems([
+    { key: "e", language: "en", source: "OpenSubtitles", downloads: 444 },
+    { key: "f", language: "en", source: "OpenSubtitles", downloads: 38 }
+  ]);
+  assert.deepEqual(downloads.map(item => item.text), ["English", "444 downloads", "38 downloads"]);
 });
 
 test("cue counts are shown only when every alternative has a complete count", () => {

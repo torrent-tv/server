@@ -41,7 +41,8 @@ Task: [meta#103](https://github.com/torrent-tv/meta/issues/103).
    collapsed into the selectable row. The menu omits filenames, movie names,
    subtitle formats, frame rates, verification state and arbitrary provider
    comments. For provider alternatives it uses structured role, edition,
-   uploader and upload-date metadata only as needed to distinguish choices.
+   uploader, download-count and upload-date metadata only as needed to
+   distinguish choices.
    Cue counts are shown only when complete text is already available for every
    alternative: sidecars are already loaded, while a provider file is counted
    only after the viewer selects and downloads it. Discovery never downloads

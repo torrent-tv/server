@@ -235,6 +235,7 @@ test("OpenSubtitles discovery keeps useful menu metadata without downloading sub
     return json({ total_pages: 1, data: [{ attributes: {
       language: "en", release: "Movie.2025.WEB-DL", hearing_impaired: true,
       foreign_parts_only: false, ai_translated: true, machine_translated: false,
+      download_count: 12,
       upload_date: "2025-03-13T00:50:01Z", uploader: { name: "oakislandtk" },
       comments: "arbitrary comment must not become a subtitle label",
       files: [{ file_id: 7, file_name: "Movie.2025.eng.srt" }]
@@ -244,7 +245,7 @@ test("OpenSubtitles discovery keeps useful menu metadata without downloading sub
   assert.equal(requests, 1);
   assert.deepEqual(result.items[0], {
     provider: "opensubtitles", id: "7", language: "en", filename: "Movie.2025.eng.srt",
-    release: "Movie.2025.WEB-DL", hearingImpaired: true, forced: false, downloads: 0, rating: 0,
+    release: "Movie.2025.WEB-DL", hearingImpaired: true, forced: false, downloads: 12, rating: 0,
     aiTranslated: true, machineTranslated: false, uploaderName: "oakislandtk", uploadDate: "2025-03-13T00:50:01Z"
   });
 });

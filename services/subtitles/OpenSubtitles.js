@@ -53,7 +53,8 @@ export class OpenSubtitles extends SubtitleProvider {
         const item = { provider: this.name, id: String(file.file_id), language: attr.language,
           filename: String(file.file_name ?? "subtitles.srt").slice(0, 500), release: String(attr.release ?? "").slice(0, 500),
           hearingImpaired: attr.hearing_impaired === true, forced: attr.foreign_parts_only === true,
-          downloads: Number(attr.download_count) || 0, rating: Number(attr.ratings) || 0,
+          downloads: Number.isSafeInteger(attr.download_count) && attr.download_count >= 0 ? attr.download_count : null,
+          rating: Number(attr.ratings) || 0,
           aiTranslated: attr.ai_translated === true, machineTranslated: attr.machine_translated === true };
         const uploaderName = typeof attr.uploader?.name === "string" ? attr.uploader.name.trim() : "";
         if (uploaderName) item.uploaderName = uploaderName.slice(0, 100);
