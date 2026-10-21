@@ -1,4 +1,4 @@
-## Unreleased
+## 0.60.2
 
 - **Fix**: Preserve bounded per-provider and per-stage identification diagnostics across unsuccessful fallback attempts (#ttv-220).
 
