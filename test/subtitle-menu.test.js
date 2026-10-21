@@ -25,20 +25,20 @@ test("source headings precede team choices; an unknown team is omitted", () => {
     { key: "b", language: "en", source: "OpenSubtitles", team: "Team B", hearingImpaired: true, showing: true },
     { key: "c", language: "en", source: "OpenSubtitles", team: null }
   ]);
-  assert.deepEqual(items.map(({ text, kind, level, key }) => [text, kind, level, key]), [
-    ["English", "heading", "language", "language:en"],
-    ["In container", "radio", undefined, "local"],
-    ["OpenSubtitles", "heading", "source", "source:en:OpenSubtitles"],
-    ["Team A", "radio", undefined, "a"],
-    ["Team B", "radio", undefined, "b"],
-    ["Subtitle", "radio", undefined, "c"]
+  assert.deepEqual(items.map(({ text, kind, level, key, depth }) => [text, kind, level, key, depth]), [
+    ["English", "heading", "language", "language:en", 0],
+    ["In container", "radio", undefined, "local", 1],
+    ["OpenSubtitles", "heading", "source", "source:en:OpenSubtitles", 1],
+    ["Team A", "radio", undefined, "a", 2],
+    ["Team B", "radio", undefined, "b", 2],
+    ["Subtitle", "radio", undefined, "c", 2]
   ]);
   assert.equal(items[1].depth, 1);
   assert.equal(items[3].depth, 2);
   assert.equal(items[3].accessibleText, "English, OpenSubtitles, Team A");
 });
 
-test("only distinguishing Forced and SDH characteristics appear; repeated options stay selectable", () => {
+test("one source heading is hidden and only distinguishing Forced and SDH characteristics appear", () => {
   const items = subtitleMenuItems([
     { key: "forced", language: "ru", source: "OpenSubtitles", forced: true, filename: "movie.release.ass", fps: 25 },
     { key: "sdh", language: "ru", source: "OpenSubtitles", hearingImpaired: true, format: "SRT" },
@@ -47,7 +47,6 @@ test("only distinguishing Forced and SDH characteristics appear; repeated option
   ]);
   assert.deepEqual(items.map(({ text, kind }) => [text, kind]), [
     ["Russian", "heading"],
-    ["OpenSubtitles", "heading"],
     ["Forced", "radio"],
     ["SDH", "radio"],
     ["Subtitle (1)", "radio"],
@@ -56,17 +55,39 @@ test("only distinguishing Forced and SDH characteristics appear; repeated option
   assert.equal(items.some(item => /release|\.ass|srt|fps|unverified/iu.test(item.text)), false);
 });
 
-test("the source heading contains its alternative tracks even when it is the only source", () => {
+test("language variants remain separate and a sole provider heading is hidden", () => {
   const items = subtitleMenuItems([
     { key: "pt-br", language: "pt-BR", source: "OpenSubtitles", forced: true },
     { key: "pt", language: "pt", source: "OpenSubtitles", hearingImpaired: true }
   ]);
-  assert.deepEqual(items.map(({ text, kind, level }) => [text, kind, level]), [
-    ["Portuguese", "heading", "language"],
-    ["OpenSubtitles", "heading", "source"],
-    ["Forced", "radio", undefined],
-    ["SDH", "radio", undefined]
+  assert.deepEqual(items.map(({ text, kind, depth }) => [text, kind, depth]), [
+    ["Portuguese", "radio", 0],
+    ["Portuguese (Brazil)", "radio", 0]
   ]);
+});
+
+test("script and region variants retain their own language rows", () => {
+  const items = subtitleMenuItems([
+    { key: "simplified", language: "zh-CN", source: "In container" },
+    { key: "traditional", language: "zh-TW", source: "In container" },
+    { key: "english", language: "en-US", source: "In container" },
+    { key: "english-default", language: "en", source: "OpenSubtitles", provider: "opensubtitles" }
+  ]);
+  assert.deepEqual(items.map(({ key, text }) => [key, text]), [
+    ["simplified", "Chinese (China)"],
+    ["traditional", "Chinese (Taiwan)"],
+    ["english-default", "English"],
+    ["english", "English (United States)"]
+  ]);
+});
+
+test("OpenSubtitles aliases display their language names without false country labels", () => {
+  const items = subtitleMenuItems([
+    { key: "ea", language: "ea", source: "OpenSubtitles", provider: "opensubtitles" },
+    { key: "zh-ca", language: "zh-ca", source: "OpenSubtitles", provider: "opensubtitles" },
+    { key: "ze", language: "ze", source: "OpenSubtitles", provider: "opensubtitles" }
+  ]);
+  assert.deepEqual(items.map(({ text }) => text), ["Chinese (Bilingual)", "Chinese (Cantonese)", "Spanish (Latin America)"]);
 });
 
 test("container and torrent subtitles precede provider results", () => {

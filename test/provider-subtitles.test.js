@@ -98,6 +98,8 @@ test("provider track labels keep language but omit release and verification meta
     identity: { title: "Cowboy Bebop", year: 2021 } });
   assert.equal(label, "English");
   assert.equal(providerSubtitleLabel({ provider: "opensubtitles", language: "en", eligibility: "unknown", fps: 25 }), "English");
+  assert.equal(providerSubtitleLabel({ provider: "opensubtitles", language: "ea" }), "Spanish (Latin America)");
+  assert.equal(providerSubtitleLabel({ provider: "opensubtitles", language: "zh-ca" }), "Chinese (Cantonese)");
 });
 
 test("an exact hash identity is published after discovery returns without waiting in the caller", async () => {

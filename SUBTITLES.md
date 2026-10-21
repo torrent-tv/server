@@ -31,9 +31,13 @@ Task: [meta#103](https://github.com/torrent-tv/meta/issues/103).
    its late result. Provider errors appear in the subtitle menu and never change
    video playback state. Failed discovery can be retried from the menu. Choices
    appear in one menu, grouped by primary language and explicit team when
-   available, then track title and technical details. Tracks without team
-   metadata appear directly under their language; a track title is not used as
-   a team. Provider file downloads still begin only after selection. Embedded
+   available. A language, source or team level appears only when it separates
+   choices; otherwise the choices are shown directly at the next useful level.
+   Region and script variants remain separate language choices. Track labels
+   show Forced or SDH only when that characteristic distinguishes alternatives;
+   filenames and technical details are omitted. Tracks without team metadata
+   appear directly under their language; a track title is not used as a team.
+   Provider file downloads still begin only after selection. Embedded
    subtitle cues and paired torrent sidecars keep their existing loading behavior.
 6. Only standalone text files are supported: SRT, ASS/SSA and WebVTT. Jimaku ZIP,
    7z and image subtitle files and OpenSubtitles multi-CD sets are not offered as
