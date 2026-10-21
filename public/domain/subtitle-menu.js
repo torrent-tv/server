@@ -2,7 +2,8 @@
  * @file The subtitle menu names tracks by key; labels are only what is shown.
  */
 
-import { subtitleLanguageInfo } from "./track-language.js";
+import { mediaTrackLanguageInfo } from "./track-language.js";
+import { trackMenuState } from "./track-menu.js";
 
 /**
  * A single menu: "Off" and the supplied language, source, team and track rows.
@@ -11,21 +12,7 @@ import { subtitleLanguageInfo } from "./track-language.js";
  * @returns {import("./menu-update.js").MenuItemState[]}
  */
 export function subtitleMenuState(items) {
-  return [
-    { key: "", text: "Off", kind: "radio", checked: !hasChecked(items), disabled: false },
-    ...items.map((item) => ({
-      ...item,
-      key: String(item.key),
-      text: String(item.text ?? ""),
-      kind: item.kind ?? "radio",
-      checked: item.checked === true,
-      disabled: item.disabled === true
-    }))
-  ];
-}
-
-function hasChecked(items) {
-  return Array.isArray(items) && items.some((item) => item.checked === true);
+  return trackMenuState(items, { offLabel: "Off" });
 }
 
 /**
@@ -70,8 +57,9 @@ export function subtitleMenuItems(entries, statuses = []) {
   const languages = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
     const language = languageParts(entry);
+    const normalizedEntry = language.title === textOf(entry.trackTitle) ? entry : { ...entry, trackTitle: language.title };
     const group = languages.get(language.code) ?? { ...language, tracks: [] };
-    group.tracks.push(entry);
+    group.tracks.push(normalizedEntry);
     languages.set(language.code, group);
   }
 
@@ -260,7 +248,7 @@ function sourceRank(source) {
 }
 
 function languageParts(entry) {
-  const info = subtitleLanguageInfo(entry.language, entry.provider);
+  const info = mediaTrackLanguageInfo({ language: entry.language, title: entry.trackTitle }, { provider: entry.provider });
   return { ...info, unknown: info.unknown ? 1 : 0 };
 }
 

@@ -60,36 +60,43 @@
     fill: none;
   }
 
-  #player__subtitle-menu {
-    --subtitle-menu-indent: 0.75rem;
-    --subtitle-menu-step: 1rem;
-    --subtitle-menu-indicator: 1.25rem;
+  #player__subtitle-menu,
+  #player__audio-menu {
+    --track-menu-indent: 0.75rem;
+    --track-menu-step: 1rem;
+    --track-menu-indicator: 1.25rem;
   }
 
-  #player__subtitle-menu > media-chrome-menu-item {
-    --media-menu-item-indicator-height: var(--subtitle-menu-indicator);
-    padding-inline-start: var(--subtitle-menu-indent);
+  #player__subtitle-menu > media-chrome-menu-item,
+  #player__audio-menu > media-chrome-menu-item {
+    --media-menu-item-indicator-height: var(--track-menu-indicator);
+    padding-inline-start: var(--track-menu-indent);
   }
 
-  #player__subtitle-menu > [data-subtitle-group][data-subtitle-depth="0"] {
-    padding-inline-start: calc(var(--subtitle-menu-indent) + var(--subtitle-menu-indicator) + 0.5ch);
+  #player__subtitle-menu > [data-track-menu-group][data-track-menu-depth="0"],
+  #player__audio-menu > [data-track-menu-group][data-track-menu-depth="0"] {
+    padding-inline-start: calc(var(--track-menu-indent) + var(--track-menu-indicator) + 0.5ch);
   }
 
-  #player__subtitle-menu > [data-subtitle-group][data-subtitle-depth="1"] {
-    padding-inline-start: calc(var(--subtitle-menu-indent) + var(--subtitle-menu-step) + var(--subtitle-menu-indicator) + 0.5ch);
+  #player__subtitle-menu > [data-track-menu-group][data-track-menu-depth="1"],
+  #player__audio-menu > [data-track-menu-group][data-track-menu-depth="1"] {
+    padding-inline-start: calc(var(--track-menu-indent) + var(--track-menu-step) + var(--track-menu-indicator) + 0.5ch);
   }
 
-  #player__subtitle-menu > [data-subtitle-group][data-subtitle-depth="2"] {
-    padding-inline-start: calc(var(--subtitle-menu-indent) + 2 * var(--subtitle-menu-step) + var(--subtitle-menu-indicator) + 0.5ch);
+  #player__subtitle-menu > [data-track-menu-group][data-track-menu-depth="2"],
+  #player__audio-menu > [data-track-menu-group][data-track-menu-depth="2"] {
+    padding-inline-start: calc(var(--track-menu-indent) + 2 * var(--track-menu-step) + var(--track-menu-indicator) + 0.5ch);
   }
 
-  #player__subtitle-menu > [data-subtitle-group="language"] {
+  #player__subtitle-menu > [data-track-menu-group="language"],
+  #player__audio-menu > [data-track-menu-group="language"] {
     padding-block: 0.55rem 0.25rem;
     color: var(--media-primary-color, #eee);
     font-weight: 600;
   }
 
-  #player__subtitle-menu > [data-subtitle-group="source"] {
+  #player__subtitle-menu > [data-track-menu-group="source"],
+  #player__audio-menu > [data-track-menu-group="source"] {
     padding-block: 0.25rem 0.15rem;
     color: inherit;
     font-size: 0.875rem;
@@ -97,7 +104,8 @@
     opacity: 0.8;
   }
 
-  #player__subtitle-menu > [data-subtitle-group="team"] {
+  #player__subtitle-menu > [data-track-menu-group="team"],
+  #player__audio-menu > [data-track-menu-group="team"] {
     padding-block: 0.25rem 0.15rem;
     color: inherit;
     font-size: 0.875rem;
@@ -105,20 +113,24 @@
     opacity: 0.8;
   }
 
-  #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="0"] {
-    padding-inline-start: var(--subtitle-menu-indent);
+  #player__subtitle-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="0"],
+  #player__audio-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="0"] {
+    padding-inline-start: var(--track-menu-indent);
   }
 
-  #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="1"] {
-    padding-inline-start: calc(var(--subtitle-menu-indent) + var(--subtitle-menu-step));
+  #player__subtitle-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="1"],
+  #player__audio-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="1"] {
+    padding-inline-start: calc(var(--track-menu-indent) + var(--track-menu-step));
   }
 
-  #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="2"] {
-    padding-inline-start: calc(var(--subtitle-menu-indent) + 2 * var(--subtitle-menu-step));
+  #player__subtitle-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="2"],
+  #player__audio-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="2"] {
+    padding-inline-start: calc(var(--track-menu-indent) + 2 * var(--track-menu-step));
   }
 
-  #player__subtitle-menu > media-chrome-menu-item[data-subtitle-key][data-subtitle-depth="3"] {
-    padding-inline-start: calc(var(--subtitle-menu-indent) + 3 * var(--subtitle-menu-step));
+  #player__subtitle-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="3"],
+  #player__audio-menu > media-chrome-menu-item[data-track-menu-key][data-track-menu-depth="3"] {
+    padding-inline-start: calc(var(--track-menu-indent) + 3 * var(--track-menu-step));
   }
 
   #player__controller {

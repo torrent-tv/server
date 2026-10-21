@@ -35,6 +35,10 @@ architecture and conventions. This repo is one of three (`server`, `proxy`,
     track's mode; the player draws the menu and reports the selected leaf key,
     and the subtitles key `c` is this page's, not media-chrome's
     (`hotkeys="noc"`).
+  - `domain/track-menu.js` — shared keyed menu state and DOM updates for audio
+    and subtitle choices. `domain/audio-menu.js` and `domain/subtitle-menu.js`
+    adapt their metadata to that shared menu; playback selection remains in
+    each track type's existing component.
   - `domain/torrent-session.js` — proxy registration, playback plan, HLS start.
     Seeking is server-side (no client-side session restart).
     The browser and proxy playback contract is documented in

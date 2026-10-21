@@ -23,6 +23,7 @@
  * @property {boolean} disabled
  * @property {string} [accessibleText]
  * @property {number} [depth]
+ * @property {string} [level]
  */
 
 /**
@@ -70,6 +71,7 @@ export function menuUpdate(current, wanted) {
     if (now.disabled !== item.disabled) change.disabled = item.disabled;
     if ((now.accessibleText ?? "") !== (item.accessibleText ?? "")) change.accessibleText = item.accessibleText ?? "";
     if ((now.depth ?? 0) !== (item.depth ?? 0)) change.depth = item.depth ?? 0;
+    if ((now.level ?? "") !== (item.level ?? "")) change.level = item.level ?? "";
     if (Object.keys(change).length > 1) set.push(change);
   }
   return { remove, set, create, reorder };
