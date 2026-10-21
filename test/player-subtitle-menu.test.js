@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { PLAYER_EVENTS } from "../public/shared/events.js";
 import { subtitleMenuItems } from "../public/domain/subtitle-menu.js";
+import { audioMenuItems } from "../public/domain/audio-menu.js";
+import { trackMenuState } from "../public/domain/track-menu.js";
 
 test("the single subtitle menu updates headings and leaves by key without rebuilding unchanged rows", async () => {
   const saved = Object.fromEntries(["document", "window", "HTMLVideoElement", "customElements"].map(key => [key, globalThis[key]]));
@@ -22,16 +24,16 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
       contains: name => this.classes.has(name), toggle: (name, value) => value ? this.classes.add(name) : this.classes.delete(name) };
     constructor(name = "div") { super(); this.localName = name; }
     get textContent() { return this.#text || this.children.map(child => child.textContent).join(""); }
-    set textContent(value) { writes.push(["text", this.dataset.subtitleNodeKey, value]); this.#text = value; }
+    set textContent(value) { writes.push(["text", this.dataset.trackMenuNodeKey, value]); this.#text = value; }
     get checked() { return this.#checked; }
-    set checked(value) { writes.push(["checked", this.dataset.subtitleNodeKey, value]); this.#checked = value; }
-    setAttribute(name, value) { writes.push(["set", this.dataset.subtitleNodeKey, name]); this.attributes.set(name, value); }
-    removeAttribute(name) { writes.push(["remove", this.dataset.subtitleNodeKey, name]); this.attributes.delete(name); }
+    set checked(value) { writes.push(["checked", this.dataset.trackMenuNodeKey, value]); this.#checked = value; }
+    setAttribute(name, value) { writes.push(["set", this.dataset.trackMenuNodeKey, name]); this.attributes.set(name, value); }
+    removeAttribute(name) { writes.push(["remove", this.dataset.trackMenuNodeKey, name]); this.attributes.delete(name); }
     getAttribute(name) { return this.attributes.get(name); }
     hasAttribute(name) { return this.attributes.has(name); }
     toggleAttribute(name, enabled) { if (enabled) this.setAttribute(name, ""); else if (this.attributes.has(name)) this.removeAttribute(name); }
     querySelector(selector) {
-      if (selector === "[data-subtitle-label]") return this.descendants().find(child => child.dataset.subtitleLabel !== undefined) ?? null;
+      if (selector === "[data-track-menu-label]") return this.descendants().find(child => child.dataset.trackMenuLabel !== undefined) ?? null;
       return null;
     }
     querySelectorAll(selector) {
@@ -40,13 +42,15 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     }
     descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
     get submenuElement() { return this.children.find(child => child.localName === "media-chrome-menu") ?? null; }
+    get checkedItems() { return this.children.filter(child => child.checked); }
+    focus() { this.focused = true; }
     appendChild(child) { this.insertBefore(child, null); }
     insertBefore(child, before) {
       if (child.parent) child.parent.children = child.parent.children.filter(other => other !== child);
       child.parent = this;
       const at = before ? this.children.indexOf(before) : -1;
       if (at < 0) this.children.push(child); else this.children.splice(at, 0, child);
-      writes.push(["place", child.dataset.subtitleNodeKey]);
+      writes.push(["place", child.dataset.trackMenuNodeKey]);
       const radios = this.children.filter(item => item.type === "radio");
       if (radios.length && !radios.some(item => item.checked)) radios[0].checked = true;
     }
@@ -68,18 +72,18 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     new Player();
     const publish = entries => document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, { detail: { items: subtitleMenuItems(entries) } }));
     const menu = node("#player__subtitle-menu");
-    const row = key => menu.children.find(child => child.dataset.subtitleKey === key);
-    const labelOf = child => child.querySelector("[data-subtitle-label]").textContent;
+    const row = key => menu.children.find(child => child.dataset.trackMenuKey === key);
+    const labelOf = child => child.querySelector("[data-track-menu-label]").textContent;
     const russian = { key: "ru", language: "ru", source: "In container" };
     publish([russian]);
     assert.equal(labelOf(row("ru")), "Russian");
-    assert.equal(row("ru").dataset.subtitleDepth, "0");
+    assert.equal(row("ru").dataset.trackMenuDepth, "0");
     publish([russian, { key: "ru-provider", language: "ru", source: "OpenSubtitles" }]);
     assert.equal(labelOf(row("ru")), "Russian");
-    assert.equal(row("ru").dataset.subtitleDepth, "1");
+    assert.equal(row("ru").dataset.trackMenuDepth, "1");
     publish([russian]);
     assert.equal(labelOf(row("ru")), "Russian");
-    assert.equal(row("ru").dataset.subtitleDepth, "0");
+    assert.equal(row("ru").dataset.trackMenuDepth, "0");
     const entries = [
       { ...russian, order: 0 },
       { key: "local", language: "en", source: "In container", order: 1 },
@@ -87,22 +91,44 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     ];
 
     publish(entries);
-    assert.equal(menu.children[0].dataset.subtitleKey, "");
+    assert.equal(menu.children[0].dataset.trackMenuKey, "");
     assert.equal(labelOf(row("ru")), "Russian");
-    assert.equal(row("ru").dataset.subtitleDepth, "0");
+    assert.equal(row("ru").dataset.trackMenuDepth, "0");
     assert.equal(labelOf(menu.children[1]), "English");
-    assert.equal(menu.children[1].dataset.subtitleGroup, "language");
+    assert.equal(menu.children[1].dataset.trackMenuGroup, "language");
     assert.equal(labelOf(row("local")), "English");
-    assert.equal(row("local").dataset.subtitleDepth, "1");
+    assert.equal(row("local").dataset.trackMenuDepth, "1");
     assert.equal(labelOf(menu.children[3]), "OpenSubtitles");
-    assert.equal(menu.children[3].dataset.subtitleGroup, "source");
+    assert.equal(menu.children[3].dataset.trackMenuGroup, "source");
     assert.equal(labelOf(menu.children.at(-1)), "Russian");
     assert.equal(labelOf(row("p329")), "Team 330");
     assert.equal(menu.querySelectorAll("media-chrome-menu[slot='submenu']").length, 0);
     assert.equal(menu.children.length, 335, "language/source headings and selectable rows share one menu");
     assert.equal(createdNames.includes("media-settings-menu-item"), false, "the subtitle list does not create expandable groups");
-    assert.equal(menu.children.filter(child => child.type === "radio").every(child => !child.checked || child.dataset.subtitleKey === ""), true,
+    assert.equal(menu.children.filter(child => child.type === "radio").every(child => !child.checked || child.dataset.trackMenuKey === ""), true,
       "only the Off row is checked when subtitles are off");
+
+    const audioMenu = node("#player__audio-menu");
+    audioMenu.localName = "media-chrome-menu";
+    const audioButton = node("#player__audio-button");
+    const audioTracks = [
+      { index: 0, language: "und", title: "RUS", channels: 2 },
+      { index: 1, language: "und", title: "ENG", channels: 2 }
+    ];
+    const audioItems = trackMenuState(audioMenuItems(audioTracks, 0));
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, { detail: { tracks: audioTracks, activeIndex: 0 } }));
+    assert.deepEqual(audioMenu.children.map(labelOf), ["English · (Stereo)", "Russian · (Stereo)"]);
+    assert.equal(audioMenu.children[0].dataset.trackMenuKey, "1");
+    assert.equal(audioMenu.children[1].checked, true);
+    assert.deepEqual(audioItems.map(({ key }) => key), audioMenu.children.map(item => item.dataset.trackMenuNodeKey));
+    audioMenu.children[1].checked = false;
+    audioMenu.children[0].checked = true;
+    let selectedAudio = null;
+    document.addEventListener(PLAYER_EVENTS.SELECT_AUDIO_TRACK, event => { selectedAudio = event.detail.trackIndex; }, { once: true });
+    audioMenu.dispatchEvent(new Event("change"));
+    assert.equal(selectedAudio, 1);
+    assert.equal(audioMenu.hidden, true);
+    assert.equal(audioButton.focused, true);
     const first = [...menu.children];
 
     writes.length = 0;

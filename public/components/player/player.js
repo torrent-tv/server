@@ -17,7 +17,8 @@ import {
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import { noteViewerStopped, pauseWithoutIntent } from "../../domain/playback-intent.js";
 import { isTypingTarget, subtitleMenuState } from "../../domain/subtitle-menu.js";
-import { menuUpdate } from "../../domain/menu-update.js";
+import { audioMenuItems } from "../../domain/audio-menu.js";
+import { createTrackMenuNode, reconcileTrackMenu, trackMenuState } from "../../domain/track-menu.js";
 import { bufferedAheadSeconds, fillRateFromSamples, withSample } from "../../domain/buffer-metrics.js";
 
 /**
@@ -794,7 +795,7 @@ export class Player extends StateDerivedView {
     this.#controller.addEventListener("mediaplayrequest", this.#onPlaybackRequest, true);
     this.#controller.addEventListener("mediapauserequest", this.#onPlaybackRequest, true);
     document.addEventListener(PLAYER_EVENTS.SET_AUDIO_TRACKS, this.#onSetAudioTracks);
-    this.#audioMenu.addEventListener("click", this.#onAudioMenuClick);
+    this.#audioMenu.addEventListener("change", this.#onAudioMenuChange, true);
     document.addEventListener(PLAYER_EVENTS.SET_SUBTITLE_TRACKS, this.#onSetSubtitleTracks);
     this.#subtitleMenu.addEventListener("change", this.#onSubtitleMenuChange, true);
     this.#controller.addEventListener("keydown", this.#onControllerKeydown);
@@ -887,81 +888,8 @@ export class Player extends StateDerivedView {
     }
     this.#subtitleButton.hidden = false;
     const wanted = subtitleMenuState(items);
-    this.#reconcileSubtitleMenu(this.#subtitleMenu, wanted);
+    reconcileTrackMenu(this.#subtitleMenu, wanted, item => createTrackMenuNode(document, item));
   };
-
-  #reconcileSubtitleMenu(menu, wanted) {
-    const elements = new Map();
-    const current = [...menu.children].filter((element) => element.dataset?.subtitleNodeKey !== undefined).map((element) => {
-      const key = element.dataset.subtitleNodeKey;
-      elements.set(key, element);
-      return {
-        key,
-        text: element.querySelector?.("[data-subtitle-label]")?.textContent ?? "",
-        checked: element.checked === true,
-        disabled: element.hasAttribute?.("disabled") === true,
-        accessibleText: element.getAttribute?.("aria-label") ?? "",
-        depth: Number(element.dataset.subtitleDepth) || 0
-      };
-    });
-    const comparable = wanted.map((item) => ({
-      key: item.key,
-      text: item.text,
-      checked: item.kind === "radio" && item.checked,
-      disabled: item.disabled === true,
-      accessibleText: item.accessibleText ?? "",
-      depth: item.depth ?? 0
-    }));
-    const wantedByKey = new Map(wanted.map((item) => [item.key, item]));
-    const { remove, set, create, reorder } = menuUpdate(current, comparable);
-    for (const key of remove) elements.get(key)?.remove();
-    for (const change of set) {
-      const element = elements.get(change.key);
-      if ("text" in change) element.querySelector("[data-subtitle-label]").textContent = change.text;
-      if ("checked" in change && "checked" in element) element.checked = change.checked;
-      if ("disabled" in change) element.toggleAttribute("disabled", change.disabled);
-      if ("accessibleText" in change) {
-        if (change.accessibleText) element.setAttribute("aria-label", change.accessibleText);
-        else element.removeAttribute("aria-label");
-      }
-      if ("depth" in change) element.dataset.subtitleDepth = String(change.depth);
-    }
-    for (const { item, before } of create) {
-      const element = this.#createSubtitleMenuNode(wantedByKey.get(item.key));
-      menu.insertBefore(element, before === null ? null : elements.get(before) ?? null);
-      elements.set(item.key, element);
-    }
-    if (reorder) for (const item of wanted) menu.appendChild(elements.get(item.key));
-    // media-chrome initializes an empty radio group by checking its first item
-    // as each row connects. Reapply the published state after all rows exist.
-    for (const item of wanted) {
-      const element = elements.get(item.key);
-      if (item.kind === "radio" && element.checked !== item.checked) element.checked = item.checked;
-    }
-  }
-
-  #createSubtitleMenuNode(item) {
-    const heading = item.kind === "heading";
-    const element = document.createElement(heading ? "div" : "media-chrome-menu-item");
-    element.dataset.subtitleNodeKey = item.key;
-    element.dataset.subtitleDepth = String(item.depth ?? 0);
-    const label = document.createElement("span");
-    label.dataset.subtitleLabel = "";
-    label.textContent = item.text;
-    element.appendChild(label);
-    if (heading) {
-      element.dataset.subtitleGroup = item.level;
-      element.setAttribute("role", "presentation");
-      return element;
-    }
-    element.type = item.kind === "radio" ? "radio" : "";
-    element.value = item.key;
-    element.dataset.subtitleKey = item.key;
-    if (item.accessibleText) element.setAttribute("aria-label", item.accessibleText);
-    element.checked = item.kind === "radio" && item.checked === true;
-    element.toggleAttribute("disabled", item.disabled === true);
-    return element;
-  }
 
   #closeSubtitleMenu() {
     this.#subtitleMenu.hidden = true;
@@ -976,8 +904,8 @@ export class Player extends StateDerivedView {
   #onSubtitleMenuChange = (event) => {
     const menu = event.composedPath().find((node) => node?.localName === "media-chrome-menu");
     const item = menu?.checkedItems?.[0];
-    if (!item || item.dataset?.subtitleKey === undefined || item.hasAttribute("disabled")) return;
-    this.#selectSubtitleMenuItem(item.dataset.subtitleKey);
+    if (!item || item.dataset?.trackMenuKey === undefined || item.hasAttribute("disabled")) return;
+    this.#selectSubtitleMenuItem(item.dataset.trackMenuKey);
   };
 
   /**
@@ -1007,43 +935,25 @@ export class Player extends StateDerivedView {
     const tracks = Array.isArray(detail?.tracks) ? detail.tracks : [];
     const activeIndex = Number.isInteger(detail?.activeIndex) ? detail.activeIndex : 0;
 
-    this.#clearTrackMenu(this.#audioMenu, this.#audioButton, tracks.length <= 1);
-
     const show = tracks.length > 1;
     this.#audioButton.hidden = !show;
     if (!show) {
+      this.#clearTrackMenu(this.#audioMenu, this.#audioButton);
       return;
     }
-
-    for (const track of tracks) {
-      const item = document.createElement("media-chrome-menu-item");
-      item.setAttribute("type", "radio");
-      item.dataset.audioTrackIndex = String(track.index);
-      if (track.index === activeIndex) {
-        item.setAttribute("checked", "");
-      }
-      item.textContent = track.label ?? `Track ${track.index + 1}`;
-      this.#audioMenu.appendChild(item);
-    }
+    const wanted = trackMenuState(audioMenuItems(tracks, activeIndex));
+    reconcileTrackMenu(this.#audioMenu, wanted, item => createTrackMenuNode(document, item));
   };
 
-  /** @param {MouseEvent} event */
-  #onAudioMenuClick = (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const item = target.closest("media-chrome-menu-item[data-audio-track-index]");
-    if (!item || item.hasAttribute("checked")) return;
-    for (const sibling of this.#audioMenu.querySelectorAll("media-chrome-menu-item")) {
-      sibling.toggleAttribute("checked", sibling === item);
-    }
-    // A choice made closes the menu; it is a menu of its own now, not a
-    // submenu the settings menu used to close.
+  #onAudioMenuChange = (event) => {
+    const menu = event.composedPath().find((node) => node?.localName === "media-chrome-menu");
+    const item = menu?.checkedItems?.[0];
+    if (!item || item.dataset?.trackMenuKey === undefined || item.hasAttribute("disabled")) return;
+    const trackIndex = Number(item.dataset.trackMenuKey);
+    if (!Number.isInteger(trackIndex)) return;
     this.#audioMenu.hidden = true;
-    document.dispatchEvent(
-      new CustomEvent(PLAYER_EVENTS.SELECT_AUDIO_TRACK, {
-        detail: { trackIndex: Number(item.dataset.audioTrackIndex) }
-      })
-    );
+    this.#audioButton.focus();
+    document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.SELECT_AUDIO_TRACK, { detail: { trackIndex } }));
   };
 
   #closeHandler = () => {

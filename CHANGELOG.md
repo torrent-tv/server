@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Share audio and subtitle menu grouping, language labels and keyed rendering while retaining each track type's selection contract.
+
 ## 0.61.2
 
 - **Fix**: Use OpenSubtitles download counts to distinguish otherwise identical provider choices (#ttv-223).

@@ -440,6 +440,7 @@ export class SubtitlePlayback {
       uploaderName: entry.menu?.uploaderName ?? "",
       uploadDate: entry.menu?.uploadDate ?? "",
       cueCount: Number.isSafeInteger(entry.menu?.cueCount) ? entry.menu.cueCount : null,
+      downloads: Number.isSafeInteger(entry.menu?.downloads) ? entry.menu.downloads : null,
       aiTranslated: entry.menu?.aiTranslated === true,
       machineTranslated: entry.menu?.machineTranslated === true,
       showing: entry.textTrack.mode === "showing"

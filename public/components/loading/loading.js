@@ -52,7 +52,7 @@ import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 import { PictureHolds, seekHoldAnswer, nextSeekHoldAsk } from "../../domain/picture-holds.js";
 import { startPageTimings, timed } from "../../domain/page-timings.js";
-import { trackLanguageTag, trackLanguageCode, languageName } from "../../domain/track-language.js";
+import { mediaTrackLanguageInfo, trackLanguageTag, trackLanguageCode } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
 import { subtitleStartHold } from "../../domain/subtitle-start.js";
 import { ChapterMetadata } from "../../domain/chapter-metadata.js";
@@ -80,122 +80,24 @@ const RECONNECT_BACKOFF_MS = 2_000; // pause before attempt 2
 const RECONNECT_STABLE_RESET_MS = 30_000; // healthy playback resets the cycle count
 const RECONNECT_MAX_CYCLES = 3; // consecutive loss→recover cycles before giving up
 
-/**
- * How many channels a soundtrack carries, in the words a viewer uses for them.
- *
- * @param {number | null | undefined} channels
- * @returns {string}
- */
-function channelLayoutName(channels) {
-  const count = Number(channels);
-  if (!Number.isFinite(count) || count <= 0) {
-    return "";
-  }
-  if (count === 1) {
-    return "mono";
-  }
-  if (count === 2) {
-    return "stereo";
-  }
-  if (count === 6) {
-    return "5.1";
-  }
-  if (count === 8) {
-    return "7.1";
-  }
-  return `${count} channels`;
-}
-
-/**
- * Human label for one soundtrack: its language, who made it, and what it is.
- *
- * Three things, and each has one source that is allowed to answer it:
- *
- * - the LANGUAGE is the container's own where the file states it, and where it
- *   does not — which is usual for a dub shipped as a separate file — the folder
- *   the release put it in (`Rus Sound/`);
- * - the RELEASER is a bracketed group in that file's own path which the picture
- *   does NOT also carry. A dub named exactly like the video says nothing about
- *   its author, and naming the video's release group there would be inventing
- *   one;
- * - the TYPE is what the container declares about the track's role —
- *   commentary, audio description, the original language — read from the flags
- *   RFC 9559 defines for exactly this and which ffmpeg's banner does not carry.
- *
- * @param {{ index: number, language?: string, languageBcp47?: string, title?: string,
- *   kind?: string, folders?: string[], fileName?: string, channels?: number | null,
- *   isCommentary?: boolean, isVisualImpaired?: boolean, isOriginal?: boolean }} track
- * @param {string} [videoName] - The picture's file name, for the releaser rule.
- * @returns {string}
- */
-function buildTrackLabel(track, videoName = "") {
-  const parts = [];
-  // Read by the PROXY, by the grammar that also paired this file with this
-  // picture. Reading the same path again here is how one name came to have
-  // two answers.
-  const naming = track?.naming ?? { code: null, name: null, releaser: null };
-  const code = trackLanguageCode(trackLanguageTag(track) || "") || naming.code || "";
-  if (code) {
-    try {
-      parts.push(languageName(code) || code);
-    } catch {
-      // silent-ok: a browser without a display name for this language tag says
-      // so by refusing; the tag itself is then the best label there is.
-      parts.push(code);
-    }
-  } else if (naming.name) {
-    parts.push(naming.name);
-  }
-  if (typeof track.title === "string" && track.title.trim().length > 0) {
-    parts.push(track.title.trim());
-  } else if (naming.releaser) {
-    parts.push(naming.releaser);
-  }
-  if (parts.length === 0) {
-    parts.push(`Track ${Number(track.index) + 1}`);
-  }
-  const marks = [];
-  if (track?.isCommentary === true) {
-    marks.push("commentary");
-  }
-  if (track?.isVisualImpaired === true) {
-    marks.push("audio description");
-  }
-  // Only where the track is not the only one that could be original — saying it
-  // of a single-track file tells the viewer nothing they can act on.
-  if (track?.isOriginal === true && !track?.isCommentary) {
-    marks.push("original");
-  }
-  const layout = channelLayoutName(track?.channels);
-  if (layout) {
-    marks.push(layout);
-  }
-  const base = parts.join(" — ");
-  return marks.length > 0 ? `${base} · ${marks.join(" · ")}` : base;
-}
 import { trackIdentity, findTrackByIdentity } from "../../domain/track-memory.js";
 
 /**
- * What a soundtrack IS, in the terms a choice of it survives an episode switch
- * in: the language and whoever made it.
+ * What a soundtrack IS, in the terms a choice survives an episode switch in:
+ * its resolved language and team or meaningful title.
  *
- * Read from the same two sources `buildTrackLabel` shows the viewer, and in the
- * same order — so what is remembered is what they picked by, and not some other
- * reading of the same track.
+ * Use the same normalized facts shown by the audio menu; never use the rendered
+ * label as an identity.
  *
  * @param {object} track - One entry of the plan's audio list.
- * @param {string} [videoName] - The picture's file name, for the releaser rule.
  * @returns {{ code: string, releaser: string | null } | null}
  */
-function audioTrackIdentity(track, videoName = "") {
-  // Read by the PROXY, by the grammar that also paired this file with this
-  // picture. Reading the same path again here is how one name came to have
-  // two answers.
+function audioTrackIdentity(track) {
   const naming = track?.naming ?? { code: null, releaser: null };
-  const title = typeof track?.title === "string" ? track.title.trim() : "";
+  const language = mediaTrackLanguageInfo(track);
   return trackIdentity({
-    code: trackLanguageCode(trackLanguageTag(track) || "") || naming.code || "",
-    releaser: title.length > 0 ? title : naming.releaser
+    code: language.code,
+    releaser: naming.releaser || language.title
   });
 }
 
@@ -6623,11 +6525,8 @@ export class Loading extends StateDerivedView {
       return;
     }
     const tracks = this.#audioTracks;
-    const files = this.#session.current?.files;
-    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0 ? files[this.#activeFileIndex] : null;
-    const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
     const position = findTrackByIdentity(
-      tracks.map((track) => audioTrackIdentity(track, videoName)),
+      tracks.map((track) => audioTrackIdentity(track)),
       this.#rememberedAudio
     );
     if (position < 0) {
@@ -6652,13 +6551,10 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #rememberAudioChoice() {
-    const files = this.#session.current?.files;
-    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0 ? files[this.#activeFileIndex] : null;
-    const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
     const track = (this.#audioTracks).find(
       (candidate) => candidate?.index === this.#selectedAudioTrackIndex
     );
-    const identity = track ? audioTrackIdentity(track, videoName) : null;
+    const identity = track ? audioTrackIdentity(track) : null;
     if (!identity) {
       // A track whose language nothing states cannot be looked for in another
       // file. Leaving the previous memory in place would be worse than none:
@@ -6671,23 +6567,12 @@ export class Loading extends StateDerivedView {
   }
 
   #publishAudioTracks() {
-    // The picture's own file name, which is what tells a bracketed group naming
-    // the RELEASE apart from one naming whoever made a soundtrack beside it.
-    const files = this.#session.current?.files;
-    const videoFile = Array.isArray(files) && this.#activeFileIndex >= 0
-      ? files[this.#activeFileIndex]
-      : null;
-    const videoName = typeof videoFile?.name === "string" ? videoFile.name : "";
     const tracks = (this.#audioTracks)
       // A track the container marks unusable is not offered. It keeps its number
       // — every entry carries its own, and the proxy publishes a rendition for
       // it either way — so leaving it out of the menu changes what the viewer
       // sees and nothing else.
-      .filter((track) => track?.isEnabled !== false)
-      .map((track) => ({
-        index: track.index,
-        label: buildTrackLabel(track, videoName)
-      }));
+      .filter((track) => track?.isEnabled !== false);
     document.dispatchEvent(
       new CustomEvent(PLAYER_EVENTS.SET_AUDIO_TRACKS, {
         detail: { tracks, activeIndex: this.#selectedAudioTrackIndex }
