@@ -1,5 +1,8 @@
-## 0.62.1
+## Unreleased
 
+- **Fix**: Measure the full seek command from `#moveToPosition` entry, including its synchronous setup.
+
+## 0.62.1
 - **New**: Trace seek input, debounced command, readiness hold and first advancing frame under one wait identity (#ttv-185).
 
 ## 0.62.0
