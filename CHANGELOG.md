@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Trace seek input, debounced command, readiness hold and first advancing frame under one wait identity (#ttv-185).
+
 ## 0.62.0
 
 - **New**: Share audio and subtitle menu grouping, language labels and keyed rendering while retaining each track type's selection contract.

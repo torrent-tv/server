@@ -437,6 +437,10 @@ export class Loading extends StateDerivedView {
 
   /** Pending seek-intent report timer (see #reportSeekIntent). */
   #seekReportTimer = null;
+  /** Wait trace opened by the viewer's seek input and retained through its moving frame. */
+  #seekTraceWaitId = null;
+  /** Debounce span for native seek controls. */
+  #seekIntentTraceEnd = null;
   /** @type {ReturnType<typeof setTimeout> | null} Debounce before showing the buffering notice. */
   #bufferingTimer = null;
   /** @type {boolean} Whether the mid-playback buffering notice is currently shown. */
@@ -524,15 +528,34 @@ export class Loading extends StateDerivedView {
   #seekPosition = new SeekPosition();
   #seekEventPosition = null;
 
+  #beginSeekWaitTrace(startedAt, targetSeconds, input) {
+    if (!waitTrace.enabled || !this.#playbackLive || this.#activeFileIndex < 0) return;
+    if (waitTrace.current?.wait === this.#seekTraceWaitId) {
+      waitTrace.event("seek-input-update", { process: "S0", phase: "event", input, targetSeconds });
+      return;
+    }
+    this.#seekIntentTraceEnd?.({ outcome: "superseded", targetSeconds });
+    this.#seekIntentTraceEnd = null;
+    waitTrace.begin("seek", startedAt);
+    waitTrace.attempt(this.#activeFileIndex, startedAt, true);
+    this.#seekTraceWaitId = waitTrace.current?.wait ?? null;
+    waitTrace.event("seek-input", { process: "S0", phase: "begin", input, targetSeconds });
+  }
+
   #onMediaSeekRequest = (event) => {
     const controller = document.getElementById("player__controller");
     if (!event.composedPath().includes(controller) || !Number.isFinite(event.detail)) return;
+    this.#beginSeekWaitTrace(performance.now(), event.detail, "player-seek-request");
     void this.#moveToPosition(event.detail);
   };
 
   async #moveToPosition(position) {
     if (!Number.isFinite(position) || position < 0) return;
-    if (this.#seekReportTimer !== null) clearTimeout(this.#seekReportTimer);
+    if (this.#seekReportTimer !== null) {
+      clearTimeout(this.#seekReportTimer);
+      this.#seekIntentTraceEnd?.({ outcome: "superseded", targetSeconds: position });
+      this.#seekIntentTraceEnd = null;
+    }
     this.#seekReportTimer = null;
     this.#pendingCurrentTime = this.#isProcessing && !this.#hlsPlayer.isActive() ? position : null;
     this.#seekEventPosition = position;
@@ -545,7 +568,7 @@ export class Loading extends StateDerivedView {
     const hold = this.#playbackLive ? this.#holds.beginSeek() : null;
     try {
       let reportedAt = Number.POSITIVE_INFINITY;
-      await this.#seekPosition.move(position, {
+      await waitTrace.run("S1.seek-command", () => this.#seekPosition.move(position, {
       stopLoad: () => this.#hlsPlayer.stopLoad(),
       reportSeek: async (target) => {
         const answer = await waitTrace.run("B4.position-restatement", () => this.#session.reportSeek(target),
@@ -554,15 +577,19 @@ export class Loading extends StateDerivedView {
         return answer;
       },
       startLoad: (target) => this.#hlsPlayer.seekTo(target, this.#videoElement)
-      });
+      }), { process: "S1", targetSeconds: position });
       if (hold !== null) {
-        if (epoch === this.#playbackEpoch && Number.isFinite(reportedAt)) void this.#holdSeekUntilReady(hold, epoch, reportedAt);
+        if (epoch === this.#playbackEpoch && Number.isFinite(reportedAt)) {
+          void waitTrace.run("S2.seek-readiness-gate", () => this.#holdSeekUntilReady(hold, epoch, reportedAt),
+            { process: "S2", targetSeconds: position });
+        }
         else this.#holds.releaseSeek(hold);
       }
     } catch (error) {
       if (hold !== null) this.#holds.releaseSeek(hold);
       if (epoch !== this.#playbackEpoch) return;
       const description = error instanceof Error ? error.message : String(error);
+      waitTrace.finish("seek-error", { targetSeconds: position, error: description });
       this.#logEvt(`seek failed: ${description}`);
       const canRetry = this.#activeFileIndex >= 0;
       this.#logEvt(`seek to ${position}s failed (retry ${canRetry ? "offered" : "impossible"}): ${description}`);
@@ -904,12 +931,18 @@ export class Loading extends StateDerivedView {
       this.#logEvt(`${ownMove} (${videoElement.currentTime.toFixed(1)}s) — not reported as a seek`);
       return;
     }
+    this.#beginSeekWaitTrace(performance.now(), videoElement.currentTime, "native-seeking-event");
     if (this.#seekReportTimer !== null) {
       clearTimeout(this.#seekReportTimer);
+    } else if (waitTrace.enabled) {
+      this.#seekIntentTraceEnd = waitTrace.open("S0.seek-debounce", { process: "S0" });
     }
     this.#seekReportTimer = window.setTimeout(() => {
       this.#seekReportTimer = null;
       const position = videoElement.currentTime;
+      this.#seekIntentTraceEnd?.({ outcome: Number.isFinite(position) ? "settled" : "invalid-position",
+        targetSeconds: Number.isFinite(position) ? position : null });
+      this.#seekIntentTraceEnd = null;
       if (!Number.isFinite(position)) {
         return;
       }
@@ -1735,6 +1768,8 @@ export class Loading extends StateDerivedView {
   }
 
   #stopPlayback(options = {}) {
+    this.#seekIntentTraceEnd?.({ outcome: "playback-stopped" });
+    this.#seekIntentTraceEnd = null;
     this.#qualityPreparation?.abort();
     this.#audioPreparation?.abort();
     this.#playbackTasks.invalidate();
