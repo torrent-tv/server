@@ -435,6 +435,13 @@ export class SubtitlePlayback {
       team: entry.menu?.team ?? null,
       forced: entry.menu?.forced === true,
       hearingImpaired: entry.menu?.hearingImpaired === true,
+      trackTitle: entry.menu?.trackTitle ?? "",
+      release: entry.menu?.release ?? "",
+      uploaderName: entry.menu?.uploaderName ?? "",
+      uploadDate: entry.menu?.uploadDate ?? "",
+      cueCount: Number.isSafeInteger(entry.menu?.cueCount) ? entry.menu.cueCount : null,
+      aiTranslated: entry.menu?.aiTranslated === true,
+      machineTranslated: entry.menu?.machineTranslated === true,
       showing: entry.textTrack.mode === "showing"
     }));
   }
@@ -559,7 +566,13 @@ export class SubtitlePlayback {
           source: item.provider === "opensubtitles" ? "OpenSubtitles" : item.provider === "jimaku" ? "Jimaku" : item.provider,
           team: null,
           forced: item.forced === true,
-          hearingImpaired: item.hearingImpaired === true
+          hearingImpaired: item.hearingImpaired === true,
+          aiTranslated: item.aiTranslated === true,
+          machineTranslated: item.machineTranslated === true,
+          release: item.release,
+          uploaderName: item.uploaderName,
+          uploadDate: item.uploadDate,
+          cueCount: null
         }
       });
       // Provider variants without a confirmed translation identity must not
@@ -609,6 +622,8 @@ export class SubtitlePlayback {
       });
       if (epoch !== this.#subtitleEpoch || selection !== this.#providerSelection || abort.signal.aborted || this.#providerEntries.get(key) !== entry) return;
       entry.loaded = true;
+      const menuEntry = this.#menuEntries.get(key);
+      if (menuEntry?.menu) menuEntry.menu.cueCount = parseVttCues(vtt).length;
       this.#providerLoadingKey = null;
       entry.element.label = label;
       this.select(key);
@@ -763,7 +778,12 @@ export class SubtitlePlayback {
           source: "In torrent",
           team: sub.naming?.team ?? null,
           forced: info.isForced,
-          hearingImpaired: info.isHearingImpaired
+          hearingImpaired: info.isHearingImpaired,
+          machineTranslated: false,
+          release: "",
+          uploaderName: "",
+          uploadDate: "",
+          cueCount: parseVttCues(vtt).length
         });
         // A subtitle FILE is never the container's choice, so `null` — and the
         // mode reading is registered here too, because a video with only
@@ -837,8 +857,11 @@ export class SubtitlePlayback {
         language: trackLanguageTag(track),
         source: "In container",
         team: null,
+        trackTitle: track.title,
         forced: track.isForced === true,
-        hearingImpaired: track.isHearingImpaired === true
+        hearingImpaired: track.isHearingImpaired === true,
+        machineTranslated: false,
+        cueCount: null
       });
       // What this track IS, for carrying a choice of it to the next episode.
       // Corrected in `#refineSubtitleLabel` if the container said nothing and

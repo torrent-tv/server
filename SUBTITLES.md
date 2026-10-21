@@ -34,11 +34,21 @@ Task: [meta#103](https://github.com/torrent-tv/meta/issues/103).
    available. A language, source or team level appears only when it separates
    choices; otherwise the choices are shown directly at the next useful level.
    Region and script variants remain separate language choices. Track labels
-   show Forced or SDH only when that characteristic distinguishes alternatives;
-   filenames and technical details are omitted. Tracks without team metadata
-   appear directly under their language; a track title is not used as a team.
-   Provider file downloads still begin only after selection. Embedded
-   subtitle cues and paired torrent sidecars keep their existing loading behavior.
+   show track titles such as Forced, Full and SDH in readable wording, and use
+   a named release team when it is present. A source such as OpenSubtitles is
+   shown only when it separates multiple source groups; “In container” and
+   “In torrent” are never menu labels. A language or team with one child is
+   collapsed into the selectable row. The menu omits filenames, movie names,
+   subtitle formats, frame rates, verification state and arbitrary provider
+   comments. For provider alternatives it uses structured role, edition,
+   uploader and upload-date metadata only as needed to distinguish choices.
+   Cue counts are shown only when complete text is already available for every
+   alternative: sidecars are already loaded, while a provider file is counted
+   only after the viewer selects and downloads it. Discovery never downloads
+   provider files to compute counts. Embedded subtitle index entries are not
+   treated as cue counts. Provider file downloads still begin only after
+   selection. Embedded subtitle cues and paired torrent sidecars keep their
+   existing loading behavior.
 6. Only standalone text files are supported: SRT, ASS/SSA and WebVTT. Jimaku ZIP,
    7z and image subtitle files and OpenSubtitles multi-CD sets are not offered as
    whole tracks. ASS positioning, drawing and full styling are not reproduced by

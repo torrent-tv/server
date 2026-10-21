@@ -18,41 +18,71 @@ test("a language with one subtitle is itself the selectable row", () => {
   assert.equal(items[0].checked, true);
 });
 
-test("source headings precede team choices; an unknown team is omitted", () => {
+test("local source headings are hidden and provider alternatives retain useful differences", () => {
   const items = subtitleMenuItems([
     { key: "local", language: "en", source: "In container" },
-    { key: "a", language: "en", source: "OpenSubtitles", team: "Team A", forced: true },
-    { key: "b", language: "en", source: "OpenSubtitles", team: "Team B", hearingImpaired: true, showing: true },
-    { key: "c", language: "en", source: "OpenSubtitles", team: null }
+    { key: "a", language: "en", source: "OpenSubtitles", trackTitle: "Forced | Team A", forced: true },
+    { key: "b", language: "en", source: "OpenSubtitles", trackTitle: "SDH | Team B", hearingImpaired: true, showing: true },
+    { key: "c", language: "en", source: "OpenSubtitles", team: "Standard", trackTitle: "Subtitle (1)" }
   ]);
   assert.deepEqual(items.map(({ text, kind, level, key, depth }) => [text, kind, level, key, depth]), [
     ["English", "heading", "language", "language:en", 0],
-    ["In container", "radio", undefined, "local", 1],
+    ["English", "radio", undefined, "local", 1],
     ["OpenSubtitles", "heading", "source", "source:en:OpenSubtitles", 1],
-    ["Team A", "radio", undefined, "a", 2],
-    ["Team B", "radio", undefined, "b", 2],
-    ["Subtitle", "radio", undefined, "c", 2]
+    ["Signs and foreign dialogue · Team A", "radio", undefined, "a", 2],
+    ["Dialogue and sound descriptions · Team B", "radio", undefined, "b", 2],
+    ["English", "radio", undefined, "c", 2]
   ]);
   assert.equal(items[1].depth, 1);
   assert.equal(items[3].depth, 2);
-  assert.equal(items[3].accessibleText, "English, OpenSubtitles, Team A");
+  assert.equal(items[3].accessibleText, "English, OpenSubtitles, Signs and foreign dialogue · Team A");
 });
 
-test("one source heading is hidden and only distinguishing Forced and SDH characteristics appear", () => {
+test("Moana-style container titles become useful labels without exposing the source or format", () => {
   const items = subtitleMenuItems([
-    { key: "forced", language: "ru", source: "OpenSubtitles", forced: true, filename: "movie.release.ass", fps: 25 },
-    { key: "sdh", language: "ru", source: "OpenSubtitles", hearingImpaired: true, format: "SRT" },
-    { key: "plain1", language: "ru", source: "OpenSubtitles" },
-    { key: "plain2", language: "ru", source: "OpenSubtitles" }
+    { key: "ru-forced", language: "ru", source: "In container", trackTitle: "Forced", forced: true },
+    { key: "ru-jaskier", language: "ru", source: "In container", trackTitle: "Forced | Jaskier", forced: true },
+    { key: "ru-focs", language: "ru", source: "In container", trackTitle: "Full | FOCS" },
+    { key: "en-full", language: "en", source: "In container", trackTitle: "Full" },
+    { key: "en-sdh", language: "en", source: "In container", trackTitle: "SDH", hearingImpaired: true }
   ]);
-  assert.deepEqual(items.map(({ text, kind }) => [text, kind]), [
-    ["Russian", "heading"],
-    ["Forced", "radio"],
-    ["SDH", "radio"],
-    ["Subtitle (1)", "radio"],
-    ["Subtitle (2)", "radio"]
+  assert.deepEqual(items.map(({ text, kind, key }) => [text, kind, key]), [
+    ["English", "heading", "language:en"],
+    ["Full dialogue", "radio", "en-full"],
+    ["Dialogue and sound descriptions", "radio", "en-sdh"],
+    ["Russian", "heading", "language:ru"],
+    ["Signs and foreign dialogue", "radio", "ru-forced"],
+    ["Signs and foreign dialogue · Jaskier", "radio", "ru-jaskier"],
+    ["Full dialogue · FOCS", "radio", "ru-focs"]
   ]);
   assert.equal(items.some(item => /release|\.ass|srt|fps|unverified/iu.test(item.text)), false);
+  assert.equal(items.some(item => item.text === "In container"), false);
+});
+
+test("provider differences use edition, uploader and date, never filename or arbitrary comments", () => {
+  const items = subtitleMenuItems([
+    { key: "a", language: "en", source: "OpenSubtitles", release: "VisionQuest S01E02 WEB-DL DDP5.1", uploaderName: "oakislandtk", uploadDate: "2025-03-13T00:50:01Z", filename: "VisionQuest.S01E02.eng.srt" },
+    { key: "b", language: "en", source: "OpenSubtitles", release: "VisionQuest S01E02 WEB-DL DDP5.1", uploaderName: "other-uploader", uploadDate: "2025-03-13T00:50:02Z", filename: "VisionQuest.S01E02.eng.sdh.srt" }
+  ]);
+  assert.deepEqual(items.map(item => item.text), ["English", "Uploaded by oakislandtk", "Uploaded by other-uploader"]);
+  assert.equal(items.some(item => /VisionQuest|\.srt|OpenSubtitles/iu.test(item.text)), false);
+  assert.equal(items[1].key, "a");
+  assert.equal(items[2].key, "b");
+  const sameUploader = subtitleMenuItems([
+    { key: "c", language: "en", source: "OpenSubtitles", uploaderName: "same", uploadDate: "2025-03-13T00:50:01Z" },
+    { key: "d", language: "en", source: "OpenSubtitles", uploaderName: "same", uploadDate: "2025-03-13T00:50:02Z" }
+  ]);
+  assert.match(sameUploader[1].text, /^Uploaded /u);
+  assert.match(sameUploader[2].text, /^Uploaded /u);
+});
+
+test("cue counts are shown only when every alternative has a complete count", () => {
+  const entries = [
+    { key: "a", language: "en", source: "OpenSubtitles", cueCount: 120 },
+    { key: "b", language: "en", source: "OpenSubtitles", cueCount: 160 }
+  ];
+  assert.deepEqual(subtitleMenuItems(entries).map(item => item.text), ["English", "120 cues", "160 cues"]);
+  assert.deepEqual(subtitleMenuItems([{ ...entries[0] }, { ...entries[1], cueCount: null }]).map(item => item.text), ["English", "English", "English"]);
 });
 
 test("language variants remain separate and a sole provider heading is hidden", () => {
@@ -97,8 +127,10 @@ test("container and torrent subtitles precede provider results", () => {
     { key: "embedded", language: "en", source: "In container" }
   ]);
   assert.deepEqual(items.map(item => item.text), [
-    "English", "In container", "In torrent", "OpenSubtitles"
+    "English", "English", "English", "OpenSubtitles"
   ]);
+  assert.deepEqual(items.slice(1).map(item => item.key), ["embedded", "sidecar", "provider"]);
+  assert.equal(items.some(item => item.kind === "heading" && ["In container", "In torrent"].includes(item.text)), false);
 });
 
 test("one option stays addressable while a language changes from singleton to alternatives and back", () => {
@@ -108,7 +140,7 @@ test("one option stays addressable while a language changes from singleton to al
   ]);
   assert.deepEqual(subtitleMenuItems([...one, { key: "provider", language: "ru", source: "OpenSubtitles" }]).map(item => [item.key, item.text]), [
     ["language:ru", "Russian"],
-    ["container", "In container"],
+    ["container", "Russian"],
     ["provider", "OpenSubtitles"]
   ]);
   assert.deepEqual(subtitleMenuItems(one).map(item => [item.key, item.text, item.kind]), [

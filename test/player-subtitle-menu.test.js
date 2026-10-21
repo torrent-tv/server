@@ -75,7 +75,7 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     assert.equal(labelOf(row("ru")), "Russian");
     assert.equal(row("ru").dataset.subtitleDepth, "0");
     publish([russian, { key: "ru-provider", language: "ru", source: "OpenSubtitles" }]);
-    assert.equal(labelOf(row("ru")), "In container");
+    assert.equal(labelOf(row("ru")), "Russian");
     assert.equal(row("ru").dataset.subtitleDepth, "1");
     publish([russian]);
     assert.equal(labelOf(row("ru")), "Russian");
@@ -83,7 +83,7 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     const entries = [
       { ...russian, order: 0 },
       { key: "local", language: "en", source: "In container", order: 1 },
-      ...Array.from({ length: 330 }, (_, n) => ({ key: `p${n}`, language: "en", source: "OpenSubtitles", order: n + 2 }))
+      ...Array.from({ length: 330 }, (_, n) => ({ key: `p${n}`, language: "en", source: "OpenSubtitles", trackTitle: `Full | Team ${n + 1}`, order: n + 2 }))
     ];
 
     publish(entries);
@@ -92,12 +92,12 @@ test("the single subtitle menu updates headings and leaves by key without rebuil
     assert.equal(row("ru").dataset.subtitleDepth, "0");
     assert.equal(labelOf(menu.children[1]), "English");
     assert.equal(menu.children[1].dataset.subtitleGroup, "language");
-    assert.equal(labelOf(row("local")), "In container");
+    assert.equal(labelOf(row("local")), "English");
     assert.equal(row("local").dataset.subtitleDepth, "1");
     assert.equal(labelOf(menu.children[3]), "OpenSubtitles");
     assert.equal(menu.children[3].dataset.subtitleGroup, "source");
     assert.equal(labelOf(menu.children.at(-1)), "Russian");
-    assert.equal(labelOf(row("p329")), "Subtitle (330)");
+    assert.equal(labelOf(row("p329")), "Team 330");
     assert.equal(menu.querySelectorAll("media-chrome-menu[slot='submenu']").length, 0);
     assert.equal(menu.children.length, 335, "language/source headings and selectable rows share one menu");
     assert.equal(createdNames.includes("media-settings-menu-item"), false, "the subtitle list does not create expandable groups");
