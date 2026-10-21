@@ -93,6 +93,21 @@ export function playlistRows(files, naming = {}) {
 }
 
 /**
+ * The first season to expand when no file is selected.
+ *
+ * @param {Array<PlaylistFileRow | PlaylistGroupRow>} rows
+ * @param {number} selectedFileIndex
+ * @returns {string | null}
+ */
+export function initialOpenSeason(rows, selectedFileIndex) {
+  if (Number.isInteger(selectedFileIndex) && selectedFileIndex >= 0) {
+    return null;
+  }
+  const seasons = rows.filter((row) => row.kind === "group" && row.folder.startsWith("season:"));
+  return seasons.length > 1 ? seasons[0].folder : null;
+}
+
+/**
  * @param {PlaylistFile} file
  * @returns {string} The folder the file sits in, relative to the torrent's root; empty at the root.
  */

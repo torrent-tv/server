@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { playlistRows } from "../public/domain/playlist-groups.js";
+import { initialOpenSeason, playlistRows } from "../public/domain/playlist-groups.js";
 
 /**
  * @param {string[]} paths - Pictures, in the order the proxy gave them.
@@ -43,6 +43,27 @@ test("a folder per season becomes a group per season, in the order given", () =>
     { group: "Season_01", files: ["s01e01_The.Adventure.of.the.Clapham.Cook", "s01e02_Murder.in.the.Mews"] },
     { group: "Season_02", files: ["s02e01_Peril.at.End.House_Part.1", "s02e02_Peril.at.End.House_Part.2"] }
   ]);
+});
+
+test("the first season is initially open only when no file is selected", () => {
+  const files = filesOf(["S01/a.mkv", "S01/b.mkv", "S02/c.mkv", "S02/d.mkv"]).map((file, index) => ({
+    ...file,
+    season: index < 2 ? 1 : 2
+  }));
+  const rows = playlistRows(files, { groupKey: (file) => `season:${file.season}` });
+  assert.equal(initialOpenSeason(rows, -1), "season:1");
+  assert.equal(initialOpenSeason(rows, 2), null);
+});
+
+test("a playlist without season groups has no initially open season", () => {
+  const rows = playlistRows(filesOf(["e01.mkv", "e02.mkv"]));
+  assert.equal(initialOpenSeason(rows, -1), null);
+});
+
+test("a single season keeps its existing always-visible layout", () => {
+  const files = filesOf(["S01/a.mkv", "S01/b.mkv"]);
+  const rows = playlistRows(files, { groupKey: () => "season:1" });
+  assert.equal(initialOpenSeason(rows, -1), null);
 });
 
 test("each row keeps its own file number", () => {
