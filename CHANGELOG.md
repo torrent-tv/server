@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.2
 
 - **Fix**: Measure the full seek command from `#moveToPosition` entry, including its synchronous setup.
 
