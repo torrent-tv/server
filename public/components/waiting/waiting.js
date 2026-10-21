@@ -95,9 +95,12 @@ export class WaitingOverlay {
     const downloadStats = detail?.downloadStats ?? null;
     const transcodeProgress = detail?.transcodeProgress ?? null;
     const readiness = detail?.playbackReadiness;
-    const hasCurrentWaitEstimate = this.#awaitingFirstPresentedFrame && downloadStats &&
-      Object.hasOwn(downloadStats, "waitEstimate");
     const earlyWaitEstimate = downloadStats?.waitEstimate;
+    // Startup and seek polling publish the active action's estimate through the
+    // same event. A seek can begin after the startup wait has ended, so the
+    // overlay's startup-only flag cannot decide whether this answer is current.
+    const hasCurrentWaitEstimate = downloadStats && Object.hasOwn(downloadStats, "waitEstimate") &&
+      earlyWaitEstimate !== null && earlyWaitEstimate !== undefined;
     const nestedWaitEstimate = readiness?.waitEstimate;
     const traceKey = JSON.stringify([
       this.#awaitingFirstPresentedFrame,
