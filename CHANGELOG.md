@@ -1,4 +1,4 @@
-## Unreleased
+## 0.60.4
 
 - **Chore**: Record when progress polling receives a wait estimate and when the waiting overlay accepts it, so missing or stale forecast updates can be localized in field traces (#ttv-185).
 
