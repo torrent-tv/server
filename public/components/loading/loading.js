@@ -1415,11 +1415,13 @@ export class Loading extends StateDerivedView {
       if (answer === "stale") continue;
       const video = this.#videoElement;
       const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
+      const waitEstimate = waitEstimateForProgress(progress);
       this.#waitingModel.update({
-        ...(waitEstimateForProgress(progress) ? { waitEstimate: waitEstimateForProgress(progress) } : {}),
+        waitEstimate,
         playbackReadiness: readiness ?? null,
         bufferedAhead: ahead
       });
+      this.#publishTranscodeMeasurements(progress);
       if (answer === "release") {
         this.#logEvt(readiness?.version === 1
           ? `seek hold released: forecast ready ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s`
@@ -5930,11 +5932,24 @@ export class Loading extends StateDerivedView {
     if ((unified.cushionPercent ?? 0) <= 0) {
       this.setStatus("Preparing playback...");
     }
+    this.#publishTranscodeMeasurements(progress);
+  }
+
+  /**
+   * Publish the current action's estimate and readiness to the waiting overlay.
+   * The seek hold uses the same progress endpoint as startup, so its answers
+   * must reach the display even though startup polling has already stopped.
+   *
+   * @param {object} progress
+   * @returns {void}
+   */
+  #publishTranscodeMeasurements(progress) {
+    const waitEstimate = waitEstimateForProgress(progress);
     document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
       detail: {
-        downloadStats: withProgressWaitEstimate(this.#lastDownloadStats, progress),
+        downloadStats: { ...(this.#lastDownloadStats ?? {}), waitEstimate: waitEstimate ?? null },
         transcodeProgress: progress,
-        playbackReadiness: progress.playbackReadiness
+        playbackReadiness: progress?.playbackReadiness ?? null
       }
     }));
   }
