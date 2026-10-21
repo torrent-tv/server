@@ -1,4 +1,4 @@
-## Unreleased
+## 0.60.7
 
 - **Fix**: Accept the current estimate from active progress events after the startup wait has ended, so later seeks can display a numeric wait estimate (#ttv-185).
 
