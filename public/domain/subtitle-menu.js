@@ -35,8 +35,15 @@ function hasChecked(items) {
  * @property {string} [source]
  * @property {string} [team]
  * @property {string} [provider]
+ * @property {string} [trackTitle]
+ * @property {string} [release]
+ * @property {string} [uploaderName]
+ * @property {string} [uploadDate]
+ * @property {number | null} [cueCount]
+ * @property {boolean} [aiTranslated]
  * @property {boolean} [forced]
  * @property {boolean} [hearingImpaired]
+ * @property {boolean} [machineTranslated]
  * @property {boolean} showing
  */
 
@@ -71,18 +78,15 @@ export function subtitleMenuItems(entries, statuses = []) {
     .sort((a, b) => a.unknown - b.unknown || a.name.localeCompare(b.name) || a.code.localeCompare(b.code))
     .flatMap((language) => {
       if (language.tracks.length === 1) {
-        return [trackItem(language.tracks[0], language.name, [], language.name, 0)];
+        const entry = language.tracks[0];
+        const details = trackDetails(entry, language.tracks, false);
+        const text = details.length ? `${language.name} (${details.join(" · ")})` : language.name;
+        return [trackItem(entry, language.name, [], text, 0)];
       }
       const rows = [heading(`language:${language.code}`, language.name, "language", 0)];
       const sources = groupBy(language.tracks, entry => textOf(entry.source) || "Subtitles")
         .sort((a, b) => sourceRank(a.name) - sourceRank(b.name));
-      if (sources.length === 1) {
-        rows.push(...sourceItems(sources[0].items, language, false));
-      } else {
-        for (const source of sources) {
-          rows.push(...sourceItems(source.items, language, source.items.length !== 1));
-        }
-      }
+      for (const source of sources) rows.push(...sourceItems(source.items, language, sources, language.tracks));
       return rows;
     });
 
@@ -96,56 +100,129 @@ export function subtitleMenuItems(entries, statuses = []) {
   return [...grouped, ...actions];
 }
 
-function sourceItems(tracks, language, showSource) {
+function sourceItems(tracks, language, sources, languageTracks) {
   const source = textOf(tracks[0]?.source) || "Subtitles";
-  if (!showSource && tracks.length === 1) {
-    return [trackItem(tracks[0], language.name, [], source, 1)];
-  }
-  const parentLabels = showSource ? [source] : [];
-  const sourceDepth = showSource ? 1 : 0;
-  const sources = showSource
+  const localSource = source === "In container" || source === "In torrent";
+  const showSource = sources.length > 1 && !localSource && tracks.length > 1;
+  const sourceLabels = showSource ? [source] : [];
+  const sourceDepth = showSource ? 2 : 1;
+  const sourceRows = showSource
     ? [heading(`source:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}`, source, "source", 1)]
     : [];
-  const teams = groupBy(tracks, entry => textOf(entry.team));
-  if (teams.length === 1) {
-    return [...sources, ...trackItems(tracks, language, parentLabels, sourceDepth + 1)];
-  }
-
-  const rows = [...sources];
+  const teams = groupBy(tracks, entry => teamOf(entry));
+  const teamsDiffer = teams.length > 1;
+  const rows = [...sourceRows];
   for (const group of teams) {
-    if (group.items.length === 1) {
-      rows.push(trackItem(group.items[0], language.name, [...parentLabels, group.name].filter(Boolean), group.name || "Subtitle", sourceDepth + 1));
-    } else {
-      if (group.name) rows.push(heading(`team:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}:${encodeURIComponent(group.name)}`, group.name, "team", sourceDepth + 1));
-      rows.push(...trackItems(group.items, language, [...parentLabels, ...(group.name ? [group.name] : [])], sourceDepth + 1 + (group.name ? 1 : 0)));
+    const team = group.name;
+    if (teamsDiffer && team && group.items.length > 1) {
+      rows.push(heading(`team:${encodeURIComponent(language.code)}:${encodeURIComponent(source)}:${encodeURIComponent(team)}`, team, "team", sourceDepth));
+      rows.push(...trackItems(group.items, language, [...sourceLabels, team], sourceDepth + 1, group.items, false));
+      continue;
     }
+    const parentLabels = [...sourceLabels, ...(teamsDiffer && team && group.items.length > 1 ? [team] : [])];
+    const collapsedSource = sources.length > 1 && !showSource && group.items.length === 1;
+    const comparison = collapsedSource ? languageTracks : teamsDiffer ? tracks : group.items;
+    rows.push(...trackItems(group.items, language, parentLabels, sourceDepth, comparison, teamsDiffer && Boolean(team), collapsedSource));
   }
   return rows;
 }
 
-function trackItems(tracks, language, parentLabels, depth) {
-  const forcedDiffers = new Set(tracks.map(track => track.forced === true)).size > 1;
-  const sdhDiffers = new Set(tracks.map(track => track.hearingImpaired === true)).size > 1;
-  const prepared = tracks.map(entry => {
-    const labels = [];
-    if (forcedDiffers && entry.forced === true) labels.push("Forced");
-    if (sdhDiffers && entry.hearingImpaired === true) labels.push("SDH");
-    return { entry, text: labels.join(" · ") || "Subtitle" };
+function trackItems(tracks, language, parentLabels, depth, comparison = tracks, includeTeam = false, includeSource = false) {
+  return tracks.map(entry => {
+    const details = trackDetails(entry, comparison, includeTeam, includeSource);
+    const text = details.join(" · ") || language.name;
+    return trackItem(entry, language.name, parentLabels, text, depth);
   });
-  const totals = new Map();
-  for (const item of prepared) totals.set(item.text, (totals.get(item.text) ?? 0) + 1);
-  const seen = new Map();
-  return prepared.map(({ entry, text }) => {
-    const ordinal = (seen.get(text) ?? 0) + 1;
-    seen.set(text, ordinal);
-    const label = totals.get(text) > 1 ? `${text} (${ordinal})` : text;
-    return trackItem(entry, language.name, parentLabels, label, depth);
-  });
+}
+
+function trackDetails(entry, comparison, includeTeam, includeSource) {
+  const entries = Array.isArray(comparison) ? comparison : [entry];
+  const distinguishingFields = [
+    ["cueCount", item => Number.isSafeInteger(item.cueCount) && item.cueCount >= 0 ? `${item.cueCount.toLocaleString()} cues` : "", true],
+    ["kind", item => subtitleKinds(item).join(" · "), false],
+    ["team", teamOf, false],
+    ["edition", item => releaseEdition(item.release), false],
+    ["ai", item => item.aiTranslated === true ? "AI-translated" : "", false],
+    ["machine", item => item.machineTranslated === true ? "Machine-translated" : "", false]
+  ];
+  const fallbackFields = [
+    ["uploader", item => textOf(item.uploaderName) ? `Uploaded by ${textOf(item.uploaderName)}` : "", false],
+    ["date", item => uploadDateLabel(item.uploadDate), false],
+    ["source", item => textOf(item.source) && item.source !== "In container" && item.source !== "In torrent" ? textOf(item.source) : "", false]
+  ];
+  const labels = [];
+  const signatures = entries.map(() => []);
+  const addFields = (fields, onlyWhileDuplicates) => {
+    for (const [name, valueOf, requireComplete] of fields) {
+      if (onlyWhileDuplicates && !hasDuplicateSignatures(signatures)) break;
+      if (name === "team" && !includeTeam) continue;
+      if (name === "source" && !includeSource) continue;
+      const values = entries.map(item => valueOf(item));
+      if (requireComplete && values.some(value => !value)) continue;
+      if (new Set(values).size < 2) continue;
+      if (onlyWhileDuplicates && !values.some((value, left) => values.some((other, right) => left < right && value !== other && signatures[left].every((item, index) => item === signatures[right][index])))) continue;
+      values.forEach((value, index) => signatures[index].push(value));
+      const value = valueOf(entry);
+      if (value) labels.push(value);
+    }
+  };
+  addFields(distinguishingFields, false);
+  addFields(fallbackFields, true);
+  return labels;
+}
+
+function hasDuplicateSignatures(signatures) {
+  return signatures.some((signature, index) => signatures.slice(index + 1).some(other => signature.every((value, valueIndex) => value === other[valueIndex])));
+}
+
+function subtitleKinds(entry) {
+  const kinds = [];
+  const titleParts = textOf(entry.trackTitle).split("|").map(part => part.trim()).filter(Boolean);
+  const titleKinds = new Set();
+  for (const part of titleParts) {
+    const kind = part.toLowerCase();
+    if (kind === "forced") titleKinds.add("Signs and foreign dialogue");
+    else if (kind === "full") titleKinds.add("Full dialogue");
+    else if (kind === "sdh") titleKinds.add("Dialogue and sound descriptions");
+    else if (/^(?:signs and foreign dialogue|foreign parts only)$/iu.test(part)) titleKinds.add("Signs and foreign dialogue");
+    else if (/^(?:full dialogue)$/iu.test(part)) titleKinds.add("Full dialogue");
+    else if (/^(?:dialogue and sound descriptions)$/iu.test(part)) titleKinds.add("Dialogue and sound descriptions");
+  }
+  if (entry.forced === true) titleKinds.add("Signs and foreign dialogue");
+  if (entry.hearingImpaired === true) titleKinds.add("Dialogue and sound descriptions");
+  kinds.push(...titleKinds);
+  return kinds;
+}
+
+function teamOf(entry) {
+  if (textOf(entry.team) && !isGenericTrackPart(textOf(entry.team))) return textOf(entry.team);
+  const parts = textOf(entry.trackTitle).split("|").map(part => part.trim()).filter(Boolean);
+  const team = parts.find(part => !isGenericTrackPart(part));
+  return team ?? "";
+}
+
+function isGenericTrackPart(value) {
+  return /^(?:forced|full|full dialogue|sdh|standard|default|no description|subtitle|subtitles|unknown|signs and foreign dialogue|foreign parts only|dialogue and sound descriptions)(?:\s*\(?\d+\)?)?$/iu.test(textOf(value));
+}
+
+function releaseEdition(release) {
+  const name = textOf(release);
+  if (/\b(?:uhd[._ -]*)?(?:blu[._ -]?ray|bdrip)\b/iu.test(name)) return /\buhd\b/iu.test(name) ? "UHD Blu-ray" : "Blu-ray";
+  if (/\b(?:web[._ -]?(?:dl|rip))\b/iu.test(name)) return "Streaming";
+  if (/\b(?:hdtv|pdtv)\b/iu.test(name)) return "TV";
+  if (/\bdvd(?:rip)?\b/iu.test(name)) return "DVD";
+  if (/\b(?:telesync|telecine|camrip|cam)\b/iu.test(name)) return "Cinema recording";
+  return "";
+}
+
+function uploadDateLabel(value) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return "";
+  return `Uploaded ${new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" })}`;
 }
 
 function trackItem(entry, language, parentLabels, text, depth) {
   const accessibleParts = [language, ...parentLabels].filter(Boolean);
-  if (accessibleParts.at(-1) !== text) accessibleParts.push(text);
+  if (!accessibleParts.includes(text)) accessibleParts.push(text);
   return {
     key: String(entry.key),
     text,
