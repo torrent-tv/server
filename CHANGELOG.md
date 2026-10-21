@@ -1,4 +1,4 @@
-## Unreleased
+## 0.61.0
 
 - **New**: Expand the first season in a multi-season playlist when no episode is selected (#ttv-226).
 
