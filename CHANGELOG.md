@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.3
 
 - **Fix**: Measure first-frame elapsed time from the original traced action for startup and seek observations.
 
