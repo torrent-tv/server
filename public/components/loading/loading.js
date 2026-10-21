@@ -684,6 +684,10 @@ export class Loading extends StateDerivedView {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (!detail || !Number.isFinite(detail.waitSequence) || !Number.isFinite(detail.mediaTime) ||
         !this.#videoElement) return;
+    const trace = waitTrace.current?.attempt > 0 && waitTrace.current.fileIndex === this.#activeFileIndex
+      ? waitTrace.current : null;
+    const actionElapsedMs = trace ? performance.now() - trace.startedAt : null;
+    const elapsedMs = actionElapsedMs ?? detail.elapsedMs;
     let buffers = null;
     try {
       buffers = this.#hlsPlayer.getBufferedRanges(this.#videoElement);
@@ -703,18 +707,19 @@ export class Loading extends StateDerivedView {
     const generation = this.#session?.viewGeneration ?? 0;
     const waitId = this.#activeSourceKey && this.#activeFileIndex >= 0
       ? `${this.#activeSourceKey}:${this.#activeFileIndex}:${generation}` : "";
-    if (waitId && Number.isFinite(detail.elapsedMs)) {
+    if (waitId && Number.isFinite(elapsedMs)) {
       const stages = audioReady ? this.#coldStartStages : null;
       if (stages) this.#coldStartStages = null;
       const stageFields = stages
         ? ` coldStartTotalMs=${stages.totalMs.toFixed(3)} transportMs=${stages.transportMs.toFixed(3)}` +
           ` planMs=${stages.planMs.toFixed(3)} prepareMs=${stages.prepareMs.toFixed(3)}` +
           ` prebufferMs=${stages.prebufferMs.toFixed(3)}` +
-          ` presentationMs=${Math.max(0, detail.elapsedMs - stages.totalMs).toFixed(3)}`
+          ` presentationMs=${Math.max(0, elapsedMs - stages.totalMs).toFixed(3)}`
         : "";
       console.debug(`[first-frame-observation] consumer=${this.#session?.consumerId ?? ""} ` +
         `generation=${generation} waitId=${waitId} wait=${detail.waitSequence} ` +
-        `audioReady=${audioReady} elapsedMs=${detail.elapsedMs.toFixed(3)}${stageFields}`);
+        `audioReady=${audioReady} elapsedMs=${elapsedMs.toFixed(3)} ` +
+        `elapsedSource=${trace ? "action-trace" : "loading-wait"}${stageFields}`);
     }
   };
 
