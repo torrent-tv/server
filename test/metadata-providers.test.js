@@ -131,7 +131,48 @@ test("without container evidence the container is not consulted and the answer i
 
 test("an answer that is not an identity carries no records", async () => {
   const answer = await registry({ answer: { status: "ambiguous", candidates: [work] } }).identify({ names: ["Example"] });
-  assert.deepEqual(answer, { status: "ambiguous", candidates: [work] });
+  assert.equal(answer.status, "ambiguous");
+  assert.deepEqual(answer.candidates, [work]);
+  assert.deepEqual(answer.diagnostics.selection, { status: "ambiguous", providers: [] });
+});
+
+test("fallback not-found and unavailable attempts retain earlier search evidence", async () => {
+  for (const lastResortAnswer of [
+    { status: "not-found", diagnostics: { stage: "transliteration", marker: "later" } },
+    { status: "unavailable", diagnostics: { stage: "transliteration", marker: "later" } }
+  ]) {
+    const service = {
+      identify: async () => ({ status: "not-found", searches: [{ kind: "movie", query: "title", status: "complete", totalResults: 1, results: [{ id: 41, name: "Title", originalName: "Title", year: 2001 }] }], diagnostics: { stage: "title", marker: "earlier" } }),
+      identifyTransliterated: async () => lastResortAnswer
+    };
+    const answer = await new MetadataRegistry({ providers: [new TmdbProvider(service)] }).identify({ names: ["Title"], language: "en-US" });
+    assert.equal(answer.status, lastResortAnswer.status);
+    assert.deepEqual(answer.diagnostics.attempts.map(attempt => attempt.status), ["not-found", lastResortAnswer.status]);
+    assert.equal(answer.diagnostics.attempts[0].details.marker, "earlier");
+    assert.equal(answer.diagnostics.attempts[0].searches[0].returned, 1);
+    assert.equal(answer.diagnostics.attempts[1].details.marker, "later");
+  }
+});
+
+test("the same provider answer keeps the same selected identity and status", async () => {
+  const selected = { ...work, tmdbId: 73 };
+  const answer = await new MetadataRegistry({ providers: [new TmdbProvider({
+    identify: async () => ({ status: "identified", work: selected }),
+    episodes: async () => ({ status: "unavailable" })
+  })] }).identify({ names: ["Example"], language: "en-US" });
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.sources.tmdb.tmdbId, 73);
+  assert.equal(answer.diagnostics.selection.tmdbId, 73);
+});
+
+test("provider diagnostic details are capped and report truncation", async () => {
+  const answer = await new MetadataRegistry({ providers: [new TmdbProvider({
+    identify: async () => ({ status: "unavailable", diagnostics: { values: Array.from({ length: 70 }, (_, index) => index) } }),
+    episodes: async () => ({ status: "unavailable" })
+  })] }).identify({ names: ["Example"], language: "en-US" });
+  const attempt = answer.diagnostics.attempts[0];
+  assert.equal(attempt.details.values.length, 60);
+  assert.equal(attempt.detailsTruncated, true);
 });
 
 test("episodes go to the first source that answers them, and without one the answer is unavailable", async () => {

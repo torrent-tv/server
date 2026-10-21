@@ -67,7 +67,33 @@ function service(source) {
 }
 
 test("without a token nothing is asked and the answer is unavailable", async () => {
-  assert.deepEqual(await service(null).identify({ names: ["Title"], kindHint: null, language: "en-US" }), { status: "unavailable" });
+  const answer = await service(null).identify({ names: ["Title"], kindHint: null, language: "en-US" });
+  assert.equal(answer.status, "unavailable");
+  assert.deepEqual(answer.diagnostics.stages, [{ name: "search", status: "unavailable" }]);
+});
+
+test("search and record diagnostics keep rejected candidates, contradictions and bounded outcomes", async () => {
+  const rows = Array.from({ length: 100 }, (_, index) => ({ id: index + 1, name: `Unrelated ${index}`, year: 2000 }));
+  const answer = await service(fakeSource({ "movie|Title": rows })).identify({ names: ["Title"], kindHint: "movie", language: "en-US" });
+  assert.equal(answer.status, "undetermined");
+  assert.equal(answer.diagnostics.candidates.candidates.length, 60);
+  assert.equal(answer.diagnostics.candidates.truncated, 40);
+  assert.equal(answer.diagnostics.candidates.candidates[0].admissions[0].admission, "rejected");
+
+  const contradicted = await service(fakeSource({ "movie|Title": [{ id: 9, name: "Title", year: 2000 }] }, {
+    works: { "movie|9": { runtimeSeconds: 8_000 } }
+  })).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 3_600, language: "en-US" });
+  assert.equal(contradicted.status, "not-found");
+  assert.deepEqual(contradicted.diagnostics.recordReads, [{ kind: "movie", tmdbId: 9, status: "read" }]);
+  assert.equal(contradicted.diagnostics.ranking[0].contradiction, "runtime-mismatch");
+  assert.deepEqual(contradicted.diagnostics.selection, { status: "not-found", candidate: null, reason: "all-read-candidates-contradicted" });
+
+  const failedSource = fakeSource({ "movie|Title": [{ id: 10, name: "Title", year: 2000 }] });
+  failedSource.work = async () => { throw new MetadataUnavailableError("record unavailable"); };
+  const failedRecord = await service(failedSource).identify({ names: ["Title"], kindHint: "movie", language: "en-US" });
+  assert.equal(failedRecord.status, "unavailable");
+  assert.deepEqual(failedRecord.diagnostics.recordReads, [{ kind: "movie", tmdbId: 10, status: "failed" }]);
+  assert.equal(failedRecord.diagnostics.selection.reason, "selected-record-read-failed");
 });
 
 test("a series is looked for as a series, with and without the season number LostFilm puts after the title", async () => {
@@ -121,7 +147,7 @@ test("identification retains bounded database search results and scores a contai
   assert.equal(answer.work.tmdbId, 377);
   assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 23437).contradiction, "year-mismatch");
   assert.deepEqual(answer.searches.find(search => search.kind === "movie"), {
-    provider: "tmdb", kind: "movie", query: "a nightmare on elm street", status: "complete", totalResults: 2, truncated: false,
+    provider: "tmdb", kind: "movie", query: "a nightmare on elm street", language: "en-US", status: "complete", pagesFetched: 1, totalPages: 1, totalResults: 2, truncated: false,
     results: [
       { id: 377, name: "A Nightmare on Elm Street", originalName: "A Nightmare on Elm Street", year: 1984 },
       { id: 23437, name: "A Nightmare on Elm Street", originalName: "A Nightmare on Elm Street", year: 2010 }

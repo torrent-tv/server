@@ -58,17 +58,65 @@ const EVIDENCE_REQUEST_BUDGET_MS = 20_000;
 const MAX_INITIAL_RECORD_CHECKS = 8;
 
 /** Candidate feature values returned so the survey can replay the ranking. */
-const RANKED_REPORTED = MAX_RUNTIME_CHECKS;
+const MAX_RANKED_REPORTED = MAX_RUNTIME_CHECKS;
 
 /** Search results retained with an identification answer. */
 const MAX_SEARCH_RESULTS_REPORTED = MAX_RUNTIME_CHECKS;
+const MAX_DIAGNOSTIC_CANDIDATES = 60;
+
+function boundedText(value, limit = 200) {
+  return typeof value === "string" ? value.slice(0, limit) : null;
+}
+
+function candidateEvidence(searches) {
+  const candidates = new Map();
+  let truncated = 0;
+  for (const search of searches) {
+    for (const result of search.results ?? []) {
+      const key = `${search.kind}:${result.id}`;
+      let candidate = candidates.get(key);
+      if (!candidate) {
+        if (candidates.size >= MAX_DIAGNOSTIC_CANDIDATES) {
+          truncated += 1;
+          continue;
+        }
+        candidate = {
+          kind: search.kind,
+          tmdbId: result.id,
+          title: boundedText(result.name),
+          originalTitle: boundedText(result.originalName),
+          year: result.year,
+          admissions: [],
+          admissionsTruncated: false
+        };
+        candidates.set(key, candidate);
+      }
+      const name = normalizeTitle(result.name);
+      const originalName = normalizeTitle(result.originalName);
+      const admission = name === search.query || originalName === search.query
+        ? "exact"
+        : name.startsWith(`${search.query} `) || originalName.startsWith(`${search.query} `) ? "prefix" : "rejected";
+      if (candidate.admissions.length < 12) candidate.admissions.push({ query: boundedText(search.query), status: search.status, admission });
+      else candidate.admissionsTruncated = true;
+    }
+  }
+  return { candidates: [...candidates.values()], truncated, limit: MAX_DIAGNOSTIC_CANDIDATES };
+}
+
+function reportedRanked(ranked) {
+  return ranked.slice(0, MAX_RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) =>
+    ({ kind, tmdbId, title: boundedText(title), year, titleMatch, shares, score, contradiction, order }));
+}
 
 function reportedSearches(searches) {
-  return searches.map(({ kind, query, status, results }) => ({
+  return searches.map(({ kind, query, language, status, results, pagesFetched, totalPages }) => ({
     provider: "tmdb",
     kind,
     query,
+    language,
     status,
+    pagesFetched,
+    totalPages,
     totalResults: results.length,
     truncated: results.length > MAX_SEARCH_RESULTS_REPORTED,
     results: results.slice(0, MAX_SEARCH_RESULTS_REPORTED)
@@ -148,57 +196,131 @@ export class MetadataService {
    */
   /** A bounded last resort, called only after both providers found no identity. */
   async identifyTransliterated({ names, kindHint, subtitleEvidence = null, language, signal }) {
-    if (!this.#source) return { status: "unavailable" };
+    const diagnostics = { mode: "transliteration", searches: [], candidates: [], checked: [], selection: null };
+    if (!this.#source) return { status: "unavailable", diagnostics };
     const readings = names.map(parseReleaseName);
     const years = [...new Set([...readings.map(reading => reading.years?.from), ...(subtitleEvidence?.years ?? [])].filter(Number.isInteger))];
     const titles = [...new Set(readings.flatMap(reading => reading.titles).map(normalizeTitle))];
     const latin = titles.filter(title => /^[a-z0-9 ]+$/u.test(title));
     const words = [...new Set(latin.flatMap(title => title.split(" ")).filter(word => /^[a-z]{5,}$/u.test(word)))];
-    if (!words.length) return { status: "not-found" };
-    if (words.length > 3) return { status: "undetermined" };
+    if (!words.length) {
+      diagnostics.selection = { status: "not-found", reason: "no-transliterated-search-word" };
+      return { status: "not-found", diagnostics };
+    }
+    if (words.length > 3) {
+      diagnostics.selection = { status: "undetermined", reason: "word-count-limit", wordsAvailable: words.length, wordsAllowed: 3 };
+      return { status: "undetermined", diagnostics };
+    }
     const expanded = [...new Set(words.flatMap(word => [word, ...russianSearchSpellings(word)]))];
     const wordDiscovery = expanded.length <= MAX_QUERIES ? expanded : words;
     const wholeDiscovery = [...new Set(latin.flatMap(russianTitleSpellings))];
     const stages = [wholeDiscovery.length <= MAX_QUERIES ? wholeDiscovery : [], wordDiscovery];
     const kinds = kindHint ? [kindHint] : readings.some(reading => reading.seriesEvidence) ? ["tv"] : ["tv", "movie"];
     const wait = { deadlineAt: this.#now() + REQUEST_BUDGET_MS, signal };
+    const allCandidates = new Map();
     try {
-      for (const discovery of stages) {
-        if (!discovery.length) continue;
+      for (const [stageIndex, discovery] of stages.entries()) {
+        const stageName = stageIndex === 0 ? "whole-title-spelling" : "word-spellings";
+        if (!discovery.length) {
+          (diagnostics.stages ??= []).push({ name: stageName, status: "skipped", reason: "query-count-limit" });
+          continue;
+        }
       const candidates = new Map();
       for (const kind of kinds) {
         for (const word of discovery) {
           const found = await this.#search(kind, word, language, wait);
-          if (found.capped) return { status: "undetermined" };
+          diagnostics.searches.push({ kind, query: boundedText(word), language, status: found.capped ? "capped" : "complete",
+            returned: found.results.length, pagesFetched: found.pagesFetched, totalPages: found.totalPages });
           for (const candidate of found.results) {
             candidates.set(`${kind}|${candidate.id}`, { ...candidate, kind });
+            allCandidates.set(`${kind}|${candidate.id}`, { ...candidate, kind });
+          }
+          if (found.capped) {
+            (diagnostics.stages ??= []).push({ name: stageName, status: "undetermined", reason: "search-page-limit", candidatesAvailable: candidates.size });
+            diagnostics.selection = { status: "undetermined", reason: "search-page-limit", candidatesAvailable: candidates.size };
+            diagnostics.candidates = [...allCandidates.values()].slice(0, MAX_DIAGNOSTIC_CANDIDATES).map(candidate => ({
+              kind: candidate.kind, tmdbId: candidate.id, title: boundedText(candidate.name), originalTitle: boundedText(candidate.originalName), year: candidate.year
+            }));
+            diagnostics.candidatesTruncated = allCandidates.size > MAX_DIAGNOSTIC_CANDIDATES;
+            return { status: "undetermined", diagnostics };
           }
         }
       }
-      if (candidates.size > MAX_ALTERNATIVE_CHECKS) return { status: "undetermined" };
+      diagnostics.candidatesAvailable = allCandidates.size;
+      diagnostics.candidates = [...allCandidates.values()].slice(0, MAX_DIAGNOSTIC_CANDIDATES).map(candidate => ({
+        kind: candidate.kind, tmdbId: candidate.id, title: boundedText(candidate.name), originalTitle: boundedText(candidate.originalName), year: candidate.year
+      }));
+      diagnostics.candidatesTruncated = allCandidates.size > MAX_DIAGNOSTIC_CANDIDATES;
+      if (candidates.size > MAX_ALTERNATIVE_CHECKS) {
+        (diagnostics.stages ??= []).push({ name: stageName, status: "undetermined", reason: "alternative-check-limit", candidatesAvailable: candidates.size });
+        diagnostics.selection = { status: "undetermined", reason: "alternative-check-limit", candidatesAvailable: candidates.size, candidatesAllowed: MAX_ALTERNATIVE_CHECKS };
+        return { status: "undetermined", diagnostics };
+      }
       const matches = [];
       for (const candidate of candidates.values()) {
-        const russian = await this.#cached(`work|v3|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
-          deadlineAt => this.#source.work(candidate.kind, candidate.id, "ru-RU", { deadlineAt }), wait);
-        const aliases = await this.#cached(`alternative|${candidate.kind}|${candidate.id}`, () => FOUND_TTL_MS,
-          deadlineAt => this.#source.alternativeTitles(candidate.kind, candidate.id, { deadlineAt }), wait);
+        const checked = { kind: candidate.kind, tmdbId: candidate.id, title: boundedText(candidate.name), status: "checking", recordReads: [] };
+        diagnostics.checked.push(checked);
+        let russian;
+        try {
+          russian = await this.#cached(`work|v3|${candidate.kind}|${candidate.id}|ru-RU`, () => FOUND_TTL_MS,
+            deadlineAt => this.#source.work(candidate.kind, candidate.id, "ru-RU", { deadlineAt }), wait);
+          checked.recordReads.push({ language: "ru-RU", status: "read" });
+        } catch (error) {
+          if (!(error instanceof MetadataUnavailableError)) throw error;
+          checked.recordReads.push({ language: "ru-RU", status: "failed" });
+          throw error;
+        }
+        let aliases;
+        try {
+          aliases = await this.#cached(`alternative|${candidate.kind}|${candidate.id}`, () => FOUND_TTL_MS,
+            deadlineAt => this.#source.alternativeTitles(candidate.kind, candidate.id, { deadlineAt }), wait);
+          checked.recordReads.push({ record: "alternative-titles", status: "read" });
+        } catch (error) {
+          if (!(error instanceof MetadataUnavailableError)) throw error;
+          checked.recordReads.push({ record: "alternative-titles", status: "failed" });
+          throw error;
+        }
         const catalogTitles = [candidate.name, candidate.originalName, russian.title, russian.originalTitle, ...aliases].filter(Boolean);
         const agrees = title => catalogTitles.some(alias => normalizeTitle(title) === normalizeTitle(alias) || matchesRussianTransliteration(title, alias));
-        if (!latin.some(agrees)) continue;
-        if (subtitleEvidence?.titles?.some(title => !agrees(title))) continue;
+        checked.matchedReleaseTitles = latin.filter(agrees).slice(0, 12).map(title => boundedText(title));
+        checked.subtitleTitlesAgree = !subtitleEvidence?.titles?.some(title => !agrees(title));
+        checked.status = checked.matchedReleaseTitles.length && checked.subtitleTitlesAgree ? "admitted" : "rejected";
+        if (checked.status !== "admitted") continue;
         matches.push(candidate);
       }
-      if (!matches.length) continue;
-      const found = preferYearMatches(matches, years);
-      if (found.length !== 1) return { status: "ambiguous" };
-      const [chosen] = found;
-      const work = await this.#cached(`work|v3|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
-        deadlineAt => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
-      return { status: "identified", work };
+      if (!matches.length) {
+        diagnostics.stages ??= [];
+        diagnostics.stages.push({ name: stageName, status: "not-found", candidatesAvailable: candidates.size, candidatesChecked: diagnostics.checked.length });
+        continue;
       }
-      return { status: "not-found" };
+      const found = preferYearMatches(matches, years);
+      if (found.length !== 1) {
+        (diagnostics.stages ??= []).push({ name: stageName, status: "ambiguous", candidatesAvailable: matches.length, candidatesSelected: found.length });
+        diagnostics.selection = { status: "ambiguous", reason: "multiple-transliteration-candidates", candidates: found.slice(0, MAX_ALTERNATIVE_CHECKS).map(candidate => ({ kind: candidate.kind, tmdbId: candidate.id })) };
+        return { status: "ambiguous", diagnostics };
+      }
+      const [chosen] = found;
+      let work;
+      try {
+        work = await this.#cached(`work|v3|${chosen.kind}|${chosen.id}|${language}`, () => FOUND_TTL_MS,
+          deadlineAt => this.#source.work(chosen.kind, chosen.id, language, { deadlineAt }), wait);
+        diagnostics.finalRecordRead = { kind: chosen.kind, tmdbId: chosen.id, language, status: "read" };
+      } catch (error) {
+        if (!(error instanceof MetadataUnavailableError)) throw error;
+        diagnostics.finalRecordRead = { kind: chosen.kind, tmdbId: chosen.id, language, status: "failed" };
+        throw error;
+      }
+      (diagnostics.stages ??= []).push({ name: stageName, status: "identified", candidatesAvailable: matches.length, candidatesSelected: 1 });
+      diagnostics.selection = { status: "identified", kind: chosen.kind, tmdbId: chosen.id, reason: "one-transliterated-title-match" };
+      return { status: "identified", work, diagnostics };
+      }
+      diagnostics.selection = { status: "not-found", reason: "all-transliteration-searches-complete" };
+      return { status: "not-found", diagnostics };
     } catch (error) {
-      if (error instanceof MetadataUnavailableError) return { status: "unavailable" };
+      if (error instanceof MetadataUnavailableError) {
+        diagnostics.selection = { status: "unavailable", reason: "provider-or-record-read-failed" };
+        return { status: "unavailable", diagnostics };
+      }
       throw error;
     }
   }
@@ -243,7 +365,7 @@ export class MetadataService {
       if (!episodeEvidence.titles.length) episodeEvidence = null;
     }
     if (!this.#source) {
-      return { status: "unavailable" };
+      return { status: "unavailable", diagnostics: { stages: [{ name: "search", status: "unavailable" }] } };
     }
     const hasDuration = Number.isFinite(durationSeconds) && durationSeconds > 0;
     const readings = names.map(parseReleaseName);
@@ -280,7 +402,7 @@ export class MetadataService {
       }
     }
     if (queries.length === 0) {
-      return { status: "not-found" };
+      return { status: "not-found", diagnostics: { stages: [{ name: "query", status: "not-found" }] } };
     }
 
     const searches = await Promise.all(
@@ -288,10 +410,10 @@ export class MetadataService {
         kinds.map(async (kind) => {
           try {
             const found = await this.#search(kind, sent, language, { deadlineAt, signal }, hasDuration ? MAX_RUNTIME_SEARCH_PAGES : MAX_SEARCH_PAGES);
-            return { kind, query: normalized, status: found.capped ? "capped" : "complete", results: found.results };
+            return { kind, query: normalized, language, status: found.capped ? "capped" : "complete", ...found };
           } catch (error) {
             if (error instanceof MetadataUnavailableError) {
-              return { kind, query: normalized, status: "failed", results: [] };
+              return { kind, query: normalized, language, status: "failed", results: [], pagesFetched: 0, totalPages: null };
             }
             throw error;
           }
@@ -300,6 +422,27 @@ export class MetadataService {
     );
 
     let identity = decideIdentity({ searches, candidateLimit: MAX_RUNTIME_CHECKS + 1 });
+    const candidates = candidateEvidence(searches);
+    const diagnostics = {
+      limits: {
+        maxQueries: MAX_QUERIES,
+        maxPagesPerSearch: hasDuration ? MAX_RUNTIME_SEARCH_PAGES : MAX_SEARCH_PAGES,
+        maxRuntimeChecks: MAX_RUNTIME_CHECKS,
+        maxInitialRecordChecks: MAX_INITIAL_RECORD_CHECKS,
+        maxAlternativeChecks: MAX_ALTERNATIVE_CHECKS,
+        maxEpisodeChecks: MAX_EPISODE_CHECKS
+      },
+      searchCount: searches.length,
+      searchOutcomes: searches.map(({ kind, query, language: searchLanguage, status, results, pagesFetched, totalPages }) => ({
+        kind, query: boundedText(query), language: searchLanguage, status, returned: results.length, pagesFetched, totalPages
+      })),
+      candidates,
+      stages: [{ name: "title", status: identity.status, candidateCount: identity.candidates.length,
+        candidates: reportedRanked(identity.candidates.map(candidate => ({ ...candidate, score: null, contradiction: null }))) }],
+      recordReads: [],
+      ranking: [],
+      selection: null
+    };
     // No main or original title matched. Check further evidence without
     // restricting the candidates by their years: the provider's alternative
     // titles (a transliterated or romanized name), and, for a series, its
@@ -312,21 +455,25 @@ export class MetadataService {
           deadlineAt,
           signal
         });
+        diagnostics.stages.push({ name: "alternative-title", status: byAlternative.status, ...byAlternative.diagnostics });
         identity = combineStages(identity, byAlternative);
         if (byAlternative.status !== "identified" && kinds.includes("tv") && episodeEvidence) {
           const byEpisodes = await this.#identifyByEpisodes({ searches, episodeEvidence, language, deadlineAt, signal });
+          diagnostics.stages.push({ name: "episode-title", status: byEpisodes.status, ...byEpisodes.diagnostics });
           identity = combineStages(identity, byEpisodes);
         }
       } catch (error) {
         if (error instanceof MetadataUnavailableError) {
-          return { status: "unavailable" };
+          diagnostics.stages.push({ name: diagnostics.stages.at(-1)?.name === "title" ? "alternative-title" : "episode-title", status: "unavailable" });
+          return { status: "unavailable", searches: reportedSearches(searches), diagnostics };
         }
         throw error;
       }
     }
     const pool = identity.candidates ?? [];
     if (pool.length === 0) {
-      return { status: identity.status, searches: reportedSearches(searches) };
+      diagnostics.selection = { status: identity.status, candidate: null };
+      return { status: identity.status, searches: reportedSearches(searches), diagnostics };
     }
     const highestEpisode = new Map();
     for (const { season, episode } of episodeNumbers) {
@@ -350,14 +497,22 @@ export class MetadataService {
     // measured duration every candidate's runtime is worth reading.
     const recordLimit = hasDuration || (hasSupplementalEvidence && pool.length > 1) ? MAX_RUNTIME_CHECKS : MAX_INITIAL_RECORD_CHECKS;
     const read = rankCandidates(pool, new Map(), evidence).slice(0, recordLimit);
-    const records = await this.#records(read, { language, deadlineAt, signal, evidence });
+    diagnostics.recordLimit = recordLimit;
+    diagnostics.recordCandidatesAvailable = pool.length;
+    diagnostics.recordCandidatesRead = read.length;
+    diagnostics.recordCandidatesTruncated = Math.max(0, pool.length - read.length);
+    const { records, outcomes: recordReads } = await this.#records(read, { language, deadlineAt, signal, evidence });
     const ranked = rankCandidates(read, records, evidence);
+    diagnostics.recordReads = recordReads;
+    diagnostics.ranking = reportedRanked(ranked);
     const consistent = ranked.filter((candidate) => candidate.contradiction === null);
     if (consistent.length === 0) {
+      diagnostics.selection = { status: "not-found", candidate: null, reason: "all-read-candidates-contradicted" };
       return {
         status: "not-found",
         searches: reportedSearches(searches),
-        ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) => ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }))
+        ranked: reportedRanked(ranked),
+        diagnostics
       };
     }
     const [chosen] = consistent;
@@ -365,16 +520,18 @@ export class MetadataService {
       const scoredWork = records.get(`${chosen.kind}:${chosen.tmdbId}`) ?? await this.#cached(`work|v3|${chosen.kind}|${chosen.tmdbId}|${language}`, () => FOUND_TTL_MS,
         (fetchDeadline) => this.#source.work(chosen.kind, chosen.tmdbId, language, { deadlineAt: fetchDeadline }), { deadlineAt, signal });
       const { russianTitle: _russianTitle, totalEpisodeCount: _totalEpisodeCount, episodeTitles: _episodeTitles, ...work } = scoredWork;
+      diagnostics.selection = { status: "identified", candidate: { kind: chosen.kind, tmdbId: chosen.tmdbId, titleMatch: chosen.titleMatch }, reason: "highest-ranked-consistent-candidate" };
       return {
         status: "identified",
         work: { ...work, identification: pool.length > 1 ? "scored" : chosen.titleMatch },
         searches: reportedSearches(searches),
-        ranked: ranked.slice(0, RANKED_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }) =>
-          ({ kind, tmdbId, title, year, titleMatch, shares, score, contradiction, order }))
+        ranked: reportedRanked(ranked),
+        diagnostics
       };
     } catch (error) {
       if (error instanceof MetadataUnavailableError) {
-        return { status: "unavailable" };
+        diagnostics.selection = { status: "unavailable", candidate: { kind: chosen.kind, tmdbId: chosen.tmdbId }, reason: "selected-record-read-failed" };
+        return { status: "unavailable", searches: reportedSearches(searches), ranked: reportedRanked(ranked), diagnostics };
       }
       throw error;
     }
@@ -391,6 +548,7 @@ export class MetadataService {
    */
   async #records(candidates, { language, deadlineAt, signal, evidence }) {
     const records = new Map();
+    const outcomes = [];
     // Match source concurrency rather than filling its shared request queue.
     for (let offset = 0; offset < candidates.length; offset += 4) {
       await Promise.all(candidates.slice(offset, offset + 4).map(async (candidate) => {
@@ -422,12 +580,15 @@ export class MetadataService {
             }
           }
           records.set(`${candidate.kind}:${candidate.tmdbId}`, work);
+          outcomes.push({ kind: candidate.kind, tmdbId: candidate.tmdbId, status: "read" });
         } catch (error) {
           if (!(error instanceof MetadataUnavailableError)) throw error;
+          outcomes.push({ kind: candidate.kind, tmdbId: candidate.tmdbId, status: "failed" });
         }
       }));
     }
-    return records;
+    return { records, outcomes: outcomes.sort((left, right) => candidates.findIndex(candidate => candidate.tmdbId === left.tmdbId && candidate.kind === left.kind) -
+      candidates.findIndex(candidate => candidate.tmdbId === right.tmdbId && candidate.kind === right.kind)) };
   }
 
   /**
@@ -462,8 +623,23 @@ export class MetadataService {
         )
       }))
     );
-    return { ...decideByAlternativeTitles({ checked, queries, uncheckedRemain: admitted.length > toCheck.length }),
-      incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete") };
+    const identity = decideByAlternativeTitles({ checked, queries, uncheckedRemain: admitted.length > toCheck.length });
+    const checkedIds = new Set(identity.candidates.map(candidate => `${candidate.kind}:${candidate.tmdbId}`));
+    return { ...identity,
+      incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete"),
+      diagnostics: {
+        candidatesAvailable: admitted.length,
+        candidatesChecked: checked.length,
+        candidatesTruncated: Math.max(0, admitted.length - toCheck.length),
+        checked: checked.slice(0, MAX_ALTERNATIVE_CHECKS).map(({ candidate, titles }) => ({
+          kind: candidate.kind,
+          tmdbId: candidate.tmdbId,
+          title: boundedText(candidate.title),
+          status: checkedIds.has(`${candidate.kind}:${candidate.tmdbId}`) ? "admitted" : "rejected",
+          matchedQueries: queries.filter(query => titles.some(title => normalizeTitle(title) === query)).slice(0, 12)
+        }))
+      }
+    };
   }
 
   /**
@@ -508,11 +684,30 @@ export class MetadataService {
         };
       })
     );
-    return { ...decideByEpisodeTitles({
+    const identity = decideByEpisodeTitles({
       checked,
       titles: episodeEvidence.titles,
       uncheckedRemain: admitted.length > toCheck.length
-    }), incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete") };
+    });
+    const checkedIds = new Set(identity.candidates.map(candidate => String(candidate.tmdbId)));
+    return { ...identity,
+      incomplete: admitted.length > toCheck.length || searches.some(search => search.status !== "complete"),
+      diagnostics: {
+        candidatesAvailable: admitted.length,
+        candidatesChecked: checked.length,
+        candidatesTruncated: Math.max(0, admitted.length - toCheck.length),
+        checked: checked.slice(0, MAX_EPISODE_CHECKS).map(({ candidate, episodeNames }) => {
+          const episodeTitles = new Set(episodeNames.map(normalizeTitle));
+          return {
+            kind: candidate.kind,
+            tmdbId: candidate.tmdbId,
+            title: boundedText(candidate.title),
+            status: checkedIds.has(String(candidate.tmdbId)) ? "admitted" : "rejected",
+            matchedReleaseTitles: episodeEvidence.titles.filter(title => episodeTitles.has(normalizeTitle(title))).slice(0, 12).map(title => boundedText(title))
+          };
+        })
+      }
+    };
   }
 
   /**
@@ -569,7 +764,7 @@ export class MetadataService {
           const next = await this.#source.search(kind, query, language, page, { deadlineAt: fetchDeadline });
           results.push(...next.results);
         }
-        return { results, capped: first.totalPages > pageLimit };
+        return { results, capped: first.totalPages > pageLimit, pagesFetched: lastPage, totalPages: first.totalPages };
       },
       wait
     );

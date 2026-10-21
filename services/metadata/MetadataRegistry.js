@@ -34,6 +34,69 @@ const UNRESOLVED = ["not-found", "undetermined", "unavailable"];
 /** How good an answer is, to keep the best of several primary sources. */
 const RANK = { identified: 4, ambiguous: 3, undetermined: 2, unavailable: 1, "not-found": 0 };
 
+const MAX_ATTEMPTS_REPORTED = 32;
+const MAX_SEARCHES_PER_ATTEMPT_REPORTED = 24;
+const MAX_RANKED_PER_ATTEMPT_REPORTED = 60;
+const MAX_DIAGNOSTIC_NODES_PER_ATTEMPT = 5_000;
+
+function boundedDiagnostic(value, state, depth = 0) {
+  state.remaining -= 1;
+  if (state.remaining < 0 || depth >= 8) {
+    state.truncated = true;
+    return null;
+  }
+  if (typeof value === "string") {
+    if (value.length > 200) state.truncated = true;
+    return value.slice(0, 200);
+  }
+  if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    if (value.length > 60) state.truncated = true;
+    return value.slice(0, 60).map(item => boundedDiagnostic(item, state, depth + 1));
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.length > 40) state.truncated = true;
+    return Object.fromEntries(entries.slice(0, 40).map(([key, item]) => [key.slice(0, 100), boundedDiagnostic(item, state, depth + 1)]));
+  }
+  return null;
+}
+
+function attemptSummary(provider, operation, phase, answer) {
+  const searches = Array.isArray(answer?.searches) ? answer.searches : [];
+  const ranked = Array.isArray(answer?.ranked) ? answer.ranked : [];
+  const detailState = { remaining: MAX_DIAGNOSTIC_NODES_PER_ATTEMPT, truncated: false };
+  const details = answer?.diagnostics && typeof answer.diagnostics === "object"
+    ? boundedDiagnostic(answer.diagnostics, detailState)
+    : undefined;
+  return {
+    provider: provider.name,
+    operation,
+    phase,
+    status: answer?.status ?? "no-answer",
+    ...(searches.length ? {
+      searches: searches.slice(0, MAX_SEARCHES_PER_ATTEMPT_REPORTED).map(({ kind, query, language, status, totalResults, pagesFetched, totalPages, results, truncated }) => ({
+        kind,
+        query: typeof query === "string" ? query.slice(0, 200) : null,
+        language: typeof language === "string" ? language.slice(0, 32) : null,
+        status,
+        totalResults: Number.isInteger(totalResults) ? totalResults : Array.isArray(results) ? results.length : 0,
+        pagesFetched: Number.isInteger(pagesFetched) ? pagesFetched : null,
+        totalPages: Number.isInteger(totalPages) ? totalPages : null,
+        returned: Array.isArray(results) ? results.length : 0,
+        truncated: Boolean(truncated)
+      })),
+      searchesTruncated: searches.length > MAX_SEARCHES_PER_ATTEMPT_REPORTED
+    } : {}),
+    ...(ranked.length ? {
+      ranked: ranked.slice(0, MAX_RANKED_PER_ATTEMPT_REPORTED).map(({ kind, tmdbId, title, year, titleMatch, score, contradiction, order }) =>
+        ({ kind, tmdbId, title: typeof title === "string" ? title.slice(0, 200) : null, year, titleMatch, score, contradiction, order })),
+      rankedTruncated: ranked.length > MAX_RANKED_PER_ATTEMPT_REPORTED
+    } : {}),
+    ...(details !== undefined ? { details, detailsTruncated: detailState.truncated } : {})
+  };
+}
+
 export class MetadataRegistry {
   /** @type {import("./MetadataProvider.js").MetadataProvider[]} */
   #providers;
@@ -56,29 +119,32 @@ export class MetadataRegistry {
    */
   async identify(request) {
     const evidenced = this.#withEvidence(request);
-    let result = await this.#stages(evidenced);
+    const attempts = [];
+    let result = await this.#stages(evidenced, attempts, "initial");
     if (UNRESOLVED.includes(result.status)) {
       let tried = false;
       for (const provider of this.#at(STAGE.primary)) {
-        const other = await provider.lastResort(evidenced);
+        const other = await this.#ask(provider, "lastResort", "last-resort", () => provider.lastResort(evidenced), attempts);
         if (!other) continue;
         tried = true;
         if (["identified", "ambiguous"].includes(other.status) || result.status === "not-found") result = other;
       }
       if (tried && result.status === "identified" && this.#at(STAGE.supplement).some((provider) => provider.interestedIn(evidenced.names, result.work))) {
-        const enriched = await this.#stages({ ...evidenced, names: [`${result.work.title} ${result.work.year}`], kindHint: result.work.kind });
+        const enriched = await this.#stages({ ...evidenced, names: [`${result.work.title} ${result.work.year}`], kindHint: result.work.kind }, attempts, "enrichment");
         if (enriched.status === "identified" && enriched.work?.tmdbId === result.work.tmdbId) result = enriched;
       }
     }
     const { records, ...answer } = result;
-    if (answer.status !== "identified") return answer;
+    const diagnostics = this.#diagnostics(attempts, answer, result);
+    if (answer.status !== "identified") return { ...answer, diagnostics };
     // The candidates the choice was made among, with their scores: public film
     // data, returned so the choice can be read back (and measured).
     return {
       status: "identified",
       work: this.#merge(records ?? {}, evidenced),
       ...(answer.ranked ? { ranked: answer.ranked } : {}),
-      ...(answer.searches ? { searches: answer.searches } : {})
+      ...(answer.searches ? { searches: answer.searches } : {}),
+      diagnostics
     };
   }
 
@@ -89,7 +155,7 @@ export class MetadataRegistry {
   }
 
   /** The best answer of the primary sources, in the order stated above. */
-  async #primary(request) {
+  async #primary(request, attempts, phase) {
     const sources = this.#at(STAGE.primary);
     const hasNames = Array.isArray(request.names) && request.names.length > 0;
     const first = request.category === "adult" ? CATEGORY.adult : CATEGORY.general;
@@ -100,20 +166,20 @@ export class MetadataRegistry {
     };
     if (request.externalIds && Object.keys(request.externalIds).length > 0) {
       for (const provider of sources.filter((candidate) => candidate.takes.has(EVIDENCE.externalIds))) {
-        const answer = await provider.identifyById(request);
+        const answer = await this.#ask(provider, "identifyById", phase, () => provider.identifyById(request), attempts);
         if (answer && consider(answer)) return result;
       }
     }
     if (request.fingerprint) {
       for (const provider of sources.filter((candidate) => candidate.takes.has(EVIDENCE.fingerprint))) {
-        if (consider(await provider.identify({ ...request, names: [] }))) return result;
+        if (consider(await this.#ask(provider, "identify", phase, () => provider.identify({ ...request, names: [] }), attempts))) return result;
       }
     }
     if (!hasNames) return result ?? { status: "not-found" };
     const byName = { ...request, fingerprint: undefined };
     const named = (kind) => sources.filter((candidate) => candidate.category === kind && candidate.takes.has(EVIDENCE.names) && candidate.accepts(byName));
     for (const provider of named(first)) {
-      if (consider(await provider.identify(byName))) return result;
+      if (consider(await this.#ask(provider, "identify", phase, () => provider.identify(byName), attempts))) return result;
     }
     return result ?? { status: "not-found" };
   }
@@ -122,13 +188,13 @@ export class MetadataRegistry {
    * The databases of the other kind, by name. Asked after the supplementary
    * sources (anime), and only when nothing was found at all.
    */
-  async #otherKind(request, prior) {
+  async #otherKind(request, prior, attempts, phase) {
     if (!["not-found", "undetermined", "unavailable"].includes(prior.status) || !request.names?.length) return prior;
     const byName = { ...request, fingerprint: undefined };
     const other = request.category === "adult" ? CATEGORY.general : CATEGORY.adult;
     let result = prior;
     for (const provider of this.#at(STAGE.primary).filter((candidate) => candidate.category === other && candidate.takes.has(EVIDENCE.names) && candidate.accepts(byName))) {
-      const answer = await provider.identify(byName);
+      const answer = await this.#ask(provider, "identify", phase, () => provider.identify(byName), attempts);
       if (RANK[answer.status] > RANK[result.status]) result = answer;
       if (result.status === "identified") break;
     }
@@ -136,13 +202,42 @@ export class MetadataRegistry {
   }
 
   /** The primary sources, then the supplementary ones with the answer so far. */
-  async #stages(request) {
-    let result = await this.#primary(request);
+  async #stages(request, attempts, phase) {
+    let result = await this.#primary(request, attempts, phase);
     for (const provider of this.#at(STAGE.supplement)) {
       if (!provider.accepts(request)) continue;
-      result = await provider.identify(request, { prior: result, again: (next) => this.#primary(next) });
+      result = await this.#ask(provider, "identify", phase, () => provider.identify(request, {
+        prior: result,
+        again: (next) => this.#primary(next, attempts, `${phase}-retry`)
+      }), attempts);
     }
-    return this.#otherKind(request, result);
+    return this.#otherKind(request, result, attempts, phase);
+  }
+
+  async #ask(provider, operation, phase, ask, attempts) {
+    const answer = await ask();
+    attempts.push(answer
+      ? attemptSummary(provider, operation, phase, answer)
+      : { provider: provider.name, operation, phase, status: "no-answer" });
+    return answer;
+  }
+
+  #diagnostics(attempts, answer, result) {
+    const reported = attempts.slice(0, MAX_ATTEMPTS_REPORTED);
+    return {
+      version: 1,
+      attempts: reported,
+      attemptsTruncated: attempts.length > reported.length,
+      selection: {
+        status: answer.status,
+        providers: Object.keys(result.records ?? {}),
+        ...(result.work ? {
+          kind: result.work.kind ?? null,
+          tmdbId: result.work.tmdbId ?? null,
+          identification: result.work.identification ?? null
+        } : {})
+      }
+    };
   }
 
   /** The request with what the sources derive from it added. */
