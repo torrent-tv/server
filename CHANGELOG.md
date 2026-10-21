@@ -1,4 +1,4 @@
-## Unreleased
+## 0.61.2
 
 - **Fix**: Use OpenSubtitles download counts to distinguish otherwise identical provider choices (#ttv-223).
 
