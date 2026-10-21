@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.0
 
 - **New**: Share audio and subtitle menu grouping, language labels and keyed rendering while retaining each track type's selection contract.
 
