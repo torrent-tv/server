@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @biomejs/biome 2.5.15 → 2.6.2, @fastify/static 10.1.6 → 10.1.7; 15 package(s) changed in the lock file.
+
 ## 0.62.3
 
 - **Fix**: Measure first-frame elapsed time from the original traced action for startup and seek observations.
