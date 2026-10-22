@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.6
 
 - **Fix**: Step the playhead by a microsecond when the picture stops while both tracks hold media ahead of it, which restarts Chrome's video after hls.js removed the frames under the playhead (#ttv-231).
 - **Fix**: Lower the forward buffer ceiling when hls.js removes media to make room, or when the browser starts evicting played media, so the video buffer stops reaching the browser's limit (#ttv-231).
