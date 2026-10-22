@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.4
 
 - **Chore**: Update dependencies: @biomejs/biome 2.5.15 → 2.6.2, @fastify/static 10.1.6 → 10.1.7; 15 package(s) changed in the lock file.
 
