@@ -244,6 +244,56 @@ export function ceilingAfterUnaskedRemoval({ ceiling, heldAheadSeconds, fragment
 /** hls.js's own fragment length when a level does not state one. */
 const FRAGMENT_SECONDS_WHEN_UNKNOWN = 6;
 
+/**
+ * The ceiling to hold while the browser evicts played media to make room.
+ *
+ * The player keeps `backBufferLength` of played media behind the playhead, and
+ * hls.js trims what is older. When the forward buffer grows into the device's
+ * limit, the browser frees the room itself by evicting played media, and what
+ * is left behind the playhead falls below what the player keeps. That is the
+ * first sign of the limit, and it comes minutes before the harm: field
+ * 2026-10-22, 42 s behind at 20:36:18, 4 s at 20:36:48, and at 20:40:32, with
+ * nothing played left to evict, hls.js removed the frames the picture was
+ * showing (torrent-tv/meta#231). Lowering the ceiling by what is missing
+ * behind gives that room back to the played media, so an append always finds
+ * played media to evict first.
+ *
+ * hls.js's own trim removes to `backBufferLength` behind and the browser
+ * extends it to the next keyframe, so after it up to a keyframe interval less
+ * stays behind; less than half of it is not that trim. And the back buffer can
+ * only be full once that much has been played since the last seek.
+ *
+ * @param {Object} state
+ * @param {number} state.ceiling - The ceiling in force now, seconds.
+ * @param {number} state.behindSeconds - Played media held behind the playhead.
+ * @param {number} state.playedSeconds - Played since the last seek.
+ * @param {number} state.backBufferSeconds - `backBufferLength`.
+ * @param {number} state.floor - `maxBufferLength`, which this does not go under.
+ * @returns {number} The ceiling to set; the current one when nothing was evicted.
+ */
+export function ceilingWhilePlayedMediaIsEvicted({ ceiling, behindSeconds, playedSeconds, backBufferSeconds, floor }) {
+  const now = Number(ceiling) || 0;
+  const kept = Number(backBufferSeconds) || 0;
+  if (now <= 0 || kept <= 0) {
+    return now;
+  }
+  if (!(Number(playedSeconds) >= kept + PLAYED_BEYOND_THE_BACK_BUFFER_SECONDS)) {
+    return now;
+  }
+  const behind = Math.max(0, Number(behindSeconds) || 0);
+  if (behind >= kept / 2) {
+    return now;
+  }
+  const next = Math.max(Math.max(0, Number(floor) || 0), now - (kept - behind));
+  return next < now ? next : now;
+}
+
+/**
+ * How much more than the back buffer must have been played since a seek before
+ * a short back buffer counts as evicted: one more trim of hls.js's.
+ */
+const PLAYED_BEYOND_THE_BACK_BUFFER_SECONDS = 15;
+
 /** `HTMLMediaElement.HAVE_FUTURE_DATA`, named for a module that also runs without a DOM. */
 const HAVE_FUTURE_DATA = 3;
 
@@ -569,6 +619,7 @@ export function createHlsPlayer(onLog) {
   const stopCushionSampler = () => {
     if (cushionSampler) {
       clearInterval(cushionSampler.timer);
+      cushionSampler.stopWatching();
       cushionSampler = null;
     }
   };
@@ -593,6 +644,13 @@ export function createHlsPlayer(onLog) {
     let lastCeilingSaid = askedCeiling;
     let lastRefusalAt = 0;
     let retries = 0;
+    // Where the current unbroken stretch of playback began. A seek begins a
+    // new one, and the back buffer has to fill again before it says anything.
+    let stretchFrom = null;
+    const onSeeking = () => {
+      stretchFrom = null;
+    };
+    media?.addEventListener?.("seeking", onSeeking);
     const timer = setInterval(() => {
       if (!instance?.config || !(media instanceof HTMLVideoElement)) {
         return;
@@ -613,12 +671,35 @@ export function createHlsPlayer(onLog) {
       const bitrate = Number(level?.maxBitrate) || Number(level?.bitrate) || 0;
       const asked = askedForwardBufferSeconds(instance.config, bitrate);
       const held = bufferedAheadSeconds(media);
-      const ceiling = Number(instance.config.maxMaxBufferLength) || 0;
+      let ceiling = Number(instance.config.maxMaxBufferLength) || 0;
+      const behind = bufferedBehindSeconds(media);
+      if (stretchFrom === null || media.currentTime < stretchFrom) {
+        stretchFrom = media.currentTime;
+      }
+      // The browser taking the played media is the device's limit too, said
+      // before hls.js has to remove anything itself — see
+      // `ceilingWhilePlayedMediaIsEvicted`.
+      const backBuffer = Number(instance.config.backBufferLength) || 0;
+      const sparing = ceilingWhilePlayedMediaIsEvicted({
+        ceiling,
+        behindSeconds: behind,
+        playedSeconds: media.currentTime - stretchFrom,
+        backBufferSeconds: backBuffer,
+        floor: instance.config.maxBufferLength
+      });
+      if (sparing < ceiling) {
+        console.debug(
+          `[torrent-tv][cushion] the browser is evicting played media to make room: ` +
+          `${behind.toFixed(0)}s behind the playhead of the ${backBuffer.toFixed(0)}s kept, ` +
+          `${held.toFixed(0)}s ahead; ceiling ${ceiling.toFixed(0)}s → ${sparing.toFixed(0)}s`
+        );
+        instance.config.maxMaxBufferLength = sparing;
+        ceiling = sparing;
+      }
       // hls.js answers `QuotaExceededError` by lowering the ceiling
       // (`reduceMaxBufferLength`). That is the device stating a limit — the one
       // measurement of memory available to us — so it is said the moment it
       // happens rather than left inside hls.js's own logger.
-      const behind = bufferedBehindSeconds(media);
       if (ceiling < lastCeilingSaid - 0.5) {
         lastRefusalAt = Date.now();
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.BUFFER_CEILING, {
@@ -661,7 +742,7 @@ export function createHlsPlayer(onLog) {
         `${level?.height ?? "?"}p at ${(bitrate / 1e6).toFixed(2)}Mbit/s)`
       );
     }, CUSHION_SAMPLE_MS);
-    cushionSampler = { timer };
+    cushionSampler = { timer, stopWatching: () => media?.removeEventListener?.("seeking", onSeeking) };
   };
   // The media this player is driving. Kept because two answers need the
   // playhead and have nothing else to read it from — where a switched audio
