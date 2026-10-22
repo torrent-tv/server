@@ -199,6 +199,51 @@ const CEILING_RETRIES_PER_SESSION = 3;
 /** How long after a refusal the same depth may be tried again. */
 const CEILING_RETRY_QUIET_MS = 60_000;
 
+/**
+ * The ceiling to hold after media was removed for room that nobody asked to
+ * remove.
+ *
+ * hls.js 1.7 answers a `QuotaExceededError` by removing played media itself
+ * and appending again, and only reports the refusal when that removal is not
+ * possible. The removal ends at the end of the last fragment that ended before
+ * the playhead, and the browser extends every removal to the next keyframe
+ * (the coded frame removal algorithm of Media Source Extensions). With the
+ * played media behind the playhead used up, that keyframe can lie AHEAD of the
+ * playhead: field 2026-10-22, room was made for segment 96 with the playhead at
+ * 509.2 s inside segment 77 (508.175 s on), the video then began at the
+ * keyframe at 510.135 s, and the picture never moved again
+ * (torrent-tv/meta#231). hls.js 1.6 had no such removal and lowered the
+ * ceiling instead.
+ *
+ * So the removal is read as what it is — the device refusing the depth — and
+ * answered the way hls.js answers a refusal it reports
+ * (`reduceMaxBufferLength`, with what is held ahead as its threshold). The
+ * buffer then stops growing into the limit, and later removals take played
+ * media from the back instead of the picture being shown.
+ *
+ * @param {Object} state
+ * @param {number} state.ceiling - The ceiling in force now, seconds.
+ * @param {number} state.heldAheadSeconds - Media held ahead of the playhead.
+ * @param {number} state.fragmentSeconds - The level's average fragment length.
+ * @param {number} state.floor - `maxBufferLength`, which a refusal does not go under.
+ * @returns {number} The ceiling to set; the current one when there is nothing to lower.
+ */
+export function ceilingAfterUnaskedRemoval({ ceiling, heldAheadSeconds, fragmentSeconds, floor }) {
+  const now = Number(ceiling) || 0;
+  if (now <= 0) {
+    return now;
+  }
+  const held = Math.max(0, Number(heldAheadSeconds) || 0);
+  const fragment = Number(fragmentSeconds) > 0 ? Number(fragmentSeconds) : FRAGMENT_SECONDS_WHEN_UNKNOWN;
+  const lowest = Math.max(0, Number(floor) || 0);
+  // hls.js's rule, and the floor this player keeps under every refusal.
+  const reduced = Math.max(held - 3 * fragment, now / 2, lowest, fragment / 2);
+  return reduced < now ? reduced : now;
+}
+
+/** hls.js's own fragment length when a level does not state one. */
+const FRAGMENT_SECONDS_WHEN_UNKNOWN = 6;
+
 /** `HTMLMediaElement.HAVE_FUTURE_DATA`, named for a module that also runs without a DOM. */
 const HAVE_FUTURE_DATA = 3;
 
@@ -1390,6 +1435,59 @@ export function createHlsPlayer(onLog) {
           stoppedSince = 0;
         }, STOPPED_CHECK_MS);
         elementWatch.signal.addEventListener("abort", () => clearInterval(stoppedCheck), { once: true });
+        // Removals hls.js announces (`BUFFER_FLUSHING`) are the back-buffer
+        // trim, a level switch or a seek. The one it does not announce is the
+        // removal it makes on its own for room when the browser refuses an
+        // append — see `ceilingAfterUnaskedRemoval`. Counted per SourceBuffer,
+        // the way hls.js queues the removals.
+        const announcedRemovals = new Map();
+        const forgetAnnouncedRemovals = () => announcedRemovals.clear();
+        if (HlsClass.Events.BUFFER_FLUSHING && HlsClass.Events.BUFFER_FLUSHED) {
+          instance.on(HlsClass.Events.BUFFER_FLUSHING, (_event, data) => {
+            const types = typeof data?.type === "string" && data.type
+              ? [data.type]
+              : (instance.bufferController?.sourceBuffers ?? [])
+                .filter(([name, source]) => name && source)
+                .map(([name]) => name);
+            for (const type of types) {
+              announcedRemovals.set(type, (announcedRemovals.get(type) ?? 0) + 1);
+            }
+          });
+          instance.on(HlsClass.Events.BUFFER_FLUSHED, (_event, data) => {
+            const type = typeof data?.type === "string" ? data.type : "";
+            const announced = announcedRemovals.get(type) ?? 0;
+            if (announced > 0) {
+              announcedRemovals.set(type, announced - 1);
+              return;
+            }
+            // hls.js's own removal for room always starts at zero.
+            if (data?.error || Number(data?.start) !== 0 || !(Number(data?.end) > 0)) {
+              return;
+            }
+            const ceiling = Number(instance.config?.maxMaxBufferLength) || 0;
+            const level = instance.levels?.[instance.currentLevel];
+            const next = ceilingAfterUnaskedRemoval({
+              ceiling,
+              heldAheadSeconds: bufferedAheadSeconds(videoElement),
+              fragmentSeconds: Number(level?.details?.averagetargetduration) || Number(level?.details?.targetduration),
+              floor: instance.config?.maxBufferLength
+            });
+            console.debug(
+              `[torrent-tv][cushion] the browser had no room: hls.js removed ${type} 0..` +
+              `${Number(data.end).toFixed(3)}s on its own at ${videoElement.currentTime.toFixed(2)}s; ` +
+              (next < ceiling ? `ceiling ${ceiling.toFixed(0)}s → ${next.toFixed(0)}s ` : `ceiling stays ${ceiling.toFixed(0)}s `) +
+              describeTrackBuffers(instance, videoElement)
+            );
+            if (next < ceiling) {
+              instance.config.maxMaxBufferLength = next;
+            }
+          });
+        }
+        for (const event of [HlsClass.Events.BUFFER_RESET, HlsClass.Events.MEDIA_DETACHED]) {
+          if (event) {
+            instance.on(event, forgetAnnouncedRemovals);
+          }
+        }
         const recoverFatal = (data) => {
           const retry = data?.type === HlsClass.ErrorTypes.NETWORK_ERROR &&
             data?.networkDetails?.canRetry === true && !data?.outputTerminal;
