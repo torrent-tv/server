@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import {
   askedForwardBufferSeconds,
   bufferByteBudget,
+  ceilingAfterUnaskedRemoval,
   ceilingWorthRetrying,
   forwardBufferCeilingSeconds
 } from "../public/domain/hls-player.js";
@@ -172,4 +173,53 @@ test("the steps converge and stop, without ever passing what the proxy holds", (
 test("no ceiling and no stated depth means nothing to do", () => {
   assert.equal(ceilingWorthRetrying({ ...REFUSED, ceiling: 0 }), 0);
   assert.equal(ceilingWorthRetrying({ ...REFUSED, statedCeiling: 0 }), 0);
+});
+
+/**
+ * A removal for room that nobody asked for is the device refusing the depth.
+ *
+ * hls.js 1.7 answers `QuotaExceededError` by removing played media itself and
+ * says nothing while that works. Its removal ends at a fragment's end, and the
+ * browser extends it to the next keyframe, which with the played media used up
+ * lies ahead of the playhead: field 2026-10-22, the picture at 509.2 s lost the
+ * frames to 510.135 s and never moved again (torrent-tv/meta#231). The answer
+ * is hls.js's own to a refusal it reports, `reduceMaxBufferLength`.
+ */
+const FULL = { ceiling: 120, heldAheadSeconds: 120, fragmentSeconds: 6, floor: 30 };
+
+test("an unasked removal lowers the ceiling by three fragments under what is held", () => {
+  assert.equal(ceilingAfterUnaskedRemoval(FULL), 102);
+});
+
+test("one removal never takes more than half the ceiling", () => {
+  assert.equal(ceilingAfterUnaskedRemoval({ ...FULL, heldAheadSeconds: 40 }), 60);
+});
+
+test("repeated removals go down to the floor and stop there", () => {
+  const seen = [];
+  let ceiling = 120;
+  for (let round = 0; round < 10; round += 1) {
+    const next = ceilingAfterUnaskedRemoval({ ...FULL, ceiling, heldAheadSeconds: ceiling });
+    if (next === ceiling) {
+      break;
+    }
+    seen.push(next);
+    ceiling = next;
+  }
+  assert.deepEqual(seen, [102, 84, 66, 48, 30]);
+});
+
+test("a removal never raises the ceiling", () => {
+  // More held than the ceiling is what was appended before it was lowered; it
+  // is not a reason to ask for more.
+  assert.equal(ceilingAfterUnaskedRemoval({ ...FULL, ceiling: 83, heldAheadSeconds: 120 }), 83);
+});
+
+test("an unknown fragment length is hls.js's own default of six seconds", () => {
+  assert.equal(ceilingAfterUnaskedRemoval({ ...FULL, fragmentSeconds: undefined }), 102);
+  assert.equal(ceilingAfterUnaskedRemoval({ ...FULL, fragmentSeconds: Number.NaN }), 102);
+});
+
+test("no ceiling means nothing to lower", () => {
+  assert.equal(ceilingAfterUnaskedRemoval({ ...FULL, ceiling: 0 }), 0);
 });
