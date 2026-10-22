@@ -1,3 +1,8 @@
+## Unreleased
+
+- **Fix**: Step the playhead by a microsecond when the picture stops while both tracks hold media ahead of it, which restarts Chrome's video after hls.js removed the frames under the playhead (#ttv-231).
+- **Fix**: Lower the forward buffer ceiling when hls.js removes media to make room, or when the browser starts evicting played media, so the video buffer stops reaching the browser's limit (#ttv-231).
+
 ## 0.62.5
 
 - **Fix**: Pass the cues the proxy takes back and its detected language from a subtitle push to the page, so a corrected cue replaces the old one instead of showing twice (#ttv-7).
