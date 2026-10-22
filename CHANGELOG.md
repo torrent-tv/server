@@ -1,4 +1,4 @@
-## Unreleased
+## 0.62.5
 
 - **Fix**: Pass the cues the proxy takes back and its detected language from a subtitle push to the page, so a corrected cue replaces the old one instead of showing twice (#ttv-7).
 
