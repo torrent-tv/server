@@ -322,3 +322,16 @@ test("probe reports contain only the counters and probes of their own associatio
   assert.equal(report(media).report.transportBytesReceived, 120);
   assert.equal(report(control).report.transportBytesReceived, 20);
 });
+
+test("a subtitle push reaches the page with the cues it takes back and the detected language", async t => {
+  const { proxy, media } = await connect(t);
+  const events = [];
+  proxy.onSubtitleCues = event => events.push(event);
+  media.receive({ type: "subtitle-cues", fileIndex: 3, trackIndex: 0, cursor: 7, language: "",
+    cues: [{ seq: 7, startSeconds: 1, endSeconds: 3, text: "One" }], withdrawn: [5],
+    detectedLanguage: { code: "en", name: "English" } });
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].withdrawn, [5]);
+  assert.deepEqual(events[0].detectedLanguage, { code: "en", name: "English" });
+  assert.equal(events[0].cursor, 7);
+});

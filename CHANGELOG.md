@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Pass the cues the proxy takes back and its detected language from a subtitle push to the page, so a corrected cue replaces the old one instead of showing twice (#ttv-7).
+
 ## 0.62.4
 
 - **Chore**: Update dependencies: @biomejs/biome 2.5.15 → 2.6.2, @fastify/static 10.1.6 → 10.1.7; 15 package(s) changed in the lock file.

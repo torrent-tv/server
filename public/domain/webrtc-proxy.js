@@ -309,7 +309,9 @@ export class WebRtcProxy {
    * cues for one track, found off the proxy's own download rather than in
    * answer to a request this side made. Assign a handler to receive them.
    *
-   * @type {((event: { fileIndex: number, trackIndex: number, cues: object[], language: string, cursor: number | null }) => void) | null}
+   * @type {((event: { fileIndex: number, trackIndex: number, cues: object[], language: string,
+   *   detectedLanguage: { code: string, name: string } | null, withdrawn: Array<number | string>,
+   *   cursor: number | null }) => void) | null}
    */
   onSubtitleCues = null;
   onChaptersChanged = null;
@@ -1030,6 +1032,8 @@ export class WebRtcProxy {
           trackIndex: msg.trackIndex,
           cues: Array.isArray(msg.cues) ? msg.cues : [],
           language: msg.language ?? "",
+          detectedLanguage: msg.detectedLanguage ?? null,
+          withdrawn: Array.isArray(msg.withdrawn) ? msg.withdrawn : [],
           cursor: Number.isFinite(msg.cursor) ? msg.cursor : null
         });
       } catch (error) {
