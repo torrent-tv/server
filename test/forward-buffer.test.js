@@ -15,6 +15,7 @@ import {
   askedForwardBufferSeconds,
   bufferByteBudget,
   ceilingAfterUnaskedRemoval,
+  ceilingWhilePlayedMediaIsEvicted,
   ceilingWorthRetrying,
   forwardBufferCeilingSeconds
 } from "../public/domain/hls-player.js";
@@ -222,4 +223,41 @@ test("an unknown fragment length is hls.js's own default of six seconds", () => 
 
 test("no ceiling means nothing to lower", () => {
   assert.equal(ceilingAfterUnaskedRemoval({ ...FULL, ceiling: 0 }), 0);
+});
+
+/**
+ * Played media evicted by the browser is the first sign of the device's limit.
+ *
+ * Field 2026-10-22: 42 s behind the playhead at 20:36:18 of the 30 s kept plus
+ * a keyframe interval, 4 s at 20:36:48, and four minutes later nothing played
+ * was left to evict and hls.js removed the frames being shown
+ * (torrent-tv/meta#231). The ceiling gives the missing seconds back.
+ */
+const EVICTING = { ceiling: 120, behindSeconds: 11, playedSeconds: 600, backBufferSeconds: 30, floor: 30 };
+
+test("played media evicted below half the back buffer lowers the ceiling by what is missing", () => {
+  assert.equal(ceilingWhilePlayedMediaIsEvicted(EVICTING), 101);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, ceiling: 101, behindSeconds: 4 }), 75);
+});
+
+test("hls.js's own trim leaves more than half the back buffer and changes nothing", () => {
+  // It trims to 30 s behind and the browser extends that to the next keyframe.
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, behindSeconds: 15 }), 120);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, behindSeconds: 22 }), 120);
+});
+
+test("a short back buffer right after a seek or the start is not an eviction", () => {
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, playedSeconds: 44 }), 120);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, playedSeconds: 45 }), 101);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, playedSeconds: Number.NaN }), 120);
+});
+
+test("the floor holds whatever is missing", () => {
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, ceiling: 40, behindSeconds: 0 }), 30);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, ceiling: 30, behindSeconds: 0 }), 30);
+});
+
+test("no back buffer kept, or no ceiling, means nothing to read", () => {
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, backBufferSeconds: 0 }), 120);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, ceiling: 0 }), 0);
 });
