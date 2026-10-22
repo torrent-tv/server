@@ -263,15 +263,23 @@ const FRAGMENT_SECONDS_WHEN_UNKNOWN = 6;
  * stays behind; less than half of it is not that trim. And the back buffer can
  * only be full once that much has been played since the last seek.
  *
+ * The browser evicts played media only to make room for media ahead, so a
+ * short back buffer with less than the floor held ahead is not an eviction:
+ * it is the playhead running past what was supplied, outside any buffered
+ * range, where nothing is behind it either. Field 2026-10-22 21:28:08 UTC, a
+ * film at 22 Mbit/s over a 15 Mbit/s link: `0s behind, 0s ahead`, and the
+ * ceiling went 75 s → 45 s → 30 s for a shortage of supply.
+ *
  * @param {Object} state
  * @param {number} state.ceiling - The ceiling in force now, seconds.
  * @param {number} state.behindSeconds - Played media held behind the playhead.
+ * @param {number} state.aheadSeconds - Media held ahead of the playhead.
  * @param {number} state.playedSeconds - Played since the last seek.
  * @param {number} state.backBufferSeconds - `backBufferLength`.
  * @param {number} state.floor - `maxBufferLength`, which this does not go under.
  * @returns {number} The ceiling to set; the current one when nothing was evicted.
  */
-export function ceilingWhilePlayedMediaIsEvicted({ ceiling, behindSeconds, playedSeconds, backBufferSeconds, floor }) {
+export function ceilingWhilePlayedMediaIsEvicted({ ceiling, behindSeconds, aheadSeconds, playedSeconds, backBufferSeconds, floor }) {
   const now = Number(ceiling) || 0;
   const kept = Number(backBufferSeconds) || 0;
   if (now <= 0 || kept <= 0) {
@@ -280,11 +288,16 @@ export function ceilingWhilePlayedMediaIsEvicted({ ceiling, behindSeconds, playe
   if (!(Number(playedSeconds) >= kept + PLAYED_BEYOND_THE_BACK_BUFFER_SECONDS)) {
     return now;
   }
+  const lowest = Math.max(0, Number(floor) || 0);
+  const ahead = Number(aheadSeconds) || 0;
+  if (!(ahead > 0 && ahead >= lowest)) {
+    return now;
+  }
   const behind = Math.max(0, Number(behindSeconds) || 0);
   if (behind >= kept / 2) {
     return now;
   }
-  const next = Math.max(Math.max(0, Number(floor) || 0), now - (kept - behind));
+  const next = Math.max(lowest, now - (kept - behind));
   return next < now ? next : now;
 }
 
@@ -683,6 +696,7 @@ export function createHlsPlayer(onLog) {
       const sparing = ceilingWhilePlayedMediaIsEvicted({
         ceiling,
         behindSeconds: behind,
+        aheadSeconds: held,
         playedSeconds: media.currentTime - stretchFrom,
         backBufferSeconds: backBuffer,
         floor: instance.config.maxBufferLength

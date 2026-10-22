@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Do not read a playhead that ran past the supplied media as the browser evicting played media; the cushion is lowered for an eviction only while at least the floor is held ahead (#ttv-231).
+
 ## 0.62.6
 
 - **Fix**: Step the playhead by a microsecond when the picture stops while both tracks hold media ahead of it, which restarts Chrome's video after hls.js removed the frames under the playhead (#ttv-231).

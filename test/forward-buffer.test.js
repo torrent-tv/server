@@ -233,7 +233,7 @@ test("no ceiling means nothing to lower", () => {
  * was left to evict and hls.js removed the frames being shown
  * (torrent-tv/meta#231). The ceiling gives the missing seconds back.
  */
-const EVICTING = { ceiling: 120, behindSeconds: 11, playedSeconds: 600, backBufferSeconds: 30, floor: 30 };
+const EVICTING = { ceiling: 120, behindSeconds: 11, aheadSeconds: 118, playedSeconds: 600, backBufferSeconds: 30, floor: 30 };
 
 test("played media evicted below half the back buffer lowers the ceiling by what is missing", () => {
   assert.equal(ceilingWhilePlayedMediaIsEvicted(EVICTING), 101);
@@ -250,6 +250,18 @@ test("a short back buffer right after a seek or the start is not an eviction", (
   assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, playedSeconds: 44 }), 120);
   assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, playedSeconds: 45 }), 101);
   assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, playedSeconds: Number.NaN }), 120);
+});
+
+test("a playhead run past what was supplied is not an eviction", () => {
+  // Field 2026-10-22 21:28:08 UTC: `0s behind, 0s ahead` at 22 Mbit/s over a
+  // 15 Mbit/s link — outside any buffered range, nothing is behind either.
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, ceiling: 75, behindSeconds: 0, aheadSeconds: 0 }), 75);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, aheadSeconds: 29 }), 120);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, aheadSeconds: Number.NaN }), 120);
+  // The same run during a pause, the browser evicting for real: 14 s behind,
+  // 47 s ahead.
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, ceiling: 75, behindSeconds: 14, aheadSeconds: 47 }), 59);
+  assert.equal(ceilingWhilePlayedMediaIsEvicted({ ...EVICTING, aheadSeconds: 30 }), 101);
 });
 
 test("the floor holds whatever is missing", () => {
