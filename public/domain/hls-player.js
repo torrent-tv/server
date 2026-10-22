@@ -199,6 +199,67 @@ const CEILING_RETRIES_PER_SESSION = 3;
 /** How long after a refusal the same depth may be tried again. */
 const CEILING_RETRY_QUIET_MS = 60_000;
 
+/** `HTMLMediaElement.HAVE_FUTURE_DATA`, named for a module that also runs without a DOM. */
+const HAVE_FUTURE_DATA = 3;
+
+/**
+ * How much every track must hold beyond the playhead for a stopped element to
+ * count as stopped with its media in hand. One second is more than a frame of
+ * any film and less than any fragment the proxy cuts.
+ */
+const HELD_AHEAD_OF_A_STOPPED_ELEMENT_SECONDS = 1;
+
+/** How often the element is checked for having stopped with its media held. */
+const STOPPED_CHECK_MS = 500;
+/** How long it must stay so before the playhead is stepped. */
+const STOPPED_FOR_MS = 1000;
+/** Steps tried on one stop before it is left to the viewer. */
+const STEPS_PER_STOP = 3;
+/** The least time between two steps of the same stop. */
+const STEPS_APART_MS = 2000;
+/** The step itself: the one hls.js uses to make the pipeline read again. */
+const PIPELINE_STEP_SECONDS = 0.000001;
+
+/**
+ * Whether the element has stopped although every track holds the media at its
+ * position.
+ *
+ * Chrome's video pipeline does not continue by itself when the frames it was
+ * reading are removed under it: the sound plays on for a second or two and then
+ * the element waits, with the media it needs already in the buffer. hls.js
+ * steps the playhead for this only when the removal leaves a hole between two
+ * ranges (`nudgeOnVideoHole`); a removal at the front of the only range leaves
+ * it waiting for good — field 2026-10-22, 114 s at 511.36 s with 100 s held in
+ * both tracks (torrent-tv/meta#231). A step of the playhead makes the pipeline
+ * read again from the keyframe before it.
+ *
+ * Not a wait for media: then a track does not hold the position. Not a pause,
+ * a seek or the end, which stop the element on purpose.
+ *
+ * @param {Object} state
+ * @param {boolean} state.paused
+ * @param {boolean} state.seeking
+ * @param {boolean} state.ended
+ * @param {number} state.readyState - The element's `readyState`.
+ * @param {number} state.position - The element's `currentTime`.
+ * @param {Array<Array<{ start: number, end: number }>>} state.tracks - Each
+ *   track's held ranges, read from its own SourceBuffer.
+ * @returns {boolean}
+ */
+export function stoppedWithMediaHeld({ paused, seeking, ended, readyState, position, tracks }) {
+  if (paused || seeking || ended) {
+    return false;
+  }
+  if (!(readyState >= 1 && readyState < HAVE_FUTURE_DATA) || !Number.isFinite(position)) {
+    return false;
+  }
+  if (!Array.isArray(tracks) || tracks.length === 0) {
+    return false;
+  }
+  return tracks.every(ranges => Array.isArray(ranges) && ranges.some(range =>
+    range.start <= position && range.end >= position + HELD_AHEAD_OF_A_STOPPED_ELEMENT_SECONDS));
+}
+
 /**
  * How deep hls.js will actually try to buffer, in seconds.
  *
@@ -1254,6 +1315,81 @@ export function createHlsPlayer(onLog) {
             ownMove = null;
           }
         }, { signal: elementWatch.signal });
+        // An element stopped with its media held is stepped by a millionth of
+        // a second, so its pipeline reads again — see `stoppedWithMediaHeld`.
+        // A few steps per stop, then it is left alone: a stop the step does
+        // not end has another cause, and stepping it forever would only hide
+        // that.
+        let stoppedSince = 0;
+        let stepsThisStop = 0;
+        let lastStepAt = 0;
+        let stepsGivenUp = false;
+        const stoppedCheck = setInterval(() => {
+          if (hlsInstance !== instance || !(videoElement instanceof HTMLVideoElement)) {
+            return;
+          }
+          const position = videoElement.currentTime;
+          const buffers = readPlayerBuffers(instance, videoElement);
+          const tracks = [buffers.video, buffers.audio].filter(Array.isArray);
+          const stopped = stoppedWithMediaHeld({
+            paused: videoElement.paused,
+            seeking: videoElement.seeking,
+            ended: videoElement.ended,
+            readyState: videoElement.readyState,
+            position,
+            tracks
+          });
+          const now = Date.now();
+          if (!stopped) {
+            if (stepsThisStop > 0 && videoElement.readyState >= HAVE_FUTURE_DATA) {
+              console.debug(
+                `[torrent-tv][hls] the stopped picture moves again at ${position.toFixed(2)}s ` +
+                `after ${stepsThisStop} step(s)`
+              );
+            }
+            if (videoElement.readyState >= HAVE_FUTURE_DATA || videoElement.paused) {
+              stepsThisStop = 0;
+              stepsGivenUp = false;
+            }
+            stoppedSince = 0;
+            return;
+          }
+          if (stoppedSince === 0) {
+            stoppedSince = now;
+            return;
+          }
+          if (now - stoppedSince < STOPPED_FOR_MS || now - lastStepAt < STEPS_APART_MS) {
+            return;
+          }
+          if (stepsThisStop >= STEPS_PER_STOP) {
+            if (!stepsGivenUp) {
+              stepsGivenUp = true;
+              console.warn(
+                `[torrent-tv][hls] the picture is still stopped at ${position.toFixed(2)}s after ` +
+                `${STEPS_PER_STOP} steps with its media held; not stepping it again ` +
+                describeTrackBuffers(instance, videoElement)
+              );
+            }
+            return;
+          }
+          stepsThisStop += 1;
+          lastStepAt = now;
+          const target = position + PIPELINE_STEP_SECONDS;
+          // The `seeking` this causes is the player's, not the viewer's.
+          ownMove = {
+            from: position, to: target, at: now, withinMs: 1000, consume: true,
+            reason: "stepped a picture stopped with its media held"
+          };
+          console.warn(
+            `[torrent-tv][hls] the picture stopped at ${position.toFixed(2)}s for ` +
+            `${((now - stoppedSince) / 1000).toFixed(1)}s with its media held ` +
+            `(readyState=${videoElement.readyState}); stepping the playhead to read it again, ` +
+            `step ${stepsThisStop} of ${STEPS_PER_STOP} ${describeTrackBuffers(instance, videoElement)}`
+          );
+          videoElement.currentTime = target;
+          stoppedSince = 0;
+        }, STOPPED_CHECK_MS);
+        elementWatch.signal.addEventListener("abort", () => clearInterval(stoppedCheck), { once: true });
         const recoverFatal = (data) => {
           const retry = data?.type === HlsClass.ErrorTypes.NETWORK_ERROR &&
             data?.networkDetails?.canRetry === true && !data?.outputTerminal;
