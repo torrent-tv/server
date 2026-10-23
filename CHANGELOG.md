@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.5
 
 - **New**: Record timed steps while requesting local-network permission during proxy connection retry (#ttv-185).
 
