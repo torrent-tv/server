@@ -1,4 +1,4 @@
-## Unreleased
+## 0.64.0
 
 - **New**: Time the subtitle hold that keeps playback readiness closed until the opening track is read (#ttv-185).
 
