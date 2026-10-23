@@ -1,3 +1,8 @@
+## Unreleased
+
+- **Fix**: End HLS fragment-remux spans on the matching parsed-fragment event, independently of the earlier codec-availability event (#ttv-185).
+- **Fix**: Pair manifest parse spans within the HLS instance that loaded each manifest (#ttv-185).
+
 ## 0.64.1
 
 - **Fix**: Close HLS manifest, init-segment and media-segment request spans only after the response body completes, fails or is cancelled (#ttv-185).
