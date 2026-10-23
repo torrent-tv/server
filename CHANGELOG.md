@@ -1,5 +1,8 @@
-## 0.64.7
+## Unreleased
 
+- **New**: Measure the seek interval from `playing` to the first advancing frame separately from the full seek-to-frame interval (#ttv-185).
+
+## 0.64.7
 - **Fix**: End seek presentation timing at the first advancing frame, not a paused target frame (#ttv-185).
 
 ## 0.64.6

@@ -292,17 +292,24 @@ export function observeVideoWait(video, readAudio) {
   if (!waitTrace.enabled || !video.requestVideoFrameCallback) return;
   let callback = null;
   let endPresentation = null;
+  let endFramePresentation = null;
   let previous = null;
   let wait = null;
   let attempt = null;
   let presentationContext = null;
   let presentationStartedAt = null;
   let presentationStartedBySeek = false;
+  const closeFramePresentation = result => {
+    const end = endFramePresentation;
+    endFramePresentation = null;
+    end?.(result);
+  };
   const closePresentation = result => {
     const end = endPresentation;
     if (callback !== null) video.cancelVideoFrameCallback?.(callback);
     callback = null;
     endPresentation = null;
+    closeFramePresentation({ outcome: result?.outcome ?? "presentation-ended" });
     presentationContext = null;
     presentationStartedAt = null;
     presentationStartedBySeek = false;
@@ -358,6 +365,8 @@ export function observeVideoWait(video, readAudio) {
       previous.audioBuffered && (!current.audioRequired ||
         (current.audioDecodedBytes > 0 && previous.audioDecodedBytes > 0))) {
       const firstAdvancingFrameAt = presentationStartedBySeek ? at : previous.at;
+      closeFramePresentation({ outcome: "advancing-with-decoded-audio", endedAt: firstAdvancingFrameAt,
+        confirmedAt: at });
       closePresentation({ outcome: "advancing-with-decoded-audio", endedAt: firstAdvancingFrameAt, confirmedAt: at });
       waitTrace.event("C7.audio-ready", { process: "C7", phase: "event", at: firstAdvancingFrameAt,
         confirmedAt: at, audioRequired: current.audioRequired, audioBuffered: current.audioBuffered,
@@ -376,6 +385,9 @@ export function observeVideoWait(video, readAudio) {
         readyState: video.readyState, paused: video.paused });
       if ((name === "seeking" || name === "playing") && waitTrace.current?.attempt > 0) {
         startPresentation(name === "seeking");
+        if (name === "playing" && presentationStartedBySeek && endPresentation && !endFramePresentation) {
+          endFramePresentation = waitTrace.open("C6.frame-presentation-tail");
+        }
       }
     });
   }
