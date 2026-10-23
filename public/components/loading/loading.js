@@ -5625,9 +5625,20 @@ export class Loading extends StateDerivedView {
     // that forecast could have weighed the subtitle reported since.
     let cachedProgressRequestedAt = -Infinity;
     let saidProxyUnaware = false;
+    let endSubtitleHold = null;
+    const finishSubtitleHold = (outcome) => {
+      endSubtitleHold?.({ outcome });
+      endSubtitleHold = null;
+    };
     while (true) {
-      this.#throwIfCancelled(epoch);
+      try {
+        this.#throwIfCancelled(epoch);
+      } catch (error) {
+        finishSubtitleHold(error?.name === "AbortError" ? "cancelled" : "error");
+        throw error;
+      }
       if (videoElement.error) {
+        finishSubtitleHold("video-error");
         return;
       }
       // Re-assert pause in case leftover play-intent resumed it.
@@ -5664,12 +5675,23 @@ export class Loading extends StateDerivedView {
           }
         }
       }
-      this.#throwIfCancelled(epoch);
-      this.#assertTranscodeProgress(cachedProgress);
+      try {
+        this.#throwIfCancelled(epoch);
+      } catch (error) {
+        finishSubtitleHold(error?.name === "AbortError" ? "cancelled" : "error");
+        throw error;
+      }
+      try {
+        this.#assertTranscodeProgress(cachedProgress);
+      } catch (error) {
+        finishSubtitleHold(error?.name === "AbortError" ? "cancelled" : "error");
+        throw error;
+      }
       // The published reading, not a fresh one of our own — see the listener.
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
       const proxyReadiness = cachedProgress?.playbackReadiness;
       if (proxyReadiness?.reason === "media-continuity-unavailable") {
+        finishSubtitleHold("error");
         throw new Error("Prepared media contains a timestamp gap; playback cannot start.");
       }
       // The subtitle the file opens with: the proxy decides when it has been
@@ -5687,6 +5709,12 @@ export class Loading extends StateDerivedView {
         );
       }
       const holdsForSubtitles = subtitleHold === "subtitles-pending";
+      if (holdsForSubtitles && !endSubtitleHold) {
+        endSubtitleHold = waitTrace.open("C3.subtitle-hold", { process: "C3",
+          trackIndex: startSubtitle?.trackIndex ?? null, state: startSubtitle?.state ?? null });
+      } else if (!holdsForSubtitles && endSubtitleHold) {
+        finishSubtitleHold("released");
+      }
       const readiness = holdsForSubtitles
         ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
         : proxyReadiness;
