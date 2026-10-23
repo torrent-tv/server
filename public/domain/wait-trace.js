@@ -54,6 +54,7 @@ export class WaitTrace {
       this.event("end", { operation, name, process, phase: "end", start, endedAt,
         duration: endedAt - start, ...result }, context);
     };
+    end.startedAt = start;
     end.context = context;
     end.operation = operation;
     return end;
@@ -294,15 +295,47 @@ export function observeVideoWait(video, readAudio) {
   let previous = null;
   let wait = null;
   let attempt = null;
+  let presentationContext = null;
+  let presentationStartedAt = null;
+  const closePresentation = result => {
+    const end = endPresentation;
+    if (callback !== null) video.cancelVideoFrameCallback?.(callback);
+    callback = null;
+    endPresentation = null;
+    presentationContext = null;
+    presentationStartedAt = null;
+    end?.(result);
+  };
+  const startPresentation = () => {
+    const context = waitTrace.current;
+    if (!context || context.attempt <= 0) return;
+    if (presentationContext?.wait === context.wait && presentationContext.attempt === context.attempt) return;
+    closePresentation({ outcome: "superseded" });
+    previous = null;
+    wait = context.wait;
+    attempt = context.attempt;
+    presentationContext = { wait, attempt };
+    endPresentation = waitTrace.open("C6.presentation");
+    presentationStartedAt = endPresentation.startedAt ?? waitTrace.now();
+    callback = video.requestVideoFrameCallback(frame);
+  };
   const frame = (at, metadata) => {
     callback = null;
+    if (Number.isFinite(presentationStartedAt) && at < presentationStartedAt) {
+      callback = video.requestVideoFrameCallback(frame);
+      return;
+    }
     const context = waitTrace.current;
-    if (!context || wait !== context.wait || attempt !== context.attempt) return;
+    if (!context || wait !== context.wait || attempt !== context.attempt) {
+      closePresentation({ outcome: "context-changed" });
+      return;
+    }
     let audio;
     try { audio = readAudio(metadata.mediaTime); }
     catch (error) {
       // silent-ok: finish emits observation-failed; this diagnostic must not interrupt playback.
       waitTrace.finish("observation-failed", { error: String(error?.message ?? error) });
+      closePresentation({ outcome: "observation-failed" });
       return;
     }
     const current = { at, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames,
@@ -313,14 +346,14 @@ export function observeVideoWait(video, readAudio) {
     if (!video.paused && previous && metadata.mediaTime > previous.mediaTime &&
       current.audioRequired && current.audioDecodedBytes === null) {
       waitTrace.finish("advancing-audio-output-unverified", current);
-      endPresentation?.({ outcome: "audio-output-unverified" });
+      closePresentation({ outcome: "audio-output-unverified" });
       return;
     }
     if (!video.paused && previous && metadata.mediaTime > previous.mediaTime &&
       metadata.presentedFrames > previous.presentedFrames && current.audioBuffered &&
       previous.audioBuffered && (!current.audioRequired ||
         (current.audioDecodedBytes > 0 && previous.audioDecodedBytes > 0))) {
-      endPresentation?.({ outcome: "advancing-with-decoded-audio", endedAt: previous.at, confirmedAt: at });
+      closePresentation({ outcome: "advancing-with-decoded-audio", endedAt: previous.at, confirmedAt: at });
       waitTrace.event("C7.audio-ready", { process: "C7", phase: "event", at: previous.at,
         confirmedAt: at, audioRequired: current.audioRequired, audioBuffered: current.audioBuffered,
         audioDecodedBytes: current.audioDecodedBytes });
@@ -336,14 +369,7 @@ export function observeVideoWait(video, readAudio) {
       waitTrace.event(`media-${name}`, { process: name === "play" || name === "playing" ? "C5" : undefined,
         phase: name === "play" ? "begin" : name === "playing" ? "end" : "event", mediaTime: video.currentTime,
         readyState: video.readyState, paused: video.paused });
-      if (name === "playing" && waitTrace.current?.attempt > 0) {
-        if (callback !== null) video.cancelVideoFrameCallback?.(callback);
-        previous = null;
-        wait = waitTrace.current.wait;
-        attempt = waitTrace.current.attempt;
-        endPresentation = waitTrace.open("C6.presentation");
-        callback = video.requestVideoFrameCallback(frame);
-      }
+      if ((name === "seeking" || name === "playing") && waitTrace.current?.attempt > 0) startPresentation();
     });
   }
 }
