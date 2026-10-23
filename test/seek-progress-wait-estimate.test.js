@@ -52,7 +52,7 @@ test("a readiness answer without an estimate clears the waiting overlay's prior 
 });
 
 test("each seek-hold progress answer is sent through the waiting overlay event", () => {
-  assert.match(holdMethod, /this\.#publishTranscodeMeasurements\(progress\);/);
+  assert.match(holdMethod, /waitTrace\.run\("S2\.5\.publish-transcode-readings",[\s\S]*this\.#publishTranscodeMeasurements\(progress\)/);
 });
 
 test("the active seek estimate is accepted after the startup wait has ended", () => {
