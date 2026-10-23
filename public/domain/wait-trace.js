@@ -297,6 +297,7 @@ export function observeVideoWait(video, readAudio) {
   let attempt = null;
   let presentationContext = null;
   let presentationStartedAt = null;
+  let presentationStartedBySeek = false;
   const closePresentation = result => {
     const end = endPresentation;
     if (callback !== null) video.cancelVideoFrameCallback?.(callback);
@@ -304,9 +305,10 @@ export function observeVideoWait(video, readAudio) {
     endPresentation = null;
     presentationContext = null;
     presentationStartedAt = null;
+    presentationStartedBySeek = false;
     end?.(result);
   };
-  const startPresentation = () => {
+  const startPresentation = startedBySeek => {
     const context = waitTrace.current;
     if (!context || context.attempt <= 0) return;
     if (presentationContext?.wait === context.wait && presentationContext.attempt === context.attempt) return;
@@ -315,6 +317,7 @@ export function observeVideoWait(video, readAudio) {
     wait = context.wait;
     attempt = context.attempt;
     presentationContext = { wait, attempt };
+    presentationStartedBySeek = startedBySeek;
     endPresentation = waitTrace.open("C6.presentation");
     presentationStartedAt = endPresentation.startedAt ?? waitTrace.now();
     callback = video.requestVideoFrameCallback(frame);
@@ -340,6 +343,7 @@ export function observeVideoWait(video, readAudio) {
     }
     const current = { at, mediaTime: metadata.mediaTime, presentedFrames: metadata.presentedFrames,
       expectedDisplayTime: metadata.expectedDisplayTime, presentationTime: metadata.presentationTime,
+      paused: video.paused,
       audioDecodedBytes: Number.isFinite(video.webkitAudioDecodedByteCount) ? video.webkitAudioDecodedByteCount : null,
       ...audio };
     if (!previous) waitTrace.event("first-frame", { process: "C6", phase: "event", ...current });
@@ -353,11 +357,12 @@ export function observeVideoWait(video, readAudio) {
       metadata.presentedFrames > previous.presentedFrames && current.audioBuffered &&
       previous.audioBuffered && (!current.audioRequired ||
         (current.audioDecodedBytes > 0 && previous.audioDecodedBytes > 0))) {
-      closePresentation({ outcome: "advancing-with-decoded-audio", endedAt: previous.at, confirmedAt: at });
-      waitTrace.event("C7.audio-ready", { process: "C7", phase: "event", at: previous.at,
+      const firstAdvancingFrameAt = presentationStartedBySeek ? at : previous.at;
+      closePresentation({ outcome: "advancing-with-decoded-audio", endedAt: firstAdvancingFrameAt, confirmedAt: at });
+      waitTrace.event("C7.audio-ready", { process: "C7", phase: "event", at: firstAdvancingFrameAt,
         confirmedAt: at, audioRequired: current.audioRequired, audioBuffered: current.audioBuffered,
         audioDecodedBytes: current.audioDecodedBytes });
-      waitTrace.finish("advancing-with-decoded-audio", { firstAdvancingFrameAt: previous.at,
+      waitTrace.finish("advancing-with-decoded-audio", { firstAdvancingFrameAt,
         confirmedAt: at, frameInterval: at - previous.at, ...current });
       return;
     }
@@ -369,7 +374,9 @@ export function observeVideoWait(video, readAudio) {
       waitTrace.event(`media-${name}`, { process: name === "play" || name === "playing" ? "C5" : undefined,
         phase: name === "play" ? "begin" : name === "playing" ? "end" : "event", mediaTime: video.currentTime,
         readyState: video.readyState, paused: video.paused });
-      if ((name === "seeking" || name === "playing") && waitTrace.current?.attempt > 0) startPresentation();
+      if ((name === "seeking" || name === "playing") && waitTrace.current?.attempt > 0) {
+        startPresentation(name === "seeking");
+      }
     });
   }
 }
