@@ -1,4 +1,4 @@
-## Unreleased
+## 0.64.2
 
 - **Chore**: Update dependencies: 1 package(s) changed in the lock file.
 
