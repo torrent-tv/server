@@ -155,6 +155,7 @@ test("a frame without audio does not end observation; both advancing frames must
     frame();
     assert.equal(waitTrace.current, null);
     assert.equal(events.at(-1).firstAdvancingFrameAt, 120);
+    assert.equal(events.at(-1).firstAdvancingFrameElapsedMs, 120);
     assert.equal(events.at(-1).confirmedAt, 160);
   } finally { Object.assign(waitTrace, saved); }
 });
