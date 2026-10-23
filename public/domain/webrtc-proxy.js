@@ -274,7 +274,12 @@ export class WebRtcProxy {
   #lostFired = false;
   /** @type {string | null} Signalling session id assigned by the server (== the proxy's `[webrtc] Session <id>`). */
   #signalSessionId = null;
+  #traceContext = null;
   #traceSignalEnd = null;
+  #traceSessionEnd = null;
+  #traceOfferEnd = null;
+  #traceAnswerEnd = null;
+  #traceGatherEnd = null;
   #traceMediaEnd = null;
   #traceControlEnd = null;
   #traceJoinEnd = null;
@@ -420,9 +425,21 @@ export class WebRtcProxy {
    */
   async connect(timeoutMs = CONNECT_TIMEOUT_MS, { signal } = {}) {
     if (signal?.aborted) throw new DOMException("Proxy connection was cancelled.", "AbortError");
-    const finishConnect = waitTrace.open("A2.connection-attempt", { proxyId: this.#proxyId });
+    this.#traceContext = waitTrace.contextForOperation("A2");
+    const finishConnect = waitTrace.open("A2.connection-attempt", { proxyId: this.#proxyId }, this.#traceContext);
+    this.#traceSessionEnd = waitTrace.open("A2.2.websocket-session", {
+      process: "A2.2.1", proxyId: this.#proxyId
+    }, this.#traceContext);
     const wsUrl = `${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`;
-    this.#ws = new WebSocket(wsUrl);
+    try {
+      this.#ws = new WebSocket(wsUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.#traceSessionEnd?.({ outcome: "error", error: message });
+      this.#traceSessionEnd = null;
+      finishConnect({ outcome: "error", error: message });
+      throw error;
+    }
 
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -438,10 +455,15 @@ export class WebRtcProxy {
         if (settled) return;
         const traceResult = { outcome: err ? "error" : "ready", error: err?.message };
         this.#traceSignalEnd?.(traceResult);
+        this.#traceSessionEnd?.(traceResult);
+        this.#traceOfferEnd?.(traceResult);
+        this.#traceAnswerEnd?.(traceResult);
+        this.#traceGatherEnd?.(traceResult);
         this.#traceMediaEnd?.(traceResult);
         this.#traceControlEnd?.(traceResult);
         this.#traceJoinEnd?.(traceResult);
-        this.#traceSignalEnd = this.#traceMediaEnd = this.#traceControlEnd = this.#traceJoinEnd = null;
+        this.#traceSignalEnd = this.#traceSessionEnd = this.#traceOfferEnd = this.#traceAnswerEnd =
+          this.#traceGatherEnd = this.#traceMediaEnd = this.#traceControlEnd = this.#traceJoinEnd = null;
         finishConnect({ outcome: err ? "error" : "connected", error: err?.message });
         settled = true;
         clearTimeout(timer);
@@ -494,7 +516,9 @@ export class WebRtcProxy {
 
     if (this.#closedByUser) return;
     if (msg.type === "session") {
-      this.#traceSignalEnd = waitTrace.open("A2.2.signalling", { connection: msg.sessionId });
+      this.#traceSessionEnd?.({ outcome: "session-received", connection: msg.sessionId });
+      this.#traceSessionEnd = null;
+      this.#traceSignalEnd = waitTrace.open("A2.2.signalling", { connection: msg.sessionId }, this.#traceContext);
       // Record the session id and hand it to the log forwarder so browser logs
       // can be joined to the proxy's `[webrtc] Session <id>` lines.
       //
@@ -526,22 +550,37 @@ export class WebRtcProxy {
     }
 
     if (msg.type === "answer" && this.#pc) {
+      this.#traceAnswerEnd = waitTrace.open("A2.2.remote-description", {
+        process: "A2.2.3", connection: this.#signalSessionId
+      }, this.#traceContext);
       try {
-        waitTrace.event("A2.media-answer", { connection: this.#signalSessionId });
+        waitTrace.event("A2.media-answer", { connection: this.#signalSessionId }, this.#traceContext);
         const pc = this.#pc;
         await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        this.#traceAnswerEnd?.({ outcome: "applied" });
+        this.#traceAnswerEnd = null;
         if (this.#closedByUser || this.#pc !== pc) return;
         this.#remoteDescriptionSet = true;
         // Drain buffered candidates so ICE checking can start.
         for (const c of this.#pendingCandidates) {
-          await pc.addIceCandidate(c).catch(() => {});
+          const finishCandidate = waitTrace.open("A2.2.remote-candidate-application", {
+            process: "A2.2.4", connection: this.#signalSessionId, disposition: "buffered"
+          }, this.#traceContext);
+          try {
+            await pc.addIceCandidate(c);
+            finishCandidate({ outcome: "applied" });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            finishCandidate({ outcome: "rejected", error: message });
+            console.debug(`[torrent-tv][ice] buffered remote candidate refused (${message})`);
+          }
         }
         if (this.#closedByUser || this.#pc !== pc) return;
         this.#pendingCandidates = [];
-        waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId });
+        waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId }, this.#traceContext);
         this.#traceSignalEnd?.({ outcome: "answer-applied" });
         this.#traceSignalEnd = null;
-        this.#traceJoinEnd = waitTrace.open("A2.J.ready-join", { connection: this.#signalSessionId });
+        this.#traceJoinEnd = waitTrace.open("A2.J.ready-join", { connection: this.#signalSessionId }, this.#traceContext);
         if (msg.separateControl === 2) {
           this.#openSeparateControl(settle);
         } else if (!this.#controlChannel) {
@@ -550,6 +589,8 @@ export class WebRtcProxy {
         this.#controlNegotiated = true;
         this.#settleConnected(settle);
       } catch (err) {
+        this.#traceAnswerEnd?.({ outcome: "error", error: String(err?.message ?? err) });
+        this.#traceAnswerEnd = null;
         settle(err instanceof Error ? err : new Error(String(err)));
       }
       return;
@@ -562,6 +603,8 @@ export class WebRtcProxy {
         sdpMLineIndex: 0
       };
       console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(c.candidate)}`);
+      waitTrace.event("A2.2.remote-candidate-received", { process: "A2.2.4", connection: this.#signalSessionId,
+        disposition: this.#remoteDescriptionSet ? "apply" : "buffer" }, this.#traceContext);
       // Track the proxy's LAN address (for the local-network permission probe)
       // and, in public-only mode, drop local-address candidates so the browser
       // never touches the local network — and never asks for the permission.
@@ -580,9 +623,14 @@ export class WebRtcProxy {
         this.#pendingCandidates.push(c);
         return;
       }
+      const finishCandidate = waitTrace.open("A2.2.remote-candidate-application", {
+        process: "A2.2.4", connection: this.#signalSessionId, disposition: "trickled"
+      }, this.#traceContext);
       try {
         await this.#pc.addIceCandidate(c);
+        finishCandidate({ outcome: "applied" });
       } catch (error) {
+        finishCandidate({ outcome: "rejected", error: String(error?.message ?? error) });
         // Usually stale or duplicate — but that is a guess, and a candidate
         // refused for some other reason is a path to the proxy that was never
         // tried. Name what was refused instead of asserting why.
@@ -617,7 +665,10 @@ export class WebRtcProxy {
    * @param {(err?: Error) => void} settle
    */
   async #createPeerConnection(_sessionId, settle) {
-    this.#traceMediaEnd = waitTrace.open("A2.2m.media-transport", { connection: this.#signalSessionId });
+    this.#traceMediaEnd = waitTrace.open("A2.2m.media-transport", { connection: this.#signalSessionId }, this.#traceContext);
+    this.#traceGatherEnd = waitTrace.open("A2.2.ice-gathering", {
+      process: "A2.2.5", connection: this.#signalSessionId
+    }, this.#traceContext);
     this.#pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this.#channel = this.#pc.createDataChannel("proxy", { ordered: true });
 
@@ -651,7 +702,7 @@ export class WebRtcProxy {
     this.#channel.bufferedAmountLowThreshold = REQUEST_BUFFERED_LOW_BYTES;
 
     this.#channel.addEventListener("open", () => {
-      waitTrace.event("A2.media-open", { connection: this.#signalSessionId });
+      waitTrace.event("A2.media-open", { connection: this.#signalSessionId }, this.#traceContext);
       this.#traceMediaEnd?.({ outcome: "open" });
       this.#traceMediaEnd = null;
       // A silence is counted from the moment there was something to deliver on.
@@ -674,6 +725,12 @@ export class WebRtcProxy {
 
     this.#pc.addEventListener("icecandidate", (event) => {
       console.debug(`[ice] local ${WebRtcProxy.#describeCandidate(event.candidate?.candidate)}`);
+      waitTrace.event("A2.2.local-candidate", { connection: this.#signalSessionId,
+        disposition: event.candidate ? "sent" : "complete" }, this.#traceContext);
+      if (!event.candidate) {
+        this.#traceGatherEnd?.({ outcome: "complete" });
+        this.#traceGatherEnd = null;
+      }
       if (event.candidate && this.#ws?.readyState === WebSocket.OPEN) {
         this.#ws.send(JSON.stringify({
           type: "candidate",
@@ -692,6 +749,12 @@ export class WebRtcProxy {
     });
     this.#pc.addEventListener("icegatheringstatechange", () => {
       console.debug(`[ice] iceGatheringState=${this.#pc?.iceGatheringState}`);
+      waitTrace.event("A2.2.ice-gathering-state", { connection: this.#signalSessionId,
+        state: this.#pc?.iceGatheringState }, this.#traceContext);
+      if (this.#pc?.iceGatheringState === "complete") {
+        this.#traceGatherEnd?.({ outcome: "complete" });
+        this.#traceGatherEnd = null;
+      }
     });
 
     this.#pc.addEventListener("connectionstatechange", () => {
@@ -707,8 +770,13 @@ export class WebRtcProxy {
       }
     });
 
-    const offer = await this.#pc.createOffer();
-    await this.#pc.setLocalDescription(offer);
+    this.#traceOfferEnd = waitTrace.open("A2.2.offer-create-and-send", {
+      process: "A2.2.2", connection: this.#signalSessionId
+    }, this.#traceContext);
+    let offer;
+    try {
+      offer = await this.#pc.createOffer();
+      await this.#pc.setLocalDescription(offer);
 
     // Strip `a=sctp-init` from the COPY of the offer sent to the proxy.
     // Chromium 152+ embeds its SCTP INIT in the SDP (zero-RTT association).
@@ -718,9 +786,16 @@ export class WebRtcProxy {
     // channel dies ~5 s after DTLS (confirmed via tcpdump + SDP capture).
     // Without the attribute in the answer the browser falls back to the
     // classic in-band INIT handshake, which works. Local description keeps it.
-    const sdpForProxy = offer.sdp.replace(/a=sctp-init:[^\r\n]*\r\n/g, "");
+      const sdpForProxy = offer.sdp.replace(/a=sctp-init:[^\r\n]*\r\n/g, "");
 
-    this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: sdpForProxy }));
+      this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: sdpForProxy }));
+      this.#traceOfferEnd?.({ outcome: "sent" });
+      this.#traceOfferEnd = null;
+    } catch (error) {
+      this.#traceOfferEnd?.({ outcome: "error", error: String(error?.message ?? error) });
+      this.#traceOfferEnd = null;
+      throw error;
+    }
   }
 
   #settleConnected(settle) {
@@ -730,7 +805,7 @@ export class WebRtcProxy {
     if (!this.#connected) {
       this.#traceJoinEnd?.({ outcome: "ready", mediaOpen: true, controlReady: true });
       this.#traceJoinEnd = null;
-      waitTrace.event("A2.both-open", { process: "A2.J", phase: "end", connection: this.#signalSessionId });
+      waitTrace.event("A2.both-open", { process: "A2.J", phase: "end", connection: this.#signalSessionId }, this.#traceContext);
     }
     this.#connected = true;
     settle();
@@ -738,7 +813,7 @@ export class WebRtcProxy {
 
   #openLegacyControl() {
     this.#traceControlEnd = waitTrace.open("A2.2c.control-transport", { connection: this.#signalSessionId,
-      mode: "legacy" });
+      mode: "legacy" }, this.#traceContext);
     const channel = this.#pc.createDataChannel("proxy-control", { ordered: true });
     this.#controlChannel = channel;
     channel.binaryType = "arraybuffer";
@@ -759,8 +834,8 @@ export class WebRtcProxy {
   #openSeparateControl(settle) {
     if (this.#controlLink) return;
     this.#traceControlEnd = waitTrace.open("A2.2c.control-transport", { connection: this.#signalSessionId,
-      mode: "separate" });
-    waitTrace.event("A2.control-start", { connection: this.#signalSessionId });
+      mode: "separate" }, this.#traceContext);
+    waitTrace.event("A2.control-start", { connection: this.#signalSessionId }, this.#traceContext);
     this.#controlLink = new ControlConnection({
       proxyId: this.#proxyId,
       iceServers: ICE_SERVERS,
@@ -773,7 +848,7 @@ export class WebRtcProxy {
       },
       onMessage: raw => this.#onChannelMessage(raw, "proxy-control"),
       onOpen: channel => {
-        waitTrace.event("A2.control-open", { connection: this.#signalSessionId });
+        waitTrace.event("A2.control-open", { connection: this.#signalSessionId }, this.#traceContext);
         this.#traceControlEnd?.({ outcome: "open" });
         this.#traceControlEnd = null;
         this.#controlChannel = channel;
@@ -1459,7 +1534,7 @@ export class WebRtcProxy {
    * @returns {Promise<number>} RTT in milliseconds.
    */
   async ping() {
-    const endTrace = waitTrace.open("A2.3.ping");
+    const endTrace = waitTrace.open("A2.3.ping", {}, this.#traceContext);
     if (!this.isOpen) {
       const error = new Error("Data channel is not open.");
       endTrace({ outcome: "error", error: error.message });
