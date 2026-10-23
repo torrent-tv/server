@@ -1,7 +1,10 @@
+## Unreleased
+
+- **New**: Time the subtitle hold that keeps playback readiness closed until the opening track is read (#ttv-185).
+
 ## 0.63.0
 
 - **New**: Log elapsed time from the original action to the first advancing frame with decoded required audio (#ttv-185).
-- **New**: Time the subtitle hold that keeps playback readiness closed until the opening track is read (#ttv-185).
 
 ## 0.62.7
 
