@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.1
 
 - **Fix**: Include the data-channel request ID in every `[dc-load]` timing line so browser transfer spans join to proxy request spans (#ttv-185).
 
