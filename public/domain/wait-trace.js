@@ -196,10 +196,12 @@ export function observeHlsWait(instance, Events) {
       const type = data?.id ?? data?.type ?? data?.frag?.type ?? "main";
       const stream = type === "audio" ? "B8.a" : "B8.v";
       const track = trackForHlsType(type, data?.parent);
-      if (name === "MANIFEST_LOADED") waitTrace.trackManifestParse(waitTrace.open("B5.manifest-parse", {
-        process: "B5", url: data?.url ?? null, hlsInstance
-      }), hlsInstance);
-      if (name === "FRAG_PARSING_INIT_SEGMENT") {
+      if (name === "MANIFEST_LOADED") {
+        const parsing = data?.stats?.parsing;
+        waitTrace.span("B5.manifest-parse", { process: "B5", startedAt: parsing?.start,
+          endedAt: parsing?.end, url: data?.url ?? null, hlsInstance });
+      }
+      if (name === "FRAG_LOADED") {
         const key = `${type}:${data?.frag?.sn ?? "unknown"}`;
         const pending = remuxes.get(key) ?? [];
         pending.push(waitTrace.open(stream, { process: stream, stream: type,
