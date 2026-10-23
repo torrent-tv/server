@@ -225,7 +225,8 @@ export function observeHlsWait(instance, Events) {
       if (name === "BUFFER_CREATED") {
         const tracks = data?.tracks ? Object.keys(data.tracks) : [];
         const readyTimes = tracks.map(track => codecReadyAt.get(track));
-        const startedAt = readyTimes.length && readyTimes.every(Number.isFinite) ? Math.max(...readyTimes) : null;
+        const observedReadyTimes = readyTimes.filter(Number.isFinite);
+        const startedAt = observedReadyTimes.length ? Math.min(...observedReadyTimes) : null;
         const endedAt = waitTrace.now();
         if (startedAt !== null) waitTrace.span("B9.source-buffers", { process: "B9", startedAt,
           endedAt, tracks, outcome: "created" });
