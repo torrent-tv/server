@@ -328,6 +328,9 @@ test("seek presentation starts at seeking and ignores a frame callback timestamp
     const presentationEnd = events.find(event => event.name === "C6.presentation" && event.phase === "end");
     assert.equal(presentationEnd.duration, 30);
     assert.equal(presentationEnd.endedAt, 130);
+    const framePresentationEnd = events.find(event => event.name === "C6.frame-presentation-tail" && event.phase === "end");
+    assert.equal(framePresentationEnd.duration, 10);
+    assert.equal(framePresentationEnd.endedAt, 130);
     assert.equal(events.at(-1).firstAdvancingFrameAt, 130);
     assert.equal(events.at(-1).firstAdvancingFrameElapsedMs, 30);
     assert.ok(events.every(event => !Number.isFinite(event.duration) || event.duration >= 0));
