@@ -5,6 +5,7 @@ import { SeekPosition } from "../../domain/seek-position.js";
 import { openingAudioTrack } from "../../domain/audio-opening.js";
 import { PlaybackTasks } from "../../domain/playback-tasks.js";
 import { shouldReportWaiting } from "../../domain/waiting-signal.js";
+import { sourceFileIndexesForOperations } from "../../domain/waiting-text.js";
 import { APP_EVENT, APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { StateDerivedView } from "../../shared/state-derived-view.js";
 import {
@@ -1144,10 +1145,8 @@ export class Loading extends StateDerivedView {
       let downloadStats = null;
       let transcodeProgress = null;
       try {
-        [downloadStats, transcodeProgress] = await Promise.all([
-          this.#fetchBufferingStats(),
-          this.#session.fetchActiveTranscodeProgress()
-        ]);
+        transcodeProgress = await this.#session.fetchActiveTranscodeProgress();
+        downloadStats = await this.#fetchBufferingStats(transcodeProgress?.playbackReadiness?.operations);
       } catch (error) {
         // Aborted when the session is torn down under the wait — a failure
         // that ends playback does exactly that — and then there is nothing
@@ -1484,7 +1483,7 @@ export class Loading extends StateDerivedView {
    *
    * @returns {Promise<{ numPeers: number, downloadSpeed: number } | null>}
    */
-  async #fetchBufferingStats() {
+  async #fetchBufferingStats(operations = []) {
     try {
       if (!this.#transport || this.#activeFileIndex < 0) {
         return null;
@@ -1500,14 +1499,17 @@ export class Loading extends StateDerivedView {
         // live read position it answers the question actually being asked.
         ? ""
         : "";
-      const response = await this.#transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${this.#activeFileIndex}${anchorParam}`,
-        { cache: "no-store" }
-      );
-      if (!response.ok) {
-        return null;
-      }
-      const stats = await response.json();
+      const requiredFileIndexes = sourceFileIndexesForOperations(operations);
+      const fileIndexes = new Set([this.#activeFileIndex, ...(requiredFileIndexes ?? [])]);
+      const entries = await Promise.all([...fileIndexes].map(async fileIndex => {
+        const response = await this.#transport.fetch(
+          `/api/sources/${encodeURIComponent(sourceKey)}/stats?fileIndex=${fileIndex}${anchorParam}`,
+          { cache: "no-store" }
+        );
+        return response.ok ? { fileIndex, stats: await response.json() } : { fileIndex, stats: null };
+      }));
+      const stats = entries.find(entry => entry.fileIndex === this.#activeFileIndex)?.stats;
+      if (!stats) return null;
       // Capture the anchor ONCE per episode (first successful poll) — later
       // polls keep sending that same value above, so we must not overwrite it
       // with a newer live position on every response.
@@ -1517,11 +1519,17 @@ export class Loading extends StateDerivedView {
       // Readable again: a later failure is a new condition and is worth one
       // more line.
       this.#statsUnreadable = false;
+      const completeDemand = requiredFileIndexes !== null && entries.every(({ stats: fileStats }) =>
+        Number.isFinite(fileStats?.resumeNeededBytes) && Number.isFinite(fileStats?.resumeDownloadedBytes));
       return {
-        numPeers: typeof stats?.numPeers === "number" ? stats.numPeers : 0,
-        downloadSpeed: typeof stats?.downloadSpeed === "number" ? stats.downloadSpeed : 0,
-        resumeNeededBytes: typeof stats?.resumeNeededBytes === "number" ? stats.resumeNeededBytes : null,
-        resumeDownloadedBytes: typeof stats?.resumeDownloadedBytes === "number" ? stats.resumeDownloadedBytes : null
+        ...(Number.isFinite(stats.numPeers) ? { numPeers: stats.numPeers } : {}),
+        ...(Number.isFinite(stats.downloadSpeed) ? { downloadSpeed: stats.downloadSpeed } : {}),
+        resumeNeededBytes: completeDemand
+          ? entries.reduce((sum, { stats: fileStats }) => sum + fileStats.resumeNeededBytes, 0)
+          : null,
+        resumeDownloadedBytes: completeDemand
+          ? entries.reduce((sum, { stats: fileStats }) => sum + fileStats.resumeDownloadedBytes, 0)
+          : null
       };
     } catch (error) {
       // The peer count and the download speed are what the waiting interface
@@ -2316,9 +2324,7 @@ export class Loading extends StateDerivedView {
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
-        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
-          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
-        }));
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOICE_READY));
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
         return;
       }
@@ -2859,9 +2865,7 @@ export class Loading extends StateDerivedView {
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
         this.setProgress(100);
-        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
-          detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
-        }));
+        document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOICE_READY));
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
         return;
       }

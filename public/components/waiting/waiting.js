@@ -127,7 +127,9 @@ export class WaitingOverlay {
     const got = downloadStats?.resumeDownloadedBytes;
     const usable = transcodeProgress && transcodeProgress.state !== "failed";
     // Download and processing can be active concurrently.
-    const downloading = typeof needed === "number" && typeof got === "number" ? got < needed : !usable;
+    const downloading = typeof needed === "number" && typeof got === "number"
+      ? got < needed
+      : readiness?.ready !== true;
     Object.assign(this.#measurements, {
       peers: downloading ? downloadStats?.numPeers : undefined,
       seeders: downloading ? downloadStats?.trackerSeeders : undefined,

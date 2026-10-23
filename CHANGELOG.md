@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Keep the waiting view in file-choice state until a video file is selected; label copy/encode mode as an output path and show byte demand only when all required source files have measured demand (#ttv-11).
+
 ## 0.66.2
 
 - **New**: Record proxy selection and each WebRTC signalling, ICE-candidate, and gathering span even when the connection completes before the viewer chooses a file (#ttv-185).
