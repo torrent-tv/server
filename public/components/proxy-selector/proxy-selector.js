@@ -43,6 +43,7 @@ export class ProxySelector {
    * @returns {Promise<{ chosen: ChosenProxy | null, candidates: object[], narrowedBy: string }>}
    */
   async #choose({ infoHash = "", onlyIds = null, tried = [], current = "", process = "A2.1" } = {}) {
+    const traceContext = process === "A2.1" ? waitTrace.contextForOperation("A2") : null;
     const response = await waitTrace.run(`${process}.choose`, () => waitTrace.fetch("/api/proxy-clients/choose", {
       method: "POST",
       headers: requestHeaders(),
@@ -52,7 +53,7 @@ export class ProxySelector {
         ...(tried.length > 0 ? { tried } : {}),
         ...(current ? { current } : {})
       })
-    }, process));
+    }, process), { process, traceContext });
     if (!response.ok) {
       throw new Error(`Proxy choice request failed (${response.status}).`);
     }

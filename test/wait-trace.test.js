@@ -23,6 +23,28 @@ test("a proxy retry retains the action origin and identifies each attempt", asyn
   assert.equal(events.find(event => event.event === "begin").process, "A12");
 });
 
+test("standalone connection spans are recorded before a playback wait starts", async () => {
+  let now = 100;
+  let id = 0;
+  const events = [];
+  const trace = new WaitTrace({ enabled: true, now: () => now, id: () => String(++id), emit: event => events.push(event) });
+  const context = trace.contextForOperation("A2");
+  const work = trace.run("A2.1.choose", async () => {
+    now = 175;
+    return "proxy";
+  }, { process: "A2.1", traceContext: context });
+  assert.equal(await work, "proxy");
+  assert.deepEqual(events.map(event => [event.event, event.process, event.wait]), [
+    ["begin", "A2.1", context.wait], ["end", "A2.1", context.wait]
+  ]);
+  assert.equal(events[1].duration, 75);
+
+  now = 200;
+  trace.begin("torrent-file");
+  const active = trace.contextForOperation("A2");
+  assert.equal(active.wait, trace.current.wait);
+});
+
 test("HLS observations give separate spans to remux, buffer creation, init append and media append", () => {
   const saved = { ...waitTrace };
   const events = [];

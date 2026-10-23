@@ -20,6 +20,12 @@ export class WaitTrace {
     this.event("action", { kind, process: "A0", phase: "begin", startedAt });
   }
 
+  contextForOperation(kind = "background") {
+    if (!this.enabled) return null;
+    if (this.current) return { ...this.current };
+    return { wait: `${kind}:${this.id()}`, attempt: 0, startedAt: this.now(), fileIndex: null };
+  }
+
   attempt(fileIndex, startedAt, originalOpen) {
     if (!this.enabled) return;
     if (!this.current || (this.current.fileIndex === null && !originalOpen) ||
@@ -38,8 +44,8 @@ export class WaitTrace {
     this.emitMs = (this.emitMs ?? 0) + this.now() - before;
   }
 
-  open(name, fields = {}) {
-    const context = this.current && { ...this.current };
+  open(name, fields = {}, contextOverride = null) {
+    const context = contextOverride ? { ...contextOverride } : this.current && { ...this.current };
     if (!context) return () => {};
     const operation = `b${++this.sequence}`;
     const start = this.now();
@@ -71,8 +77,9 @@ export class WaitTrace {
   }
 
   run(name, work, fields = {}) {
-    if (!this.current) return work();
-    const end = this.open(name, fields);
+    const { traceContext = null, ...traceFields } = fields;
+    if (!this.current && !traceContext) return work();
+    const end = this.open(name, traceFields, traceContext);
     try {
       const result = work();
       if (result?.then) return result.then(value => { end({ outcome: "ok" }); return value; },
