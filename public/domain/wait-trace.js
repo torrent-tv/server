@@ -8,7 +8,7 @@ export class WaitTrace {
         console.debug(`[wait-trace] ${JSON.stringify(value)}`);
       }
     } } = {}) {
-    Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0 });
+    Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0, manifestParseEnds: [] });
   }
 
   begin(kind, startedAt = this.now()) {
@@ -82,6 +82,18 @@ export class WaitTrace {
     }
   }
 
+  trackManifestParse(end) {
+    if (this.enabled && typeof end === "function") this.manifestParseEnds.push(end);
+  }
+
+  finishManifestParse(result = {}) {
+    this.manifestParseEnds.shift()?.(result);
+  }
+
+  failManifestParses(result = {}) {
+    for (const end of this.manifestParseEnds.splice(0)) end(result);
+  }
+
   request(path, method, processOverride = null) {
     const process = processOverride ?? processForRequest(path);
     const end = this.open("proxy-response", { path, method, process });
@@ -107,6 +119,8 @@ export class WaitTrace {
 
   finish(outcome, fields = {}) {
     if (!this.current) return;
+    this.failManifestParses({ outcome: outcome === "advancing-with-decoded-audio"
+      ? "active-at-wait-end" : outcome, reason: "wait-ended" });
     const firstAdvancingFrameElapsedMs = Number.isFinite(fields.firstAdvancingFrameAt)
       ? fields.firstAdvancingFrameAt - this.current.startedAt : null;
     this.event("outcome", { outcome, process: "A0", phase: "end", startedAt: this.current.startedAt,
@@ -138,54 +152,30 @@ export function observeHlsWait(instance, Events) {
   if (!waitTrace.enabled) return;
   const appends = new Map();
   const remuxes = new Map();
-  const initialized = new Set();
-  const fragments = new Map();
   const codecReadyAt = new Map();
-  let manifestEnd = null;
-  let manifestParseEnd = null;
-  let levelEnd = null;
-  let audioPlaylistEnd = null;
-  for (const name of ["MANIFEST_LOADING", "MANIFEST_LOADED", "MANIFEST_PARSED", "LEVEL_LOADING", "LEVEL_LOADED",
+  for (const name of ["DESTROYING", "MANIFEST_LOADING", "MANIFEST_LOADED", "MANIFEST_PARSED", "LEVEL_LOADING", "LEVEL_LOADED",
     "AUDIO_TRACK_LOADING", "AUDIO_TRACK_LOADED", "FRAG_LOADING", "FRAG_LOADED",
     "FRAG_PARSING_INIT_SEGMENT", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING", "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"]) {
     if (!Events[name]) continue;
     instance.on(Events[name], (_event, data) => {
-      if (name === "MANIFEST_LOADING") manifestEnd = waitTrace.open("B5.manifest-request", { process: "B5" });
-      if (name === "MANIFEST_LOADED") {
-        manifestEnd?.({ outcome: "loaded" });
-        manifestParseEnd = waitTrace.open("B5.manifest-parse", { process: "B5" });
-      }
-      if (name === "MANIFEST_PARSED") manifestParseEnd?.({ outcome: "parsed" });
-      if (name === "LEVEL_LOADING") levelEnd = waitTrace.open("B5.level-playlist", { process: "B5" });
-      if (name === "LEVEL_LOADED") levelEnd?.({ outcome: "loaded" });
-      if (name === "AUDIO_TRACK_LOADING") audioPlaylistEnd = waitTrace.open("B6.a.p.playlist", { process: "B6.a.p" });
-      if (name === "AUDIO_TRACK_LOADED") audioPlaylistEnd?.({ outcome: "loaded" });
-      const type = data?.type ?? data?.frag?.type ?? "main";
+      if (name === "MANIFEST_PARSED") waitTrace.finishManifestParse({ outcome: "parsed" });
+      const type = data?.id ?? data?.type ?? data?.frag?.type ?? "main";
       const stream = type === "audio" ? "B8.a" : "B8.v";
-      const requestProcess = type === "audio"
-        ? (data?.frag?.sn === "initSegment" ? "B6.a.i" : "B7.a")
-        : (data?.frag?.sn === "initSegment" ? "B6.v" : "B7.v");
-      const fragmentKey = `${type}:${data?.frag?.sn ?? "?"}:${data?.frag?.level ?? "?"}`;
-      if (name === "FRAG_LOADING") fragments.set(fragmentKey,
-        waitTrace.open(`${requestProcess}.request`, { process: requestProcess, stream: type,
-          segment: data?.frag?.sn, level: data?.frag?.level }));
-      if (name === "FRAG_LOADED") {
-        fragments.get(fragmentKey)?.({ outcome: "loaded",
-          bytes: data?.payload?.byteLength ?? data?.stats?.loaded ?? null });
-        fragments.delete(fragmentKey);
-      }
-      const appendKey = `${type}:${data?.parent ?? "media"}`;
-      const mediaAppend = initialized.has(appendKey);
-      const appendProcess = mediaAppend
-        ? (type === "audio" ? "B12.a" : "B12.v")
-        : (type === "audio" ? "B10.a" : "B10.v");
+      const track = trackForHlsType(type, data?.parent);
+      if (name === "MANIFEST_LOADED") waitTrace.trackManifestParse(waitTrace.open("B5.manifest-parse", {
+        process: "B5", url: data?.url ?? null
+      }));
       if (name === "FRAG_PARSING_INIT_SEGMENT") remuxes.set(type, waitTrace.open(stream, { stream: type,
         segment: data?.frag?.sn, level: data?.frag?.level }));
       if (name === "BUFFER_CODECS") {
-        codecReadyAt.set(type, waitTrace.now());
-        waitTrace.event(name, { process: "B8", type, segment: data?.frag?.sn });
-        remuxes.get(type)?.({ outcome: "codecs-ready" });
-        remuxes.delete(type);
+        const tracks = ["video", "audio", "audiovideo"].filter(track => data?.[track]);
+        const codecStream = data?.frag?.type ?? (tracks.includes("video") || tracks.includes("audiovideo")
+          ? "main" : tracks.includes("audio") ? "audio" : type);
+        const at = waitTrace.now();
+        for (const codecTrack of tracks) codecReadyAt.set(codecTrack, at);
+        waitTrace.event(name, { process: "B8", type: codecStream, tracks, segment: data?.frag?.sn });
+        remuxes.get(codecStream)?.({ outcome: "codecs-ready" });
+        remuxes.delete(codecStream);
       }
       if (name === "BUFFER_CREATED") {
         const tracks = data?.tracks ? Object.keys(data.tracks) : [];
@@ -197,40 +187,48 @@ export function observeHlsWait(instance, Events) {
         waitTrace.event(name, { process: "B9", phase: "event", tracks, outcome: "created" });
       }
       if (name === "BUFFER_APPENDING") {
-        appends.set(appendKey, waitTrace.open(appendProcess, { stream: type, parent: data?.parent ?? null,
+        const isInit = data?.frag?.sn === "initSegment";
+        const appendProcess = isInit
+          ? (track === "audio" ? "B10.a" : "B10.v")
+          : (track === "audio" ? "B12.a" : "B12.v");
+        const pending = appends.get(track) ?? [];
+        pending.push(waitTrace.open(appendProcess, { stream: track, parent: data?.parent ?? null,
           segment: data?.frag?.sn }));
+        appends.set(track, pending);
       }
       if (name === "BUFFER_APPENDED") {
-        appends.get(appendKey)?.({ outcome: "updateend-or-hls-ack" });
-        appends.delete(appendKey);
-        initialized.add(appendKey);
+        const pending = appends.get(track);
+        pending?.shift()?.({ outcome: "updateend-or-hls-ack", parent: data?.parent ?? null });
+        if (!pending?.length) appends.delete(track);
       }
       if (name === "ERROR") {
         const error = { outcome: "error", details: data?.details ?? null, fatal: data?.fatal ?? false };
-        const failedFragmentKey = data?.frag
-          ? `${data.type ?? data.frag.type ?? "main"}:${data.frag.sn ?? "?"}:${data.frag.level ?? "?"}` : null;
-        if (failedFragmentKey && fragments.has(failedFragmentKey)) {
-          fragments.get(failedFragmentKey)(error);
-          fragments.delete(failedFragmentKey);
-        }
         if (data?.fatal) {
-          manifestEnd?.(error);
-          manifestParseEnd?.(error);
-          levelEnd?.(error);
-          audioPlaylistEnd?.(error);
-          for (const end of fragments.values()) end(error);
-          fragments.clear();
+          waitTrace.failManifestParses(error);
           for (const end of remuxes.values()) end(error);
           remuxes.clear();
-          for (const end of appends.values()) end(error);
+          for (const pending of appends.values()) for (const end of pending) end(error);
           appends.clear();
         }
       }
+      if (name === "DESTROYING") {
+        const cancelled = { outcome: "cancelled", reason: "hls-destroyed" };
+        waitTrace.failManifestParses(cancelled);
+        for (const end of remuxes.values()) end(cancelled);
+        remuxes.clear();
+        for (const pending of appends.values()) for (const end of pending) end(cancelled);
+        appends.clear();
+      }
       waitTrace.event(name, { process: name === "MANIFEST_PARSED" ? "B5" : undefined, phase: "event",
         type, segment: data?.frag?.sn, level: data?.frag?.level,
-        tracks: data?.tracks ? Object.keys(data.tracks) : undefined, details: data?.details });
+        tracks: data?.tracks ? Object.keys(data.tracks) : undefined, details: data?.details,
+        parent: data?.parent ?? undefined });
     });
   }
+}
+
+function trackForHlsType(type, parent = null) {
+  return type === "audio" || parent === "audio" ? "audio" : "video";
 }
 
 function processForRequest(path) {

@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Close HLS manifest, init-segment and media-segment request spans only after the response body completes, fails or is cancelled (#ttv-185).
+
 ## 0.64.0
 
 - **New**: Time the subtitle hold that keeps playback readiness closed until the opening track is read (#ttv-185).
