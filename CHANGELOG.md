@@ -1,4 +1,4 @@
-## Unreleased
+## 0.64.7
 
 - **Fix**: End seek presentation timing at the first advancing frame, not a paused target frame (#ttv-185).
 
