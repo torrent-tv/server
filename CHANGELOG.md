@@ -1,4 +1,4 @@
-## Unreleased
+## 0.63.0
 
 - **New**: Log elapsed time from the original action to the first advancing frame with decoded required audio (#ttv-185).
 
