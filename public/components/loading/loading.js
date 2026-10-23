@@ -4170,6 +4170,7 @@ export class Loading extends StateDerivedView {
    * @returns {Promise<import("../../domain/proxy-transport.js").ProxyTransport>}
    */
   async #connectTransport(record) {
+    const traceContext = waitTrace.contextForOperation("A2");
     const onConnecting = (proxyName) => {
       record.announced = proxyName;
       for (const listener of record.listeners) {
@@ -4211,18 +4212,29 @@ export class Loading extends StateDerivedView {
         publicOnlyError instanceof Error && typeof publicOnlyError.lanProbeUrl === "string"
           ? publicOnlyError.lanProbeUrl
           : null;
-      this.#logEvt(`public-only connect failed (${publicOnlyError?.message ?? publicOnlyError}); trying local path`);
-      await this.#ensureLocalNetworkPermission(lanProbeUrl);
-      this.#throwIfCancelled();
-      this.#throwIfAbandoned(record);
-      // Attempt 2: all addresses, permission (when the browser has such a
-      // mechanism) obtained above.
-      proxy = await this.#proxySelector.chooseBestProxy({
-        allowPrivateCandidates: true,
-        onConnecting,
-        infoHash: this.#currentInfoHash(),
-        onlyIds: this.#restrictProxiesTo
-      });
+      const endLocalRetry = waitTrace.open("A2.4.local-network-retry", {
+        process: "A2.4", proxyName: record.announced ?? null,
+        publicOnlyError: String(publicOnlyError?.message ?? publicOnlyError)
+      }, traceContext);
+      try {
+        this.#logEvt(`public-only connect failed (${publicOnlyError?.message ?? publicOnlyError}); trying local path`);
+        await this.#ensureLocalNetworkPermission(lanProbeUrl, traceContext);
+        this.#throwIfCancelled();
+        this.#throwIfAbandoned(record);
+        // Attempt 2: all addresses, permission (when the browser has such a
+        // mechanism) obtained above.
+        proxy = await this.#proxySelector.chooseBestProxy({
+          allowPrivateCandidates: true,
+          onConnecting,
+          infoHash: this.#currentInfoHash(),
+          onlyIds: this.#restrictProxiesTo
+        });
+        endLocalRetry({ outcome: "connected" });
+      } catch (error) {
+        endLocalRetry({ outcome: error?.name === "AbortError" ? "cancelled" : "error",
+          error: String(error?.message ?? error) });
+        throw error;
+      }
     }
     // Adopting now would hand a live proxy to a component that has torn its
     // own down, so the connection is closed rather than left running.
@@ -4335,10 +4347,12 @@ export class Loading extends StateDerivedView {
    * @param {string | null} lanProbeUrl - `http://<proxy-lan-ip>:<port>/healthz`, when known.
    * @returns {Promise<void>}
    */
-  async #ensureLocalNetworkPermission(lanProbeUrl) {
+  async #ensureLocalNetworkPermission(lanProbeUrl, traceContext) {
     for (;;) {
       this.#throwIfCancelled();
-      const state = await queryLocalNetworkPermission();
+      const state = await waitTrace.run("A2.4.1.query-local-network-permission",
+        () => queryLocalNetworkPermission(), { process: "A2.4.1", traceContext });
+      waitTrace.event("A2.4.permission-state", { process: "A2.4.1", state }, traceContext);
       if (state === "unsupported" || state === "granted") {
         return;
       }
@@ -4348,16 +4362,24 @@ export class Loading extends StateDerivedView {
           // attempt itself will succeed or fail on its own.
           return;
         }
-        this.setStatus(Loading.MESSAGES.lanPermissionExplainer);
-        await this.#waitForActionClick(Loading.MESSAGES.lanAllowButton);
+        await waitTrace.run("A2.4.2.show-local-network-permission-explainer", () =>
+          this.setStatus(Loading.MESSAGES.lanPermissionExplainer),
+        { process: "A2.4.2", traceContext });
+        await waitTrace.run("A2.4.3.wait-for-local-network-allow-click", () =>
+          this.#waitForActionClick(Loading.MESSAGES.lanAllowButton),
+        { process: "A2.4.3", traceContext });
         this.#throwIfCancelled();
-        this.setStatus(Loading.MESSAGES.lanPermissionWaiting);
-        await probeLocalNetwork(lanProbeUrl);
+        await waitTrace.run("A2.4.4.request-local-network-permission", async () => {
+          this.setStatus(Loading.MESSAGES.lanPermissionWaiting);
+          return probeLocalNetwork(lanProbeUrl);
+        }, { process: "A2.4.4", traceContext });
         continue; // re-check the permission state
       }
       // denied — the browser will not ask again; guide to the site settings.
-      this.setStatus(Loading.MESSAGES.lanPermissionDenied);
-      await this.#waitForActionClick(Loading.MESSAGES.lanCheckAgainButton);
+      await waitTrace.run("A2.4.5.wait-for-local-network-permission-check-again", async () => {
+        this.setStatus(Loading.MESSAGES.lanPermissionDenied);
+        return this.#waitForActionClick(Loading.MESSAGES.lanCheckAgainButton);
+      }, { process: "A2.4.5", traceContext });
     }
   }
 
