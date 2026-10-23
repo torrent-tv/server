@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Record timed steps while requesting local-network permission during proxy connection retry (#ttv-185).
+
 ## 0.66.4
 
 - **Fix**: Record the media-link probe duration when transport setup finishes before a playback wait starts (#ttv-185).
@@ -1159,8 +1163,4 @@ Total output lines: 1858
 
 - **New**: WebRTC signalling server — replaced direct HTTP proxy registration with a WebSocket tunnel endpoint. The server brokers SDP offer/answer and ICE candidates between browser and proxy; all video data flows directly over the WebRTC data channel.
 - **New**: `npm run patch / minor / major` scripts — bump the package version, build and push a versioned Docker image (`ghcr.io/torrent-tv/server:<version>` + `:latest`), and push git tags in one command.
-
-## Unreleased
-
-- **New**: Record timed steps while requesting local-network permission during proxy connection retry (#ttv-185).
 
