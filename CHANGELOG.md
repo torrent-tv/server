@@ -4,6 +4,8 @@
 
 ## 0.65.0
 
+- **New**: Log atomic browser actions and timer/event waits inside the initial prebuffer gate and seek command/readiness path (#ttv-185).
+- **Fix**: Include the data-channel request ID in every `[dc-load]` timing line so browser transfer spans join to proxy request spans (#ttv-185).
 - **New**: Measure the seek interval from `playing` to the first advancing frame separately from the full seek-to-frame interval (#ttv-185).
 
 ## 0.64.7

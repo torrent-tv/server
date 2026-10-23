@@ -5,7 +5,8 @@ import { WebRtcProxy } from "../public/domain/webrtc-proxy.js";
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function setup(t) {
-  t.mock.method(console, "debug", () => {});
+  const debugLines = [];
+  t.mock.method(console, "debug", (...values) => debugLines.push(values.join(" ")));
   const peers = [];
   const sockets = [];
   class Channel extends EventTarget {
@@ -76,7 +77,7 @@ function setup(t) {
     proxy.close();
     for (const [key, value] of Object.entries(previousGlobals)) globalThis[key] = value;
   });
-  return { proxy, peers, sockets };
+  return { proxy, peers, sockets, debugLines };
 }
 
 async function connect(t, separateControl = true) {
@@ -112,7 +113,7 @@ async function connect(t, separateControl = true) {
 }
 
 test("control answers arrive while media is outstanding, using the same proxy and distinct peers", async t => {
-  const { proxy, media, control, peers, sockets } = await connect(t);
+  const { proxy, media, control, peers, sockets, debugLines } = await connect(t);
   assert.equal(peers.length, 2);
   const offers = sockets.flatMap(socket => socket.sent).filter(message => message.type === "offer");
   assert.ok(offers.every(offer => offer.proxyId === "fake-proxy" && !offer.sdp.includes("sctp-init")));
@@ -130,6 +131,16 @@ test("control answers arrive while media is outstanding, using the same proxy an
   assert.equal(await (await forecast).text(), "ok");
   media.answer(media.sent.at(-1).requestId);
   assert.equal(await (await film).text(), "ok");
+  assert.ok(debugLines.some(line => line.includes(`[dc-load] /transcode/output/seg0.m4s requestId=${media.sent.at(-1).requestId}`)));
+  const progress = proxy.fetch("/api/transcode-sessions/session-1/progress");
+  await flush();
+  const progressRequest = [...media.sent, ...control.sent].find(message =>
+    message.type === "request" && message.path === "/api/transcode-sessions/session-1/progress");
+  assert.ok(progressRequest);
+  (media.sent.includes(progressRequest) ? media : control).answer(progressRequest.requestId);
+  assert.equal(await (await progress).text(), "ok");
+  assert.ok(debugLines.some(line => line.includes(`[dc-load] /api/transcode-sessions/session-1/progress requestId=${progressRequest.requestId}`)),
+    debugLines.join("\n"));
 });
 
 test("control loss rejects its requests, preserves media and reconnects without replaying actions", async t => {
