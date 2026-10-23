@@ -8,7 +8,8 @@ export class WaitTrace {
         console.debug(`[wait-trace] ${JSON.stringify(value)}`);
       }
     } } = {}) {
-    Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map() });
+    Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0, hlsSequence: 0,
+      manifestParseEnds: new Map(), hlsObservers: new Map() });
   }
 
   begin(kind, startedAt = this.now()) {
@@ -23,6 +24,7 @@ export class WaitTrace {
     if (!this.enabled) return;
     if (!this.current || (this.current.fileIndex === null && !originalOpen) ||
       (this.current.fileIndex !== null && this.current.fileIndex !== fileIndex)) this.begin("file-choice", startedAt);
+    if (this.current.attempt > 0) this.closeHlsObservers({ outcome: "cancelled", reason: "attempt-changed" });
     this.current.fileIndex = fileIndex;
     this.current.attempt++;
     this.event("attempt", { fileIndex });
@@ -105,6 +107,18 @@ export class WaitTrace {
     }
   }
 
+  registerHlsObserver(hlsInstance, closePending) {
+    this.hlsObservers.set(hlsInstance, closePending);
+  }
+
+  removeHlsObserver(hlsInstance) {
+    this.hlsObservers.delete(hlsInstance);
+  }
+
+  closeHlsObservers(result = {}) {
+    for (const closePending of this.hlsObservers.values()) closePending(result);
+  }
+
   request(path, method, processOverride = null) {
     const process = processOverride ?? processForRequest(path);
     const end = this.open("proxy-response", { path, method, process });
@@ -130,7 +144,7 @@ export class WaitTrace {
 
   finish(outcome, fields = {}) {
     if (!this.current) return;
-    this.failManifestParses({ outcome: outcome === "advancing-with-decoded-audio"
+    this.closeHlsObservers({ outcome: outcome === "advancing-with-decoded-audio"
       ? "active-at-wait-end" : outcome, reason: "wait-ended" });
     const firstAdvancingFrameElapsedMs = Number.isFinite(fields.firstAdvancingFrameAt)
       ? fields.firstAdvancingFrameAt - this.current.startedAt : null;
@@ -165,6 +179,14 @@ export function observeHlsWait(instance, Events) {
   const remuxes = new Map();
   const codecReadyAt = new Map();
   const hlsInstance = `hls-${++waitTrace.hlsSequence}`;
+  const closePending = result => {
+    waitTrace.failManifestParses(result, hlsInstance);
+    for (const pending of remuxes.values()) for (const end of pending) end(result);
+    remuxes.clear();
+    for (const pending of appends.values()) for (const end of pending) end(result);
+    appends.clear();
+  };
+  waitTrace.registerHlsObserver(hlsInstance, closePending);
   for (const name of ["DESTROYING", "MANIFEST_LOADING", "MANIFEST_LOADED", "MANIFEST_PARSED", "LEVEL_LOADING", "LEVEL_LOADED",
     "AUDIO_TRACK_LOADING", "AUDIO_TRACK_LOADED", "FRAG_LOADING", "FRAG_LOADED",
     "FRAG_PARSING_INIT_SEGMENT", "FRAG_PARSED", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING", "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"]) {
@@ -224,21 +246,12 @@ export function observeHlsWait(instance, Events) {
       }
       if (name === "ERROR") {
         const error = { outcome: "error", details: data?.details ?? null, fatal: data?.fatal ?? false };
-        if (data?.fatal) {
-          waitTrace.failManifestParses(error, hlsInstance);
-          for (const pending of remuxes.values()) for (const end of pending) end(error);
-          remuxes.clear();
-          for (const pending of appends.values()) for (const end of pending) end(error);
-          appends.clear();
-        }
+        if (data?.fatal) closePending(error);
       }
       if (name === "DESTROYING") {
         const cancelled = { outcome: "cancelled", reason: "hls-destroyed" };
-        waitTrace.failManifestParses(cancelled, hlsInstance);
-        for (const pending of remuxes.values()) for (const end of pending) end(cancelled);
-        remuxes.clear();
-        for (const pending of appends.values()) for (const end of pending) end(cancelled);
-        appends.clear();
+        closePending(cancelled);
+        waitTrace.removeHlsObserver(hlsInstance);
       }
       waitTrace.event(name, { process: name === "MANIFEST_PARSED" ? "B5" : undefined, phase: "event", hlsInstance,
         type, segment: data?.frag?.sn, level: data?.frag?.level,
