@@ -220,6 +220,9 @@ test("the edges that lead back to their own state are deliberate", () => {
     [
       // Intent changes update extended state without completing preparation.
       `${APP_STATE.ADVANCING} + ${APP_EVENT.RESUMED}`,
+      // A listed source has no stream yet, but the viewer may still change intent.
+      `${APP_STATE.CHOOSING_FILE} + ${APP_EVENT.PAUSED_BY_VIEWER}`,
+      `${APP_STATE.CHOOSING_FILE} + ${APP_EVENT.RESUMED}`,
       `${APP_STATE.OPENING} + ${APP_EVENT.PAUSED_BY_VIEWER}`,
       `${APP_STATE.OPENING} + ${APP_EVENT.RESUMED}`,
       `${APP_STATE.PAUSED} + ${APP_EVENT.PAUSED_BY_VIEWER}`,
@@ -277,6 +280,14 @@ test("waiting for a cold open and waiting for a seek look identical to the viewe
       `${output.name} differs between the two waits, so one interface cannot serve both`
     );
   }
+});
+
+test("a multi-file source waits for a file choice before becoming a stream", () => {
+  assert.equal(nextState(APP_STATE.OPENING, APP_EVENT.FILE_CHOICE_READY), APP_STATE.CHOOSING_FILE);
+  assert.equal(nextState(APP_STATE.CHOOSING_FILE, APP_EVENT.STREAM_READY), null);
+  assert.equal(nextState(APP_STATE.CHOOSING_FILE, APP_EVENT.SOURCE_OPENED), APP_STATE.OPENING);
+  assert.equal(isWaiting(APP_STATE.CHOOSING_FILE), false);
+  assert.equal(mediaIntentForState(APP_STATE.CHOOSING_FILE), MEDIA_INTENT.PAUSE);
 });
 
 // -------------------------------------------------------------------- outputs

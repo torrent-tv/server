@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatWaitingText } from "../public/domain/waiting-text.js";
+import { formatWaitingText, sourceFileIndexesForOperations } from "../public/domain/waiting-text.js";
 
 test("unavailable measurements are identified without an estimating placeholder", () => {
   const text = formatWaitingText({ readinessReason: "encode-rate-unavailable" });
@@ -13,17 +13,37 @@ test("a zero estimate remains visible only as a measured duration", () => {
   assert.equal(formatWaitingText({ etaSeconds: 0 }).split("\n").at(-1), "0 seconds until playback");
 });
 
-test("shows download and processing facts in one details row and total playback time", () => {
-  const text = formatWaitingText({ stage: "Encoding", peers: 22, seeders: 12,
+test("shows supply, configured output paths and total playback time", () => {
+  const text = formatWaitingText({ stage: "Preparing playback", peers: 22, seeders: 12,
     downloadBytesPerSecond: 12 * 1024 * 1024, remainingBytes: 15 * 1024 * 1024,
     downloadedBytes: 15 * 1024 * 1024, neededBytes: 30 * 1024 * 1024,
     operations: [{ track: "audio", operation: "encode", inputCodec: "ac3", outputCodec: "aac", speed: 2 }],
     etaSeconds: 38 });
   const rows = text.split("\n");
   assert.equal(rows.length, 3);
-  assert.equal(rows[0], "Encoding");
-  assert.match(rows[1], /peers: 22.*tracker seeders: 12.*12.0 MB\/s.*15.0 MB of 30.0 MB needed.*ac3 to aac/);
+  assert.equal(rows[0], "Preparing playback");
+  assert.match(rows[1], /peers: 22.*tracker seeders: 12.*12.0 MB\/s.*15.0 MB of 30.0 MB needed.*Audio output path: encode ac3 to aac/);
+  assert.doesNotMatch(rows[1], /2\.0x realtime/);
   assert.equal(rows[2], "38.00 seconds until playback");
+});
+
+test("an output mode is not described as active work", () => {
+  const text = formatWaitingText({ operations: [
+    { track: "video", operation: "copy", inputCodec: "h264", speed: 12 },
+    { track: "audio", operation: "encode", inputCodec: "ac3", outputCodec: "aac", speed: 2 }
+  ] });
+  assert.match(text, /Video output path: copy h264/);
+  assert.match(text, /Audio output path: encode ac3 to aac/);
+  assert.doesNotMatch(text, /Copying|Encoding|12\.0x|2\.0x/);
+});
+
+test("source file indexes are unique and unknown scope remains unknown", () => {
+  assert.deepEqual(sourceFileIndexesForOperations([
+    { sourceFileIndexes: [2, 3] },
+    { sourceFileIndexes: [3] }
+  ]), [2, 3]);
+  assert.equal(sourceFileIndexesForOperations([{ sourceFileIndexes: [2] }, {}]), null);
+  assert.equal(sourceFileIndexesForOperations([{ sourceFileIndexes: [] }]), null);
 });
 
 test("formats wait estimates with precision that keeps display rounding within five percent", () => {

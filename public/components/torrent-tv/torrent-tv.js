@@ -198,6 +198,10 @@ class TorrentTV {
     this.#send(APP_EVENT.STREAM_READY);
   };
 
+  #onFileChoiceReady = () => {
+    this.#send(APP_EVENT.FILE_CHOICE_READY);
+  };
+
   /** @param {CustomEvent} event */
   #onPlaybackFailed = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
@@ -269,6 +273,7 @@ class TorrentTV {
     document.addEventListener(TORRENT_EVENTS.MAGNET_READY, this.#onMagnetReady);
     document.addEventListener(PLAYER_EVENTS.SET_MEDIA_FILES, this.#onSetMediaFiles);
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onLoadingShow);
+    document.addEventListener(LOADING_EVENTS.FILE_CHOICE_READY, this.#onFileChoiceReady);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_READY, this.#onPlaybackReady);
     document.addEventListener(LOADING_EVENTS.PLAYBACK_FAILED, this.#onPlaybackFailed);
     document.addEventListener(APP_EVENTS.RETRY_PLAYBACK, this.#onRetryPlayback);

@@ -213,7 +213,9 @@ export const APP_EVENT = Object.freeze({
    * The viewer asked to choose a different file of the source that is already
    * open — "Back to episodes" on the error screen.
    */
-  FILE_CHOICE_REQUESTED: "FILE_CHOICE_REQUESTED"
+  FILE_CHOICE_REQUESTED: "FILE_CHOICE_REQUESTED",
+  /** The source is listed and the viewer must choose which file to open. */
+  FILE_CHOICE_READY: "FILE_CHOICE_READY"
 });
 
 /**
@@ -263,7 +265,9 @@ const TRANSITIONS = deepFreeze({
 
   [APP_STATE.CHOOSING_FILE]: {
     // Choosing one starts building it.
-    [APP_EVENT.SOURCE_OPENED]: APP_STATE.OPENING
+    [APP_EVENT.SOURCE_OPENED]: APP_STATE.OPENING,
+    [APP_EVENT.PAUSED_BY_VIEWER]: APP_STATE.CHOOSING_FILE,
+    [APP_EVENT.RESUMED]: APP_STATE.CHOOSING_FILE
   },
 
   [APP_STATE.OPENING]: {
@@ -272,7 +276,8 @@ const TRANSITIONS = deepFreeze({
     // A rebuild that finishes while the viewer is paused must land in PAUSED,
     // not start playing at them.
     [APP_EVENT.STREAM_READY]: (context) =>
-      context.viewerWantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING
+      context.viewerWantsPlayback === false ? APP_STATE.PAUSED : APP_STATE.ADVANCING,
+    [APP_EVENT.FILE_CHOICE_READY]: APP_STATE.CHOOSING_FILE
   },
 
   [APP_STATE.ADVANCING]: {

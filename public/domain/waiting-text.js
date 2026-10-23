@@ -76,6 +76,32 @@ function isNumber(value) {
 }
 
 /**
+ * Unique torrent file indexes required by the current operations, or null when
+ * an older proxy did not identify every operation's source files.
+ *
+ * @param {unknown} operations
+ * @returns {number[] | null}
+ */
+export function sourceFileIndexesForOperations(operations) {
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return null;
+  }
+  const indexes = new Set();
+  for (const operation of operations) {
+    if (!Array.isArray(operation?.sourceFileIndexes)) {
+      return null;
+    }
+    for (const fileIndex of operation.sourceFileIndexes) {
+      if (!Number.isSafeInteger(fileIndex) || fileIndex < 0) {
+        return null;
+      }
+      indexes.add(fileIndex);
+    }
+  }
+  return indexes.size > 0 ? [...indexes] : null;
+}
+
+/**
  * A byte count in the largest unit that keeps it readable.
  *
  * @param {number} bytes
@@ -208,14 +234,13 @@ function describeEncodingRun(run) {
 export function formatWaitingText(measurements = {}) {
   const operations = Array.isArray(measurements.operations) ? measurements.operations : [];
   const processing = operations.map((operation) => {
-    const action = operation.operation === "copy" ? "Copying" : "Encoding";
+    const action = operation.operation === "copy" ? "copy" : "encode";
     const codec = operation.inputCodec ? ` ${operation.inputCodec}` : "";
     const target = operation.outputCodec ? ` to ${operation.outputCodec}` : "";
-    const speed = isNumber(operation.speed) && operation.speed >= 0 ? `, ${operation.speed.toFixed(1)}x realtime` : "";
-    return `${action} ${operation.track}${codec}${target}${speed}`;
+    const track = operation.track === "audio" ? "Audio" : "Video";
+    return `${track} output path: ${action}${codec}${target}`;
   });
-  const stage = measurements.stage || (operations.some(({ operation }) => operation === "encode") ? "Encoding" :
-    operations.length > 0 ? "Copying media" : isNumber(measurements.remainingBytes) && measurements.remainingBytes > 0 ?
+  const stage = measurements.stage || (isNumber(measurements.remainingBytes) && measurements.remainingBytes > 0 ?
       "Downloading torrent" : "Preparing playback");
   const details = [];
   const supply = supplyLine(measurements);
@@ -240,7 +265,7 @@ export function formatWaitingText(measurements = {}) {
   const unavailable = new Map([
     ["forecast-not-received", "Playback measurements have not arrived"],
     ["incomplete-state", "Media duration or required tracks are not available"],
-    ["separate-audio-not-observed", "The selected audio track is not available"],
+    ["separate-audio-not-observed", "The selected audio track has not reached the playhead"],
     ["timeline-unavailable", "Media segment times are not available"],
     ["link-rate-unavailable", "The client connection has not been measured"],
     ["segment-size-unavailable", "Output segment sizes are not available"],
