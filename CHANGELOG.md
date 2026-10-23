@@ -1,11 +1,11 @@
-## 0.64.2
-
-- **Chore**: Update dependencies: 1 package(s) changed in the lock file.
-
 ## Unreleased
 
 - **Fix**: End HLS fragment-remux spans on the matching parsed-fragment event, independently of the earlier codec-availability event (#ttv-185).
 - **Fix**: Pair manifest parse spans within the HLS instance that loaded each manifest (#ttv-185).
+
+## 0.64.2
+
+- **Chore**: Update dependencies: 1 package(s) changed in the lock file.
 
 ## 0.64.1
 
