@@ -105,6 +105,7 @@ const REQUEST_BUFFERED_HIGH_BYTES = 1 * 1024 * 1024; // pause sending above this
 // The answers a held picture waits for: a seek's acknowledgement and the
 // start forecast. Each is logged on arrival with its request id.
 const HELD_ANSWER_PATH = /\/api\/transcode-sessions\/[^/?]+\/(?:progress|seek)(?:\?|$)/u;
+const MEDIA_TRANSFER_PATH = /\/transcode\//u;
 const REQUEST_BUFFERED_LOW_BYTES = 256 * 1024; // resume once drained to this
 const REQUEST_BUFFER_DRAIN_TIMEOUT_MS = 5_000; // fallback so a missed drain event cannot deadlock
 
@@ -1092,12 +1093,20 @@ export class WebRtcProxy {
       if (msg.done) {
         this.#pending.delete(msg.requestId);
         const finishedAt = performance.now();
+        const waitMs = typeof entry.startedAt === "number"
+          ? (entry.firstByteAt ?? finishedAt) - entry.startedAt
+          : null;
+        const transferMs = typeof entry.startedAt === "number"
+          ? finishedAt - (entry.firstByteAt ?? finishedAt)
+          : null;
+        const totalBytes = entry.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        this.#logDataChannelLoad(entry, msg.requestId, totalBytes, waitMs, transferMs);
         // Split the same way as the binary path. Without it this path answered
         // "no timing", and the loader's fallback is the whole round trip — the
         // figure that counts an encoder's wait as the viewer's link speed.
         entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks, {
-          waitMs: typeof entry.startedAt === "number" ? (entry.firstByteAt ?? finishedAt) - entry.startedAt : null,
-          transferMs: typeof entry.startedAt === "number" ? finishedAt - (entry.firstByteAt ?? finishedAt) : null
+          waitMs,
+          transferMs
         }));
       }
       return;
@@ -1145,24 +1154,21 @@ export class WebRtcProxy {
       const transferMs = typeof entry.startedAt === "number"
         ? finishedAt - (entry.firstByteAt ?? finishedAt)
         : null;
-      // Reported for real payloads, and for the two answers a held picture
-      // waits for: the seek's acknowledgement and the forecast. Their time
-      // here, read beside the proxy's `sent` line of the same request id, says
-      // how long each answer stood in the connection (torrent-tv/meta#178).
-      if (waitMs !== null && transferMs !== null && HELD_ANSWER_PATH.test(entry.path ?? "")) {
-        console.debug(
-          `[dc-recv] ${entry.path} requestId=${requestId} bytes=${totalBytes} ` +
-            `waitMs=${waitMs.toFixed(0)} transferMs=${transferMs.toFixed(0)}`
-        );
-      } else if (totalBytes > 65536 && waitMs !== null && transferMs !== null) {
-        const mbps = transferMs > 0 ? (totalBytes * 8) / (transferMs * 1000) : 0;
-        console.debug(
-          `[dc-recv] ${entry.path ?? "?"} bytes=${totalBytes} ` +
-            `waitMs=${waitMs.toFixed(0)} transferMs=${transferMs.toFixed(0)} ` +
-            `chunks=${entry.chunks.length} rate=${mbps.toFixed(1)}Mbps`
-        );
-      }
+      this.#logDataChannelLoad(entry, requestId, totalBytes, waitMs, transferMs);
       entry.resolve(this.#buildResponse(entry.status, entry.headers, entry.chunks, { waitMs, transferMs }));
+    }
+  }
+
+  #logDataChannelLoad(entry, requestId, totalBytes, waitMs, transferMs) {
+    if (waitMs === null || transferMs === null) return;
+    if (HELD_ANSWER_PATH.test(entry.path ?? "") || MEDIA_TRANSFER_PATH.test(entry.path ?? "")) {
+      console.debug(`[dc-load] ${entry.path} requestId=${requestId} bytes=${totalBytes} ` +
+        `waitMs=${waitMs.toFixed(0)} transferMs=${transferMs.toFixed(0)}`);
+    } else if (totalBytes > 65536) {
+      const mbps = transferMs > 0 ? (totalBytes * 8) / (transferMs * 1000) : 0;
+      console.debug(`[dc-load] ${entry.path ?? "?"} requestId=${requestId} bytes=${totalBytes} ` +
+        `waitMs=${waitMs.toFixed(0)} transferMs=${transferMs.toFixed(0)} ` +
+        `chunks=${entry.chunks.length} rate=${mbps.toFixed(1)}Mbps`);
     }
   }
 
@@ -1259,7 +1265,7 @@ export class WebRtcProxy {
       chunks: [],
       status: 200,
       headers: {},
-      // For the [dc-recv] timing line: when the request left, and what it was
+      // For the [dc-load] timing line: when the request left, and what it was
       // for. `firstByteAt` is filled when the first body byte arrives.
       startedAt: performance.now(),
       path,
