@@ -560,26 +560,36 @@ export class Loading extends StateDerivedView {
         this.#seekIntentTraceEnd = null;
       }
       this.#seekReportTimer = null;
-      this.#pendingCurrentTime = this.#isProcessing && !this.#hlsPlayer.isActive() ? position : null;
-      this.#seekEventPosition = position;
-      this.#writeHistory("replace", { ...readUrlState(location.search), currentTime: position });
-      this.#waitingModel.reset();
+      waitTrace.run("S1.1.record-seek-target", () => {
+        this.#pendingCurrentTime = this.#isProcessing && !this.#hlsPlayer.isActive() ? position : null;
+        this.#seekEventPosition = position;
+      }, { process: "S1.1", targetSeconds: position });
+      waitTrace.run("S1.2.write-seek-position-to-history", () =>
+        this.#writeHistory("replace", { ...readUrlState(location.search), currentTime: position }),
+      { process: "S1.2", targetSeconds: position });
+      waitTrace.run("S1.3.reset-wait-state", () => this.#waitingModel.reset(),
+        { process: "S1.3", targetSeconds: position });
       this.#logEvt(`seek intent → ${position.toFixed(1)}s`);
       const epoch = this.#playbackEpoch;
       // Held from the seek itself: the frame arriving must not start the picture
       // before the forecast for this position has been read.
-      const hold = this.#playbackLive ? this.#holds.beginSeek() : null;
+      const hold = waitTrace.run("S1.4.acquire-seek-hold",
+        () => this.#playbackLive ? this.#holds.beginSeek() : null,
+        { process: "S1.4", targetSeconds: position });
       try {
         let reportedAt = Number.POSITIVE_INFINITY;
         await this.#seekPosition.move(position, {
-          stopLoad: () => this.#hlsPlayer.stopLoad(),
+          stopLoad: () => waitTrace.run("S1.5.stop-hls-loading", () => this.#hlsPlayer.stopLoad(),
+            { process: "S1.5", targetSeconds: position }),
           reportSeek: async (target) => {
             const answer = await waitTrace.run("B4.position-restatement", () => this.#session.reportSeek(target),
               { process: "B4" });
             reportedAt = performance.now();
             return answer;
           },
-          startLoad: (target) => this.#hlsPlayer.seekTo(target, this.#videoElement)
+          startLoad: (target) => waitTrace.run("S1.6.restart-hls-at-target",
+            () => this.#hlsPlayer.seekTo(target, this.#videoElement),
+            { process: "S1.6", targetSeconds: target })
         });
         if (hold !== null) {
           if (epoch === this.#playbackEpoch && Number.isFinite(reportedAt)) {
@@ -1340,7 +1350,8 @@ export class Loading extends StateDerivedView {
       let unread = false;
       try {
         requestedAt = performance.now();
-        progress = await this.#session.fetchActiveTranscodeProgress();
+        progress = await waitTrace.run("S2.1.read-proxy-readiness", () =>
+          this.#session.fetchActiveTranscodeProgress(), { process: "S2.1" });
       } catch (error) {
         if (error?.name === "AbortError") break;
         unread = true;
@@ -1356,21 +1367,27 @@ export class Loading extends StateDerivedView {
       }
       if (!current()) break;
       if (unread) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await waitTrace.run("S2.6.wait-before-readiness-retry",
+          () => new Promise(resolve => setTimeout(resolve, 1500)), { process: "S2.6" });
         continue;
       }
       const readiness = progress?.playbackReadiness;
-      const answer = seekHoldAnswer({ readiness, requestedAt, reportedAt });
+      const answer = waitTrace.run("S2.2.evaluate-readiness", () =>
+        seekHoldAnswer({ readiness, requestedAt, reportedAt }),
+      { process: "S2.2" });
       if (answer === "stale") continue;
+      const endReadinessState = waitTrace.open("S2.3.read-buffer-and-estimate", { process: "S2.3" });
       const video = this.#videoElement;
       const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
       const waitEstimate = waitEstimateForProgress(progress);
-      this.#waitingModel.update({
+      endReadinessState({ outcome: "read", bufferedAhead: ahead, hasWaitEstimate: waitEstimate !== null });
+      waitTrace.run("S2.4.update-browser-readiness", () => this.#waitingModel.update({
         waitEstimate,
         playbackReadiness: readiness ?? null,
         bufferedAhead: ahead
-      });
-      this.#publishTranscodeMeasurements(progress);
+      }), { process: "S2.4" });
+      waitTrace.run("S2.5.publish-transcode-readings", () => this.#publishTranscodeMeasurements(progress),
+        { process: "S2.5" });
       if (answer === "release") {
         this.#logEvt(readiness?.version === 1
           ? `seek hold released: forecast ready ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s`
@@ -1388,9 +1405,11 @@ export class Loading extends StateDerivedView {
       // when the element says the position's media has arrived, which is what
       // the forecast was waiting for. Back to 30 s in r69 the media arrived at
       // 22.01 and the hold asked again only at 23.52 (torrent-tv/meta#178).
-      await this.#untilMediaArrivesOr(nextSeekHoldAsk(readiness, 1500));
+      await waitTrace.run("S2.6.wait-for-media-or-readiness-poll",
+        () => this.#untilMediaArrivesOr(nextSeekHoldAsk(readiness, 1500)), { process: "S2.6" });
     }
-    this.#holds.releaseSeek(seq);
+    waitTrace.run("S2.7.release-seek-hold", () => this.#holds.releaseSeek(seq),
+      { process: "S2.7", outcome: current() ? "released" : "cancelled" });
   }
 
   /**
@@ -5662,7 +5681,8 @@ export class Loading extends StateDerivedView {
         aheadAtFetch = aheadNow;
         try {
           const requestedAt = performance.now();
-          cachedProgress = await this.#session.fetchActiveTranscodeProgress();
+          cachedProgress = await waitTrace.run("C1.1.read-proxy-readiness", () =>
+            this.#session.fetchActiveTranscodeProgress(), { process: "C1.1" });
           cachedProgressRequestedAt = requestedAt;
         } catch (error) {
           // The estimate and the quality menu are built from these readings; a
@@ -5690,6 +5710,7 @@ export class Loading extends StateDerivedView {
         throw error;
       }
       // The published reading, not a fresh one of our own — see the listener.
+      const endReadinessEvaluation = waitTrace.open("C1.2.evaluate-readiness", { process: "C1.2" });
       const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
       const proxyReadiness = cachedProgress?.playbackReadiness;
       if (proxyReadiness?.reason === "media-continuity-unavailable") {
@@ -5720,13 +5741,15 @@ export class Loading extends StateDerivedView {
       const readiness = holdsForSubtitles
         ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
         : proxyReadiness;
+      endReadinessEvaluation({ outcome: "evaluated", ready: readiness?.ready ?? null,
+        reason: readiness?.reason ?? null, bufferedAhead: ahead });
       waitTrace.event("C1.gate", { ready: readiness?.ready, reason: readiness?.reason,
         subtitleHold, bufferedAhead: ahead });
-      const unified = this.#waitingModel.update({
+      const unified = waitTrace.run("C1.3.update-browser-readiness", () => this.#waitingModel.update({
         ...(waitEstimateForProgress(cachedProgress) ? { waitEstimate: waitEstimateForProgress(cachedProgress) } : {}),
         playbackReadiness: readiness,
         bufferedAhead: ahead
-      });
+      }), { process: "C1.3" });
       if (readiness?.version === 1 && readiness.ready === true) {
         const subtitles = readiness.subtitles;
         this.#logEvt(
@@ -5762,7 +5785,8 @@ export class Loading extends StateDerivedView {
           lastGrowthAt = Date.now();
           const end = bufferedEndSeconds(videoElement);
           this.#logEvt(`prebuffer stood still at ${ahead.toFixed(1)}s — pointing the loader at ${end.toFixed(1)}s`);
-          this.#hlsPlayer.resumeLoadAt(end);
+          waitTrace.run("C1.4.resume-loader-at-buffered-end",
+            () => this.#hlsPlayer.resumeLoadAt(end), { process: "C1.4", bufferedEndSeconds: end });
         }
       } else {
         lastAhead = ahead;
@@ -5778,15 +5802,16 @@ export class Loading extends StateDerivedView {
       // these facts. This used to call the formatter directly, which is how a
       // component that no longer talks to the overlay went on computing text
       // nobody read.
-      document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
+      waitTrace.run("C1.5.publish-current-readings", () => document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
         detail: {
           downloadStats: withProgressWaitEstimate(this.#lastDownloadStats, cachedProgress),
           transcodeProgress: cachedProgress,
           playbackReadiness: readiness ?? null,
           bufferLimitSeconds: this.#browserBufferLimitSeconds
         }
-      }));
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      })), { process: "C1.5" });
+      await waitTrace.run("C1.6.wait-for-next-gate-check",
+        () => new Promise((resolve) => setTimeout(resolve, 250)), { process: "C1.6" });
     }
   }
 
