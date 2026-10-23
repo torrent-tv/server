@@ -1,4 +1,4 @@
-## Unreleased
+## 0.65.0
 
 - **New**: Measure the seek interval from `playing` to the first advancing frame separately from the full seek-to-frame interval (#ttv-185).
 
