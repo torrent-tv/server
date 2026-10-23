@@ -5711,7 +5711,7 @@ export class Loading extends StateDerivedView {
         throw error;
       }
       // The published reading, not a fresh one of our own — see the listener.
-      const { ahead, startSubtitle, subtitleHold, readiness } = waitTrace.run("C1.2.evaluate-readiness", () => {
+      const { ahead, subtitleHold, readiness } = waitTrace.run("C1.2.evaluate-readiness", () => {
         const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
         const proxyReadiness = cachedProgress?.playbackReadiness;
         if (proxyReadiness?.reason === "media-continuity-unavailable") {
@@ -5739,7 +5739,7 @@ export class Loading extends StateDerivedView {
         const readiness = holdsForSubtitles
           ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
           : proxyReadiness;
-        return { ahead, startSubtitle, subtitleHold, readiness };
+        return { ahead, subtitleHold, readiness };
       }, { process: "C1.2" });
       waitTrace.event("C1.gate", { ready: readiness?.ready, reason: readiness?.reason,
         subtitleHold, bufferedAhead: ahead });
