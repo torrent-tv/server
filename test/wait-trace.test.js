@@ -28,7 +28,7 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   const events = [];
   const listeners = new Map();
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0 });
+    current: null, sequence: 0, hlsSequence: 0 });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
   try {
@@ -36,7 +36,7 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     waitTrace.attempt(0, 10, true);
     const Events = Object.fromEntries(["MANIFEST_LOADING", "MANIFEST_LOADED", "MANIFEST_PARSED", "LEVEL_LOADING", "LEVEL_LOADED",
       "AUDIO_TRACK_LOADING", "AUDIO_TRACK_LOADED", "FRAG_LOADING",
-      "FRAG_LOADED", "FRAG_PARSING_INIT_SEGMENT", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING",
+      "FRAG_LOADED", "FRAG_PARSING_INIT_SEGMENT", "FRAG_PARSED", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING",
       "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"].map(name => [name, name]));
     observeHlsWait(hls, Events);
     fire("MANIFEST_LOADING");
@@ -50,8 +50,11 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     fire("FRAG_LOADED", { type: "main", frag: { sn: 0, level: 0 }, payload: new Uint8Array(4) });
     fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 0 } });
     fire("BUFFER_CODECS", { video: {}, frag: { sn: 0 } });
+    assert.equal(events.filter(event => event.event === "end" && event.process === "B8.v").length, 0);
+    fire("FRAG_PARSED", { id: "main", frag: { sn: 0 } });
     fire("FRAG_PARSING_INIT_SEGMENT", { id: "audio", frag: { sn: 0 } });
     fire("BUFFER_CODECS", { audio: {}, frag: { sn: 0 } });
+    fire("FRAG_PARSED", { id: "audio", frag: { sn: 0 } });
     fire("BUFFER_CREATED", { tracks: { video: {}, audio: {} } });
     fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
     fire("BUFFER_APPENDED", { type: "video", parent: "main", frag: { sn: "initSegment" } });
@@ -71,11 +74,43 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   } finally { Object.assign(waitTrace, saved); }
 });
 
+test("manifest parse spans stay paired with the HLS instance that loaded them", () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  let now = 0;
+  Object.assign(waitTrace, { enabled: true, now: () => now, id: () => "action", emit: event => events.push(event),
+    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map() });
+  const createHls = () => {
+    const listeners = new Map();
+    return { on: (name, handler) => listeners.set(name, handler), fire: name => listeners.get(name)?.(name, {}) };
+  };
+  try {
+    waitTrace.begin("torrent-file");
+    waitTrace.attempt(0, 0, true);
+    const Events = { MANIFEST_LOADED: "MANIFEST_LOADED", MANIFEST_PARSED: "MANIFEST_PARSED" };
+    const first = createHls();
+    const second = createHls();
+    observeHlsWait(first, Events);
+    observeHlsWait(second, Events);
+    now = 10;
+    first.fire("MANIFEST_LOADED");
+    now = 20;
+    second.fire("MANIFEST_LOADED");
+    now = 25;
+    second.fire("MANIFEST_PARSED");
+    now = 40;
+    first.fire("MANIFEST_PARSED");
+
+    const spans = events.filter(event => event.event === "end" && event.name === "B5.manifest-parse");
+    assert.deepEqual(spans.map(({ duration, hlsInstance }) => [duration, hlsInstance]), [[5, "hls-2"], [30, "hls-1"]]);
+  } finally { Object.assign(waitTrace, saved); }
+});
+
 test("HLS request spans include the full response body and identify the media process", async () => {
   const saved = { ...waitTrace };
   const events = [];
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0 });
+    current: null, sequence: 0, hlsSequence: 0 });
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 10, true);
@@ -108,7 +143,7 @@ test("a fatal HLS error closes pending parse, remux and append spans", () => {
   const events = [];
   const listeners = new Map();
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0 });
+    current: null, sequence: 0, hlsSequence: 0 });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
   try {
@@ -130,7 +165,7 @@ test("destroying HLS closes unfinished parse, remux and append spans as cancelle
   const events = [];
   const listeners = new Map();
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0, manifestParseEnds: [] });
+    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map() });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
   try {

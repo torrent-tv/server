@@ -8,7 +8,7 @@ export class WaitTrace {
         console.debug(`[wait-trace] ${JSON.stringify(value)}`);
       }
     } } = {}) {
-    Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0, manifestParseEnds: [] });
+    Object.assign(this, { enabled, now, id, emit, current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map() });
   }
 
   begin(kind, startedAt = this.now()) {
@@ -82,16 +82,27 @@ export class WaitTrace {
     }
   }
 
-  trackManifestParse(end) {
-    if (this.enabled && typeof end === "function") this.manifestParseEnds.push(end);
+  trackManifestParse(end, hlsInstance) {
+    if (!this.enabled || typeof end !== "function") return;
+    const pending = this.manifestParseEnds.get(hlsInstance) ?? [];
+    pending.push(end);
+    this.manifestParseEnds.set(hlsInstance, pending);
   }
 
-  finishManifestParse(result = {}) {
-    this.manifestParseEnds.shift()?.(result);
+  finishManifestParse(result = {}, hlsInstance) {
+    const pending = this.manifestParseEnds.get(hlsInstance);
+    pending?.shift()?.({ ...result, hlsInstance });
+    if (!pending?.length) this.manifestParseEnds.delete(hlsInstance);
   }
 
-  failManifestParses(result = {}) {
-    for (const end of this.manifestParseEnds.splice(0)) end(result);
+  failManifestParses(result = {}, hlsInstance = null) {
+    const entries = hlsInstance === null
+      ? this.manifestParseEnds.entries()
+      : [[hlsInstance, this.manifestParseEnds.get(hlsInstance) ?? []]];
+    for (const [instance, pending] of entries) {
+      for (const end of pending) end({ ...result, hlsInstance: instance });
+      this.manifestParseEnds.delete(instance);
+    }
   }
 
   request(path, method, processOverride = null) {
@@ -153,20 +164,32 @@ export function observeHlsWait(instance, Events) {
   const appends = new Map();
   const remuxes = new Map();
   const codecReadyAt = new Map();
+  const hlsInstance = `hls-${++waitTrace.hlsSequence}`;
   for (const name of ["DESTROYING", "MANIFEST_LOADING", "MANIFEST_LOADED", "MANIFEST_PARSED", "LEVEL_LOADING", "LEVEL_LOADED",
     "AUDIO_TRACK_LOADING", "AUDIO_TRACK_LOADED", "FRAG_LOADING", "FRAG_LOADED",
-    "FRAG_PARSING_INIT_SEGMENT", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING", "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"]) {
+    "FRAG_PARSING_INIT_SEGMENT", "FRAG_PARSED", "BUFFER_CODECS", "BUFFER_CREATED", "BUFFER_APPENDING", "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"]) {
     if (!Events[name]) continue;
     instance.on(Events[name], (_event, data) => {
-      if (name === "MANIFEST_PARSED") waitTrace.finishManifestParse({ outcome: "parsed" });
+      if (name === "MANIFEST_PARSED") waitTrace.finishManifestParse({ outcome: "parsed" }, hlsInstance);
       const type = data?.id ?? data?.type ?? data?.frag?.type ?? "main";
       const stream = type === "audio" ? "B8.a" : "B8.v";
       const track = trackForHlsType(type, data?.parent);
       if (name === "MANIFEST_LOADED") waitTrace.trackManifestParse(waitTrace.open("B5.manifest-parse", {
-        process: "B5", url: data?.url ?? null
-      }));
-      if (name === "FRAG_PARSING_INIT_SEGMENT") remuxes.set(type, waitTrace.open(stream, { stream: type,
-        segment: data?.frag?.sn, level: data?.frag?.level }));
+        process: "B5", url: data?.url ?? null, hlsInstance
+      }), hlsInstance);
+      if (name === "FRAG_PARSING_INIT_SEGMENT") {
+        const key = `${type}:${data?.frag?.sn ?? "unknown"}`;
+        const pending = remuxes.get(key) ?? [];
+        pending.push(waitTrace.open(stream, { process: stream, stream: type,
+          segment: data?.frag?.sn, level: data?.frag?.level, hlsInstance }));
+        remuxes.set(key, pending);
+      }
+      if (name === "FRAG_PARSED") {
+        const key = `${type}:${data?.frag?.sn ?? "unknown"}`;
+        const pending = remuxes.get(key);
+        pending?.shift()?.({ outcome: "fragment-parsed", hlsInstance });
+        if (!pending?.length) remuxes.delete(key);
+      }
       if (name === "BUFFER_CODECS") {
         const tracks = ["video", "audio", "audiovideo"].filter(track => data?.[track]);
         const codecStream = data?.frag?.type ?? (tracks.includes("video") || tracks.includes("audiovideo")
@@ -174,8 +197,6 @@ export function observeHlsWait(instance, Events) {
         const at = waitTrace.now();
         for (const codecTrack of tracks) codecReadyAt.set(codecTrack, at);
         waitTrace.event(name, { process: "B8", type: codecStream, tracks, segment: data?.frag?.sn });
-        remuxes.get(codecStream)?.({ outcome: "codecs-ready" });
-        remuxes.delete(codecStream);
       }
       if (name === "BUFFER_CREATED") {
         const tracks = data?.tracks ? Object.keys(data.tracks) : [];
@@ -204,8 +225,8 @@ export function observeHlsWait(instance, Events) {
       if (name === "ERROR") {
         const error = { outcome: "error", details: data?.details ?? null, fatal: data?.fatal ?? false };
         if (data?.fatal) {
-          waitTrace.failManifestParses(error);
-          for (const end of remuxes.values()) end(error);
+          waitTrace.failManifestParses(error, hlsInstance);
+          for (const pending of remuxes.values()) for (const end of pending) end(error);
           remuxes.clear();
           for (const pending of appends.values()) for (const end of pending) end(error);
           appends.clear();
@@ -213,13 +234,13 @@ export function observeHlsWait(instance, Events) {
       }
       if (name === "DESTROYING") {
         const cancelled = { outcome: "cancelled", reason: "hls-destroyed" };
-        waitTrace.failManifestParses(cancelled);
-        for (const end of remuxes.values()) end(cancelled);
+        waitTrace.failManifestParses(cancelled, hlsInstance);
+        for (const pending of remuxes.values()) for (const end of pending) end(cancelled);
         remuxes.clear();
         for (const pending of appends.values()) for (const end of pending) end(cancelled);
         appends.clear();
       }
-      waitTrace.event(name, { process: name === "MANIFEST_PARSED" ? "B5" : undefined, phase: "event",
+      waitTrace.event(name, { process: name === "MANIFEST_PARSED" ? "B5" : undefined, phase: "event", hlsInstance,
         type, segment: data?.frag?.sn, level: data?.frag?.level,
         tracks: data?.tracks ? Object.keys(data.tracks) : undefined, details: data?.details,
         parent: data?.parent ?? undefined });
