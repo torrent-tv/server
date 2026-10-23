@@ -1376,11 +1376,12 @@ export class Loading extends StateDerivedView {
         seekHoldAnswer({ readiness, requestedAt, reportedAt }),
       { process: "S2.2" });
       if (answer === "stale") continue;
-      const endReadinessState = waitTrace.open("S2.3.read-buffer-and-estimate", { process: "S2.3" });
-      const video = this.#videoElement;
-      const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
-      const waitEstimate = waitEstimateForProgress(progress);
-      endReadinessState({ outcome: "read", bufferedAhead: ahead, hasWaitEstimate: waitEstimate !== null });
+      const { ahead, waitEstimate } = waitTrace.run("S2.3.read-buffer-and-estimate", () => {
+        const video = this.#videoElement;
+        const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
+        const waitEstimate = waitEstimateForProgress(progress);
+        return { ahead, waitEstimate };
+      }, { process: "S2.3" });
       waitTrace.run("S2.4.update-browser-readiness", () => this.#waitingModel.update({
         waitEstimate,
         playbackReadiness: readiness ?? null,
@@ -5710,39 +5711,36 @@ export class Loading extends StateDerivedView {
         throw error;
       }
       // The published reading, not a fresh one of our own — see the listener.
-      const endReadinessEvaluation = waitTrace.open("C1.2.evaluate-readiness", { process: "C1.2" });
-      const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
-      const proxyReadiness = cachedProgress?.playbackReadiness;
-      if (proxyReadiness?.reason === "media-continuity-unavailable") {
-        finishSubtitleHold("error");
-        throw new Error("Prepared media contains a timestamp gap; playback cannot start.");
-      }
-      // The subtitle the file opens with: the proxy decides when it has been
-      // read, and this only refuses a "ready" taken before the page's own
-      // report of that track reached it (`subtitleStartHold`).
-      const startSubtitle = this.#subtitlePlayback.startSelection();
-      const subtitleHold = proxyReadiness?.version === 1 && proxyReadiness.ready === true
-        ? subtitleStartHold(startSubtitle, proxyReadiness, cachedProgressRequestedAt)
-        : null;
-      if (subtitleHold === "proxy-unaware" && !saidProxyUnaware) {
-        saidProxyUnaware = true;
-        this.#logEvt(
-          `prebuffer: this proxy does not state whether subtitle track ${startSubtitle.trackIndex} ` +
-            `has been read; starting without waiting for it`
-        );
-      }
-      const holdsForSubtitles = subtitleHold === "subtitles-pending";
-      if (holdsForSubtitles && !endSubtitleHold) {
-        endSubtitleHold = waitTrace.open("C3.subtitle-hold", { process: "C3",
-          trackIndex: startSubtitle?.trackIndex ?? null, state: startSubtitle?.state ?? null });
-      } else if (!holdsForSubtitles && endSubtitleHold) {
-        finishSubtitleHold("released");
-      }
-      const readiness = holdsForSubtitles
-        ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
-        : proxyReadiness;
-      endReadinessEvaluation({ outcome: "evaluated", ready: readiness?.ready ?? null,
-        reason: readiness?.reason ?? null, bufferedAhead: ahead });
+      const { ahead, startSubtitle, subtitleHold, readiness } = waitTrace.run("C1.2.evaluate-readiness", () => {
+        const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
+        const proxyReadiness = cachedProgress?.playbackReadiness;
+        if (proxyReadiness?.reason === "media-continuity-unavailable") {
+          finishSubtitleHold("error");
+          throw new Error("Prepared media contains a timestamp gap; playback cannot start.");
+        }
+        const startSubtitle = this.#subtitlePlayback.startSelection();
+        const subtitleHold = proxyReadiness?.version === 1 && proxyReadiness.ready === true
+          ? subtitleStartHold(startSubtitle, proxyReadiness, cachedProgressRequestedAt)
+          : null;
+        if (subtitleHold === "proxy-unaware" && !saidProxyUnaware) {
+          saidProxyUnaware = true;
+          this.#logEvt(
+            `prebuffer: this proxy does not state whether subtitle track ${startSubtitle.trackIndex} ` +
+              `has been read; starting without waiting for it`
+          );
+        }
+        const holdsForSubtitles = subtitleHold === "subtitles-pending";
+        if (holdsForSubtitles && !endSubtitleHold) {
+          endSubtitleHold = waitTrace.open("C3.subtitle-hold", { process: "C3",
+            trackIndex: startSubtitle?.trackIndex ?? null, state: startSubtitle?.state ?? null });
+        } else if (!holdsForSubtitles && endSubtitleHold) {
+          finishSubtitleHold("released");
+        }
+        const readiness = holdsForSubtitles
+          ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
+          : proxyReadiness;
+        return { ahead, startSubtitle, subtitleHold, readiness };
+      }, { process: "C1.2" });
       waitTrace.event("C1.gate", { ready: readiness?.ready, reason: readiness?.reason,
         subtitleHold, bufferedAhead: ahead });
       const unified = waitTrace.run("C1.3.update-browser-readiness", () => this.#waitingModel.update({
