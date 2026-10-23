@@ -107,8 +107,11 @@ export class WaitTrace {
 
   finish(outcome, fields = {}) {
     if (!this.current) return;
+    const firstAdvancingFrameElapsedMs = Number.isFinite(fields.firstAdvancingFrameAt)
+      ? fields.firstAdvancingFrameAt - this.current.startedAt : null;
     this.event("outcome", { outcome, process: "A0", phase: "end", startedAt: this.current.startedAt,
-      elapsed: this.now() - this.current.startedAt, emitMs: this.emitMs, ...fields });
+      elapsed: this.now() - this.current.startedAt, emitMs: this.emitMs,
+      ...(firstAdvancingFrameElapsedMs === null ? {} : { firstAdvancingFrameElapsedMs }), ...fields });
     this.current = null;
   }
 }

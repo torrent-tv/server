@@ -1,3 +1,7 @@
+## Unreleased
+
+- **New**: Log elapsed time from the original action to the first advancing frame with decoded required audio (#ttv-185).
+
 ## 0.62.7
 
 - **Fix**: Do not read a playhead that ran past the supplied media as the browser evicting played media; the cushion is lowered for an eviction only while at least the floor is held ahead (#ttv-231).
