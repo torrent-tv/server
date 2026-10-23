@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WaitTrace, waitTrace, observeHlsWait, observeVideoWait } from "../public/domain/wait-trace.js";
+import { createWebRtcHlsLoader } from "../public/domain/webrtc-hls-loader.js";
 
 test("a proxy retry retains the action origin and identifies each attempt", async () => {
   let now = 100;
@@ -47,21 +48,20 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     fire("AUDIO_TRACK_LOADED");
     fire("FRAG_LOADING", { type: "main", frag: { sn: 0, level: 0 } });
     fire("FRAG_LOADED", { type: "main", frag: { sn: 0, level: 0 }, payload: new Uint8Array(4) });
-    fire("FRAG_PARSING_INIT_SEGMENT", { type: "main", frag: { sn: 0 } });
-    fire("BUFFER_CODECS", { type: "main", frag: { sn: 0 } });
-    fire("BUFFER_CODECS", { type: "audio", frag: { sn: 0 } });
-    fire("BUFFER_CREATED", { tracks: { main: {}, audio: {} } });
-    fire("BUFFER_APPENDING", { type: "main", parent: "main", frag: { sn: 0 } });
-    fire("BUFFER_APPENDED", { type: "main", parent: "main", frag: { sn: 0 } });
-    fire("BUFFER_APPENDING", { type: "main", parent: "main", frag: { sn: 0 } });
-    fire("BUFFER_APPENDED", { type: "main", parent: "main", frag: { sn: 0 } });
+    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 0 } });
+    fire("BUFFER_CODECS", { video: {}, frag: { sn: 0 } });
+    fire("FRAG_PARSING_INIT_SEGMENT", { id: "audio", frag: { sn: 0 } });
+    fire("BUFFER_CODECS", { audio: {}, frag: { sn: 0 } });
+    fire("BUFFER_CREATED", { tracks: { video: {}, audio: {} } });
+    fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
+    fire("BUFFER_APPENDED", { type: "video", parent: "main", frag: { sn: "initSegment" } });
+    fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: 0 } });
+    fire("BUFFER_APPENDED", { type: "video", parent: "main", frag: { sn: 0 } });
     assert.ok(events.some(event => event.event === "begin" && event.process === "B8.v"));
+    assert.ok(events.some(event => event.event === "begin" && event.process === "B8.a"));
+    assert.ok(events.some(event => event.event === "end" && event.process === "B8.a"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B5"));
     assert.ok(events.some(event => event.event === "end" && event.process === "B5"));
-    assert.ok(events.some(event => event.event === "begin" && event.name === "B5.level-playlist"));
-    assert.ok(events.some(event => event.event === "begin" && event.process === "B6.a.p"));
-    assert.ok(events.some(event => event.event === "begin" && event.process === "B7.v"));
-    assert.ok(events.some(event => event.event === "end" && event.process === "B7.v"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B9"));
     assert.ok(events.some(event => event.event === "end" && event.process === "B9"));
     assert.ok(events.some(event => event.event === "BUFFER_CREATED" && event.process === "B9"));
@@ -71,7 +71,39 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   } finally { Object.assign(waitTrace, saved); }
 });
 
-test("a recoverable HLS error closes only its failed fragment request", () => {
+test("HLS request spans include the full response body and identify the media process", async () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
+    current: null, sequence: 0 });
+  try {
+    waitTrace.begin("torrent-file");
+    waitTrace.attempt(0, 10, true);
+    const Loader = createWebRtcHlsLoader({ fetch: async () => ({ ok: true, status: 200,
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer, text: async () => "#EXTM3U" }) });
+    const requests = [
+      { url: "http://webrtc-proxy/transcode/1/master.m3u8?variant=1", type: "manifest", responseType: "text", process: "B5" },
+      { url: "http://webrtc-proxy/transcode/1/level.m3u8?level=2", type: "level", responseType: "text", process: "B5" },
+      { url: "http://webrtc-proxy/transcode/1/audio.m3u8?track=1", type: "audioTrack", responseType: "text", process: "B6.a.p" },
+      { url: "http://webrtc-proxy/transcode/1/init.mp4", type: "media-fragment", responseType: "arraybuffer",
+        frag: { sn: "initSegment", type: "audio" }, process: "B6.a.i" },
+      { url: "http://webrtc-proxy/transcode/1/seg.m4s?consumer=x", type: "media-fragment", responseType: "arraybuffer",
+        frag: { sn: 0, type: "audio" }, process: "B7.a" },
+      { url: "http://webrtc-proxy/transcode/1/seg.m4s", type: "media-fragment", responseType: "arraybuffer",
+        frag: { sn: 0, type: "main" }, process: "B7.v" }
+    ];
+    for (const request of requests) {
+      const loader = new Loader();
+      await new Promise((resolve, reject) => loader.load(request, {}, { onSuccess: resolve, onError: reject }));
+      const begin = events.findLast(event => event.event === "begin" && event.process === request.process);
+      const end = events.find(event => event.event === "end" && event.operation === begin.operation);
+      assert.equal(end.outcome, "body-complete");
+      assert.equal(end.bytes, request.responseType === "text" ? 7 : 3);
+    }
+  } finally { Object.assign(waitTrace, saved); }
+});
+
+test("a fatal HLS error closes pending parse, remux and append spans", () => {
   const saved = { ...waitTrace };
   const events = [];
   const listeners = new Map();
@@ -82,14 +114,36 @@ test("a recoverable HLS error closes only its failed fragment request", () => {
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 10, true);
-    observeHlsWait(hls, Object.fromEntries(["FRAG_LOADING", "FRAG_LOADED", "ERROR"].map(name => [name, name])));
-    fire("FRAG_LOADING", { type: "main", frag: { sn: 1, level: 0 } });
-    fire("FRAG_LOADING", { type: "audio", frag: { sn: 1, level: 0 } });
-    fire("ERROR", { fatal: false, details: "fragLoadError", type: "main", frag: { sn: 1, level: 0 } });
+    observeHlsWait(hls, Object.fromEntries(["MANIFEST_LOADED", "MANIFEST_PARSED", "FRAG_PARSING_INIT_SEGMENT",
+      "BUFFER_APPENDING", "ERROR"].map(name => [name, name])));
+    fire("MANIFEST_LOADED");
+    fire("FRAG_PARSING_INIT_SEGMENT", { type: "main", frag: { sn: 0 } });
+    fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
+    fire("ERROR", { fatal: true, details: "manifestLoadError" });
     const failed = events.filter(event => event.event === "end" && event.outcome === "error");
-    assert.equal(failed.length, 1);
-    assert.equal(failed[0].process, "B7.v");
-    assert.ok(events.some(event => event.event === "begin" && event.process === "B7.a"));
+    assert.deepEqual(failed.map(event => event.process).sort(), ["B10.v", "B5", "B8.v"]);
+  } finally { Object.assign(waitTrace, saved); }
+});
+
+test("destroying HLS closes unfinished parse, remux and append spans as cancelled", () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  const listeners = new Map();
+  Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
+    current: null, sequence: 0, manifestParseEnds: [] });
+  const hls = { on: (name, handler) => listeners.set(name, handler) };
+  const fire = (name, data = {}) => listeners.get(name)?.(name, data);
+  try {
+    waitTrace.begin("torrent-file");
+    waitTrace.attempt(0, 10, true);
+    observeHlsWait(hls, Object.fromEntries(["DESTROYING", "MANIFEST_LOADED", "FRAG_PARSING_INIT_SEGMENT",
+      "BUFFER_APPENDING"].map(name => [name, name])));
+    fire("MANIFEST_LOADED");
+    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 0 } });
+    fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
+    fire("DESTROYING");
+    const cancelled = events.filter(event => event.event === "end" && event.outcome === "cancelled");
+    assert.deepEqual(cancelled.map(event => event.process).sort(), ["B10.v", "B5", "B8.v"]);
   } finally { Object.assign(waitTrace, saved); }
 });
 
