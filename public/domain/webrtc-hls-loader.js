@@ -21,6 +21,7 @@
 import { recordNetSample } from "./net-report.js";
 import { clearProxyRefusal, noteProxyRefusal } from "./proxy-refusal.js";
 import { noteProxyOutcome, outcomeOf } from "./proxy-outcome.js";
+import { waitTrace } from "./wait-trace.js";
 
 /**
  * The loader context object passed by HLS.js to `load()`.
@@ -111,6 +112,7 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
      * @param {{ onSuccess: Function, onError: Function, onTimeout: Function }} callbacks
      */
     load(context, _config, callbacks) {
+      this._traceEnd?.({ outcome: "cancelled", reason: "replaced" });
       this._abortController?.abort();
       const controller = new AbortController();
       this._abortController = controller;
@@ -131,6 +133,10 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
         }
       }
       const path = parsed.pathname + parsed.search;
+      this._traceEnd = waitTrace.open(hlsRequestName(context, path), {
+        process: hlsRequestProcess(context, path), path, method: "GET", type: context.type ?? null,
+        segment: context.frag?.sn ?? null
+      });
 
       // proxy.fetch() is expected to return a Promise, but wrap the call in
       // try-catch for defense-in-depth: if it somehow throws synchronously
@@ -141,6 +147,8 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
       try {
         fetchPromise = transport.fetch(path, { signal: controller.signal });
       } catch (syncErr) {
+        this._traceEnd?.({ outcome: "error", error: String(syncErr?.message ?? syncErr) });
+        this._traceEnd = null;
         // After the abort check, not before it: a load the player itself
         // abandoned is not a failure to report, and reporting it would put a
         // warning in the log for every ordinary cancellation.
@@ -190,6 +198,8 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
               // the status alone still reaches the player.
             }
             if (cancelled()) return;
+            this._traceEnd?.({ outcome: "http-error", status: response.status });
+            this._traceEnd = null;
             if (said) {
               noteProxyRefusal(said);
             }
@@ -221,6 +231,8 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
 
           const endedAt = performance.now();
           const byteLength = typeof data === "string" ? data.length : data.byteLength;
+          this._traceEnd?.({ outcome: "body-complete", status: response.status, bytes: byteLength });
+          this._traceEnd = null;
 
           // [net-debug] TEMPORARY: measure data-channel transfer time/throughput
           // per resource to locate the slow-start bottleneck.
@@ -297,10 +309,15 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
           // Nothing failed that the player should hear of: the same request is
           // made again, and the transport now routes it to the new connection.
           if (error?.name === "TransportReplacedError") {
+            this._traceEnd?.({ outcome: "cancelled", reason: "transport-replaced" });
+            this._traceEnd = null;
             console.debug(`[torrent-tv][hls-loader] ${path} asked again on the replacement connection`);
             this.load(context, _config, callbacks);
             return;
           }
+          this._traceEnd?.({ outcome: error?.name === "AbortError" ? "cancelled" : "error",
+            error: String(error?.message ?? error) });
+          this._traceEnd = null;
           callbacks.onError(
             { code: 0, text: error?.message ?? String(error) },
             context,
@@ -311,6 +328,8 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
 
     abort() {
       this._aborted = true;
+      this._traceEnd?.({ outcome: "cancelled", reason: "aborted" });
+      this._traceEnd = null;
       this._abortController?.abort();
       this.stats.aborted = true;
     }
@@ -319,6 +338,21 @@ export function createWebRtcHlsLoader(transport, consumerId = "", generationOf =
       this.abort();
     }
   };
+}
+
+function hlsRequestName(context, path) {
+  if (/\.m3u8(?:\?|$)/.test(path) && context.type === "manifest") return "B5.manifest-request";
+  if (/\.m3u8(?:\?|$)/.test(path) && context.type === "audioTrack") return "B6.a.p.request";
+  if (/\.m3u8(?:\?|$)/.test(path)) return "B5.level-playlist-request";
+  const audio = context.type === "audio" || context.frag?.type === "audio";
+  if (context.frag?.sn === "initSegment") return audio
+    ? "B6.a.i.request" : "B6.v.request";
+  return audio ? "B7.a.request" : "B7.v.request";
+}
+
+function hlsRequestProcess(context, path) {
+  const name = hlsRequestName(context, path).replace(/\.request$/, "");
+  return name.startsWith("B5.") ? "B5" : name;
 }
 
 function transportFailure(error) {
