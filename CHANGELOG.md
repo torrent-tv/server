@@ -1,6 +1,9 @@
-## 0.66.1
+## Unreleased
 
 - **New**: Record proxy selection and each WebRTC signalling, ICE-candidate, and gathering span even when the connection completes before the viewer chooses a file (#ttv-185).
+
+## 0.66.1
+
 - **Fix**: Include the data-channel request ID in every `[dc-load]` timing line so browser transfer spans join to proxy request spans (#ttv-185).
 
 ## 0.66.0
