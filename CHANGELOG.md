@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.3
 
 - **Fix**: Keep the waiting view in file-choice state until a video file is selected; label copy/encode mode as an output path and show byte demand only when all required source files have measured demand (#ttv-11).
 
