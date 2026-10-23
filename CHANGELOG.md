@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Measure source-buffer creation from the first observed codec declaration when hls.js creates buffers before reporting every track (#ttv-185).
+
 ## 0.64.4
 
 - **Fix**: Measure HLS manifest parsing from the parser's recorded start and end times (#ttv-185).

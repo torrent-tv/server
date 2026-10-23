@@ -27,7 +27,8 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   const saved = { ...waitTrace };
   const events = [];
   const listeners = new Map();
-  Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
+  let now = 10;
+  Object.assign(waitTrace, { enabled: true, now: () => now, id: () => "action", emit: event => events.push(event),
     current: null, sequence: 0, hlsSequence: 0, hlsObservers: new Map() });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
@@ -54,9 +55,11 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     fire("FRAG_PARSED", { id: "main", frag: { sn: 0 } });
     fire("FRAG_LOADED", { id: "audio", frag: { sn: 0, level: 0 } });
     fire("FRAG_PARSING_INIT_SEGMENT", { id: "audio", frag: { sn: 0 } });
+    now = 50;
+    fire("BUFFER_CREATED", { tracks: { video: {}, audio: {} } });
+    now = 51;
     fire("BUFFER_CODECS", { audio: {}, frag: { sn: 0 } });
     fire("FRAG_PARSED", { id: "audio", frag: { sn: 0 } });
-    fire("BUFFER_CREATED", { tracks: { video: {}, audio: {} } });
     fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
     fire("BUFFER_APPENDED", { type: "video", parent: "main", frag: { sn: "initSegment" } });
     fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: 0 } });
@@ -67,7 +70,9 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     assert.ok(events.some(event => event.event === "begin" && event.process === "B5"));
     assert.ok(events.some(event => event.event === "end" && event.process === "B5"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B9"));
-    assert.ok(events.some(event => event.event === "end" && event.process === "B9"));
+    const sourceBufferSpan = events.find(event => event.event === "end" && event.name === "B9.source-buffers");
+    assert.equal(sourceBufferSpan.duration, 40);
+    assert.equal(sourceBufferSpan.startedAt, 10);
     assert.ok(events.some(event => event.event === "BUFFER_CREATED" && event.process === "B9"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B10.v"));
     assert.ok(events.some(event => event.event === "begin" && event.process === "B12.v"));
