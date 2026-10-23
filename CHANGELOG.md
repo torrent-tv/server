@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: 1 package(s) changed in the lock file.
+
 ## 0.64.1
 
 - **Fix**: Close HLS manifest, init-segment and media-segment request spans only after the response body completes, fails or is cancelled (#ttv-185).
