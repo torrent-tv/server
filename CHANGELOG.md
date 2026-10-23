@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.2
 
 - **New**: Record proxy selection and each WebRTC signalling, ICE-candidate, and gathering span even when the connection completes before the viewer chooses a file (#ttv-185).
 
