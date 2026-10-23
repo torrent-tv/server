@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.4
 
 - **Fix**: Record the media-link probe duration when transport setup finishes before a playback wait starts (#ttv-185).
 
