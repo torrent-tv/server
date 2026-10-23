@@ -1,4 +1,4 @@
-## Unreleased
+## 0.64.6
 
 - **Fix**: Start seek presentation timing at the seek event and ignore stale frame callback timestamps (#ttv-185).
 
