@@ -288,3 +288,43 @@ test("a frame without audio does not end observation; both advancing frames must
     assert.equal(events.at(-1).confirmedAt, 160);
   } finally { Object.assign(waitTrace, saved); }
 });
+
+test("seek presentation starts at seeking and ignores a frame callback timestamp from before the seek", () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  let now = 100;
+  let callback;
+  const video = Object.assign(new EventTarget(), { paused: false, currentTime: 24, readyState: 4,
+    webkitAudioDecodedByteCount: 100, requestVideoFrameCallback: fn => { callback = fn; return 1; }, cancelVideoFrameCallback() {} });
+  Object.assign(waitTrace, { enabled: true, now: () => now, id: () => "seek-action", emit: event => events.push(event),
+    current: null, sequence: 0 });
+  try {
+    video.addEventListener("seeking", () => {
+      waitTrace.begin("seek", 100);
+      waitTrace.attempt(0, 100, true);
+    });
+    observeVideoWait(video, () => ({ audioRequired: true, audioBuffered: true }));
+
+    video.dispatchEvent(new Event("seeking"));
+    const presentationBegins = events.filter(event => event.name === "C6.presentation" && event.phase === "begin");
+    assert.equal(presentationBegins.length, 1);
+    assert.equal(presentationBegins[0].at, 100);
+
+    now = 105;
+    callback(95, { mediaTime: 23.958, presentedFrames: 1 });
+    assert.equal(events.some(event => event.event === "first-frame"), false);
+
+    now = 110;
+    video.dispatchEvent(new Event("playing"));
+    assert.equal(events.filter(event => event.name === "C6.presentation" && event.phase === "begin").length, 1);
+    callback(110, { mediaTime: 24, presentedFrames: 2 });
+    now = 150;
+    callback(150, { mediaTime: 24.042, presentedFrames: 3 });
+
+    const presentationEnd = events.find(event => event.name === "C6.presentation" && event.phase === "end");
+    assert.equal(presentationEnd.duration, 10);
+    assert.equal(events.at(-1).firstAdvancingFrameAt, 110);
+    assert.equal(events.at(-1).firstAdvancingFrameElapsedMs, 10);
+    assert.ok(events.every(event => !Number.isFinite(event.duration) || event.duration >= 0));
+  } finally { Object.assign(waitTrace, saved); }
+});

@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Start seek presentation timing at the seek event and ignore stale frame callback timestamps (#ttv-185).
+
 ## 0.64.5
 
 - **Fix**: Measure source-buffer creation from the first observed codec declaration when hls.js creates buffers before reporting every track (#ttv-185).

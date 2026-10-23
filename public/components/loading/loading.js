@@ -734,11 +734,6 @@ export class Loading extends StateDerivedView {
     if (this.#diagnosticsAttached) {
       return;
     }
-    observeVideoWait(videoElement, mediaTime => {
-      const ranges = this.#hlsPlayer.getBufferedRanges(videoElement);
-      return { audioRequired: this.#audioRequired, audioBuffered: !this.#audioRequired ||
-        (Array.isArray(ranges?.audio) && ranges.audio.some(range => mediaTime >= range.start && mediaTime < range.end)) };
-    });
     this.#diagnosticsAttached = true;
     const log = (name) => {
       // UTC HH:MM:SS.mmm — same timezone as the proxy logger, so browser and
@@ -781,6 +776,13 @@ export class Loading extends StateDerivedView {
         }
       });
     }
+    // Register after the intent listener above so a native `seeking` event
+    // creates its wait trace before the frame observer reads the current wait.
+    observeVideoWait(videoElement, mediaTime => {
+      const ranges = this.#hlsPlayer.getBufferedRanges(videoElement);
+      return { audioRequired: this.#audioRequired, audioBuffered: !this.#audioRequired ||
+        (Array.isArray(ranges?.audio) && ranges.audio.some(range => mediaTime >= range.start && mediaTime < range.end)) };
+    });
     document.addEventListener(APP_EVENTS.SIGNAL, (event) => {
       if (event.detail?.event === APP_EVENT.PAUSED_BY_VIEWER || event.detail?.event === APP_EVENT.RESUMED) reportNow();
     });
