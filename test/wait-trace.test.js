@@ -28,7 +28,7 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   const events = [];
   const listeners = new Map();
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0, hlsSequence: 0 });
+    current: null, sequence: 0, hlsSequence: 0, hlsObservers: new Map() });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
   try {
@@ -79,7 +79,7 @@ test("manifest parse spans stay paired with the HLS instance that loaded them", 
   const events = [];
   let now = 0;
   Object.assign(waitTrace, { enabled: true, now: () => now, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map() });
+    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map(), hlsObservers: new Map() });
   const createHls = () => {
     const listeners = new Map();
     return { on: (name, handler) => listeners.set(name, handler), fire: name => listeners.get(name)?.(name, {}) };
@@ -106,11 +106,44 @@ test("manifest parse spans stay paired with the HLS instance that loaded them", 
   } finally { Object.assign(waitTrace, saved); }
 });
 
+test("unfinished HLS spans close at wait end and cannot close during a later seek", () => {
+  const saved = { ...waitTrace };
+  const events = [];
+  let now = 0;
+  const listeners = new Map();
+  Object.assign(waitTrace, { enabled: true, now: () => now, id: () => "action", emit: event => events.push(event),
+    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map(), hlsObservers: new Map() });
+  const hls = { on: (name, handler) => listeners.set(name, handler) };
+  const fire = (name, data = {}) => listeners.get(name)?.(name, data);
+  try {
+    waitTrace.begin("torrent-file");
+    waitTrace.attempt(0, 0, true);
+    observeHlsWait(hls, { FRAG_PARSING_INIT_SEGMENT: "FRAG_PARSING_INIT_SEGMENT", FRAG_PARSED: "FRAG_PARSED" });
+    now = 10;
+    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 0 } });
+    waitTrace.finish("advancing-with-decoded-audio");
+    const endedAtWait = events.find(event => event.event === "end" && event.process === "B8.v");
+    assert.equal(endedAtWait.outcome, "active-at-wait-end");
+
+    waitTrace.begin("seek");
+    waitTrace.attempt(0, now, true);
+    now = 15;
+    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 1 } });
+    now = 20;
+    waitTrace.attempt(0, now, false);
+    const endedAtRetry = events.filter(event => event.event === "end" && event.process === "B8.v").at(-1);
+    assert.equal(endedAtRetry.outcome, "cancelled");
+    assert.equal(endedAtRetry.reason, "attempt-changed");
+    fire("FRAG_PARSED", { id: "main", frag: { sn: 1 } });
+    assert.equal(events.filter(event => event.event === "end" && event.process === "B8.v").length, 2);
+  } finally { Object.assign(waitTrace, saved); }
+});
+
 test("HLS request spans include the full response body and identify the media process", async () => {
   const saved = { ...waitTrace };
   const events = [];
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0, hlsSequence: 0 });
+    current: null, sequence: 0, hlsSequence: 0, hlsObservers: new Map() });
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 10, true);
@@ -143,7 +176,7 @@ test("a fatal HLS error closes pending parse, remux and append spans", () => {
   const events = [];
   const listeners = new Map();
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0, hlsSequence: 0 });
+    current: null, sequence: 0, hlsSequence: 0, hlsObservers: new Map() });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
   try {
@@ -165,7 +198,7 @@ test("destroying HLS closes unfinished parse, remux and append spans as cancelle
   const events = [];
   const listeners = new Map();
   Object.assign(waitTrace, { enabled: true, now: () => 10, id: () => "action", emit: event => events.push(event),
-    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map() });
+    current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map(), hlsObservers: new Map() });
   const hls = { on: (name, handler) => listeners.set(name, handler) };
   const fire = (name, data = {}) => listeners.get(name)?.(name, data);
   try {
