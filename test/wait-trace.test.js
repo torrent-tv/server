@@ -45,6 +45,22 @@ test("standalone connection spans are recorded before a playback wait starts", a
   assert.equal(active.wait, trace.current.wait);
 });
 
+test("standalone background work is recorded before a playback wait starts", async () => {
+  let now = 300;
+  const events = [];
+  const trace = new WaitTrace({ enabled: true, now: () => now, id: () => "link-probe", emit: event => events.push(event) });
+  const context = trace.contextForOperation("A2");
+  const work = trace.run("A2.5.link-probe", async () => {
+    now = 450;
+    return "measured";
+  }, { process: "A2.5", traceContext: context });
+  assert.equal(await work, "measured");
+  assert.deepEqual(events.map(event => [event.event, event.process, event.wait]), [
+    ["begin", "A2.5", context.wait], ["end", "A2.5", context.wait]
+  ]);
+  assert.equal(events[1].duration, 150);
+});
+
 test("HLS observations give separate spans to remux, buffer creation, init append and media append", () => {
   const saved = { ...waitTrace };
   const events = [];

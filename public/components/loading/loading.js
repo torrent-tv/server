@@ -4120,7 +4120,10 @@ export class Loading extends StateDerivedView {
       // figure used to come only from segments of the film itself, so it did
       // not exist until playback had begun — after every decision that wants
       // it. Best-effort and unawaited: nothing here waits on it.
-      void waitTrace.run("A2.5.link-probe", () => measureLink(transport), { process: "A2.5" });
+      void waitTrace.run("A2.5.link-probe", () => measureLink(transport), {
+        process: "A2.5",
+        traceContext: waitTrace.contextForOperation("A2")
+      });
       return transport;
     }).finally(() => {
       // Only if it is still ours: an abandoned attempt was replaced long ago
