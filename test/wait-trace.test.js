@@ -40,7 +40,7 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
       "BUFFER_APPENDED", "FRAG_BUFFERED", "ERROR"].map(name => [name, name]));
     observeHlsWait(hls, Events);
     fire("MANIFEST_LOADING");
-    fire("MANIFEST_LOADED");
+    fire("MANIFEST_LOADED", { stats: { parsing: { start: 7, end: 9 } }, url: "master.m3u8" });
     fire("MANIFEST_PARSED");
     fire("LEVEL_LOADING");
     fire("LEVEL_LOADED");
@@ -52,6 +52,7 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
     fire("BUFFER_CODECS", { video: {}, frag: { sn: 0 } });
     assert.equal(events.filter(event => event.event === "end" && event.process === "B8.v").length, 0);
     fire("FRAG_PARSED", { id: "main", frag: { sn: 0 } });
+    fire("FRAG_LOADED", { id: "audio", frag: { sn: 0, level: 0 } });
     fire("FRAG_PARSING_INIT_SEGMENT", { id: "audio", frag: { sn: 0 } });
     fire("BUFFER_CODECS", { audio: {}, frag: { sn: 0 } });
     fire("FRAG_PARSED", { id: "audio", frag: { sn: 0 } });
@@ -74,7 +75,7 @@ test("HLS observations give separate spans to remux, buffer creation, init appen
   } finally { Object.assign(waitTrace, saved); }
 });
 
-test("manifest parse spans stay paired with the HLS instance that loaded them", () => {
+test("manifest parse spans use hls.js measured parser boundaries", () => {
   const saved = { ...waitTrace };
   const events = [];
   let now = 0;
@@ -82,7 +83,7 @@ test("manifest parse spans stay paired with the HLS instance that loaded them", 
     current: null, sequence: 0, hlsSequence: 0, manifestParseEnds: new Map(), hlsObservers: new Map() });
   const createHls = () => {
     const listeners = new Map();
-    return { on: (name, handler) => listeners.set(name, handler), fire: name => listeners.get(name)?.(name, {}) };
+    return { on: (name, handler) => listeners.set(name, handler), fire: (name, data) => listeners.get(name)?.(name, data) };
   };
   try {
     waitTrace.begin("torrent-file");
@@ -93,16 +94,17 @@ test("manifest parse spans stay paired with the HLS instance that loaded them", 
     observeHlsWait(first, Events);
     observeHlsWait(second, Events);
     now = 10;
-    first.fire("MANIFEST_LOADED");
+    first.fire("MANIFEST_LOADED", { url: "first.m3u8", stats: { parsing: { start: 4, end: 8 } } });
     now = 20;
-    second.fire("MANIFEST_LOADED");
+    second.fire("MANIFEST_LOADED", { url: "second.m3u8", stats: { parsing: { start: 12, end: 19 } } });
     now = 25;
     second.fire("MANIFEST_PARSED");
     now = 40;
     first.fire("MANIFEST_PARSED");
 
     const spans = events.filter(event => event.event === "end" && event.name === "B5.manifest-parse");
-    assert.deepEqual(spans.map(({ duration, hlsInstance }) => [duration, hlsInstance]), [[5, "hls-2"], [30, "hls-1"]]);
+    assert.deepEqual(spans.map(({ duration, hlsInstance, startedAt, endedAt }) =>
+      [duration, hlsInstance, startedAt, endedAt]), [[4, "hls-1", 4, 8], [7, "hls-2", 12, 19]]);
   } finally { Object.assign(waitTrace, saved); }
 });
 
@@ -118,9 +120,9 @@ test("unfinished HLS spans close at wait end and cannot close during a later see
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 0, true);
-    observeHlsWait(hls, { FRAG_PARSING_INIT_SEGMENT: "FRAG_PARSING_INIT_SEGMENT", FRAG_PARSED: "FRAG_PARSED" });
+    observeHlsWait(hls, { FRAG_LOADED: "FRAG_LOADED", FRAG_PARSING_INIT_SEGMENT: "FRAG_PARSING_INIT_SEGMENT", FRAG_PARSED: "FRAG_PARSED" });
     now = 10;
-    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 0 } });
+    fire("FRAG_LOADED", { id: "main", frag: { sn: 0 } });
     waitTrace.finish("advancing-with-decoded-audio");
     const endedAtWait = events.find(event => event.event === "end" && event.process === "B8.v");
     assert.equal(endedAtWait.outcome, "active-at-wait-end");
@@ -128,7 +130,7 @@ test("unfinished HLS spans close at wait end and cannot close during a later see
     waitTrace.begin("seek");
     waitTrace.attempt(0, now, true);
     now = 15;
-    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 1 } });
+    fire("FRAG_LOADED", { id: "main", frag: { sn: 1 } });
     now = 20;
     waitTrace.attempt(0, now, false);
     const endedAtRetry = events.filter(event => event.event === "end" && event.process === "B8.v").at(-1);
@@ -182,14 +184,14 @@ test("a fatal HLS error closes pending parse, remux and append spans", () => {
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 10, true);
-    observeHlsWait(hls, Object.fromEntries(["MANIFEST_LOADED", "MANIFEST_PARSED", "FRAG_PARSING_INIT_SEGMENT",
+    observeHlsWait(hls, Object.fromEntries(["MANIFEST_LOADED", "MANIFEST_PARSED", "FRAG_LOADED", "FRAG_PARSING_INIT_SEGMENT",
       "BUFFER_APPENDING", "ERROR"].map(name => [name, name])));
-    fire("MANIFEST_LOADED");
-    fire("FRAG_PARSING_INIT_SEGMENT", { type: "main", frag: { sn: 0 } });
+    fire("MANIFEST_LOADED", { stats: { parsing: { start: 1, end: 2 } } });
+    fire("FRAG_LOADED", { type: "main", frag: { sn: 0 } });
     fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
     fire("ERROR", { fatal: true, details: "manifestLoadError" });
     const failed = events.filter(event => event.event === "end" && event.outcome === "error");
-    assert.deepEqual(failed.map(event => event.process).sort(), ["B10.v", "B5", "B8.v"]);
+    assert.deepEqual(failed.map(event => event.process).sort(), ["B10.v", "B8.v"]);
   } finally { Object.assign(waitTrace, saved); }
 });
 
@@ -204,14 +206,14 @@ test("destroying HLS closes unfinished parse, remux and append spans as cancelle
   try {
     waitTrace.begin("torrent-file");
     waitTrace.attempt(0, 10, true);
-    observeHlsWait(hls, Object.fromEntries(["DESTROYING", "MANIFEST_LOADED", "FRAG_PARSING_INIT_SEGMENT",
+    observeHlsWait(hls, Object.fromEntries(["DESTROYING", "MANIFEST_LOADED", "FRAG_LOADED", "FRAG_PARSING_INIT_SEGMENT",
       "BUFFER_APPENDING"].map(name => [name, name])));
-    fire("MANIFEST_LOADED");
-    fire("FRAG_PARSING_INIT_SEGMENT", { id: "main", frag: { sn: 0 } });
+    fire("MANIFEST_LOADED", { stats: { parsing: { start: 1, end: 2 } } });
+    fire("FRAG_LOADED", { id: "main", frag: { sn: 0 } });
     fire("BUFFER_APPENDING", { type: "video", parent: "main", frag: { sn: "initSegment" } });
     fire("DESTROYING");
     const cancelled = events.filter(event => event.event === "end" && event.outcome === "cancelled");
-    assert.deepEqual(cancelled.map(event => event.process).sort(), ["B10.v", "B5", "B8.v"]);
+    assert.deepEqual(cancelled.map(event => event.process).sort(), ["B10.v", "B8.v"]);
   } finally { Object.assign(waitTrace, saved); }
 });
 
