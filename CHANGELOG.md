@@ -1,4 +1,4 @@
-## Unreleased
+## 0.64.4
 
 - **Fix**: Measure HLS manifest parsing from the parser's recorded start and end times (#ttv-185).
 - **Fix**: Measure HLS fragment parsing from fragment load completion to the matching parsed-fragment event (#ttv-185).
