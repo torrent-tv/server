@@ -1,7 +1,9 @@
-## 0.64.3
+## Unreleased
 
-- **Fix**: End HLS fragment-remux spans on the matching parsed-fragment event, independently of the earlier codec-availability event (#ttv-185).
-- **Fix**: Pair manifest parse spans within the HLS instance that loaded each manifest (#ttv-185).
+- **Fix**: Measure HLS manifest parsing from the parser's recorded start and end times (#ttv-185).
+- **Fix**: Measure HLS fragment parsing from fragment load completion to the matching parsed-fragment event (#ttv-185).
+
+## 0.64.3
 
 ## 0.64.2
 
