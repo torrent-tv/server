@@ -67,7 +67,7 @@ test("the page asks again as soon as a piece has arrived, after reporting it", a
     ${method("#waitForPrebuffer")}
     wait(video) { return this.#waitForPrebuffer(video); }
   }`)(HTMLVideoElement, () => calls.push({ what: "report", at: Date.now() }), () => 0, () => 0, () => {}, subtitleStartHold,
-    { MEASURED: "measured" }, 60_000, { dispatchEvent() {} }, class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls, { event() {} });
+    { MEASURED: "measured" }, 60_000, { dispatchEvent() {} }, class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls, { event() {}, run(_name, action) { return action(); } });
   const component = new Component();
   const startedAt = Date.now();
   await component.wait(new HTMLVideoElement());
