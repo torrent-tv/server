@@ -294,7 +294,7 @@ test("seek presentation starts at seeking and ignores a frame callback timestamp
   const events = [];
   let now = 100;
   let callback;
-  const video = Object.assign(new EventTarget(), { paused: false, currentTime: 24, readyState: 4,
+  const video = Object.assign(new EventTarget(), { paused: true, currentTime: 24, readyState: 4,
     webkitAudioDecodedByteCount: 100, requestVideoFrameCallback: fn => { callback = fn; return 1; }, cancelVideoFrameCallback() {} });
   Object.assign(waitTrace, { enabled: true, now: () => now, id: () => "seek-action", emit: event => events.push(event),
     current: null, sequence: 0 });
@@ -315,16 +315,21 @@ test("seek presentation starts at seeking and ignores a frame callback timestamp
     assert.equal(events.some(event => event.event === "first-frame"), false);
 
     now = 110;
+    callback(110, { mediaTime: 24, presentedFrames: 2 });
+    assert.equal(events.some(event => event.name === "C6.presentation" && event.phase === "end"), false);
+
+    now = 120;
+    video.paused = false;
     video.dispatchEvent(new Event("playing"));
     assert.equal(events.filter(event => event.name === "C6.presentation" && event.phase === "begin").length, 1);
-    callback(110, { mediaTime: 24, presentedFrames: 2 });
-    now = 150;
-    callback(150, { mediaTime: 24.042, presentedFrames: 3 });
+    now = 130;
+    callback(130, { mediaTime: 24.042, presentedFrames: 3 });
 
     const presentationEnd = events.find(event => event.name === "C6.presentation" && event.phase === "end");
-    assert.equal(presentationEnd.duration, 10);
-    assert.equal(events.at(-1).firstAdvancingFrameAt, 110);
-    assert.equal(events.at(-1).firstAdvancingFrameElapsedMs, 10);
+    assert.equal(presentationEnd.duration, 30);
+    assert.equal(presentationEnd.endedAt, 130);
+    assert.equal(events.at(-1).firstAdvancingFrameAt, 130);
+    assert.equal(events.at(-1).firstAdvancingFrameElapsedMs, 30);
     assert.ok(events.every(event => !Number.isFinite(event.duration) || event.duration >= 0));
   } finally { Object.assign(waitTrace, saved); }
 });
