@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.0
 
 - **New**: Log atomic browser actions and timer/event waits inside the initial prebuffer gate and seek command/readiness path (#ttv-185).
 
