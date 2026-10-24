@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Preserve HLS segment requests that are still waiting for the proxy to produce their media during cold-start preparation.
+
 ## 0.66.11
 
 - **Fix**: Restart paused HLS loading from the end of the buffered media when cold-start preparation stops receiving segments.
