@@ -15,6 +15,7 @@ function player() {
     #waitSequence = 0;
     #waitStartedAt = null;
     #loadArt = null;
+    #artworkWorkIdentity = null;
     #onActiveFileForPoster(event) { this.#activeFileIndex = event.detail.fileIndex; }
     ${handler}
     choose(detail) { this.#onFileChosenForPoster(new CustomEvent("file-chosen", { detail })); }

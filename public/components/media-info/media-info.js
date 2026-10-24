@@ -7,6 +7,7 @@ import {
   containerEpisode,
   containerEvidence,
   episodeNumbersOf,
+  isSelfTitledPlaceholder,
   pictureIdentification,
   releaseIdentification,
   seasonFiles,
@@ -462,7 +463,9 @@ export class MediaInfoController {
     // A series is one work: what any of its episodes states (the series' own
     // title, its season) is evidence for all of them.
     const stating = single ?? [...this.#containers.keys()].find((index) => this.#itemsByIndex.has(index)) ?? firstItem?.fileIndex;
-    const body = { ...request, language: METADATA_LANGUAGE, ...this.#evidence(stating) };
+    const container = this.#containers.get(stating);
+    const identifiedRequest = isSelfTitledPlaceholder(container) ? { ...request, kindHint: null } : request;
+    const body = { ...identifiedRequest, language: METADATA_LANGUAGE, ...this.#evidence(stating) };
     const answer = await this.#post("/api/metadata/identify", body);
     if (selection === this.#selection) this.#rememberIdentification("release", stating, body, answer);
     if (selection !== this.#selection || sequence !== this.#releaseSequence) return;

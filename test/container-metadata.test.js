@@ -155,12 +155,47 @@ test("placeholder series tags do not force a film into TV search, and item year 
   assert.equal(provider.fields(facts).year, 1984);
 });
 
+test("self-titled container evidence clears an initial TV hint on the page", async () => {
+  const target = new EventTarget();
+  globalThis.document = target;
+  const pending = [];
+  globalThis.fetch = (_url, init) => new Promise(resolve => pending.push({ body: JSON.parse(init.body), resolve }));
+  const { MediaInfoController } = await import("../public/components/media-info/media-info.js");
+  const { MEDIA_INFO_EVENTS } = await import("../public/shared/events.js");
+  new MediaInfoController();
+  const send = (type, detail) => target.dispatchEvent(new CustomEvent(type, { detail }));
+  send(MEDIA_INFO_EVENTS.SELECTED, { selection: 1, names: ["Moana.mp4"] });
+  send(MEDIA_INFO_EVENTS.CONTENTS, {
+    selection: 1,
+    contents: { name: "Moana.mp4", shape: "single", items: [{ fileIndex: 0, episode: { season: 0, episodes: [0] } }] },
+    files: [{ index: 0, relativePath: "Moana.mp4" }]
+  });
+  assert.equal(pending[1].body.kindHint, "tv");
+  send(MEDIA_INFO_EVENTS.CONTAINER, {
+    selection: 1,
+    fileIndex: 0,
+    container: { title: "Moana", seriesTitle: "Moana", season: 0, episode: 0, episodeTitle: "Moana" }
+  });
+  assert.equal(pending[2].body.kindHint, null);
+  pending.forEach(({ resolve }) => resolve(Response.json({ status: "not-found" })));
+  await new Promise(resolve => setImmediate(resolve));
+});
+
+test("a self-titled zero-number episode tag is treated as a film", () => {
+  const provider = new ContainerMetadata();
+  const facts = { title: "Moana", seriesTitle: "Moana", itemYear: 2026, season: 0, episode: 0, episodeTitle: "Moana" };
+  assert.equal(provider.evidenceFrom({ container: facts }).kindHint, undefined);
+  assert.equal(provider.fields(facts).kind, undefined);
+  assert.equal(provider.fields(facts).year, 2026);
+});
+
 test("an episode the file states fills only when it states its title and a number", () => {
   assert.deepEqual(containerEpisode({ season: 1, episode: 2, episodeTitle: "Аанг" }, null),
     { source: "container", season: 1, episodes: [{ number: 2, name: "Аанг", still: null }], part: null });
   assert.equal(containerEpisode({ episodeTitle: "Аанг" }, { season: 3, episodes: [4] }).episodes[0].number, 4);
   assert.equal(containerEpisode({ season: 1, episode: 2 }, null), null);
   assert.equal(containerEpisode({ episodeTitle: "Аанг" }, null), null);
+  assert.equal(containerEpisode({ title: "Moana", seriesTitle: "Moana", season: 0, episode: 0, episodeTitle: "Moana" }, null), null);
 });
 
 test("what a file states fills the work's empty fields and replaces none", () => {
