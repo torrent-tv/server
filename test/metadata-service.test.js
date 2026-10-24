@@ -159,7 +159,7 @@ test("identification retains bounded database search results and scores a contai
     names: ["A.Nightmare.on.Elm.Street"], kindHint: null, statedYears: [1984], durationSeconds: 5479, language: "en-US"
   });
   assert.equal(answer.work.tmdbId, 377);
-  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 23437).contradiction, "year-mismatch");
+  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 23437).contradiction, null);
   assert.deepEqual(answer.searches.find(search => search.kind === "movie"), {
     provider: "tmdb", kind: "movie", query: "a nightmare on elm street", language: "en-US", status: "complete", pagesFetched: 1, totalPages: 1, totalResults: 2, truncated: false,
     results: [
@@ -201,10 +201,10 @@ test("a returned alias candidate is scored even when an unrelated main-title mat
   assert.equal(answer.status, "identified");
   assert.equal(answer.work.tmdbId, 2);
   assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 2).titleMatch, "alternative");
-  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 1).contradiction, "year-mismatch");
+  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 1).contradiction, null);
 });
 
-test("First Blood is identified by its Rambo alias when no year is stated, but a conflicting year is rejected", async () => {
+test("First Blood remains eligible when the release filename states a conflicting year", async () => {
   const source = fakeSource({ "movie|Rambo First Blood": [{ id: 1368, name: "First Blood", year: 1982 }] },
     { alternative: { "movie|1368": ["Rambo: First Blood"] } });
   const metadata = service(source);
@@ -214,7 +214,8 @@ test("First Blood is identified by its Rambo alias when no year is stated, but a
   assert.ok(source.asked.includes("alternative|movie|1368"));
 
   const withDifferentYear = await metadata.identify({ names: ["Rambo.First.Blood.2026.1080p.mkv"], kindHint: null, language: "en-US" });
-  assert.equal(withDifferentYear.status, "not-found");
+  assert.equal(withDifferentYear.status, "identified");
+  assert.equal(withDifferentYear.work.tmdbId, 1368);
 });
 
 test("duration distinguishes First Blood from the Rambo III record sharing its alias", async () => {
@@ -282,11 +283,11 @@ test("Drifters: a later work, a season too short and the audio language each set
   // alone sets both six-episode series aside.
   const fromMagnet = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", episodeNumbers, language: "en-US" });
   assert.equal(fromMagnet.work.tmdbId, 67075);
-  assert.equal(fromMagnet.ranked.find((one) => one.tmdbId === 281558).contradiction, "episode-beyond-season");
-  // The uploaded .torrent: created at the end of 2016, so the 2019 series cannot be it.
+  assert.equal(fromMagnet.ranked.find((one) => one.tmdbId === 281558).contradiction, null);
+  // Descriptor dates alone do not exclude a catalogue result.
   const created = Date.UTC(2016, 11, 28) / 1000;
   const uploaded = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", torrentCreatedAt: created, language: "en-US" });
-  assert.equal(uploaded.ranked.find((one) => one.tmdbId === 281558).contradiction, "after-torrent");
+  assert.equal(uploaded.ranked.find((one) => one.tmdbId === 281558).contradiction, null);
   // Japanese audio against a Japanese original.
   const heard = await service(fakeSource({ "tv|Drifters": results }, { works })).identify({ names, kindHint: "tv", audioLanguages: ["jpn"], language: "en-US" });
   assert.equal(heard.work.tmdbId, 67075);
@@ -331,11 +332,11 @@ test("release tags after an episode number are not queried as episode titles", a
   assert.equal(source.asked.some((request) => request.startsWith("season|")), false);
 });
 
-test("when every candidate contradicts a release fact no work is identified", async () => {
-  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2030 }] }, { works: { "movie|1": { year: 2030 } } });
-  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", torrentCreatedAt: Date.UTC(2016, 0, 1) / 1000, language: "en-US" });
+test("a validated runtime contradiction prevents identification", async () => {
+  const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2030 }] }, { works: { "movie|1": { year: 2030, runtimeSeconds: 3600 } } });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", durationSeconds: 9000, language: "en-US" });
   assert.equal(answer.status, "not-found");
-  assert.equal(answer.ranked[0].contradiction, "after-torrent");
+  assert.equal(answer.ranked[0].contradiction, "runtime-mismatch");
 });
 
 test("a shortened series title is identified by the episode names of its files", async () => {

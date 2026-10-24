@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Keep candidates eligible when filename years, torrent timestamps or episode numbers have unverified scope; use filename years to score films only until series-year scope is known (#ttv-225).
+
 ## 0.66.9
 
 - **Fix**: Preserve scoped parent-folder and alternate-title evidence, check bounded alias candidates alongside direct matches, and search in the language of each title spelling (#ttv-57).
