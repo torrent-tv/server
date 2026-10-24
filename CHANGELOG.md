@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.8
 
 - **Fix**: Treat self-titled zero-number container tags as films, reject address metadata contradicted by measured runtime, and refresh artwork when the identified work changes (#ttv-176).
 
