@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.7
 
 - **Fix**: Explain that playback is waiting for source byte ranges for upcoming segments, rather than saying the media positions are unknown. The forecast already has the viewer's target time; the missing fact is which source bytes those segments read (#ttv-244).
 
