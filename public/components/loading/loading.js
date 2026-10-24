@@ -5811,9 +5811,11 @@ export class Loading extends StateDerivedView {
         if (Date.now() - lastGrowthAt >= PREBUFFER_NUDGE_AFTER_MS) {
           lastGrowthAt = Date.now();
           const end = bufferedEndSeconds(videoElement);
-          this.#logEvt(`prebuffer stood still at ${ahead.toFixed(1)}s — pointing the loader at ${end.toFixed(1)}s`);
-          waitTrace.run("C1.4.resume-loader-at-buffered-end",
+          const restarted = waitTrace.run("C1.4.resume-loader-at-buffered-end",
             () => this.#hlsPlayer.resumeLoadAt(end), { process: "C1.4", bufferedEndSeconds: end });
+          this.#logEvt(`prebuffer stood still at ${ahead.toFixed(1)}s — ${restarted
+            ? `restarting HLS loading at ${end.toFixed(1)}s`
+            : "waiting for the active segment request"}`);
         }
       } else {
         lastAhead = ahead;

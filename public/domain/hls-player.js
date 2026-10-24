@@ -583,14 +583,10 @@ export function fragmentAt(fragments, position) {
 }
 
 /**
- * Restart the HLS network controllers at a known media time.
+ * Restart the HLS network controllers at a known media time, but do not cancel
+ * a segment request that is still waiting for the proxy to produce it.
  *
- * `startLoad(position)` resets the stream controller, but the public HLS
- * `started` flag remains true. During a paused prebuffer stall, explicitly
- * disabling and re-enabling loading also resets that outer state before the
- * next fragment is selected.
- *
- * @param {{ stopLoad: () => void, startLoad: (position: number) => void } | null} instance
+ * @param {{ inFlightFragments?: Record<string, unknown>, startLoad: (position: number) => void } | null} instance
  * @param {number} position - Seconds on the timeline.
  * @returns {boolean} Whether loading was restarted.
  */
@@ -598,7 +594,9 @@ export function restartLoadAt(instance, position) {
   if (!instance || !Number.isFinite(position) || position < 0) {
     return false;
   }
-  instance.stopLoad();
+  if (Object.values(instance.inFlightFragments ?? {}).some(Boolean)) {
+    return false;
+  }
   instance.startLoad(position);
   return true;
 }
