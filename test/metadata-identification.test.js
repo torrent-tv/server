@@ -54,6 +54,21 @@ test("the title ends at the year, and a sequel's number is part of it", () => {
   assert.equal(parseReleaseName("A.Nightmare.on.Elm.Street.1080p.rus.LostFilm.TV.mkv").years, null);
 });
 
+test("parenthesized original-language titles survive while numeric filenames do not", () => {
+  const rosebud = parseReleaseName("Бутон розы (Rosebud).BDRip1080p.by ExKinoRay & Shkiper.mkv");
+  assert.ok(rosebud.titles.includes("Бутон розы"));
+  assert.ok(rosebud.titles.includes("Rosebud"));
+  assert.deepEqual(parseReleaseName("00000.torrent").titles, []);
+  assert.deepEqual(parseReleaseName("VIDEO_TS").titles, []);
+  assert.deepEqual(parseReleaseName("VTS_01_1.VOB").titles, []);
+});
+
+test("a same-script parenthesized cast credit is not added as a title", () => {
+  const name = parseReleaseName("Стрелок (Джон Форд).1950.BDRip.mkv");
+  assert.deepEqual(name.titles.slice(0, 1), ["Стрелок"]);
+  assert.ok(!name.titles.includes("Джон Форд"));
+});
+
 /**
  * @param {"tv" | "movie"} kind
  * @param {string} query

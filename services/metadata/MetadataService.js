@@ -68,6 +68,11 @@ function boundedText(value, limit = 200) {
   return typeof value === "string" ? value.slice(0, limit) : null;
 }
 
+/** Search in the language of the release spelling, independently of display. */
+function searchLanguageOf(title) {
+  return /\p{Script=Cyrillic}/u.test(title) ? "ru-RU" : "en-US";
+}
+
 function candidateEvidence(searches) {
   const candidates = new Map();
   let truncated = 0;
@@ -385,9 +390,10 @@ export class MetadataService {
     const addQuery = (text) => {
       const sent = String(text).replace(/[`´ʼ’‘]/g, "'").replace(/\s+/g, " ").trim();
       const normalized = normalizeTitle(sent);
-      if (normalized.length >= 2 && !seen.has(normalized) && queries.length < MAX_QUERIES) {
+      if (normalized.length >= 2 && !/^\d+$/u.test(normalized) && !/^(?:stream|video ts|vts \d+)$/iu.test(normalized) &&
+          !seen.has(normalized) && queries.length < MAX_QUERIES) {
         seen.add(normalized);
-        queries.push({ sent, normalized });
+        queries.push({ sent, normalized, language: searchLanguageOf(sent) });
       }
     };
     for (const reading of readings) {
@@ -406,14 +412,14 @@ export class MetadataService {
     }
 
     const searches = await Promise.all(
-      queries.flatMap(({ sent, normalized }) =>
+      queries.flatMap(({ sent, normalized, language: searchLanguage }) =>
         kinds.map(async (kind) => {
           try {
-            const found = await this.#search(kind, sent, language, { deadlineAt, signal }, hasDuration ? MAX_RUNTIME_SEARCH_PAGES : MAX_SEARCH_PAGES);
-            return { kind, query: normalized, language, status: found.capped ? "capped" : "complete", ...found };
+            const found = await this.#search(kind, sent, searchLanguage, { deadlineAt, signal }, hasDuration ? MAX_RUNTIME_SEARCH_PAGES : MAX_SEARCH_PAGES);
+            return { kind, query: normalized, language: searchLanguage, status: found.capped ? "capped" : "complete", ...found };
           } catch (error) {
             if (error instanceof MetadataUnavailableError) {
-              return { kind, query: normalized, language, status: "failed", results: [], pagesFetched: 0, totalPages: null };
+              return { kind, query: normalized, language: searchLanguage, status: "failed", results: [], pagesFetched: 0, totalPages: null };
             }
             throw error;
           }
@@ -447,16 +453,43 @@ export class MetadataService {
     // restricting the candidates by their years: the provider's alternative
     // titles (a transliterated or romanized name), and, for a series, its
     // episodes.
-    if (identity.status === "not-found" || identity.status === "undetermined") {
+    const hasRejectedSearchResults = searches.some(search => search.results.some(result => {
+      const title = normalizeTitle(result.name);
+      const original = normalizeTitle(result.originalName);
+      return title !== search.query && original !== search.query &&
+        !title.startsWith(`${search.query} `) && !original.startsWith(`${search.query} `);
+    }));
+    const rejectedYearMatches = searches.some(search => search.results.some(result => {
+      const title = normalizeTitle(result.name);
+      const original = normalizeTitle(result.originalName);
+      const rejected = title !== search.query && original !== search.query &&
+        !title.startsWith(`${search.query} `) && !original.startsWith(`${search.query} `);
+      return rejected && Number.isInteger(result.year) && statedYears.some(year => Math.abs(year - result.year) <= 1);
+    }));
+    if (identity.status === "not-found" || identity.status === "undetermined" ||
+        ((identity.status === "identified" || identity.status === "ambiguous") && hasRejectedSearchResults &&
+          (queries.length > 1 || rejectedYearMatches))) {
       try {
         const byAlternative = await this.#identifyByAlternativeTitles({
           searches,
           queries: queries.map((query) => query.normalized),
+          statedYears,
           deadlineAt,
           signal
         });
         diagnostics.stages.push({ name: "alternative-title", status: byAlternative.status, ...byAlternative.diagnostics });
-        identity = combineStages(identity, byAlternative);
+        if (byAlternative.candidates?.length) {
+          const merged = new Map((identity.candidates ?? []).map(candidate => [`${candidate.kind}:${candidate.tmdbId}`, candidate]));
+          let nextOrder = Math.max(-1, ...(identity.candidates ?? []).map(candidate => candidate.order)) + 1;
+          for (const candidate of byAlternative.candidates) {
+            const key = `${candidate.kind}:${candidate.tmdbId}`;
+            if (!merged.has(key)) merged.set(key, { ...candidate, order: nextOrder++ });
+          }
+          const candidates = [...merged.values()].sort((left, right) => left.order - right.order);
+          identity = { status: candidates.length > 1 ? "ambiguous" : "identified", candidates };
+        } else if (identity.candidates?.length === 0) {
+          identity = combineStages(identity, byAlternative);
+        }
         if (byAlternative.status !== "identified" && kinds.includes("tv") && episodeEvidence) {
           const byEpisodes = await this.#identifyByEpisodes({ searches, episodeEvidence, language, deadlineAt, signal });
           diagnostics.stages.push({ name: "episode-title", status: byEpisodes.status, ...byEpisodes.diagnostics });
@@ -464,10 +497,12 @@ export class MetadataService {
         }
       } catch (error) {
         if (error instanceof MetadataUnavailableError) {
-          diagnostics.stages.push({ name: diagnostics.stages.at(-1)?.name === "title" ? "alternative-title" : "episode-title", status: "unavailable" });
-          return { status: "unavailable", searches: reportedSearches(searches), diagnostics };
+          diagnostics.stages.push({ name: "alternative-title", status: "unavailable" });
+          if (!identity.candidates?.length) {
+            return { status: "unavailable", searches: reportedSearches(searches), diagnostics };
+          }
         }
-        throw error;
+        else throw error;
       }
     }
     const pool = identity.candidates ?? [];
@@ -599,18 +634,30 @@ export class MetadataService {
    * @param {object} params
    * @returns {Promise<import("./identification.js").Identity>}
    */
-  async #identifyByAlternativeTitles({ searches, queries, deadlineAt, signal }) {
+  async #identifyByAlternativeTitles({ searches, queries, statedYears = [], deadlineAt, signal }) {
     const admitted = [];
     const seen = new Set();
     for (const search of searches) {
       for (const result of search.results) {
+        const title = normalizeTitle(result.name);
+        const original = normalizeTitle(result.originalName);
+        if (title === search.query || original === search.query || title.startsWith(`${search.query} `) || original.startsWith(`${search.query} `)) {
+          continue;
+        }
         const key = `${search.kind}:${result.id}`;
         if (!seen.has(key)) {
           seen.add(key);
-          admitted.push({ kind: search.kind, result });
+          admitted.push({ kind: search.kind, result, order: admitted.length });
         }
       }
     }
+    // Check the most relevant returned-but-rejected results first. A release
+    // year is useful for ordering catalogue reads, but never admits a result.
+    admitted.sort((left, right) => {
+      const distance = candidate => Number.isInteger(candidate.result.year) && statedYears.length
+        ? Math.min(...statedYears.map(year => Math.abs(year - candidate.result.year))) : Infinity;
+      return distance(left) - distance(right) || left.order - right.order;
+    });
     const toCheck = admitted.slice(0, MAX_ALTERNATIVE_CHECKS);
     const checked = await Promise.all(
       toCheck.map(async ({ kind, result }) => ({

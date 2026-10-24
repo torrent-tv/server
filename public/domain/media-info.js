@@ -94,9 +94,15 @@ export function shapeOf(contents) {
  * @returns {string}
  */
 function stemOf(path) {
-  const name = String(path ?? "").split("/").pop() ?? "";
+  const name = String(path ?? "").split(/[\\/]/u).pop() ?? "";
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/** Parent folders of one picture, nearest first, without season labels. */
+function parentNames(path) {
+  return String(path ?? "").split(/[\\/]/u).slice(0, -1).reverse()
+    .filter(name => name.trim() && !/^(?:season|сезон|s)[ ._-]*\d{1,3}$/iu.test(name.trim()));
 }
 
 /**
@@ -126,7 +132,8 @@ export function releaseIdentification({ selectionNames, contents, filesByIndex }
     return { names: boundedNames(names), kindHint: "tv", episodeEvidence: episodeEvidenceOf(items) };
   }
   const [only] = items;
-  names.push(stemOf(filesByIndex.get(only?.fileIndex)?.relativePath ?? ""));
+  const filePath = filesByIndex.get(only?.fileIndex)?.relativePath ?? "";
+  names.push(stemOf(filePath), ...parentNames(filePath));
   return { names: boundedNames(names), kindHint: only?.episode ? "tv" : null };
 }
 
@@ -173,11 +180,8 @@ export function episodeEvidenceOf(items) {
  * @returns {{ names: string[], kindHint: "tv" | null }}
  */
 export function pictureIdentification(file, item) {
-  const parts = String(file?.relativePath ?? "").split("/");
-  const folder = parts.length > 1 ? parts[parts.length - 2] : "";
-  const seasonFolder = /^(?:season|сезон|s)[ ._-]*\d{1,3}$/iu.test(folder.trim());
   return {
-    names: boundedNames([stemOf(file?.relativePath ?? ""), seasonFolder ? "" : folder]),
+    names: boundedNames([stemOf(file?.relativePath ?? ""), ...parentNames(file?.relativePath ?? "")]),
     kindHint: item?.episode ? "tv" : null
   };
 }

@@ -116,6 +116,18 @@ test("one picture of an undetermined release is asked about by its own name and 
   assert.deepEqual(pictureIdentification({ relativePath: "Season_01/s01e01_Pilot.avi" }, { episode: marker(1, [1]) }).names, [
     "s01e01_Pilot"
   ]);
+  assert.deepEqual(pictureIdentification({ relativePath: "Zero.Dark.Thirty/VIDEO_TS/VTS_01_1.VOB" }, {}).names, [
+    "VTS_01_1", "VIDEO_TS", "Zero.Dark.Thirty"
+  ]);
+});
+
+test("a single-picture release carries its descriptor-root folder with that file", () => {
+  const request = releaseIdentification({
+    selectionNames: [],
+    contents: { shape: "single", items: [{ fileIndex: 0 }] },
+    filesByIndex: new Map([[0, { relativePath: "Zero.Dark.Thirty/VIDEO_TS/VTS_01_1.VOB" }]])
+  });
+  assert.deepEqual(request.names, ["VTS_01_1", "VIDEO_TS", "Zero.Dark.Thirty"]);
 });
 
 test("a series lacking a season the files name is not this release", () => {
