@@ -61,9 +61,11 @@ test("a proxy without the readiness forecast is identified", () => {
   );
 });
 
-test("unknown media positions and unknown arrivals remain distinct waiting causes", () => {
+test("unresolved source byte ranges are not described as unknown media positions", () => {
   assert.match(formatWaitingText({ readinessReason: "source-input-ranges-unavailable" }),
-    /required media positions have not been determined/);
+    /source byte ranges needed by upcoming segments are not available yet/);
+  assert.doesNotMatch(formatWaitingText({ readinessReason: "source-input-ranges-unavailable" }),
+    /media positions have not been determined/);
   assert.match(formatWaitingText({ readinessReason: "download-schedule-unavailable" }),
     /Arrival times for required source data are not available/);
 });

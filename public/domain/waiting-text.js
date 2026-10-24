@@ -273,7 +273,7 @@ export function formatWaitingText(measurements = {}) {
     ["download-rate-unavailable", "The source download has not been measured"],
     ["download-schedule-unavailable", "Arrival times for required source data are not available"],
     ["minimum-safe-delay", "Playback readiness has not been confirmed"],
-    ["source-input-ranges-unavailable", "The required media positions have not been determined"],
+    ["source-input-ranges-unavailable", "The source byte ranges needed by upcoming segments are not available yet"],
     ["source-measurement-unavailable", "Source measurements are not available"],
     ["media-continuity-unavailable", "A gap in the required media timeline prevents playback"],
     ["service-not-advancing", "A required data service is not progressing"],
