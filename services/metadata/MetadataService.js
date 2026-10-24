@@ -379,7 +379,7 @@ export class MetadataService {
     const deadlineAt = this.#now() + (hasSupplementalEvidence ? EVIDENCE_REQUEST_BUDGET_MS : REQUEST_BUDGET_MS);
     const seriesEvidence = readings.some((reading) => reading.seriesEvidence);
     const kinds = kindHint ? [kindHint] : seriesEvidence ? ["tv"] : ["tv", "movie"];
-    const statedYears = [...new Set([...readings.map((reading) => reading.years?.from), ...sourceYears].filter(Number.isInteger))];
+    const statedYears = seriesEvidence ? [] : [...new Set([...readings.map((reading) => reading.years?.from), ...sourceYears].filter(Number.isInteger))];
 
     // What is SENT is the spelling as written, apostrophes made plain: a
     // provider's own search may not find `christies` for `Christie's`. What is

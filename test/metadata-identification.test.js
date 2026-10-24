@@ -116,15 +116,22 @@ test("a remake is two candidates, and the stated year scores the right one first
   assert.equal(rankCandidates(identity.candidates, new Map(), {})[0].tmdbId, 1);
 });
 
-test("the stated year outweighs an exact-title advantage and a different year is a contradiction", () => {
+test("the stated year ranks candidates without excluding a different year", () => {
   const candidates = [
     { kind: "movie", tmdbId: 1, title: "Title", year: 1984, titleMatch: "exact", order: 0 },
     { kind: "movie", tmdbId: 2, title: "Title: Recut", year: 2025, titleMatch: "prefix", order: 1 }
   ];
   const ranked = rankCandidates(candidates, new Map(), { statedYears: [2025] });
   assert.equal(ranked[0].tmdbId, 2);
-  assert.equal(ranked[1].contradiction, "year-mismatch");
+  assert.equal(ranked[1].contradiction, null);
   assert.equal(rankCandidates(candidates, new Map(), { statedYears: [2024] })[0].tmdbId, 2, "a one-year catalogue difference remains eligible");
+});
+
+test("a series filename year is not compared with the series premiere year", () => {
+  const candidate = { kind: "tv", tmdbId: 1, title: "Series", year: 2015, titleMatch: "exact", order: 0 };
+  const [ranked] = rankCandidates([candidate], new Map(), { statedYears: [2018], series: true });
+  assert.equal(ranked.shares.year, 0);
+  assert.equal(ranked.contradiction, null);
 });
 
 test("a runtime far below the measured file duration is a contradiction", () => {

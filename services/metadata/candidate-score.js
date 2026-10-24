@@ -5,10 +5,11 @@
  * always chooses (decided with the user, torrent-tv/meta#172). The choice is
  * made in two steps.
  *
- * 1. **A candidate that contradicts a fact of the release is set aside**: a
- *    film offered for a release of numbered episodes, a work that started after
- *    the torrent was created, an episode number beyond the season's count. If
- *    every candidate contradicts something, no work is identified.
+ * 1. **A candidate that contradicts validated release evidence is set aside**:
+ *    a film offered for a release of numbered episodes, or a runtime far below
+ *    the measured duration. Filename years, descriptor dates and episode
+ *    numbers are ranking evidence only because they may describe a season,
+ *    extras or incorrect metadata.
  * 2. **The rest are ranked by a score**: each feature gives a share from 0 to 1,
  *    an unknown feature gives 0 and takes nothing away, and the shares are
  *    weighted and added. A sum, not an order of features: an order lets a small
@@ -22,9 +23,8 @@
 import { normalizeTitle } from "./title.js";
 
 /**
- * Year and runtime dominate the score when the release states them. A year
- * mismatch beyond one year, or a runtime below 70% of the measured duration,
- * is also a contradiction and cannot identify a candidate. A 300-release
+ * Year and runtime dominate the score when the release states them. A runtime
+ * below 70% of the measured duration is a contradiction. A 300-release
  * IMDb-labelled survey retained these weights after a train/holdout fit;
  * feature coverage and the measured result are recorded in torrent-tv/meta#172.
  */
@@ -109,20 +109,11 @@ function episodeCountOf(record, season) {
  */
 function contradiction(candidate, record, evidence) {
   if (evidence.series && candidate.kind === "movie") return "film-for-episodes";
-  if (Number.isInteger(candidate.year) && evidence.statedYears?.length > 0 &&
-      Math.min(...evidence.statedYears.map(year => Math.abs(year - candidate.year))) > 1) return "year-mismatch";
-  if (Number.isInteger(evidence.createdYear) && Number.isInteger(candidate.year) && candidate.year > evidence.createdYear) {
-    return "after-torrent";
-  }
   const duration = evidence.durationSeconds;
   const runtimes = record ? (candidate.kind === "movie" ? [record.runtimeSeconds] : record.episodeRuntimeSeconds ?? []) : [];
   if (Number.isFinite(duration) && duration > 0 && runtimes.some(runtime => Number.isFinite(runtime) && runtime > 0) &&
       Math.max(...runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0)
         .map(runtime => Math.min(duration / runtime, runtime / duration))) < MIN_RUNTIME_SHARE) return "runtime-mismatch";
-  for (const [season, highest] of evidence.highestEpisode ?? []) {
-    const count = episodeCountOf(record, season);
-    if (count !== null && highest > count) return "episode-beyond-season";
-  }
   return null;
 }
 
@@ -135,7 +126,9 @@ function contradiction(candidate, record, evidence) {
  * @returns {{ title: number, year: number, runtime: number, episodes: number, russianTitle: number, releaseCount: number, episodeTitles: number, language: number }}
  */
 function shares(candidate, record, evidence) {
-  const years = evidence.statedYears ?? [];
+  // For a series release, a filename year can be a season or edition year.
+  // Until parsing can establish its scope, do not compare it to the series' premiere year.
+  const years = evidence.series ? [] : evidence.statedYears ?? [];
   const yearGap = Number.isInteger(candidate.year) && years.length > 0
     ? Math.min(...years.map((year) => Math.abs(year - candidate.year)))
     : null;
