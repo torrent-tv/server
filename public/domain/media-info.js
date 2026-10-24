@@ -453,6 +453,24 @@ export function addressRecord(state, fileIndex) {
 }
 
 /**
+ * Which work a file is shown as, as one string: the database record when there
+ * is one, else the title and year. `null` while no work is known. A picture
+ * chosen for one work is not kept for another (torrent-tv/meta#176).
+ *
+ * @param {object | null} state - What `MEDIA_INFO:CHANGED` publishes.
+ * @param {number} fileIndex
+ * @returns {string | null}
+ */
+export function workIdentity(state, fileIndex) {
+  const raw = state?.pictures?.[String(fileIndex)] ?? state?.work ?? null;
+  if (!raw) return null;
+  const record = addressRecord(state, fileIndex);
+  if (record) return `${record.type}:${record.kind ?? ""}:${record.id}`;
+  const work = raw.normalized ?? raw;
+  return `title:${work.title ?? ""}:${work.year ?? ""}`;
+}
+
+/**
  * The episode numbers a release's files state, as identification evidence: a
  * candidate whose season holds fewer episodes than the release cannot be it.
  * `season` is `null` for a number that names no season (`Drifters - 01`).

@@ -1,5 +1,5 @@
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, signalApp } from "../../shared/events.js";
-import { playerArt } from "../../domain/media-info.js";
+import { playerArt, workIdentity } from "../../domain/media-info.js";
 import { waitTrace } from "../../domain/wait-trace.js";
 import { navigableSections } from "../../domain/chapter-navigation.js";
 import { ChapterTimeline } from "./chapter-timeline.js";
@@ -588,11 +588,16 @@ export class Player extends StateDerivedView {
 
   /**
    * The picture chosen for the current load of a file. `playerArt` picks one
-   * of several equally suitable images at random, so it is asked once per load:
-   * a later answer from the metadata service does not swap a picture the
-   * viewer is already looking at.
+   * of several equally suitable images at random, so it is asked once per load
+   * and work: a later answer from the metadata service does not swap a picture
+   * the viewer is already looking at for another of the same work, but a
+   * different work chooses again (torrent-tv/meta#176: the first card of
+   * `Frankenstein.rus.LostFilm.TV.avi` is corrected seconds later).
    */
   #loadArt = null;
+
+  /** The work `#loadArt` was chosen for (`workIdentity`). */
+  #loadArtWork = null;
 
   /** @param {CustomEvent} event */
   #onMediaInfo = (event) => {
@@ -645,6 +650,9 @@ export class Player extends StateDerivedView {
     const showPoster = (shown) => poster.classList.toggle("player__poster--shown", shown);
     // The picture fills the video, and the video is the whole viewport
     // (`#player__controller` is 100dvw x 100dvh), so the viewport is its size.
+    const work = workIdentity(this.#media, this.#activeFileIndex);
+    if (work !== this.#loadArtWork) this.#loadArt = null;
+    this.#loadArtWork = work;
     this.#loadArt ??= playerArt(this.#media, this.#activeFileIndex, window.innerWidth, window.innerHeight, window.devicePixelRatio);
     const art = this.#loadArt;
     if (!art?.url) { showPoster(false); poster.removeAttribute("src"); return; }

@@ -1,6 +1,7 @@
 ## Unreleased
 
 - **Fix**: Identify a film whose MP4 carries TV-show items with season 0, episode 0 and its own title as a film, not as a "Specials" episode searched among series only (#ttv-176).
+- **Fix**: Choose the player's picture and the system media controls' poster again when a later answer names another work; the first card of `Frankenstein.rus.LostFilm.TV.avi` is corrected seconds after it is shown (#ttv-176).
 
 ## 0.66.5
 

@@ -1,5 +1,5 @@
 import { APP_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
-import { episodeLabel, systemArtwork, workFor, workLine } from "../../domain/media-info.js";
+import { episodeLabel, systemArtwork, workFor, workIdentity, workLine } from "../../domain/media-info.js";
 
 /**
  * MediaSession integration.
@@ -29,10 +29,14 @@ export class MediaSessionBridge {
   #media = null;
   /**
    * The poster chosen for the file being played. `systemArtwork` picks one of
-   * several equally suitable posters at random, so it is asked once per file:
-   * a later answer from the metadata service does not swap it.
+   * several equally suitable posters at random, so it is asked once per file
+   * and work: a later answer naming the same work does not swap it, one naming
+   * another work does (torrent-tv/meta#176).
    */
   #artwork = null;
+
+  /** The work `#artwork` was chosen for (`workIdentity`). */
+  #artworkWork = null;
 
   constructor() {
     if (typeof navigator !== "object" || !("mediaSession" in navigator)) {
@@ -204,6 +208,9 @@ export class MediaSessionBridge {
     const work = workFor(this.#media, this.#currentFileIndex);
     const match = this.#media?.episodes?.[String(this.#currentFileIndex)] ?? null;
     const title = match ? episodeLabel(match, { withSeason: match.season }) : (workLine(work) ?? fileName);
+    const shownWork = workIdentity(this.#media, this.#currentFileIndex);
+    if (shownWork !== this.#artworkWork) this.#artwork = null;
+    this.#artworkWork = shownWork;
     if (!this.#artwork?.length) this.#artwork = systemArtwork(this.#media, this.#currentFileIndex);
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
