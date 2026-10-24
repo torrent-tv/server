@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.11
 
 - **Fix**: Restart paused HLS loading from the end of the buffered media when cold-start preparation stops receiving segments.
 
