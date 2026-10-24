@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: media-chrome 4.19.3 → 4.19.4; 1 package(s) changed in the lock file.
+
 ## 0.66.5
 
 - **New**: Record timed steps while requesting local-network permission during proxy connection retry (#ttv-185).
