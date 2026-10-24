@@ -12,8 +12,8 @@ import { CATEGORY, EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.
 import { RequestGate, MetadataUnavailableError } from "./RequestGate.js";
 import { MetadataCache } from "./MetadataCache.js";
 import { providerFailure, registerDiagnosticSecret } from "./provider-diagnostics.js";
-import { normalizeTitle } from "./title.js";
 import { requestJson, wordsOf, yearOf } from "./adult-http.js";
+import { matchesAdultNameEvidence } from "./adult-name-evidence.js";
 
 const ENDPOINT = "https://stashdb.org/graphql";
 
@@ -79,12 +79,8 @@ export class StashDbProvider extends MetadataProvider {
         const words = wordsOf(name);
         if (!words) continue;
         const data = await this.#query(BY_TERM, { t: words });
-        const reading = normalizeTitle(words);
-        const years = [...words.matchAll(/\b(?:19|20)\d{2}\b/gu)].map(match => Number(match[0]));
         for (const scene of data?.searchScene ?? []) {
-          const title = normalizeTitle(scene?.title);
-          const year = yearOf(scene?.release_date);
-          if (scene?.id && title && reading.includes(title) && (years.length === 0 || year === undefined || years.includes(year))) found.set(scene.id, scene);
+          if (scene?.id && matchesAdultNameEvidence({ ...request, names: [name] }, scene)) found.set(scene.id, scene);
         }
       }
       if (found.size === 1) return this.#identified([...found.values()][0]);

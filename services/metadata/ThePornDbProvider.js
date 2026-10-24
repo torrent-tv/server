@@ -12,6 +12,7 @@ import { RequestGate, MetadataUnavailableError } from "./RequestGate.js";
 import { MetadataCache } from "./MetadataCache.js";
 import { providerFailure, registerDiagnosticSecret } from "./provider-diagnostics.js";
 import { requestJson, yearOf } from "./adult-http.js";
+import { matchesAdultNameEvidence } from "./adult-name-evidence.js";
 
 const BASE = "https://api.theporndb.net";
 
@@ -79,7 +80,9 @@ export class ThePornDbProvider extends MetadataProvider {
       }
       const found = new Map();
       for (const name of (request.names ?? []).slice(0, 4)) {
-        for (const scene of await this.#scenes(new URLSearchParams({ parse: name, per_page: "5" }))) found.set(scene.id, scene);
+        for (const scene of await this.#scenes(new URLSearchParams({ parse: name, per_page: "5" }))) {
+          if (matchesAdultNameEvidence({ ...request, names: [name] }, scene)) found.set(scene.id, scene);
+        }
       }
       if (found.size === 1) return this.#identified([...found.values()][0]);
       return { status: found.size > 1 ? "ambiguous" : "not-found" };
