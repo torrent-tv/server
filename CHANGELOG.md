@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Preserve scoped parent-folder and alternate-title evidence, check bounded alias candidates alongside direct matches, and search in the language of each title spelling (#ttv-57).
+
 ## 0.66.8
 
 - **Fix**: Treat self-titled zero-number container tags as films, reject address metadata contradicted by measured runtime, and refresh artwork when the identified work changes (#ttv-176).

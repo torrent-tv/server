@@ -24,10 +24,13 @@ import { ImageFetcher } from "../services/metadata/ImageFetcher.js";
  */
 function fakeSource(table, { fail = new Set(), totalPages = 1, seasons = {}, alternative = {}, works = {} } = {}) {
   const asked = [];
+  const searchLanguages = [];
   return {
     asked,
-    async search(kind, query, _language, page) {
+    searchLanguages,
+    async search(kind, query, language, page) {
       asked.push(`search|${kind}|${query}|${page}`);
+      searchLanguages.push({ kind, query, language });
       if (fail.has(`${kind}|${query}`)) {
         throw new MetadataUnavailableError("the provider answered 500");
       }
@@ -129,11 +132,22 @@ test("a search is cached per language, and a repeated question asks nothing", as
   const source = fakeSource({ "movie|Title": [{ id: 1, name: "Title", year: 2020 }] });
   const metadata = service(source);
   await metadata.identify({ names: ["Title.2020"], kindHint: "movie", language: "en-US" });
-  const afterFirst = source.asked.length;
+  const afterFirst = source.asked.filter(line => line.startsWith("search|")).length;
   await metadata.identify({ names: ["Title.2020"], kindHint: "movie", language: "en-US" });
-  assert.equal(source.asked.length, afterFirst);
+  assert.equal(source.asked.filter(line => line.startsWith("search|")).length, afterFirst);
   await metadata.identify({ names: ["Title.2020"], kindHint: "movie", language: "de-DE" });
-  assert.ok(source.asked.length > afterFirst);
+  assert.equal(source.asked.filter(line => line.startsWith("search|")).length, afterFirst);
+  assert.ok(source.asked.some(line => line.startsWith("work|movie|1")));
+});
+
+test("search language follows the release title spelling, not the display language", async () => {
+  const source = fakeSource({
+    "tv|Drifters": [{ id: 1, name: "Drifters", year: 2016 }],
+    "tv|Скитальцы": [{ id: 1, name: "Drifters", year: 2016 }]
+  });
+  await service(source).identify({ names: ["Drifters", "Скитальцы"], kindHint: "tv", language: "de-DE" });
+  assert.ok(source.searchLanguages.some(search => search.query === "Drifters" && search.language === "en-US"));
+  assert.ok(source.searchLanguages.some(search => search.query === "Скитальцы" && search.language === "ru-RU"));
 });
 
 test("identification retains bounded database search results and scores a container item year", async () => {
@@ -174,6 +188,20 @@ test("without a stated year alternative titles still identify the work", async (
   assert.equal(answer.status, "identified");
   assert.equal(answer.work.tmdbId, 110402);
   assert.ok(source.asked.some((line) => line.startsWith("alternative|")));
+});
+
+test("a returned alias candidate is scored even when an unrelated main-title match exists", async () => {
+  const source = fakeSource({
+    "movie|Wrong": [{ id: 1, name: "Wrong", year: 2000 }],
+    "movie|Alias": [{ id: 1, name: "Wrong", year: 2000 }, { id: 2, name: "Unrelated", year: 2024 }]
+  }, { alternative: { "movie|2": ["Alias"] } });
+  const answer = await service(source).identify({
+    names: ["Wrong", "Alias"], kindHint: "movie", statedYears: [2024], language: "en-US"
+  });
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 2);
+  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 2).titleMatch, "alternative");
+  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 1).contradiction, "year-mismatch");
 });
 
 test("First Blood is identified by its Rambo alias when no year is stated, but a conflicting year is rejected", async () => {

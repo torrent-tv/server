@@ -19,6 +19,7 @@
  */
 
 import { normalizeTitle } from "./title.js";
+import { matchesRussianTransliteration } from "./russian-transliteration.js";
 
 /**
  * One search as the decision sees it.
@@ -165,7 +166,8 @@ export function decideByEpisodeTitles({ checked, titles, uncheckedRemain }) {
 export function decideByAlternativeTitles({ checked, queries, uncheckedRemain }) {
   const wanted = new Set(queries);
   const qualifiers = checked
-    .filter(({ titles }) => titles.some((title) => wanted.has(normalizeTitle(title))))
+    .filter(({ titles }) => titles.some((title) => wanted.has(normalizeTitle(title)) ||
+      queries.some(query => matchesRussianTransliteration(query, title) || matchesRussianTransliteration(title, query))))
     .map(({ candidate }) => ({ ...candidate, titleMatch: "alternative" }));
   if (qualifiers.length >= 2) {
     return { status: "ambiguous", candidates: qualifiers.slice(0, 5) };

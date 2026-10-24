@@ -35,12 +35,12 @@ import { normalizeReleaseSources } from "./release-properties.js";
 const RELEASE_TAGS = new Set([
   "4k", "uhd", "hdr", "hdr10", "dv", "sdr", "imax",
   "web", "webdl", "webrip", "webdlrip", "bdrip", "bluray", "brrip", "bdremux", "remux",
-  "hdrip", "dvdrip", "hdtv", "dcprip", "uhdbdrip", "dvd9", "dvd5", "dvd", "bd", "tvrip", "satrip",
+  "hdrip", "dvdrip", "hdtv", "hdtvrip", "dcprip", "uhdbdrip", "dvd9", "dvd5", "dvd", "bd", "tvrip", "satrip",
   "x264", "x265", "h264", "h265", "hevc", "avc", "xvid", "divx", "10bit", "8bit",
   "aac", "ac3", "dts", "ddp", "ddp5", "dd5", "truehd", "atmos", "flac", "mp3",
-  "rus", "eng", "ukr", "jap", "dub", "mvo", "dvo", "avo", "sub", "subs", "multi",
+  "rus", "eng", "ukr", "jap", "dub", "mvo", "dvo", "avo", "sub", "subs", "multi", "ext", "tv", "stream",
   "lostfilm", "amzn", "nf", "hmax", "dsnp", "extended", "remastered", "repack", "proper",
-  "unrated", "ntsc", "pal", "mkv", "mp4", "avi", "torrent"
+  "unrated", "ntsc", "pal", "mkv", "mp4", "avi", "torrent", "videots", "vts"
 ]);
 
 /** Words that state a season or an episode count and end a title. */
@@ -180,6 +180,19 @@ function splitByScript(words) {
   return runs;
 }
 
+/** A parenthesized title in another script is a search spelling, not a cast credit. */
+function parenthesizedTitle(group, primary) {
+  const text = String(group ?? "").trim();
+  const words = text.match(/[\p{L}][\p{L}'’ʼ-]*/gu) ?? [];
+  if (words.length < 1 || /\d/u.test(text) || /[/|]/u.test(text)) return null;
+  const scripts = new Set(words.map(scriptOf).filter(script => script !== "neutral" && script !== "other"));
+  if (scripts.size !== 1) return null;
+  const primaryScripts = new Set((Array.isArray(primary) ? primary : [primary]).flatMap(title =>
+    (String(title ?? "").match(/[\p{L}][\p{L}'’ʼ-]*/gu) ?? []).map(scriptOf)));
+  if ([...scripts].some(script => primaryScripts.has(script))) return null;
+  return text;
+}
+
 /**
  * Read one release name.
  *
@@ -227,7 +240,8 @@ export function parseReleaseName(raw) {
       seriesEvidence = true;
       break;
     }
-    if (/^\d{3,4}p$/i.test(bare) || RELEASE_TAGS.has(lower.replace(/[^a-z0-9]/g, ""))) {
+    const tag = lower.replace(/[^a-z0-9]/g, "").replace(/\d{3,4}p$/u, "");
+    if (/^\d{3,4}p$/i.test(bare) || RELEASE_TAGS.has(tag)) {
       break;
     }
     titleWords.push(word);
@@ -236,15 +250,34 @@ export function parseReleaseName(raw) {
   const joined = titleWords.join(" ").replace(/[\s\-–—,:;]+$/g, "");
   const titles = [];
   const seen = new Set();
+  const primaryTitles = [];
   for (const piece of joined.split(/\s*[/|]\s*/)) {
     for (const run of splitByScript(piece.split(" ").filter((word) => word.length > 0))) {
       const cleaned = run.replace(/^[\s\-–—,:;]+|[\s\-–—,:;]+$/g, "");
       const key = normalizeTitle(cleaned);
-      if (key.length < 2 || seen.has(key)) {
+      const numericDescriptor = /^\d+$/u.test(key) && (!YEAR.test(key) || years?.from === Number(key));
+      if (key.length < 2 || numericDescriptor || seen.has(key)) {
         continue;
       }
       seen.add(key);
       titles.push(cleaned);
+      primaryTitles.push(cleaned);
+    }
+  }
+
+  // Parenthesized original-language spellings are common in tracker names.
+  // Keep only a single-script, multiword group that differs from the main
+  // title's script; cast and director credits often mix both scripts or repeat
+  // the release's script and are not title evidence.
+  for (const match of text.matchAll(/\(([^()]*)\)/g)) {
+    const group = match[1];
+    if ((group.match(/[\p{L}][\p{L}'’ʼ-]*/gu) ?? []).length === 1 && match.index > 0 &&
+        !/[\s._-]$/u.test(text.slice(0, match.index))) continue;
+    const candidate = parenthesizedTitle(group, primaryTitles);
+    const key = candidate ? normalizeTitle(candidate) : "";
+    if (key.length >= 2 && !seen.has(key)) {
+      seen.add(key);
+      titles.push(candidate);
     }
   }
 
@@ -260,10 +293,33 @@ export function parseReleaseName(raw) {
     titles.length = 0;
   }
   seriesEvidence ||= Number.isInteger(normalized.season);
+  // GuessIt's clean title can stop before technical tags that the local
+  // release parser does not know. Numeric descriptor names and stream paths
+  // are never title hypotheses.
+  const parserTitles = [release.title, ...(Array.isArray(release.alternative_title) ? release.alternative_title : [release.alternative_title])];
+  for (const [index, value] of parserTitles.entries()) {
+    const parserValue = typeof value === "string" ? value.trim() : "";
+    const parsedTitle = index > 0 ? parenthesizedTitle(parserValue, primaryTitles) : parserValue
+      ? value.trim().replace(/\s+(?:19|20)\d{2}(?:[-–](?:19|20)\d{2})?$/u, "")
+      : "";
+    const key = normalizeTitle(parsedTitle);
+    const parsedWords = key.split(" ").filter(Boolean);
+    const technicalOnly = parsedWords.length > 0 && parsedWords.every(word => RELEASE_TAGS.has(word.replace(/\d{3,4}p$/u, "")) || /^\d{3,4}p$/u.test(word));
+    const numericDescriptor = /^\d+$/u.test(key) && !YEAR.test(key);
+    const metadataWithoutTitle = titles.length === 0 && (years || normalized.source || normalized.resolution || normalized.releaseGroup);
+    if (key.length >= 2 && !metadataWithoutTitle && !technicalOnly && !numericDescriptor && key !== normalizeTitle(release.release_group) &&
+        !/^(?:stream|vts \d+|video ts)$/iu.test(key) && !seen.has(key)) {
+      seen.add(key);
+      titles.push(parsedTitle);
+    }
+  }
   if (Number.isInteger(normalized.episode) && normalized.title &&
       Object.keys(evidence.sources).every(source => evidence.resolutions.title.provenance.some(origin => origin.source === source)) &&
       !seen.has(normalized.title)) {
     titles.push(evidence.candidates.title.find(candidate => candidate.value === normalized.title).rawValue);
+  }
+  if (/^(?:VIDEO[_ .-]?TS|VTS[_ .-]?\d+[_ .-]?\d+|STREAM|0{4,})(?:\.(?:vob|ts|mkv|avi|mp4))?$/iu.test(String(raw ?? "").trim())) {
+    titles.length = 0;
   }
   return { titles, years, seriesEvidence, release: evidence };
 }
