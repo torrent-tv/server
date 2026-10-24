@@ -75,6 +75,22 @@ function recordIds(record) {
   return null;
 }
 
+/** The share of a runtime below which a measured duration is another work's; as `candidate-score.js`. */
+const MIN_RUNTIME_SHARE = 0.7;
+
+/**
+ * Whether a measured duration contradicts a work: a film's runtime, or every
+ * episode runtime of a series, differs from it by more than the share allowed.
+ * A work that states no runtime contradicts nothing.
+ */
+function conflictsWithDuration(work, durationSeconds) {
+  if (!(Number.isFinite(durationSeconds) && durationSeconds > 0)) return false;
+  const runtimes = (work?.kind === "movie" || !Array.isArray(work?.episodeRuntimeSeconds) ? [work?.runtimeSeconds] : work.episodeRuntimeSeconds)
+    .filter(runtime => Number.isFinite(runtime) && runtime > 0);
+  return runtimes.length > 0 &&
+    Math.max(...runtimes.map(runtime => Math.min(durationSeconds / runtime, runtime / durationSeconds))) < MIN_RUNTIME_SHARE;
+}
+
 /** Reject an exact-hash catalogue link when it conflicts with a stated year or measured runtime. */
 function conflictsWithHashIdentity(answer, names, durationSeconds) {
   const work = answer.work?.sources?.tmdb ?? answer.work?.normalized ?? answer.work;
@@ -188,14 +204,14 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
   if (!(Array.isArray(audioLanguages) && audioLanguages.length <= 16 && audioLanguages.every((code) => typeof code === "string" && /^[a-z]{2,3}$/u.test(code)))) {
     return reply.code(400).send({ error: "audioLanguages must hold at most 16 ISO 639 codes." });
   }
-  let answer = await withProviderContext(req, () => metadata.identify({
+  const identify = (withRecord) => withProviderContext(req, () => metadata.identify({
     names: names.map((name) => name.trim()).filter((name) => name.length > 0),
     kindHint,
     durationSeconds,
     torrentCreatedAt,
     episodeNumbers,
     audioLanguages,
-    ...(record ? { externalIds: record } : {}),
+    ...(withRecord && record ? { externalIds: record } : {}),
     requireYear: body.requireYear === true,
     episodeEvidence: evidence,
     subtitleEvidence,
@@ -205,8 +221,17 @@ export async function handleApiMetadataIdentifyPost(req, reply, { metadata, cont
     language: body.language,
     signal: signalOfRequest(reply)
   }));
+  let answer = await identify(true);
   if (body.hashIdentity === true && answer.status === "identified" && conflictsWithHashIdentity(answer, names, durationSeconds)) {
     answer = { status: "not-found" };
+  } else if (record && body.hashIdentity !== true && names.length > 0 && answer.status === "identified" &&
+      (answer.work?.sources?.tmdb?.identification ?? answer.work?.identification) === "external-id" &&
+      conflictsWithDuration(answer.work?.sources?.tmdb ?? answer.work?.normalized ?? answer.work, durationSeconds)) {
+    // The address names the work the page showed, which may be a first answer
+    // from names alone that the measured duration now contradicts (a refresh
+    // during the seconds before `Frankenstein.rus.LostFilm.TV.avi` was
+    // corrected, torrent-tv/meta#176). The evidence decides, as without one.
+    answer = await identify(false);
   }
   // Counts and the outcome only: the names themselves are not logged.
   withProviderContext(req, () => providerOutcome("metadata", "identify", { status: answer.status, names: names.length,

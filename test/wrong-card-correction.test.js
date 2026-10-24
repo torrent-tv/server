@@ -16,6 +16,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ContainerMetadata } from "../services/metadata/ContainerMetadata.js";
+import { handleApiMetadataIdentifyPost } from "../routes/api/metadata/identify/post.js";
 import { containerEpisode, statesEpisode, workIdentity } from "../public/domain/media-info.js";
 import { MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../public/shared/events.js";
 
@@ -50,6 +51,45 @@ test("the shown work's identity changes with the record and only with it", () =>
   assert.equal(workIdentity({ ...film, episodes: { 0: { season: 1, episodes: [{ number: 1 }] } } }, 0), "tmdb:movie:1062722");
   assert.equal(workIdentity({ work: { normalized: { title: "Scene", year: 2020 } } }, 0), "title:Scene:2020");
   assert.equal(workIdentity({ work: null }, 0), null);
+});
+
+/** The route with a provider that answers from a function, and every request it made. */
+async function route(body, answer) {
+  const seen = [];
+  const metadata = { identify: async (request) => { seen.push(request); return answer(request); } };
+  const reply = { raw: { once() {} }, code(status) { reply.status = status; return reply; }, send(payload) { reply.body = payload; return reply; } };
+  await handleApiMetadataIdentifyPost({ body, id: "r" }, reply, { metadata });
+  return { seen, body: reply.body };
+}
+
+const looked = (work) => ({ status: "identified", work: { ...work, sources: { tmdb: { ...work, identification: "external-id" } } } });
+const searched = { status: "identified", work: { kind: "movie", tmdbId: 1062722, sources: { tmdb: { kind: "movie", tmdbId: 1062722, runtimeSeconds: 9000, identification: "scored" } } } };
+const NAMES = ["Frankenstein.rus.LostFilm.TV.torrent", "Frankenstein.rus.LostFilm.TV.avi", "Frankenstein.rus.LostFilm.TV"];
+
+test("an addressed record the measured duration contradicts gives way to the evidence", async () => {
+  const series = { kind: "tv", tmdbId: 40165, episodeRuntimeSeconds: [5280] };
+  const { seen, body } = await route({ names: NAMES, kindHint: null, language: "en-US", durationSeconds: 8998.056,
+    record: { type: "tmdb", id: "40165", kind: "tv" } }, (request) => request.externalIds ? looked(series) : searched);
+  assert.deepEqual(seen.map((request) => request.externalIds ?? null), [{ tmdb: { kind: "tv", id: 40165 } }, null]);
+  assert.equal(body.work.tmdbId, 1062722);
+  assert.equal(seen[1].durationSeconds, 8998.056, "the second question carries the same evidence");
+});
+
+test("an addressed record stays when nothing measured contradicts it", async () => {
+  const film = { kind: "movie", tmdbId: 1062722, runtimeSeconds: 9000 };
+  for (const extra of [{}, { durationSeconds: 8998.056 }]) {
+    const { seen, body } = await route({ names: NAMES, kindHint: null, language: "en-US", ...extra,
+      record: { type: "tmdb", id: "1062722", kind: "movie" } }, () => looked(film));
+    assert.equal(seen.length, 1);
+    assert.equal(body.work.tmdbId, 1062722);
+  }
+  const noRuntime = { kind: "tv", tmdbId: 43455, episodeRuntimeSeconds: [] };
+  const { seen } = await route({ names: ["Moana"], kindHint: null, language: "en-US", durationSeconds: 6948.565,
+    record: { type: "tmdb", id: "43455", kind: "tv" } }, () => looked(noRuntime));
+  assert.equal(seen.length, 1, "a work that states no runtime contradicts nothing");
+  const { seen: bare } = await route({ language: "en-US", durationSeconds: 60, record: { type: "tmdb", id: "1062722", kind: "movie" } },
+    () => looked(film));
+  assert.equal(bare.length, 1, "a lookup without names has nothing to search by");
 });
 
 test("the system media controls choose a poster again only for another work", async () => {
