@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.9
 
 - **Fix**: Preserve scoped parent-folder and alternate-title evidence, check bounded alias candidates alongside direct matches, and search in the language of each title spelling (#ttv-57).
 
