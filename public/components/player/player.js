@@ -1,5 +1,5 @@
 import { APP_EVENTS, ERROR_EVENTS, LOADING_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS, signalApp } from "../../shared/events.js";
-import { playerArt } from "../../domain/media-info.js";
+import { playerArt, workIdentityFor } from "../../domain/media-info.js";
 import { waitTrace } from "../../domain/wait-trace.js";
 import { navigableSections } from "../../domain/chapter-navigation.js";
 import { ChapterTimeline } from "./chapter-timeline.js";
@@ -579,6 +579,7 @@ export class Player extends StateDerivedView {
 
   /** What the metadata service said about the release; see MEDIA_INFO:CHANGED. */
   #media = null;
+  #artworkWorkIdentity = null;
 
   /** Whether the current source has started playing; see #applyPoster. */
   #playbackStarted = false;
@@ -596,7 +597,11 @@ export class Player extends StateDerivedView {
 
   /** @param {CustomEvent} event */
   #onMediaInfo = (event) => {
-    this.#media = event instanceof CustomEvent ? event.detail : null;
+    const nextMedia = event instanceof CustomEvent ? event.detail : null;
+    const nextIdentity = workIdentityFor(nextMedia, this.#activeFileIndex);
+    if (nextIdentity !== this.#artworkWorkIdentity) this.#loadArt = null;
+    this.#artworkWorkIdentity = nextIdentity;
+    this.#media = nextMedia;
     // `null` starts a new release; nothing chosen for the last one applies.
     if (!this.#media) this.#loadArt = null;
     this.#updatePanelTitle();
@@ -608,7 +613,6 @@ export class Player extends StateDerivedView {
     // A new load of a file begins, so a new picture is chosen for it.
     const detail = event instanceof CustomEvent ? event.detail : null;
     const previousFileIndex = this.#activeFileIndex;
-    this.#loadArt = null;
     this.#onActiveFileForPoster(event);
     if (Number.isFinite(detail?.startedAt) &&
       !(this.#awaitingFirstPresentedFrame && previousFileIndex === detail.fileIndex)) {
@@ -623,7 +627,10 @@ export class Player extends StateDerivedView {
     const fileIndex = Number(event instanceof CustomEvent ? event.detail?.fileIndex : NaN);
     const next = Number.isInteger(fileIndex) ? fileIndex : -1;
     // The same load confirmed once it is ready keeps its picture.
-    if (next !== this.#activeFileIndex) this.#loadArt = null;
+    if (next !== this.#activeFileIndex) {
+      this.#loadArt = null;
+      this.#artworkWorkIdentity = workIdentityFor(this.#media, next);
+    }
     this.#activeFileIndex = next;
     this.#updatePanelTitle();
     this.#applyPoster();

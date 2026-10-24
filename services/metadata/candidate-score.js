@@ -30,7 +30,7 @@ import { normalizeTitle } from "./title.js";
  */
 const WEIGHTS = Object.freeze({ title: 8, year: 32, runtime: 24, episodes: 2, russianTitle: 1, releaseCount: 1, episodeTitles: 1, language: 1 });
 
-const MIN_RUNTIME_SHARE = 0.7;
+export const MIN_RUNTIME_SHARE = 0.7;
 
 /** The share a title match gives, by how the candidate was found. */
 const TITLE_SHARE = Object.freeze({ exact: 1, prefix: 0.5, alternative: 0.5, episodes: 0 });

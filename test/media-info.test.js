@@ -15,10 +15,13 @@ import {
   episodeLabel,
   pictureIdentification,
   playlistNaming,
+  pageTitle,
   releaseIdentification,
   seasonFiles,
   seasonsAgree,
-  shapeOf
+  shapeOf,
+  isSelfTitledPlaceholder,
+  workIdentityFor
 } from "../public/domain/media-info.js";
 import { playlistRows } from "../public/domain/playlist-groups.js";
 
@@ -51,6 +54,30 @@ test("a series is identified from every name known, with the show names the file
     "Avatar. The Last Airbender 1 - LostFilm.TV [1080p]",
     "Avatar.The.Last.Airbender"
   ]);
+});
+
+test("self-titled zero-number container tags do not create a special episode", () => {
+  const container = { title: "Moana", seriesTitle: "Moana", season: 0, episode: 0, episodeTitle: "MOÁNA" };
+  assert.equal(isSelfTitledPlaceholder(container), true);
+  const naming = playlistNaming({
+    markers: { 0: marker(0, [0]) },
+    episodes: {},
+    containers: { 0: container },
+    files: [{ index: 0, name: "Moana.mp4" }]
+  });
+  assert.equal(naming.groupKey({ index: 0 }), null);
+  assert.equal(naming.fileLabel({ index: 0 }, { grouped: false }), null);
+  assert.equal(pageTitle({ ...{
+    work: { title: "Moana" }, markers: { 0: marker(0, [0]) }, episodes: {}, containers: { 0: container }
+  } }, 0), "Torrent TV | Moana");
+});
+
+test("artwork identity follows the work, not later details of that work", () => {
+  const initial = { work: { kind: "tv", tmdbId: 40165, title: "Frankenstein", images: [] } };
+  const enriched = { work: { kind: "tv", tmdbId: 40165, title: "Frankenstein", year: 2004, images: [{ file: "poster.jpg" }] } };
+  const corrected = { work: { kind: "movie", tmdbId: 1062722, title: "Frankenstein", year: 2025, images: [] } };
+  assert.equal(workIdentityFor(initial, 0), workIdentityFor(enriched, 0));
+  assert.notEqual(workIdentityFor(enriched, 0), workIdentityFor(corrected, 0));
 });
 
 test("the episode titles sent as evidence are the best-titled season's, without parts or specials", () => {

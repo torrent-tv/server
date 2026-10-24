@@ -117,7 +117,11 @@ export function readContainerFacts(raw) {
 }
 
 /** Whether the facts say the file is an episode of a series. */
-const isEpisode = (facts) => facts.season > 0 || facts.episode > 0 || Boolean(facts.episodeTitle);
+const isEpisode = (facts) => {
+  const selfTitledPlaceholder = !(facts.season > 0) && !(facts.episode > 0) && facts.episodeTitle &&
+    normalizeTitle(facts.episodeTitle) === normalizeTitle(facts.seriesTitle ?? facts.title);
+  return facts.season > 0 || facts.episode > 0 || Boolean(facts.episodeTitle && !selfTitledPlaceholder);
+};
 
 export class ContainerMetadata extends MetadataProvider {
   constructor() {

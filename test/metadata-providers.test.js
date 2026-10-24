@@ -238,3 +238,22 @@ test("a record the address names is looked up, not searched for", async () => {
   assert.equal(byAnilist.work.sources.tmdb.year, 2016);
   assert.ok(searched.some((names) => names.includes("Drifters 2016")));
 });
+
+test("a measured duration rejects a contradictory address record and searches by name", async () => {
+  const searched = [];
+  const tmdb = new TmdbProvider({
+    identifyById: async () => ({ status: "identified", work: { ...work, kind: "movie", tmdbId: 1, runtimeSeconds: 9000, title: "Wrong Frankenstein" } }),
+    identify: async request => {
+      searched.push(request.names);
+      return { status: "identified", work: { ...work, kind: "movie", tmdbId: 1062722, runtimeSeconds: 9000, title: "Frankenstein" } };
+    },
+    episodes: async () => ({ status: "ok" })
+  });
+  const answer = await new MetadataRegistry({ providers: [tmdb] }).identify({
+    names: ["Frankenstein.2025.avi"],
+    externalIds: { tmdb: { kind: "tv", id: 40165 } },
+    durationSeconds: 6000
+  });
+  assert.equal(answer.work.sources.tmdb.tmdbId, 1062722);
+  assert.equal(searched.length, 1);
+});

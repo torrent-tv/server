@@ -1,5 +1,5 @@
 import { APP_EVENTS, MEDIA_INFO_EVENTS, PLAYER_EVENTS } from "../../shared/events.js";
-import { episodeLabel, systemArtwork, workFor, workLine } from "../../domain/media-info.js";
+import { episodeLabel, systemArtwork, workFor, workIdentityFor, workLine } from "../../domain/media-info.js";
 
 /**
  * MediaSession integration.
@@ -33,6 +33,7 @@ export class MediaSessionBridge {
    * a later answer from the metadata service does not swap it.
    */
   #artwork = null;
+  #artworkWorkIdentity = null;
 
   constructor() {
     if (typeof navigator !== "object" || !("mediaSession" in navigator)) {
@@ -55,7 +56,11 @@ export class MediaSessionBridge {
 
   /** @param {Event} event */
   #onMediaInfo = (event) => {
-    this.#media = event instanceof CustomEvent ? event.detail : null;
+    const nextMedia = event instanceof CustomEvent ? event.detail : null;
+    const nextIdentity = workIdentityFor(nextMedia, this.#currentFileIndex);
+    if (nextIdentity !== this.#artworkWorkIdentity) this.#artwork = null;
+    this.#artworkWorkIdentity = nextIdentity;
+    this.#media = nextMedia;
     // `null` starts a new release; nothing chosen for the last one applies.
     if (!this.#media) this.#artwork = null;
     this.#updateMetadata();
@@ -88,7 +93,10 @@ export class MediaSessionBridge {
     const detail = event instanceof CustomEvent ? event.detail : null;
     const fileIndex = Number(detail?.fileIndex);
     const next = Number.isInteger(fileIndex) ? fileIndex : -1;
-    if (next !== this.#currentFileIndex) this.#artwork = null;
+    if (next !== this.#currentFileIndex) {
+      this.#artwork = null;
+      this.#artworkWorkIdentity = workIdentityFor(this.#media, next);
+    }
     this.#currentFileIndex = next;
     this.#updateMetadata();
     this.#updateTrackHandlers();

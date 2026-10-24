@@ -27,6 +27,7 @@
 
 import { CATEGORY, EVIDENCE, STAGE } from "./MetadataProvider.js";
 import { mergeRecords } from "./normalize-work.js";
+import { MIN_RUNTIME_SHARE } from "./candidate-score.js";
 
 /** The statuses of an answer that mean no work was found yet. */
 const UNRESOLVED = ["not-found", "undetermined", "unavailable"];
@@ -167,6 +168,7 @@ export class MetadataRegistry {
     if (request.externalIds && Object.keys(request.externalIds).length > 0) {
       for (const provider of sources.filter((candidate) => candidate.takes.has(EVIDENCE.externalIds))) {
         const answer = await this.#ask(provider, "identifyById", phase, () => provider.identifyById(request), attempts);
+        if (answer?.status === "identified" && this.#addressRuntimeContradicts(request, answer.work)) continue;
         if (answer && consider(answer)) return result;
       }
     }
@@ -182,6 +184,14 @@ export class MetadataRegistry {
       if (consider(await this.#ask(provider, "identify", phase, () => provider.identify(byName), attempts))) return result;
     }
     return result ?? { status: "not-found" };
+  }
+
+  #addressRuntimeContradicts(request, work) {
+    const duration = request.durationSeconds;
+    if (!Number.isFinite(duration) || duration <= 0 || !work) return false;
+    const runtimes = work.kind === "movie" ? [work.runtimeSeconds] : work.episodeRuntimeSeconds ?? [];
+    const stated = runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0);
+    return stated.length > 0 && stated.every(runtime => duration < runtime * MIN_RUNTIME_SHARE);
   }
 
   /**

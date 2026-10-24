@@ -339,10 +339,23 @@ function containerFor(state, fileIndex) {
  * @returns {{ source: "container", season: number | null, episodes: Array<{ number: number, name: string, still: null }>, part: null } | null}
  */
 export function containerEpisode(container, marker) {
+  if (isSelfTitledPlaceholder(container)) return null;
   const number = Number.isInteger(container?.episode) ? container.episode : marker?.episodes?.[0];
   if (typeof container?.episodeTitle !== "string" || container.episodeTitle.length === 0 || !Number.isInteger(number)) return null;
   const season = Number.isInteger(container.season) ? container.season : Number.isInteger(marker?.season) ? marker.season : null;
   return { source: "container", season, episodes: [{ number, name: container.episodeTitle, still: null }], part: null };
+}
+
+export function isSelfTitledPlaceholder(container) {
+  const title = container?.seriesTitle ?? container?.title;
+  return !(container?.season > 0) && !(container?.episode > 0) &&
+    typeof container?.episodeTitle === "string" && typeof title === "string" &&
+    normalizeMediaTitle(container.episodeTitle) === normalizeMediaTitle(title);
+}
+
+function normalizeMediaTitle(value) {
+  return String(value ?? "").normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase()
+    .replace(/['’‘`´ʼ]/g, "").replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 /**
@@ -390,6 +403,16 @@ export function workFor(state, fileIndex) {
   if (!Number.isInteger(work.year) && Number.isInteger(container.year)) filled.year = container.year;
   if (!work.overview && typeof container.description === "string" && container.description.length > 0) filled.overview = container.description;
   return Object.keys(filled).length > 0 ? { ...work, ...filled } : work;
+}
+
+/** Stable identity used to retain artwork only while the identified work stays the same. */
+export function workIdentityFor(state, fileIndex) {
+  const work = workFor(state, fileIndex);
+  if (!work) return null;
+  const source = work.sources?.tmdb;
+  const id = source?.tmdbId ?? work.tmdbId ?? source?.imdbId ?? work.imdbId;
+  if (id != null) return `${work.kind ?? source?.kind ?? ""}:${id}`;
+  return `${work.kind ?? ""}:${normalizeMediaTitle(work.title)}:${work.year ?? ""}`;
 }
 
 /**
@@ -480,8 +503,9 @@ export function playlistNaming(state) {
   if (!state) {
     return {};
   }
-  const markerOf = file => state.markers?.[String(file?.index)];
-  const matchOf = (file) => state.episodes?.[String(file?.index)] ?? null;
+  const isPlaceholder = file => isSelfTitledPlaceholder(state.containers?.[String(file?.index)]);
+  const markerOf = file => isPlaceholder(file) ? null : state.markers?.[String(file?.index)];
+  const matchOf = (file) => isPlaceholder(file) ? null : state.episodes?.[String(file?.index)] ?? null;
   const seasonsMatched = new Set(Object.values(state.episodes ?? {}).map((match) => match.season));
   const spansSeasons = seasonsMatched.size > 1;
   return {
@@ -496,7 +520,7 @@ export function playlistNaming(state) {
       if (match) {
         return episodeLabel(match, { withSeason: !grouped && spansSeasons ? match.season : null, releaseNumbers: markerOf(file)?.episodes });
       }
-      return markerLabel(state.markers?.[String(file?.index)], !grouped && spansSeasons) ?? workLine(state.pictures?.[String(file?.index)] ?? null);
+      return markerLabel(markerOf(file), !grouped && spansSeasons) ?? workLine(state.pictures?.[String(file?.index)] ?? null);
     },
     groupLabel(folder, files) {
       if (folder.startsWith("season:")) { const number = Number(folder.slice(7)); return state.seasons?.[number] || (number === 0 ? "Specials" : "Season " + number); }
@@ -525,8 +549,9 @@ export function pageTitle(state, index) {
   const title = work?.title || state.releaseName;
   if (!title) return "Torrent TV";
   const parts = ["Torrent TV", title];
-  const marker = state.markers?.[String(index)];
-  const match = state.episodes?.[String(index)];
+  const placeholder = isSelfTitledPlaceholder(state.containers?.[String(index)]);
+  const marker = placeholder ? null : state.markers?.[String(index)];
+  const match = placeholder ? null : state.episodes?.[String(index)];
   const season = marker?.season ?? match?.season;
   if (Number.isInteger(season)) parts.push(season === 0 ? "Specials" : "Season " + season);
   const number = marker?.episodes?.join("–") || match?.episodes?.map(e => e.number).join("–");
