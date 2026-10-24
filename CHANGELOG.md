@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Identify a film whose MP4 carries TV-show items with season 0, episode 0 and its own title as a film, not as a "Specials" episode searched among series only (#ttv-176).
+
 ## 0.66.5
 
 - **New**: Record timed steps while requesting local-network permission during proxy connection retry (#ttv-185).

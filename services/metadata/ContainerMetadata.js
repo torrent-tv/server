@@ -25,6 +25,7 @@
 import { EVIDENCE, MetadataProvider, STAGE } from "./MetadataProvider.js";
 import { parseReleaseName } from "./release-name.js";
 import { normalizeTitle } from "./title.js";
+import { statesEpisode } from "../../public/domain/media-info.js";
 
 /** Longest title taken from a container, in characters. A stated limit. */
 const MAX_TEXT = 300;
@@ -116,8 +117,8 @@ export function readContainerFacts(raw) {
   };
 }
 
-/** Whether the facts say the file is an episode of a series. */
-const isEpisode = (facts) => facts.season > 0 || facts.episode > 0 || Boolean(facts.episodeTitle);
+/** Whether the facts say the file is an episode of a series; the page reads the same rule. */
+const isEpisode = statesEpisode;
 
 export class ContainerMetadata extends MetadataProvider {
   constructor() {

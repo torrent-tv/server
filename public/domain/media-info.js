@@ -328,11 +328,34 @@ function containerFor(state, fileIndex) {
   return state?.containers?.[String(fileIndex)] ?? null;
 }
 
+/** A title reduced for comparing two spellings of it: case, accents and punctuation set aside. */
+function comparableTitle(text) {
+  return String(text ?? "").normalize("NFKD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * Whether what a file states makes it an episode of a series. A season or an
+ * episode above zero does; so does an episode title, unless it only repeats the
+ * series title with no number above zero: LostFilm's MP4 films carry TV-show
+ * items with season 0, episode 0 and the film's own title in both places
+ * (`Moana.2026.720p.rus.LostFilm.TV.mp4`: `Моана`, torrent-tv/meta#176).
+ * The server's identification reads the same rule (`ContainerMetadata.js`).
+ *
+ * @param {{ season?: number | null, episode?: number | null, episodeTitle?: string | null, seriesTitle?: string | null, title?: string | null } | null | undefined} facts
+ * @returns {boolean}
+ */
+export function statesEpisode(facts) {
+  if (facts?.season > 0 || facts?.episode > 0) return true;
+  const episodeTitle = comparableTitle(facts?.episodeTitle);
+  if (episodeTitle.length === 0) return false;
+  return episodeTitle !== comparableTitle(facts.seriesTitle ?? facts.title);
+}
+
 /**
  * The episode a file states about itself, in the shape of a provider's match,
- * or `null` when it does not state both its number and its title. The number
- * the file states comes first; the one its name carries is used when the file
- * states only a title.
+ * or `null` when it does not state both its number and its title, or states no
+ * episode at all ({@link statesEpisode}). The number the file states comes
+ * first; the one its name carries is used when the file states only a title.
  *
  * @param {object | null} container
  * @param {{ season?: number | null, episodes?: number[] } | null | undefined} marker
@@ -340,7 +363,8 @@ function containerFor(state, fileIndex) {
  */
 export function containerEpisode(container, marker) {
   const number = Number.isInteger(container?.episode) ? container.episode : marker?.episodes?.[0];
-  if (typeof container?.episodeTitle !== "string" || container.episodeTitle.length === 0 || !Number.isInteger(number)) return null;
+  if (typeof container?.episodeTitle !== "string" || container.episodeTitle.length === 0 || !Number.isInteger(number) ||
+      !statesEpisode(container)) return null;
   const season = Number.isInteger(container.season) ? container.season : Number.isInteger(marker?.season) ? marker.season : null;
   return { source: "container", season, episodes: [{ number, name: container.episodeTitle, still: null }], part: null };
 }
