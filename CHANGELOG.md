@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Restart paused HLS loading from the end of the buffered media when cold-start preparation stops receiving segments.
+
 ## 0.66.10
 
 - **Fix**: Keep candidates eligible when filename years, torrent timestamps or episode numbers have unverified scope; use filename years to score films only until series-year scope is known (#ttv-225).
