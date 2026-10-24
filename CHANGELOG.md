@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Require parsed-title and compatible-year evidence before accepting an adult-database name match; keep exact file-hash matches available (#ttv-219).
+
 ## 0.66.13
 
 - **Chore**: Update dependencies: @biomejs/biome 2.6.2 → 2.6.3, knip 6.42.1 → 6.43.0; 35 package(s) changed in the lock file.

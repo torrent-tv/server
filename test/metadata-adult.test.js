@@ -31,9 +31,16 @@ test("ThePornDB identifies by the file hash first and reduces the scene to the c
 
 test("ThePornDB does not show a name that fits several scenes or none", async () => {
   const many = new ThePornDbProvider({ key: "k", fetch: fakeFetch([{ data: [tpdbScene, { ...tpdbScene, id: "other" }] }]), gate });
-  assert.equal((await many.identify({ names: ["a"] })).status, "ambiguous");
+  assert.equal((await many.identify({ names: ["Geography.Test.2007"] })).status, "ambiguous");
   const none = new ThePornDbProvider({ key: "k", fetch: fakeFetch([{ data: [] }]), gate });
-  assert.equal((await none.identify({ names: ["a"] })).status, "not-found");
+  assert.equal((await none.identify({ names: ["Geography.Test.2007"] })).status, "not-found");
+});
+
+test("ThePornDB requires the parsed release title and compatible year for a name match", async () => {
+  const wrong = new ThePornDbProvider({ key: "k", fetch: fakeFetch([{ data: [tpdbScene] }]), gate });
+  assert.equal((await wrong.identify({ names: ["Moonflet.2013.HDTVRip.Rus.MVO"] })).status, "not-found");
+  const exact = new ThePornDbProvider({ key: "k", fetch: fakeFetch([{ data: [{ ...tpdbScene, title: "Moonflet", date: "2013-01-01" }] }]), gate });
+  assert.equal((await exact.identify({ names: ["Moonflet.2013.HDTVRip.Rus.MVO"] })).status, "identified");
 });
 
 test("a refusal by the database is unavailable, never a work", async () => {
@@ -56,7 +63,16 @@ test("StashDB takes a name only when exactly one title is in it and the years ag
   assert.equal((await search([stashScene]).identify({ names: ["Brazzers.Beach.2025.1080p.mp4"] })).status, "identified");
   assert.equal((await search([stashScene]).identify({ names: ["Brazzers.Beach.2019.1080p.mp4"] })).status, "not-found");
   assert.equal((await search([stashScene]).identify({ names: ["Something.Else.1080p"] })).status, "not-found");
-  assert.equal((await search([stashScene, { ...stashScene, id: "s2", title: "Brazzers" }]).identify({ names: ["Brazzers.Beach.2025"] })).status, "ambiguous");
+  assert.equal((await search([stashScene, { ...stashScene, id: "s2" }]).identify({ names: ["Brazzers.Beach.2025"] })).status, "ambiguous");
+});
+
+test("StashDB does not accept a partial title from a movie or episode release", async () => {
+  const search = scenes => new StashDbProvider({ key: "k", fetch: fakeFetch([{ data: { searchScene: scenes } }]), gate });
+  assert.equal((await search([{ ...stashScene, title: "Studio" }]).identify({ names: ["Moonflet.2013.UK.HDTVRip.Rus.MVO.Albion.Studio"] })).status, "not-found");
+  assert.equal((await search([{ ...stashScene, title: "Ja" }]).identify({
+    names: ["Väikelinna.detektiivid.ja.valge.daami.saladus.S01.DVDRip"], kindHint: "tv", episodeNumbers: [{ season: 1, episode: 1 }]
+  })).status, "not-found");
+  assert.equal((await search([stashScene]).identify({ names: ["Brazzers.Beach.2025"], kindHint: "tv" })).status, "not-found");
 });
 
 /** A registry over a fake general source and a fake adult one, recording who was asked and with what. */
@@ -92,6 +108,13 @@ test("when the film and anime databases find nothing, the adult ones are asked e
   const answer = await registry.identify({ names: ["Brazzers.Beach.2025.1080p.mp4"] });
   assert.equal(answer.status, "identified");
   assert.equal(answer.work.normalized.studio, "Brazzers Exxtra");
+  assert.deepEqual(asked.map(([kind]) => kind), ["general", "adult"]);
+});
+
+test("a partial adult title cannot replace an unresolved general release", async () => {
+  const { asked, registry } = ordered({ general: { status: "not-found" }, adult: { name: [{ ...stashScene, title: "Studio" }] } });
+  const answer = await registry.identify({ names: ["Moonflet.2013.UK.HDTVRip.Rus.MVO.Albion.Studio"] });
+  assert.equal(answer.status, "not-found");
   assert.deepEqual(asked.map(([kind]) => kind), ["general", "adult"]);
 });
 
