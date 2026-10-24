@@ -583,6 +583,27 @@ export function fragmentAt(fragments, position) {
 }
 
 /**
+ * Restart the HLS network controllers at a known media time.
+ *
+ * `startLoad(position)` resets the stream controller, but the public HLS
+ * `started` flag remains true. During a paused prebuffer stall, explicitly
+ * disabling and re-enabling loading also resets that outer state before the
+ * next fragment is selected.
+ *
+ * @param {{ stopLoad: () => void, startLoad: (position: number) => void } | null} instance
+ * @param {number} position - Seconds on the timeline.
+ * @returns {boolean} Whether loading was restarted.
+ */
+export function restartLoadAt(instance, position) {
+  if (!instance || !Number.isFinite(position) || position < 0) {
+    return false;
+  }
+  instance.stopLoad();
+  instance.startLoad(position);
+  return true;
+}
+
+/**
  * Read ranges and their applied clocks together from the actual SourceBuffers.
  * INIT_PTS_FOUND describes a demuxer result before queued appends run and can
  * belong to another track. It is not a reading of the current buffer clock.
@@ -1051,11 +1072,7 @@ export function createHlsPlayer(onLog) {
       return true;
     },
     resumeLoadAt(position) {
-      if (!hlsInstance || !Number.isFinite(position) || position < 0) {
-        return false;
-      }
-      hlsInstance.startLoad(position);
-      return true;
+      return restartLoadAt(hlsInstance, position);
     },
     /**
      * Load the stream again from its own address and fetch from a position,
