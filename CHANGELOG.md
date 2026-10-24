@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.12
 
 - **Fix**: Preserve HLS segment requests that are still waiting for the proxy to produce their media during cold-start preparation.
 
