@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @biomejs/biome 2.6.2 → 2.6.3, knip 6.42.1 → 6.43.0; 35 package(s) changed in the lock file.
+
 ## 0.66.12
 
 - **Fix**: Preserve HLS segment requests that are still waiting for the proxy to produce their media during cold-start preparation.
