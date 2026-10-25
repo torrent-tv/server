@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.14
 
 - **Fix**: Require parsed-title and compatible-year evidence before accepting an adult-database name match; keep exact file-hash matches available (#ttv-219).
 
