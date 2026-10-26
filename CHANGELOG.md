@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Never tell viewers to use a faster connection based on a proxy's output-rate estimate; the proxy prepares a playable format and waits for media readiness.
+
 ## 0.66.16
 
 - **Fix**: Keep an exact title result when bounded episode checks remain incomplete (#ttv-57).

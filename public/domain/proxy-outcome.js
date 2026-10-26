@@ -5,10 +5,7 @@
  * Two answers, and each asks the page to do something (roadmap item 97, step
  * 11):
  *
- * 1. `output-unavailable` — nothing the proxy holds or could make is admitted
- *    by this viewer's link. The proxy does not hand over a stream it knows the
- *    link cannot carry; the page tells the viewer, with the reason, and keeps
- *    what is playing;
+ * 1. `output-unavailable` — the proxy could not prepare an output;
  * 2. `assignment-lost` — a part of the film this viewer was already given came
  *    from an output that has gone, and nothing proven to match it can stand in.
  *    The page starts a new viewing where the picture is, which is the one way
@@ -164,8 +161,8 @@ export class OutputUnavailableError extends Error {
    * terms needs nothing added at any of them. The proxy's own reason and the
    * figures stay on the error for the log.
    *
-   * Retry is offered: the answer is judged against the link as it measures
-   * now, and a link changes.
+   * The reason and figures stay available to the log; the viewer-facing text
+   * does not expose an output-rate estimate as a network requirement.
    *
    * @param {{ reason?: string, figures?: object | null }} body
    * @param {number} [height] - The quality asked for, when there was one.
@@ -193,7 +190,7 @@ export class NoCapacityError extends Error {
    * @param {{ reason?: string, figures?: object | null }} body
    */
   constructor(body) {
-    super("This proxy doesn't currently have enough capacity to prepare this video. Press Retry in a moment, or pick another proxy or file.");
+    super("This proxy doesn't currently have enough capacity to prepare this video. Press Retry in a moment.");
     this.name = "NoCapacityError";
     this.outcome = "no-capacity";
     this.viewerFacing = true;
@@ -204,13 +201,7 @@ export class NoCapacityError extends Error {
 }
 
 /**
- * What the viewer is told, in terms of their connection and the film — not in
- * terms of the proxy's parts. The figures travel beside it for the log.
- *
- * Only advice the viewer can follow is given. There is no quality to choose on
- * the page, so none is suggested; a faster connection helps only a load that is
- * too large, never one nothing can measure; and another soundtrack is offered
- * only when the file has one.
+ * What the viewer is told when the proxy cannot prepare an output.
  *
  * @param {{ figures?: object | null }} outcome
  * @param {number} [height] - The quality they asked for, when there was one.
@@ -218,26 +209,6 @@ export class NoCapacityError extends Error {
  */
 export function describeUnavailable(outcome, height = 0) {
   const figures = outcome?.figures ?? null;
-  // The share of the link a stream may use, which is what the proxy compared
-  // against — the whole reading would say "fits" where it did not.
-  const link = Number(figures?.linkMbps) * (Number(figures?.linkSafety) || 1);
-  const needed = Number(figures?.totalMbps);
   const what = height > 0 ? `${height}p` : "This video";
-  if (figures?.verdict === "no safe bound") {
-    const picture = figures?.videoClass === "unknown";
-    const sound = figures?.audioClass === "unknown";
-    const parts = picture && sound
-      ? "its picture or its soundtrack"
-      : picture ? "its picture" : sound ? "this soundtrack" : "it";
-    const otherTrack = sound && Number(figures?.soundtracks) > 1
-      ? " Choose another soundtrack, or try again later."
-      : " Try again later.";
-    return `${what} can't be confirmed to fit your connection: the proxy can't tell how much ${parts} would send.` +
-      otherTrack;
-  }
-  if (Number.isFinite(link) && Number.isFinite(needed)) {
-    return `${what} needs about ${needed.toFixed(1)} Mbit/s and your connection carries about ` +
-      `${link.toFixed(1)} Mbit/s. Try again on a faster connection.`;
-  }
-  return `${what} doesn't fit your connection right now. Try again later.`;
+  return `${what} could not be prepared right now. Retry after the proxy is ready.`;
 }

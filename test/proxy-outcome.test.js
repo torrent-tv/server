@@ -88,50 +88,14 @@ test("an outcome reaches every listener, and a listener that stopped hears nothi
   assert.deepEqual(heard, ["assignment-lost"]);
 });
 
-test("the viewer is told what the stream needs against what their link can give it", () => {
-  const text = describeUnavailable({ figures: { verdict: "does not fit", linkMbps: 3, linkSafety: 0.8, totalMbps: 3.768 } }, 720);
-  assert.match(text, /720p needs about 3\.8 Mbit\/s/);
-  assert.match(text, /carries about 2\.4 Mbit\/s/, "the share a stream may use, which is what was compared");
-});
-
-test("an output with no bound is described as such, not as a number it never had", () => {
-  const text = describeUnavailable({ figures: { verdict: "no safe bound", linkMbps: 50, totalMbps: null } }, 1080);
-  assert.match(text, /can't be confirmed to fit/);
-});
-
-test("a soundtrack with no figure is named, and another one is offered only when the file has one", () => {
-  const figures = { verdict: "no safe bound", linkMbps: 80.6, videoClass: "estimated", audioClass: "unknown", totalMbps: null };
-
-  const withOthers = describeUnavailable({ figures: { ...figures, soundtracks: 2 } });
-  assert.match(withOthers, /how much this soundtrack would send/);
-  assert.match(withOthers, /Choose another soundtrack/);
-
-  const alone = describeUnavailable({ figures: { ...figures, soundtracks: 1 } });
-  assert.doesNotMatch(alone, /another soundtrack/, "no advice the viewer cannot follow");
-});
-
-test("a picture with no figure is named, and both are named when neither has one", () => {
-  const picture = describeUnavailable({ figures: { verdict: "no safe bound", videoClass: "unknown", audioClass: "known" } });
-  assert.match(picture, /how much its picture would send/);
-  const both = describeUnavailable({ figures: { verdict: "no safe bound", videoClass: "unknown", audioClass: "unknown", soundtracks: 3 } });
-  assert.match(both, /its picture or its soundtrack/);
-});
-
-test("no refusal suggests a lower quality, which the page does not offer, and only a load too large suggests a faster link", () => {
-  const texts = [
-    describeUnavailable({ figures: { verdict: "does not fit", linkMbps: 3, linkSafety: 0.8, totalMbps: 3.768 } }),
-    describeUnavailable({ figures: { verdict: "no safe bound", audioClass: "unknown" } }),
-    describeUnavailable({ figures: null })
-  ];
-  for (const text of texts) {
-    assert.doesNotMatch(text, /lower quality/);
-  }
-  assert.match(texts[0], /faster connection/);
-  assert.doesNotMatch(texts[1], /faster connection/, "a faster link cannot measure what nothing states");
+test("link estimates never become a viewer-facing refusal", () => {
+  const text = describeUnavailable({ figures: { verdict: "does not fit", linkMbps: 3, totalMbps: 928.8 } }, 1080);
+  assert.match(text, /could not be prepared right now/);
+  assert.doesNotMatch(text, /928\.8|Mbit\/s|faster connection|needs about|carries about/);
 });
 
 test("the error the loading flow shows already speaks to the viewer, and offers Retry", () => {
-  const error = new OutputUnavailableError({ reason: "proxy wording", figures: { verdict: "does not fit", linkMbps: 3, linkSafety: 0.8, totalMbps: 3.768 } });
+  const error = new OutputUnavailableError({ reason: "proxy wording", figures: { verdict: "does not fit", linkMbps: 3, totalMbps: 3.768 } });
   assert.doesNotMatch(error.message, /proxy wording/, "the proxy's own words stay in the log");
   assert.equal(error.reason, "proxy wording");
   assert.equal(error.canRetry, true, "a link changes, so the answer can");
@@ -147,6 +111,7 @@ test("no-capacity is a retryable machine refusal with its figures kept for the l
   assert.equal(error.figures, figures);
   assert.equal(error.canRetry, true);
   assert.match(error.message, /enough capacity/);
+  assert.doesNotMatch(error.message, /another proxy/);
   // The refusal is about this machine; it does not know who else is on it.
   assert.doesNotMatch(error.message, /viewer/);
 });
