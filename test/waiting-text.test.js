@@ -69,3 +69,9 @@ test("unresolved source byte ranges are not described as unknown media positions
   assert.match(formatWaitingText({ readinessReason: "download-schedule-unavailable" }),
     /Arrival times for required source data are not available/);
 });
+
+test("a start the proxy cannot hold on its disk says why it goes on waiting", () => {
+  const text = formatWaitingText({ readinessReason: "cushion-exceeds-storage" });
+  assert.match(text, /downloads slower than it plays/);
+  assert.doesNotMatch(text, /until playback/);
+});

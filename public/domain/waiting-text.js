@@ -277,6 +277,8 @@ export function formatWaitingText(measurements = {}) {
     ["source-measurement-unavailable", "Source measurements are not available"],
     ["media-continuity-unavailable", "A gap in the required media timeline prevents playback"],
     ["service-not-advancing", "A required data service is not progressing"],
+    // The proxy waits on: a faster swarm or more free disk changes the answer.
+    ["cushion-exceeds-storage", "The film downloads slower than it plays, and this proxy cannot hold enough of it ahead to play it without stops"],
     ["subtitles-pending", "The subtitles this film opens with are being read"]
   ]);
   const timing = measurements.readinessUnavailable === true ? "This proxy needs an update before playback can start" :

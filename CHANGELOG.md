@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: When a film downloads slower than it plays and the part a start would have to hold ahead does not fit the disk the proxy keeps for downloaded pieces, the waiting screen says so instead of "Required playback measurements are unavailable". The wait goes on: a faster swarm or more free disk changes the answer. Needs proxy 2.107.39.
+
 ## 0.66.18
 
 - **Fix**: While a film waits to start, the peers, download rate and bytes still needed are read again with each answer the start waits on. They were read once while the file opened, so a twelve-minute wait showed the opening rate and "0 B of 2 B needed" throughout.
