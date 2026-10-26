@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.17
 
 - **Fix**: Never tell viewers to use a faster connection based on a proxy's output-rate estimate; the proxy prepares a playable format and waits for media readiness.
 
