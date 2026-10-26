@@ -146,7 +146,9 @@ function combineStages(byAlternative, byEpisodes) {
     const among = found && byAlternative.candidates.some((candidate) => candidate.kind === found.kind && candidate.tmdbId === found.tmdbId);
     return among ? byEpisodes : byAlternative;
   }
-  return byEpisodes.status === "not-found" ? byAlternative : byEpisodes;
+  if (byEpisodes.status === "identified") return byEpisodes;
+  if (byEpisodes.status === "not-found" || (byAlternative.status === "identified" && byEpisodes.incomplete)) return byAlternative;
+  return byEpisodes;
 }
 
 /** How long a found work, season or non-empty search is kept. */
