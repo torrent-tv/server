@@ -25,7 +25,7 @@ import { parseReleaseName } from "./release-name.js";
 import { MetadataUnavailableError } from "./RequestGate.js";
 import { providerFailure } from "./provider-diagnostics.js";
 import { normalizeTitle } from "./title.js";
-import { matchesRussianTransliteration, russianSearchSpellings, russianTitleSpellings } from "./russian-transliteration.js";
+import { matchesRussianTransliteration, russianLookalikeTitle, russianSearchSpellings, russianTitleSpellings } from "./russian-transliteration.js";
 
 /** Base request budget when scoring needs no supplemental catalogue evidence. */
 const REQUEST_BUDGET_MS = 4_000;
@@ -399,6 +399,8 @@ export class MetadataService {
     for (const reading of readings) {
       for (const title of reading.titles) {
         addQuery(title);
+        const russianTitle = russianLookalikeTitle(title);
+        if (russianTitle) addQuery(russianTitle);
         // `Firefly 1 - LostFilm.TV` numbers the season after the title. Only
         // when a series is being looked for: for a film the number is part of
         // the title (`Moana 2`).
@@ -449,26 +451,17 @@ export class MetadataService {
       ranking: [],
       selection: null
     };
-    // No main or original title matched. Check further evidence without
-    // restricting the candidates by their years: the provider's alternative
-    // titles (a transliterated or romanized name), and, for a series, its
-    // episodes.
+    // Check provider aliases alongside any main-title match when the provider
+    // returned records that did not qualify by their main or original title.
+    // This keeps one unrelated exact match from hiding a supported alias.
     const hasRejectedSearchResults = searches.some(search => search.results.some(result => {
       const title = normalizeTitle(result.name);
       const original = normalizeTitle(result.originalName);
       return title !== search.query && original !== search.query &&
         !title.startsWith(`${search.query} `) && !original.startsWith(`${search.query} `);
     }));
-    const rejectedYearMatches = searches.some(search => search.results.some(result => {
-      const title = normalizeTitle(result.name);
-      const original = normalizeTitle(result.originalName);
-      const rejected = title !== search.query && original !== search.query &&
-        !title.startsWith(`${search.query} `) && !original.startsWith(`${search.query} `);
-      return rejected && Number.isInteger(result.year) && statedYears.some(year => Math.abs(year - result.year) <= 1);
-    }));
     if (identity.status === "not-found" || identity.status === "undetermined" ||
-        ((identity.status === "identified" || identity.status === "ambiguous") && hasRejectedSearchResults &&
-          (queries.length > 1 || rejectedYearMatches))) {
+        ((identity.status === "identified" || identity.status === "ambiguous") && hasRejectedSearchResults)) {
       try {
         const byAlternative = await this.#identifyByAlternativeTitles({
           searches,

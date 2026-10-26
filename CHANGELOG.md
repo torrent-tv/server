@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Check bounded provider aliases alongside exact title results and add a bounded Cyrillic search spelling for mixed-script Russian titles (#ttv-57).
+
 ## 0.66.14
 
 - **Fix**: Require parsed-title and compatible-year evidence before accepting an adult-database name match; keep exact file-hash matches available (#ttv-219).

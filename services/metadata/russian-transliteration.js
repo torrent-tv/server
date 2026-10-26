@@ -8,10 +8,26 @@ const LETTERS = {
   ъ: "", ы: "(?:y|i)", ь: "", э: "e", ю: "(?:yu|ju|iu)", я: "(?:ya|ja|ia)"
 };
 
+const CYRILLIC_LOOKALIKE = {
+  a: "а", c: "с", e: "е", k: "к", m: "м", o: "о", p: "р", t: "т", x: "х", y: "у"
+};
+
+/** Replace visually equivalent Latin letters only in a mixed-script title. */
+export function russianLookalikeTitle(text) {
+  const normalized = normalizeTitle(text);
+  if (!/[a-z]/u.test(normalized) || !/[а-яё]/u.test(normalized)) return null;
+  const letters = [...normalized];
+  if (letters.some(letter => /[a-z]/u.test(letter) && !Object.hasOwn(CYRILLIC_LOOKALIKE, letter))) return null;
+  return letters.map(letter => CYRILLIC_LOOKALIKE[letter] ?? letter).join("");
+}
+
 /** Compare the entire title; catalog Cyrillic supplies the direction of conversion. */
 export function matchesRussianTransliteration(latin, russian) {
-  if (!/[а-яё]/iu.test(russian) || !/^[a-z0-9 ]+$/u.test(normalizeTitle(latin))) return false;
-  if (/[^a-zа-яё0-9 ]/iu.test(normalizeTitle(russian))) return false;
+  const normalizedRussian = normalizeTitle(russian);
+  if (!/[а-яё]/iu.test(normalizedRussian) || /[^a-zа-яё0-9 ]/iu.test(normalizedRussian)) return false;
+  const mixedScriptTitle = russianLookalikeTitle(latin);
+  if (mixedScriptTitle && mixedScriptTitle === normalizedRussian) return true;
+  if (!/^[a-z0-9 ]+$/u.test(normalizeTitle(latin))) return false;
   const pattern = [...String(russian).normalize("NFC").toLowerCase()].map(letter => {
     if (Object.hasOwn(LETTERS, letter)) return LETTERS[letter];
     if (/[a-z0-9]/u.test(letter)) return letter;

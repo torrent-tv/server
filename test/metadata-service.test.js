@@ -150,6 +150,14 @@ test("search language follows the release title spelling, not the display langua
   assert.ok(source.searchLanguages.some(search => search.query === "Скитальцы" && search.language === "ru-RU"));
 });
 
+test("a mixed Cyrillic and Latin spelling gets one bounded Russian search spelling", async () => {
+  const source = fakeSource({ "tv|скитальцы": [{ id: 7, name: "Скитальцы", year: 2016 }] });
+  const answer = await service(source).identify({ names: ["Сkитальцы"], kindHint: "tv", language: "en-US" });
+
+  assert.equal(answer.work.tmdbId, 7);
+  assert.ok(source.searchLanguages.some(search => search.query === "скитальцы" && search.language === "ru-RU"));
+});
+
 test("identification retains bounded database search results and scores a container item year", async () => {
   const source = fakeSource({ "movie|A Nightmare on Elm Street": [
     { id: 377, name: "A Nightmare on Elm Street", year: 1984 },
@@ -202,6 +210,18 @@ test("a returned alias candidate is scored even when an unrelated main-title mat
   assert.equal(answer.work.tmdbId, 2);
   assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 2).titleMatch, "alternative");
   assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 1).contradiction, null);
+});
+
+test("a returned alias candidate is checked beside one exact match without a stated year", async () => {
+  const source = fakeSource({ "movie|Title": [
+    { id: 1, name: "Title", year: 2000 },
+    { id: 2, name: "Different Work", year: 2000 }
+  ] }, { alternative: { "movie|2": ["Title"] } });
+  const answer = await service(source).identify({ names: ["Title"], kindHint: "movie", language: "en-US" });
+
+  assert.ok(source.asked.includes("alternative|movie|2"));
+  assert.equal(answer.ranked.find(candidate => candidate.tmdbId === 2).titleMatch, "alternative");
+  assert.equal(answer.work.tmdbId, 1, "the exact title keeps its higher title score");
 });
 
 test("First Blood remains eligible when the release filename states a conflicting year", async () => {
