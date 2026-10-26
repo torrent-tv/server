@@ -5714,6 +5714,14 @@ export class Loading extends StateDerivedView {
           cachedProgress = await waitTrace.run("C1.1.read-proxy-readiness", () =>
             this.#session.fetchActiveTranscodeProgress(), { process: "C1.1" });
           cachedProgressRequestedAt = requestedAt;
+          // The supply row is read at the same cadence, from the same call
+          // the buffering wait uses. Taken once while the file opened, it
+          // stood for the whole wait: "1.7 MB/s • 0 B of 2 B needed" for
+          // twelve minutes while the swarm went from 1.7 to 0.6 MB/s and the
+          // 2 bytes, a header read, had long been satisfied (Home Assistant
+          // 2026-10-26, Despicable Me 3 BDRemux, torrent-tv/meta#239).
+          const stats = await this.#fetchBufferingStats(cachedProgress?.playbackReadiness?.operations);
+          if (stats) this.#lastDownloadStats = stats;
         } catch (error) {
           // The estimate and the quality menu are built from these readings; a
           // run of failures freezes both at their last value with no sign why.

@@ -59,6 +59,7 @@ test("the page asks again as soon as a piece has arrived, after reporting it", a
       }
       return { playbackReadiness: { version: 1, ready: true, reason: "trajectory-safe-now", delaySeconds: 0 } };
     } };
+    async #fetchBufferingStats() { calls.push({ what: "stats", at: Date.now() }); return { downloadSpeed: 600_000 }; }
     #throwIfCancelled() {}
     #logEvt() {}
     #logColdStart() {}
@@ -74,5 +75,47 @@ test("the page asks again as soon as a piece has arrived, after reporting it", a
   const asks = calls.filter(call => call.what === "ask");
   assert.equal(asks.length, 2);
   assert.ok(asks[1].at - startedAt < 1000, `asked again after ${asks[1].at - startedAt} ms, not on the 1.5 s poll`);
-  assert.equal(calls.at(-2).what, "report", "the report of the new buffer went before the question");
+  const order = calls.filter(call => call.what !== "stats");
+  assert.equal(order.at(-2).what, "report", "the report of the new buffer went before the question");
+});
+
+test("the supply row is read again with each answer the start waits on", async () => {
+  // Home Assistant 2026-10-26 (torrent-tv/meta#239): read once while the file
+  // opened, "1.7 MB/s • 0 B of 2 B needed" stood for a twelve-minute wait.
+  const calls = [];
+  const published = [];
+  const Component = new Function("HTMLVideoElement", "reportNow", "bufferedAheadSeconds", "bufferedEndSeconds",
+    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", "waitTrace", `${waitEstimateHelper}
+    return class {
+    #playbackEpoch = 0; #coldStart = null; #lastBufferedAhead = 0; #lastDownloadStats = { downloadSpeed: 1_700_000, resumeNeededBytes: 2, resumeDownloadedBytes: 0 };
+    #browserBufferLimitSeconds = null; #progressPollFailing = false;
+    #waitingModel = { update: () => ({ cushionPercent: 0 }) };
+    #hlsPlayer = { resumeLoadAt() {} };
+    #subtitlePlayback = { startSelection: () => ({ state: "none" }) };
+    #asked = 0;
+    #session = { fetchActiveTranscodeProgress: async () => {
+      calls.push({ what: "ask" });
+      this.#asked += 1;
+      if (this.#asked === 1) setTimeout(() => { this.#lastBufferedAhead = 6; }, 50);
+      return this.#asked === 1
+        ? { playbackReadiness: { version: 1, ready: false, reason: "minimum-safe-delay", delaySeconds: 433 } }
+        : { playbackReadiness: { version: 1, ready: true, reason: "trajectory-safe-now", delaySeconds: 0 } };
+    } };
+    async #fetchBufferingStats(operations) { calls.push({ what: "stats", operations }); return { downloadSpeed: 600_000 }; }
+    #throwIfCancelled() {}
+    #logEvt() {}
+    #logColdStart() {}
+    #setPhaseProgress() {}
+    #assertTranscodeProgress() {}
+    ${method("#waitForPrebuffer")}
+    wait(video) { return this.#waitForPrebuffer(video); }
+  }`)(HTMLVideoElement, () => {}, () => 0, () => 0, () => {}, subtitleStartHold,
+    { MEASURED: "measured" }, 60_000, { dispatchEvent(event) { published.push(event.detail); } },
+    class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls,
+    { event() {}, run(_name, action) { return action(); } });
+  await new Component().wait(new HTMLVideoElement());
+  assert.deepEqual(calls.map(call => call.what), ["ask", "stats", "ask", "stats"]);
+  const shown = published.map(detail => detail?.downloadStats).filter(Boolean);
+  assert.ok(shown.length > 0 && shown.every(stats => stats.downloadSpeed === 600_000 && !("resumeNeededBytes" in stats)),
+    "every published supply row is the fresh one, not the snapshot taken while the file opened");
 });
