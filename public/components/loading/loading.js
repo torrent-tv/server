@@ -6382,11 +6382,9 @@ export class Loading extends StateDerivedView {
       return;
     }
     if (outcome.outcome === "output-unavailable") {
-      // Met by the player itself, mid-stream — a level it moved to that the
-      // proxy will not serve to this link. Said in the log with the reason; the
-      // player keeps what it holds, and the viewer asked for nothing.
+      // Keep the current picture playing and record the proxy's answer.
       const height = Number(/\/v\/(\d+)\//.exec(outcome.path)?.[1]) || 0;
-      this.#logEvt(`quality: the proxy has no output for ${height || "this"}p that fits this link — ${outcome.reason}`);
+      this.#logEvt(`quality: proxy could not prepare ${height || "this"}p — ${outcome.reason}`);
     }
   }
 
