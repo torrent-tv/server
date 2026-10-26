@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.16
 
 - **Fix**: Keep an exact title result when bounded episode checks remain incomplete (#ttv-57).
 
