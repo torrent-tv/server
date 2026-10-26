@@ -224,6 +224,27 @@ test("a returned alias candidate is checked beside one exact match without a sta
   assert.equal(answer.work.tmdbId, 1, "the exact title keeps its higher title score");
 });
 
+test("incomplete episode evidence does not replace an exact title match", async () => {
+  const results = Array.from({ length: 7 }, (_, index) => ({
+    id: index + 1,
+    name: index === 0 ? "Inside Men" : `Other Work ${index}`,
+    year: 2006
+  }));
+  const source = fakeSource({ "tv|Inside Men": results }, {
+    seasons: { "1|1": ["First encounter", "Second encounter"] }
+  });
+  const answer = await service(source).identify({
+    names: ["Inside Men"],
+    kindHint: "tv",
+    episodeEvidence: { season: 1, titles: ["First encounter", "Second encounter"] },
+    language: "en-US"
+  });
+
+  assert.equal(answer.status, "identified");
+  assert.equal(answer.work.tmdbId, 1);
+  assert.equal(answer.ranked[0].tmdbId, 1);
+});
+
 test("First Blood remains eligible when the release filename states a conflicting year", async () => {
   const source = fakeSource({ "movie|Rambo First Blood": [{ id: 1368, name: "First Blood", year: 1982 }] },
     { alternative: { "movie|1368": ["Rambo: First Blood"] } });
