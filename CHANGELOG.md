@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.15
 
 - **Fix**: Check bounded provider aliases alongside exact title results and add a bounded Cyrillic search spelling for mixed-script Russian titles (#ttv-57).
 
