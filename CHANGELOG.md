@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.19
 
 - **Fix**: When a film downloads slower than it plays and the part a start would have to hold ahead does not fit the disk the proxy keeps for downloaded pieces, the waiting screen says so instead of "Required playback measurements are unavailable". The wait goes on: a faster swarm or more free disk changes the answer. Needs proxy 2.107.39.
 
