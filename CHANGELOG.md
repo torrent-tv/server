@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: While a film waits to start, the peers, download rate and bytes still needed are read again with each answer the start waits on. They were read once while the file opened, so a twelve-minute wait showed the opening rate and "0 B of 2 B needed" throughout.
+
 ## 0.66.17
 
 - **Fix**: Never tell viewers to use a faster connection based on a proxy's output-rate estimate; the proxy prepares a playable format and waits for media readiness.
