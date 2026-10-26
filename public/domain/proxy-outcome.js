@@ -207,8 +207,7 @@ export class NoCapacityError extends Error {
  * @param {number} [height] - The quality they asked for, when there was one.
  * @returns {string}
  */
-export function describeUnavailable(outcome, height = 0) {
-  const figures = outcome?.figures ?? null;
+export function describeUnavailable(_outcome, height = 0) {
   const what = height > 0 ? `${height}p` : "This video";
   return `${what} could not be prepared right now. Retry after the proxy is ready.`;
 }
