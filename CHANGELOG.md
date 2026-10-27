@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.20
 
 - **Fix**: Keep wait estimates anchored to the proxy's returned snapshot. Time spent waiting for a preparation response no longer makes a fresh estimate count down too early (#ttv-185).
 
