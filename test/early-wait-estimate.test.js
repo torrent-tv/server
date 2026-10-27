@@ -54,23 +54,26 @@ test("requests a first-frame estimate from the source before proxy metadata is r
   assert.deepEqual(events[0].detail.downloadStats.waitEstimate, waitEstimate);
 });
 
-test("sends the monotonic age of the original wait with early source requests", async () => {
+test("keeps preparation before a fresh snapshot out of the snapshot's age", async (t) => {
+  let now = 10_000;
+  t.mock.method(performance, "now", () => now);
   let request;
   const events = [];
   const waitEstimate = { version: 1, waitId: "source:0:3", revision: 0, remainingSeconds: 7.75, ageMs: 0 };
   const component = loading({ dispatchEvent: event => events.push(event) });
-  component.setWaitStartedAt(performance.now() - 4_250);
+  component.setWaitStartedAt(now - 4_250);
   await component.request({ fetch: async url => {
     request = new URL(url, "http://proxy.invalid");
-    await new Promise(resolve => setTimeout(resolve, 15));
+    now += 8_000;
     return { ok: true, json: async () => ({ pending: true, waitEstimate }) };
   } }, "source", { index: 0, name: "Film.mkv", length: 800 });
 
   const elapsedMs = Number(request.searchParams.get("waitElapsedMs"));
-  assert.ok(elapsedMs >= 4_250 && elapsedMs < 4_300, `unexpected action age ${elapsedMs}`);
+  assert.equal(elapsedMs, 4_250);
   const emittedEstimate = events[0]?.detail.downloadStats.waitEstimate;
   assert.equal(emittedEstimate.remainingSeconds, 7.75);
-  assert.ok(emittedEstimate.ageMs >= 10 && emittedEstimate.ageMs < 100);
+  assert.equal(emittedEstimate.ageMs, 0,
+    "the eight seconds before the proxy's snapshot are not time since that snapshot");
 });
 
 test("a single-file torrent starts the estimate request before waiting for the proxy file list", () => {

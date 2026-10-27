@@ -2613,8 +2613,7 @@ export class Loading extends StateDerivedView {
         query.set("linkMbps", String(link.linkMbps));
         query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
       }
-      const hasActionAge = this.#addWaitElapsed(query);
-      const requestStartedAt = performance.now();
+      this.#addWaitElapsed(query);
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/files?${query}`,
         { signal: this.#session.abortController.signal, timeoutMs: 0 }
@@ -2629,11 +2628,7 @@ export class Loading extends StateDerivedView {
           if (!statesWhatIsInTheTorrent(body)) {
             throw viewerError(Loading.MESSAGES.torrentContentsNotStated, { canRetry: true });
           }
-          if (!hasActionAge || !Array.isArray(body.files)) return body;
-          const ageMs = Math.max(0, performance.now() - requestStartedAt);
-          return { ...body, files: body.files.map(file => file?.waitEstimate
-            ? { ...file, waitEstimate: { ...file.waitEstimate, ageMs: (file.waitEstimate.ageMs ?? 0) + ageMs } }
-            : file) };
+          return body;
         }
       } else {
         const error = new Error(`Torrent file list request failed (${response.status}).`);
@@ -2661,8 +2656,7 @@ export class Loading extends StateDerivedView {
       query.set("linkMbps", String(link.linkMbps));
       query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
     }
-    const hasActionAge = this.#addWaitElapsed(query);
-    const requestStartedAt = performance.now();
+    this.#addWaitElapsed(query);
     try {
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
@@ -2671,12 +2665,8 @@ export class Loading extends StateDerivedView {
       if (!response.ok) return;
       const stats = await response.json();
       if (stats?.waitEstimate && this.#session.viewGeneration === generation && this.#activeSourceKey === sourceKey) {
-        const waitEstimate = hasActionAge
-          ? { ...stats.waitEstimate, ageMs: (stats.waitEstimate.ageMs ?? 0) +
-            Math.max(0, performance.now() - requestStartedAt) }
-          : stats.waitEstimate;
         document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-          detail: { downloadStats: { ...stats, waitEstimate } }
+          detail: { downloadStats: stats }
         }));
       }
     } catch (error) {
@@ -6158,19 +6148,14 @@ export class Loading extends StateDerivedView {
             query.set("linkMbps", String(link.linkMbps));
             query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
           }
-          const hasActionAge = this.#addWaitElapsed(query);
-          const requestStartedAt = performance.now();
+          this.#addWaitElapsed(query);
           const resp = await transport.fetch(
             `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
             { cache: "no-store", waitProcess: "A11" }
           );
           if (!stopped && resp.ok) {
-            let stats = await resp.json();
+            const stats = await resp.json();
             if (!stopped) {
-              if (hasActionAge && stats?.waitEstimate) {
-                stats = { ...stats, waitEstimate: { ...stats.waitEstimate,
-                  ageMs: (stats.waitEstimate.ageMs ?? 0) + Math.max(0, performance.now() - requestStartedAt) } };
-              }
               this.#updateMetadataStatus(stats);
               document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
                 detail: { downloadStats: stats }

@@ -1532,7 +1532,6 @@ export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
  */
 async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
   try {
-    const requestStartedAt = performance.now();
     const response = await fetchFn(progressUrl, { cache: "no-store", signal: signal ?? undefined });
     if (!response.ok) {
       noteProgressUnreadable(progressUrl, `the proxy answered ${response.status}`);
@@ -1544,16 +1543,8 @@ async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
       return null;
     }
     progressComplainedAbout.delete(progressUrl);
-    const requestElapsedMs = Math.max(0, performance.now() - requestStartedAt);
-    const ageEstimate = (estimate) => ({ ...estimate,
-      ageMs: (Number.isFinite(estimate.ageMs) && estimate.ageMs >= 0 ? estimate.ageMs : 0) + requestElapsedMs });
-    if (payload.waitEstimate && typeof payload.waitEstimate === "object") {
-      payload.waitEstimate = ageEstimate(payload.waitEstimate);
-    }
-    if (payload.playbackReadiness?.waitEstimate && typeof payload.playbackReadiness.waitEstimate === "object") {
-      payload.playbackReadiness = { ...payload.playbackReadiness,
-        waitEstimate: ageEstimate(payload.playbackReadiness.waitEstimate) };
-    }
+    // Preparation can precede snapshot capture inside this request. The round
+    // trip is not the snapshot's age; retain the age stated by the proxy.
     return payload;
   } catch (error) {
     if (isAbortError(error)) {
