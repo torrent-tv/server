@@ -8,6 +8,12 @@
  * the player's buffer state every 1.5 s
  * (`POST /api/transcode-sessions/:id/net-report`). The proxy's realtime
  * budget uses the report as its viewer-link downshift trigger.
+ * The same report carries cumulative bytes and elapsed
+ * BUFFER_APPENDING-to-BUFFER_APPENDED acknowledgements, plus per-operation
+ * samples from the latest 30 s, grouped by stream and init/media data. It also
+ * carries media-fragment bytes, media start time, and load-to-parse elapsed samples.
+ * HLS.js load, parse and buffering boundaries are reported as ages on the
+ * browser monotonic clock so their overlap remains recoverable.
  *
  * Best-effort telemetry: send failures are ignored, sending stops with the
  * session. The smoothed estimate remains for the quality budget; the playback
@@ -17,6 +23,8 @@
 
 import { FIRST_PROBE_BYTES, nextProbeBytes } from "./transport/link-probe.js";
 import { timed } from "./page-timings.js";
+import { appendService } from "./append-service.js";
+import { fragmentService } from "./fragment-service.js";
 
 const SAMPLE_WINDOW_MS = 30_000;
 const REPORT_INTERVAL_MS = 1_500;
@@ -164,6 +172,10 @@ export function startNetReporter({
 }) {
   stopNetReporter();
   samples = [];
+  appendService.reset();
+  fragmentService.reset();
+  const appendEpoch = crypto.randomUUID();
+  const appendEpochStartedAt = performance.timeOrigin + performance.now();
   const abortController = new AbortController();
   let probing = false;
   let lastProbeAt = 0;
@@ -328,6 +340,7 @@ export function startNetReporter({
         probing = false;
       });
     }
+    const appendSnapshotNow = performance.now();
     const body = timed("net-report:body", () => JSON.stringify({
       bufferedAheadSec,
       ...(getBufferedRanges ? { bufferedRanges: getBufferedRanges() } : {}),
@@ -345,6 +358,11 @@ export function startNetReporter({
       ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
       ...(linkSampleAt === null ? {} : { linkSampleAt }),
       ...(linkSampleAt === null ? {} : { linkSampleAgeMs: sampleAgeMs }),
+      appendEpoch,
+      appendEpochStartedAt,
+      appendSnapshotAt: performance.timeOrigin + appendSnapshotNow,
+      appendService: appendService.snapshot(appendSnapshotNow),
+      fragmentService: fragmentService.snapshot(appendSnapshotNow),
       ...(positionSeconds === null ? {} : { positionSeconds })
 
     }));

@@ -1,6 +1,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { PLAYER_EVENTS } from "../shared/events.js";
+import { progressSnapshotAgeRange } from "./progress-snapshot-age.js";
 import { pauseWithoutIntent, viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
@@ -1532,19 +1533,25 @@ export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
  */
 async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
   try {
+    const requestStartedAt = performance.now();
     const response = await fetchFn(progressUrl, { cache: "no-store", signal: signal ?? undefined });
     if (!response.ok) {
       noteProgressUnreadable(progressUrl, `the proxy answered ${response.status}`);
       return null;
     }
     const payload = await response.json();
+    const responseReceivedAt = performance.now();
     if (!payload || typeof payload !== "object") {
       noteProgressUnreadable(progressUrl, "the answer was not an object");
       return null;
     }
     progressComplainedAbout.delete(progressUrl);
-    // Preparation can precede snapshot capture inside this request. The round
-    // trip is not the snapshot's age; retain the age stated by the proxy.
+    const timing = payload.snapshotTransport;
+    const ageRange = progressSnapshotAgeRange({ requestStartedAt, responseReceivedAt,
+      requestReceivedAtProxy: timing?.requestReceivedAtProxyMs,
+      snapshotAtProxy: timing?.snapshotAtProxyMs,
+      responsePreparedAtProxy: timing?.responsePreparedAtProxyMs });
+    if (ageRange) payload.snapshotAgeRangeMs = ageRange;
     return payload;
   } catch (error) {
     if (isAbortError(error)) {
