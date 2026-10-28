@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.26
 
 - **Chore**: Report browser append and media-fragment parse service samples by stream.
 - **Chore**: Record HLS.js parsing and buffering spans alongside each browser fragment observation.
