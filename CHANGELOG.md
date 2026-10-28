@@ -1,6 +1,9 @@
-## 0.66.24
+## Unreleased
 
 - **Fix**: Keep incomplete proxy wait estimates out of the playback ETA; show a number only after a complete first-frame model is available.
+
+## 0.66.24
+
 - **Fix**: Keep a playback opening pending while the proxy pool has no connected proxy; resume selection when a tunnel reconnects instead of failing the torrent.
 
 ## 0.66.23
