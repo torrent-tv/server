@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Clear the displayed wait estimate when the proxy explicitly reports that its current estimate is unavailable.
+
 ## 0.66.22
 
 - **Fix**: Reject an address record when the measured file is much longer than its runtime, not only much shorter; a refresh of `Frankenstein.rus.LostFilm.TV.avi` in its first seconds kept the 2004 series (#ttv-176).
