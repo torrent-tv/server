@@ -3,24 +3,33 @@
 set -eu
 
 candidate=
+remote_base=
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
   [ "$remote_ref" = "refs/heads/main" ] || continue
   case "$local_sha" in
     000000*) continue ;;
   esac
   candidate=$local_sha
+  remote_base=$remote_sha
 done
 
 [ -n "$candidate" ] || exit 0
 
-release_tag=$(git describe --tags --abbrev=0 "$candidate" 2>/dev/null || true)
-if [ -z "$release_tag" ]; then
-  echo "pre-push: cannot find a release tag for the main update; fetch tags before pushing" >&2
-  exit 1
-fi
-
 requires_changelog=false
-for subject in $(git log --format=%s "$release_tag..$candidate"); do
+case "$remote_base" in
+  000000*)
+    release_tag=$(git describe --tags --abbrev=0 "$candidate" 2>/dev/null || true)
+    if [ -z "$release_tag" ]; then
+      echo "pre-push: cannot find a release tag for the main update; fetch tags before pushing" >&2
+      exit 1
+    fi
+    commits=$(git rev-list "$release_tag..$candidate")
+    ;;
+  *) commits=$(git rev-list "$candidate" --not "$remote_base") ;;
+esac
+
+for commit in $commits; do
+  subject=$(git show -s --format=%s "$commit")
   case "$subject" in
     feat:*|feat\(*|feat!:*|feat\(*!*|fix:*|fix\(*|fix!:*|fix\(*!*|perf:*|perf\(*|perf!:*|perf\(*!*|revert:*|revert\(*|revert!:*|revert\(*!*)
       requires_changelog=true
