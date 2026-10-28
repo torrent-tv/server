@@ -257,3 +257,21 @@ test("a measured duration rejects a contradictory address record and searches by
   assert.equal(answer.work.sources.tmdb.tmdbId, 1062722);
   assert.equal(searched.length, 1);
 });
+
+test("a file longer than every runtime of the address record also rejects it", async () => {
+  const searched = [];
+  const tmdb = new TmdbProvider({
+    identifyById: async () => ({ status: "identified", work: { ...work, kind: "tv", tmdbId: 40165, episodeRuntimeSeconds: [5280], title: "Frankenstein" } }),
+    identify: async request => {
+      searched.push(request.names);
+      return { status: "identified", work: { ...work, kind: "movie", tmdbId: 1062722, runtimeSeconds: 9000, title: "Frankenstein" } };
+    },
+    episodes: async () => ({ status: "ok" })
+  });
+  const registry = new MetadataRegistry({ providers: [tmdb] });
+  const ask = durationSeconds => registry.identify({ names: ["Frankenstein.rus.LostFilm.TV.avi"], externalIds: { tmdb: { kind: "tv", id: 40165 } }, durationSeconds });
+  assert.equal((await ask(8998.056)).work.sources.tmdb.tmdbId, 1062722, "the AVI measured on the field");
+  assert.equal(searched.length, 1);
+  assert.equal((await ask(5000)).work.sources.tmdb.tmdbId, 40165, "an episode's own length keeps the record");
+  assert.equal(searched.length, 1);
+});

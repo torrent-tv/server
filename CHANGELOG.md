@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Reject an address record when the measured file is much longer than its runtime, not only much shorter; a refresh of `Frankenstein.rus.LostFilm.TV.avi` in its first seconds kept the 2004 series (#ttv-176).
+
 ## 0.66.21
 
 - **Chore**: Update dependencies: @fastify/static 10.1.7 → 10.1.8; 1 package(s) changed in the lock file.
