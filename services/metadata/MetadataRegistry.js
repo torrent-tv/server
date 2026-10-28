@@ -191,7 +191,9 @@ export class MetadataRegistry {
     if (!Number.isFinite(duration) || duration <= 0 || !work) return false;
     const runtimes = work.kind === "movie" ? [work.runtimeSeconds] : work.episodeRuntimeSeconds ?? [];
     const stated = runtimes.filter(runtime => Number.isFinite(runtime) && runtime > 0);
-    return stated.length > 0 && stated.every(runtime => duration < runtime * MIN_RUNTIME_SHARE);
+    // Either way: `Frankenstein.rus.LostFilm.TV.avi` measures 8998 s against the
+    // 5280 s episodes of the series its name first gave (torrent-tv/meta#176).
+    return stated.length > 0 && stated.every(runtime => Math.min(duration / runtime, runtime / duration) < MIN_RUNTIME_SHARE);
   }
 
   /**
