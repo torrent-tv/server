@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Check that releasable main pushes still have a changelog entry after rebasing.
+
 ## 0.66.25
 
 - **Fix**: Keep incomplete proxy wait estimates out of the playback ETA; show a number only after a complete first-frame model is available.
