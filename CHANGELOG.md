@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @fastify/static 10.1.7 → 10.1.8; 1 package(s) changed in the lock file.
+
 ## 0.66.20
 
 - **Fix**: Keep wait estimates anchored to the proxy's returned snapshot. Time spent waiting for a preparation response no longer makes a fresh estimate count down too early (#ttv-185).
