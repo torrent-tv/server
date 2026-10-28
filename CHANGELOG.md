@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.24
 
 - **Fix**: Keep a playback opening pending while the proxy pool has no connected proxy; resume selection when a tunnel reconnects instead of failing the torrent.
 
