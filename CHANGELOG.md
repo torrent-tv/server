@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.21
 
 - **Chore**: Update dependencies: @fastify/static 10.1.7 → 10.1.8; 1 package(s) changed in the lock file.
 
