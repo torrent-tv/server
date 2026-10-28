@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.23
 
 - **Fix**: Clear the displayed wait estimate when the proxy explicitly reports that its current estimate is unavailable.
 
