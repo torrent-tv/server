@@ -1,6 +1,9 @@
-## 0.66.23
+## Unreleased
 
 - **Fix**: Keep a playback opening pending while the proxy pool has no connected proxy; resume selection when a tunnel reconnects instead of failing the torrent.
+
+## 0.66.23
+
 - **Fix**: Clear the displayed wait estimate when the proxy explicitly reports that its current estimate is unavailable.
 
 ## 0.66.22
