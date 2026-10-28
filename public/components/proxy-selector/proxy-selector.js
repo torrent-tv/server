@@ -42,16 +42,19 @@ export class ProxySelector {
    * @param {{ infoHash?: string, onlyIds?: string[] | null, tried?: Array<{ id: string, error: string }>, current?: string }} about
    * @returns {Promise<{ chosen: ChosenProxy | null, candidates: object[], narrowedBy: string }>}
    */
-  async #choose({ infoHash = "", onlyIds = null, tried = [], current = "", process = "A2.1" } = {}) {
+  async #choose({ infoHash = "", onlyIds = null, tried = [], current = "", process = "A2.1",
+    waitForConnection = false, signal = null } = {}) {
     const traceContext = process === "A2.1" ? waitTrace.contextForOperation("A2") : null;
     const response = await waitTrace.run(`${process}.choose`, () => waitTrace.fetch("/api/proxy-clients/choose", {
       method: "POST",
       headers: requestHeaders(),
+      ...(signal ? { signal } : {}),
       body: JSON.stringify({
         ...(infoHash ? { infoHash } : {}),
         ...(Array.isArray(onlyIds) && onlyIds.length > 0 ? { onlyIds } : {}),
         ...(tried.length > 0 ? { tried } : {}),
-        ...(current ? { current } : {})
+        ...(current ? { current } : {}),
+        ...(waitForConnection ? { waitForConnection: true } : {})
       })
     }, process), { process, traceContext });
     if (!response.ok) {
@@ -109,7 +112,7 @@ export class ProxySelector {
    * local-network permission flow, so its error (with `error.lanProbeUrl`) is
    * thrown as it was.
    *
-   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number, onConnecting?: (proxyName: string) => void, infoHash?: string, onlyIds?: string[] | null }} [options]
+   * @param {{ allowPrivateCandidates?: boolean, connectTimeoutMs?: number, onConnecting?: (proxyName: string) => void, infoHash?: string, onlyIds?: string[] | null, signal?: AbortSignal }} [options]
    *   `allowPrivateCandidates: false` = public-only attempt: the proxy's
    *   local-address candidates are dropped, so the browser never asks for the
    *   local-network permission (same-LAN connects via router hairpin when
@@ -124,17 +127,20 @@ export class ProxySelector {
     connectTimeoutMs,
     onConnecting,
     infoHash = "",
-    onlyIds = null
+    onlyIds = null,
+    signal = null
   } = {}) {
     /** @type {Array<{ id: string, error: string }>} */
     const tried = [];
     for (;;) {
-      const { chosen } = await this.#choose({ infoHash, onlyIds, tried });
+      const { chosen } = await this.#choose({ infoHash, onlyIds, tried, waitForConnection: true, signal });
       if (!chosen) {
         // Said to the viewer: no proxy is connected to the pool at all, or
         // none of them could be reached from here — a fact about now and not
         // about the film.
-        throw viewerError("No video source is available right now. Try again later.");
+        const error = viewerError("No video source is available right now. Try again later.");
+        error.code = "NO_PROXY_AVAILABLE";
+        throw error;
       }
       try {
         return await this.#connect(chosen, { allowPrivateCandidates, connectTimeoutMs, onConnecting });

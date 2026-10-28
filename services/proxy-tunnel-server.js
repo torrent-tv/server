@@ -37,6 +37,8 @@ const REQUEST_TIMEOUT_MS = 60_000;
  *   request on the connection it arrived on.
  * @property {() => { proxyId: string, followsMoves: boolean }[]} connectedProxies
  *   Every proxy with an open tunnel connection now.
+ * @property {(options?: { signal?: AbortSignal }) => Promise<void>} waitForFirstConnection
+ *   Resolve when a proxy tunnel is connected, or reject when the caller aborts.
  * @property {(proxyId: string) => void} askToMove
  *   Ask a proxy to open a connection to the server instance that replaces this one.
  * @property {(code: number, reason: string) => void} closeAll
@@ -104,12 +106,25 @@ export function createProxyTunnelServer() {
    */
   const followingMoves = new WeakSet();
 
+  const connectedProxies = () => {
+    const proxies = [];
+    for (const [proxyId, socket] of connections) {
+      if (socket.readyState === 1 /* OPEN */) {
+        proxies.push({ proxyId, followsMoves: followingMoves.has(socket) });
+      }
+    }
+    return proxies;
+  };
+
   /**
    * Called when a proxy's tunnel opens or closes. Set from server.js.
    *
    * @type {((proxyId: string, connected: boolean) => void) | null}
    */
   let onConnectionChange = null;
+
+  /** @type {Set<() => void>} */
+  const firstConnectionWaiters = new Set();
 
   /** @type {Map<string, PendingRequest>} */
   const pendingRequests = new Map();
@@ -299,16 +314,34 @@ export function createProxyTunnelServer() {
         }
       });
       onConnectionChange?.(proxyId, true);
+      for (const resolve of [...firstConnectionWaiters]) resolve();
     },
 
     connectedProxies() {
-      const proxies = [];
-      for (const [proxyId, socket] of connections) {
-        if (socket.readyState === 1 /* OPEN */) {
-          proxies.push({ proxyId, followsMoves: followingMoves.has(socket) });
-        }
-      }
-      return proxies;
+      return connectedProxies();
+    },
+
+    waitForFirstConnection({ signal } = {}) {
+      if (connectedProxies().length > 0) return Promise.resolve();
+      if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      return new Promise((resolve, reject) => {
+        const cleanup = () => {
+          firstConnectionWaiters.delete(onConnected);
+          signal?.removeEventListener("abort", onAbort);
+        };
+        const onConnected = () => {
+          cleanup();
+          resolve();
+        };
+        const onAbort = () => {
+          cleanup();
+          reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+        };
+        firstConnectionWaiters.add(onConnected);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        // Close the race between the initial check and registering the waiter.
+        if (connectedProxies().length > 0) onConnected();
+      });
     },
 
     askToMove(proxyId) {

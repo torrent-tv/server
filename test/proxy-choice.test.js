@@ -61,6 +61,23 @@ test("what a proxy says over its tunnel decides the choice, and what it holds st
     try { return (await fetch(`http://127.0.0.1:${port}/healthz`)).ok; } catch { return false; }
   }, `the server listening\n${output.join("")}`);
 
+  const choose = async (body, options = {}) => (await fetch(`http://127.0.0.1:${port}/api/proxy-clients/choose`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), ...options
+  })).json();
+  const canceledChoice = new AbortController();
+  const canceledRequest = choose({ infoHash: FILM, waitForConnection: true }, { signal: canceledChoice.signal });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  canceledChoice.abort();
+  await assert.rejects(canceledRequest, { name: "AbortError" });
+
+  let waitingChoiceResolved = false;
+  const waitingChoice = choose({ infoHash: FILM, waitForConnection: true }).then((answer) => {
+    waitingChoiceResolved = true;
+    return answer;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(waitingChoiceResolved, false, "selection remains pending while no tunnel is connected");
+
   socket = new WebSocket(`ws://127.0.0.1:${port}/ws/proxy-tunnel`, {
     headers: { "x-proxy-id": "proxy-1", "x-proxy-name": "proxy-1", "x-proxy-base-url": "http://192.168.1.7:9090" }
   });
@@ -69,9 +86,13 @@ test("what a proxy says over its tunnel decides the choice, and what it holds st
     metrics: { cpuLoad: 0.25, memFree: 0.6, encodeSpeedX: 3 },
     holds: [{ infoHash: FILM, progress: 0.4, bytes: 1, wholeFiles: [] }]
   })));
-  const choose = async (body) => (await fetch(`http://127.0.0.1:${port}/api/proxy-clients/choose`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
-  })).json();
+  const resumedChoice = await waitingChoice;
+  assert.equal(resumedChoice.chosen.id, "proxy-1");
+  const restrictedChoice = await Promise.race([
+    choose({ infoHash: FILM, onlyIds: ["not-connected"], waitForConnection: true }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("selection waited despite an unsuitable connected pool")), 1000))
+  ]);
+  assert.equal(restrictedChoice.chosen, null);
   await waitFor(async () => (await choose({ infoHash: FILM })).chosen?.holdsThisFilm === true, "the proxy's state reaching the choice");
 
   const answer = await choose({ infoHash: FILM });
