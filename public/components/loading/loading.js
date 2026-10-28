@@ -2248,11 +2248,6 @@ export class Loading extends StateDerivedView {
       }
       const sourceKey = await waitTrace.run("A4.register", () => this.#session.registerSourceOnProxy(transport));
       this.#activeSourceKey = sourceKey;
-      if (parsed.files.length === 1 || Number.isSafeInteger(payload?.fileIndex)) {
-        const earlyFileIndex = Number.isSafeInteger(payload?.fileIndex) ? payload.fileIndex : parsed.files[0]?.index;
-        const earlyFile = parsed.files.find(fileEntry => fileEntry?.index === earlyFileIndex);
-        void this.#requestEarlyWaitEstimate(transport, sourceKey, earlyFile);
-      }
       const contents = await waitTrace.run("A6.files", () => this.#askWhatIsInTheTorrent(transport, sourceKey, () => {
         this.setStatus(Loading.MESSAGES.readingMetadata);
       }));
@@ -2615,7 +2610,6 @@ export class Loading extends StateDerivedView {
         query.set("linkMbps", String(link.linkMbps));
         query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
       }
-      this.#addWaitElapsed(query);
       const response = await transport.fetch(
         `/api/sources/${encodeURIComponent(sourceKey)}/files?${query}`,
         { signal: this.#session.abortController.signal, timeoutMs: 0 }
@@ -2640,51 +2634,6 @@ export class Loading extends StateDerivedView {
       whileWaiting?.();
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
-  }
-
-  async #requestEarlyWaitEstimate(transport, sourceKey, file) {
-    if (!Number.isSafeInteger(file?.index) || !Number.isFinite(file?.length) ||
-      typeof file?.name !== "string" || file.name.length === 0) return;
-    const generation = this.#session.viewGeneration;
-    const query = new URLSearchParams({
-      fileIndex: String(file.index),
-      consumer: this.#session.consumerId,
-      generation: String(generation),
-      fileName: file.name,
-      fileLength: String(file.length)
-    });
-    const link = getEarlyLinkEstimate();
-    if (link) {
-      query.set("linkMbps", String(link.linkMbps));
-      query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
-    }
-    this.#addWaitElapsed(query);
-    try {
-      const response = await transport.fetch(
-        `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
-        { signal: this.#session.abortController.signal, timeoutMs: 1_000, waitProcess: "A5" }
-      );
-      if (!response.ok) return;
-      const stats = await response.json();
-      if (stats?.waitEstimate && this.#session.viewGeneration === generation && this.#activeSourceKey === sourceKey) {
-        document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-          detail: { downloadStats: stats }
-        }));
-      }
-    } catch (error) {
-      if (!this.#isAbortError(error)) {
-        console.debug(`[wait-estimate] early source estimate unavailable: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-
-  #addWaitElapsed(query) {
-    const startedAt = this.#currentPlaybackWaitStartedAt ?? this.#pendingOriginalWaitStartedAt;
-    if (Number.isFinite(startedAt)) {
-      query.set("waitElapsedMs", String(Math.max(0, performance.now() - startedAt)));
-      return true;
-    }
-    return false;
   }
 
   #warmSourceInBackground(fileIndex, positionSeconds = 0) {
@@ -6157,7 +6106,6 @@ export class Loading extends StateDerivedView {
             query.set("linkMbps", String(link.linkMbps));
             query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
           }
-          this.#addWaitElapsed(query);
           const resp = await transport.fetch(
             `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
             { cache: "no-store", waitProcess: "A11" }
