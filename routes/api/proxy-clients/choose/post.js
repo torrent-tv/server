@@ -50,12 +50,38 @@ export async function handleApiProxyClientsChoosePost(req, reply, { clientsStore
     // proxy that is connected to this server and unusable from outside.
     console.log(`[proxy-choice] a viewer could not connect to proxy ${id.slice(0, 8)}: ${String(error ?? "").slice(0, 300)}`);
   }
-  const candidates = proxyCandidates({ clientsStore, tunnelServer, requesterIp: requesterPublicIp(req), infoHash });
-  const { chosen, pool, narrowedBy } = chooseProxy(candidates, {
-    tried: tried.map((one) => one.id),
-    onlyIds,
-    current: typeof body.current === "string" ? body.current : null
-  });
+  const select = () => {
+    const candidates = proxyCandidates({ clientsStore, tunnelServer, requesterIp: requesterPublicIp(req), infoHash });
+    return { candidates, ...chooseProxy(candidates, {
+      tried: tried.map((one) => one.id),
+      onlyIds,
+      current: typeof body.current === "string" ? body.current : null
+    }) };
+  };
+  let selection = select();
+  if (!selection.chosen && body.waitForConnection === true && tunnelServer.connectedProxies().length === 0) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const onReplyClose = () => {
+      if (!reply.raw.writableEnded) abort();
+    };
+    req.raw.once("aborted", abort);
+    reply.raw.once("close", onReplyClose);
+    try {
+      while (!selection.chosen && tunnelServer.connectedProxies().length === 0) {
+        await tunnelServer.waitForFirstConnection({ signal: controller.signal });
+        if (reply.raw.destroyed) return;
+        selection = select();
+      }
+    } catch (error) {
+      if (controller.signal.aborted || error?.name === "AbortError") return;
+      throw error;
+    } finally {
+      req.raw.removeListener("aborted", abort);
+      reply.raw.removeListener("close", onReplyClose);
+    }
+  }
+  const { chosen, pool, narrowedBy } = selection;
   return reply.send({
     chosen,
     narrowedBy,

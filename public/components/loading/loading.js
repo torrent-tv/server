@@ -69,6 +69,8 @@ import { categoryOfTorrent } from "../../domain/torrent-category.js";
  *   caller's progress callback.
  * @property {string | null} announced - The proxy named to them, once one has
  *   been chosen. Replayed to a caller that joins after the announcement.
+ * @property {AbortController} controller - Cancels the pending pool wait when
+ *   this acquisition is abandoned.
  */
 
 // Auto-reconnect after a mid-playback connection loss (see the auto-reconnect
@@ -4086,7 +4088,8 @@ export class Loading extends StateDerivedView {
     const record = {
       promise: /** @type {any} */ (null),
       listeners: new Set(typeof onConnecting === "function" ? [onConnecting] : []),
-      announced: null
+      announced: null,
+      controller: new AbortController()
     };
     record.promise = this.#connectTransport(record).then((transport) => {
       // Say who is watching, over the connection itself. The proxy can then
@@ -4144,6 +4147,7 @@ export class Loading extends StateDerivedView {
     // abandoned attempt still has a second half to run (the local-address
     // retry), and its status line would otherwise re-label a screen that has
     // moved on.
+    this.#transportAcquisition?.controller.abort();
     this.#transportAcquisition?.listeners.clear();
     this.#transportAcquisition = null;
   }
@@ -4187,6 +4191,7 @@ export class Loading extends StateDerivedView {
         allowPrivateCandidates: false,
         connectTimeoutMs: 12_000,
         onConnecting,
+        signal: record.controller.signal,
         infoHash: this.#currentInfoHash(),
         onlyIds: this.#restrictProxiesTo
       });
@@ -4198,6 +4203,9 @@ export class Loading extends StateDerivedView {
       // Asking for a network permission on behalf of an attempt nobody is
       // waiting for is worse than merely wasteful.
       this.#throwIfAbandoned(record);
+      if (publicOnlyError?.code === "NO_PROXY_AVAILABLE") {
+        throw publicOnlyError;
+      }
       const lanProbeUrl =
         publicOnlyError instanceof Error && typeof publicOnlyError.lanProbeUrl === "string"
           ? publicOnlyError.lanProbeUrl
@@ -4216,6 +4224,7 @@ export class Loading extends StateDerivedView {
         proxy = await this.#proxySelector.chooseBestProxy({
           allowPrivateCandidates: true,
           onConnecting,
+          signal: record.controller.signal,
           infoHash: this.#currentInfoHash(),
           onlyIds: this.#restrictProxiesTo
         });
