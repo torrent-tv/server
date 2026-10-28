@@ -1,5 +1,9 @@
 ## Unreleased
 
+- **Chore**: Report browser append and media-fragment parse service samples by stream.
+- **Chore**: Record HLS.js parsing and buffering spans alongside each browser fragment observation.
+- **Chore**: Bound progress-snapshot age from same-request proxy and browser timing without assuming symmetric network delay.
+- **Chore**: Record source-stat age bounds using the proxy's worker-request interval and the browser's matching response.
 - **Chore**: Check that releasable main pushes still have a changelog entry after rebasing.
 
 ## 0.66.25

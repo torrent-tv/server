@@ -53,6 +53,7 @@ import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
 import { PictureHolds, seekHoldAnswer, nextSeekHoldAsk } from "../../domain/picture-holds.js";
 import { startPageTimings, timed } from "../../domain/page-timings.js";
+import { requestSnapshotAgeRange } from "../../domain/progress-snapshot-age.js";
 import { mediaTrackLanguageInfo, trackLanguageTag, trackLanguageCode } from "../../domain/track-language.js";
 import { SubtitlePlayback } from "./SubtitlePlayback.js";
 import { subtitleStartHold } from "../../domain/subtitle-start.js";
@@ -5900,6 +5901,11 @@ export class Loading extends StateDerivedView {
     }
     this.#assertTranscodeProgress(progress);
     const waitEstimate = waitEstimateForProgress(progress);
+    const ageRange = progress.snapshotAgeRangeMs;
+    const snapshotAge = ageRange && Number.isFinite(ageRange.minimumAgeMs) && Number.isFinite(ageRange.maximumAgeMs)
+      ? `${ageRange.minimumAgeMs.toFixed(1)}-${ageRange.maximumAgeMs.toFixed(1)}ms` : "unknown";
+    console.debug(`[progress-snapshot-age] revision=${progress.playbackReadiness?.revision ?? "-"} ` +
+      `ageMs=${snapshotAge}`);
     const estimateTraceKey = waitEstimate
       ? `${waitEstimate.waitId}:${waitEstimate.revision}`
       : `missing:${progress.playbackReadiness?.reason ?? "no-readiness"}`;
@@ -6106,12 +6112,26 @@ export class Loading extends StateDerivedView {
             query.set("linkMbps", String(link.linkMbps));
             query.set("linkSampleAgeMs", String(link.linkSampleAgeMs));
           }
+          const requestStartedAt = performance.now();
+          const sourceWaitContext = waitTrace.current ? { ...waitTrace.current } : null;
           const resp = await transport.fetch(
             `/api/sources/${encodeURIComponent(sourceKey)}/stats?${query}`,
             { cache: "no-store", waitProcess: "A11" }
           );
           if (!stopped && resp.ok) {
             const stats = await resp.json();
+            const responseReceivedAt = performance.now();
+            const timing = stats?.sourceSnapshotTransport;
+            const ageRange = requestSnapshotAgeRange({ requestStartedAt, responseReceivedAt,
+              requestReceivedAtProxy: timing?.requestReceivedAtProxyMs,
+              snapshotStartedAtProxy: timing?.snapshotStartedAtProxyMs,
+              snapshotCompletedAtProxy: timing?.snapshotCompletedAtProxyMs,
+              responsePreparedAtProxy: timing?.responsePreparedAtProxyMs });
+            if (ageRange) {
+              stats.sourceSnapshotAgeRangeMs = ageRange;
+              waitTrace.event("A5.source-snapshot-age", { process: "A5", phase: "event",
+                fileIndex, minimumAgeMs: ageRange.minimumAgeMs, maximumAgeMs: ageRange.maximumAgeMs }, sourceWaitContext);
+            }
             if (!stopped) {
               this.#updateMetadataStatus(stats);
               document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
