@@ -80,3 +80,33 @@ test("the active seek estimate is accepted after the startup wait has ended", ()
 
   assert.deepEqual(modelInputs[0].waitEstimate, estimate);
 });
+
+test("an explicit unavailable estimate clears the prior countdown", () => {
+  const modelInputs = [];
+  const FakeCustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+  const Overlay = new Function("CustomEvent", "modelInputs", `
+    return class {
+      #awaitingFirstPresentedFrame = true;
+      #waitSequence = 2;
+      #lastWaitEstimateTraceKey = null;
+      #bufferedAhead = null;
+      #measurements = {};
+      #model = { update: facts => { modelInputs.push(facts); return { etaSeconds: facts.waitEstimate?.remainingSeconds ?? null }; } };
+      #applyStep() {}
+      #render() {}
+      ${receivedMethod}
+      receive(event) { this.#onProxyMeasured(event); }
+    };
+  `)(FakeCustomEvent, modelInputs);
+  const overlay = new Overlay();
+  overlay.receive(new FakeCustomEvent("measured", {
+    detail: { downloadStats: { waitEstimate: { version: 1, waitId: "source:0:2", revision: 1,
+      remainingSeconds: 7, ageMs: 0 } } }
+  }));
+  overlay.receive(new FakeCustomEvent("measured", {
+    detail: { downloadStats: { waitEstimate: null } }
+  }));
+
+  assert.equal(Object.hasOwn(modelInputs[1], "waitEstimate"), true);
+  assert.equal(modelInputs[1].waitEstimate, null);
+});

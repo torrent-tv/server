@@ -101,6 +101,8 @@ export class WaitingOverlay {
     // overlay's startup-only flag cannot decide whether this answer is current.
     const hasCurrentWaitEstimate = downloadStats && Object.hasOwn(downloadStats, "waitEstimate") &&
       earlyWaitEstimate !== null && earlyWaitEstimate !== undefined;
+    const clearsCurrentWaitEstimate = downloadStats && Object.hasOwn(downloadStats, "waitEstimate") &&
+      earlyWaitEstimate === null;
     const nestedWaitEstimate = readiness?.waitEstimate;
     const traceKey = JSON.stringify([
       this.#awaitingFirstPresentedFrame,
@@ -119,7 +121,7 @@ export class WaitingOverlay {
         `reason=${readiness?.reason ?? "-"}`);
     }
     const unified = this.#model.update({
-      ...(hasCurrentWaitEstimate ? { waitEstimate: earlyWaitEstimate } : {}),
+      ...(hasCurrentWaitEstimate || clearsCurrentWaitEstimate ? { waitEstimate: earlyWaitEstimate } : {}),
       ...(detail && Object.hasOwn(detail, "playbackReadiness") ? { playbackReadiness: readiness } : {}),
       bufferedAhead: this.#bufferedAhead ?? undefined
     });
