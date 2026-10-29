@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @biomejs/biome 2.6.3 → 2.6.4, hls.js 1.7.3 → 1.7.4; 12 package(s) changed in the lock file.
+
 ## 0.66.26
 
 - **Chore**: Report browser append and media-fragment parse service samples by stream.
