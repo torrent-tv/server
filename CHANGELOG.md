@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: knip 6.43.0 → 6.44.0; 2 package(s) changed in the lock file.
+
 ## 0.66.27
 
 - **Chore**: Update dependencies: @biomejs/biome 2.6.3 → 2.6.4, hls.js 1.7.3 → 1.7.4; 12 package(s) changed in the lock file.
