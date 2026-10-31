@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: 2 package(s) changed in the lock file.
+
 ## 0.66.28
 
 - **Chore**: Update dependencies: knip 6.43.0 → 6.44.0; 2 package(s) changed in the lock file.
