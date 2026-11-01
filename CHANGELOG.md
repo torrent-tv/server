@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.30
 
 - **Chore**: Update dependencies: @fastify/websocket 11.3.4 → 11.3.6, knip 6.44.0 → 6.44.1, ws 8.22.0 → 8.22.1; 4 package(s) changed in the lock file.
 
