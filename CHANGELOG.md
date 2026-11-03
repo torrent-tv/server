@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: 4 package(s) changed in the lock file.
+
 ## 0.66.31
 
 - **Chore**: Update dependencies: @fastify/cors 11.3.1 → 11.4.0, fastify 5.12.7 → 5.12.8; 3 package(s) changed in the lock file.
