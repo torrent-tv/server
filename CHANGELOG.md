@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.32
 
 - **Chore**: Update dependencies: 4 package(s) changed in the lock file.
 
