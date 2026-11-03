@@ -6126,7 +6126,8 @@ export class Loading extends StateDerivedView {
               requestReceivedAtProxy: timing?.requestReceivedAtProxyMs,
               snapshotStartedAtProxy: timing?.snapshotStartedAtProxyMs,
               snapshotCompletedAtProxy: timing?.snapshotCompletedAtProxyMs,
-              responsePreparedAtProxy: timing?.responsePreparedAtProxyMs });
+              responsePreparedAtProxy: timing?.responsePreparedAtProxyMs,
+              requestClockEpoch: timing?.clockEpoch, snapshotClockEpoch: timing?.snapshotClockEpoch });
             if (ageRange) {
               stats.sourceSnapshotAgeRangeMs = ageRange;
               waitTrace.event("A5.source-snapshot-age", { process: "A5", phase: "event",

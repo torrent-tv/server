@@ -26,6 +26,9 @@ test("refreshes a stale startup link and reports the measurement age", async (t)
     getWaiting: () => true
   });
   assert.equal(probes, 0);
+  const initialReport = reports.at(-1);
+  assert.equal(initialReport.linkSampleCompletedAtBrowser, initialReport.linkSampleAt);
+  assert.equal(initialReport.linkSampleStartedAtBrowser, initialReport.linkSampleAt - 100);
   t.mock.timers.tick(31_500);
   await new Promise(setImmediate);
   assert.equal(probes, 2);
@@ -39,6 +42,25 @@ test("refreshes a stale startup link and reports the measurement age", async (t)
   t.mock.timers.tick(1_500);
   await new Promise(setImmediate);
   assert.equal(probes, 2);
+});
+
+test("a transfer sample retains its active playback action and generation", (t) => {
+  t.after(stopNetReporter);
+  let report;
+  let generation = 4;
+  startNetReporter({
+    transport: { fetch: async (_path, options) => { report = JSON.parse(options.body); } },
+    sessionId: "session-four",
+    getGeneration: () => generation,
+    getBufferedAheadSec: () => 0
+  });
+  generation = 5;
+  recordNetSample(1_000_000, 250);
+  reportNow();
+  assert.equal(report.linkSampleActionId, "session-four");
+  assert.equal(report.linkSampleGeneration, 5);
+  assert.equal(report.linkSampleCompletedAtBrowser, report.linkSampleAt);
+  assert.equal(report.linkSampleStartedAtBrowser, report.linkSampleAt - 250);
 });
 
 test("stopping a reporter cancels its probe without recording a late sample", async (t) => {
