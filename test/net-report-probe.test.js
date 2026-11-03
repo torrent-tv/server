@@ -4,6 +4,7 @@ import { recordNetSample, reportNow, startNetReporter, stopNetReporter } from ".
 
 test("refreshes a stale startup link and reports the measurement age", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
+  t.mock.method(performance, "now", () => Date.now() - performance.timeOrigin);
   t.after(stopNetReporter);
   recordNetSample(1_000_000, 100);
   const reports = [];
@@ -65,6 +66,7 @@ test("a transfer sample retains its active playback action and generation", (t) 
 
 test("stopping a reporter cancels its probe without recording a late sample", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
+  t.mock.method(performance, "now", () => Date.now() - performance.timeOrigin);
   t.after(stopNetReporter);
   recordNetSample(1_000_000, 100);
   let finishProbe;
