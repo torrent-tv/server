@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: Carry per-owner capture age and validity for forecast inputs, bounding browser facts on their clock and proxy facts through the same request's transit bounds.
+
 ## 0.66.32
 
 - **Chore**: Update dependencies: 4 package(s) changed in the lock file.

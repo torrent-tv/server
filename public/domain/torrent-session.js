@@ -1,7 +1,7 @@
 /** @import { ProxyTransport } from './proxy-transport.js' */
 
 import { PLAYER_EVENTS } from "../shared/events.js";
-import { progressSnapshotAgeRange } from "./progress-snapshot-age.js";
+import { browserCaptureAgeRange, progressSnapshotAgeRange, proxyInputAgeRange } from "./progress-snapshot-age.js";
 import { pauseWithoutIntent, viewerHasStopped } from "./playback-intent.js";
 import { pickWebSeedUrl, probeWebSeed } from "./webseed.js";
 import { SESSION_EVENTS } from "../shared/events.js";
@@ -186,7 +186,8 @@ export class TorrentSession {
       const parsed = new URL(url);
       return transport.fetch(parsed.pathname + parsed.search, fetchOptions);
     };
-    return fetchTranscodeProgress(poll.progressUrl, this.abortController.signal, fetchVia);
+    return fetchTranscodeProgress(this.#progressUrlForGeneration(poll.progressUrl), this.abortController.signal,
+      fetchVia, () => this.#viewGeneration);
   }
 
   clear(options = {}) {
@@ -227,7 +228,16 @@ export class TorrentSession {
     if (!poll || typeof poll.progressUrl !== "string" || poll.progressUrl.length === 0) {
       return null;
     }
-    return fetchTranscodeProgress(poll.progressUrl, this.abortController.signal, poll.fetchFn);
+    return fetchTranscodeProgress(this.#progressUrlForGeneration(poll.progressUrl), this.abortController.signal,
+      poll.fetchFn, () => this.#viewGeneration);
+  }
+
+  #progressUrlForGeneration(url) {
+    const parsed = new URL(url);
+    if (parsed.pathname.includes("/api/transcode-sessions/") && parsed.pathname.endsWith("/progress")) {
+      parsed.searchParams.set("generation", String(this.#viewGeneration));
+    }
+    return parsed.toString();
   }
 
   /**
@@ -1203,7 +1213,7 @@ export class TorrentSession {
     // asking can be answered from somebody else's step.
     const progressPath = sessionId
       ? `/api/transcode-sessions/${encodeURIComponent(sessionId)}/progress` +
-        `?consumer=${encodeURIComponent(this.consumerId)}`
+        `?consumer=${encodeURIComponent(this.consumerId)}&generation=${this.#viewGeneration}`
       : "";
     const progressUrl = progressPath ? transport.url(progressPath) : "";
 
@@ -1287,7 +1297,7 @@ export class TorrentSession {
     // Build a fetchFn that routes through this transport (required for WebRTC,
     // harmless for HTTP where it just normalises the URL construction).
     const fetchFn = (url, fetchOptions) => {
-      const parsed = new URL(url);
+      const parsed = new URL(this.#progressUrlForGeneration(url));
       return transport.fetch(parsed.pathname + parsed.search, fetchOptions);
     };
 
@@ -1302,6 +1312,8 @@ export class TorrentSession {
     // variants. Waiting on one never finishes.
     await waitForHlsPlaylist(mediaPlaylistUrl, {
       progressUrl,
+      progressUrlForGeneration: url => this.#progressUrlForGeneration(url),
+      getGeneration: () => this.#viewGeneration,
       fetchFn,
       onProgress: onTranscodeProgress,
       signal: this.abortController.signal
@@ -1422,6 +1434,9 @@ export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
   let lastProgressPollMs = 0;
   const progressUrl =
     typeof telemetry.progressUrl === "string" ? telemetry.progressUrl.trim() : "";
+  const progressUrlForGeneration = typeof telemetry.progressUrlForGeneration === "function"
+    ? telemetry.progressUrlForGeneration : url => url;
+  const getGeneration = typeof telemetry.getGeneration === "function" ? telemetry.getGeneration : null;
   const onProgress = typeof telemetry.onProgress === "function" ? telemetry.onProgress : null;
   const signal = telemetry.signal instanceof AbortSignal ? telemetry.signal : null;
   // Allow callers to supply a custom fetch (e.g. WebRTC transport).
@@ -1436,7 +1451,7 @@ export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
     }
     const now = Date.now();
     if (progressUrl && onProgress && now - lastProgressPollMs >= 1000) {
-      const progress = await fetchTranscodeProgress(progressUrl, signal, fetchFn);
+      const progress = await fetchTranscodeProgress(progressUrlForGeneration(progressUrl), signal, fetchFn, getGeneration);
       if (progress) {
         onProgress(progress);
       }
@@ -1530,17 +1545,29 @@ export async function waitForHlsPlaylist(playlistUrl, telemetry = {}) {
  * @param {string} progressUrl
  * @param {AbortSignal | null} signal
  * @param {(url: string, options?: object) => Promise<Response>} fetchFn
+ * @param {(() => number) | null} [getGeneration]
  */
-async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
+async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch, getGeneration = null) {
   try {
+    const generationParam = new URL(progressUrl, globalThis.location?.href ?? "http://localhost")
+      .searchParams.get("generation");
+    const statedGeneration = generationParam === null ? Number.NaN : Number(generationParam);
+    const hasStatedGeneration = Number.isSafeInteger(statedGeneration) && statedGeneration >= 0;
+    if (hasStatedGeneration && typeof getGeneration === "function" && getGeneration() !== statedGeneration) return null;
     const requestStartedAt = performance.now();
+    const requestStartedAtBrowser = performance.timeOrigin + requestStartedAt;
     const response = await fetchFn(progressUrl, { cache: "no-store", signal: signal ?? undefined });
+    if (response.status === 409) return null; // The seek replaced this request's generation.
     if (!response.ok) {
       noteProgressUnreadable(progressUrl, `the proxy answered ${response.status}`);
       return null;
     }
     const payload = await response.json();
     const responseReceivedAt = performance.now();
+    const responseReceivedAtBrowser = performance.timeOrigin + responseReceivedAt;
+    if (hasStatedGeneration && (typeof getGeneration === "function" && getGeneration() !== statedGeneration ||
+        Number.isSafeInteger(payload?.snapshotTransport?.generation) &&
+        payload.snapshotTransport.generation !== statedGeneration)) return null;
     if (!payload || typeof payload !== "object") {
       noteProgressUnreadable(progressUrl, "the answer was not an object");
       return null;
@@ -1550,8 +1577,43 @@ async function fetchTranscodeProgress(progressUrl, signal, fetchFn = fetch) {
     const ageRange = progressSnapshotAgeRange({ requestStartedAt, responseReceivedAt,
       requestReceivedAtProxy: timing?.requestReceivedAtProxyMs,
       snapshotAtProxy: timing?.snapshotAtProxyMs,
-      responsePreparedAtProxy: timing?.responsePreparedAtProxyMs });
+      responsePreparedAtProxy: timing?.responsePreparedAtProxyMs,
+      requestClockEpoch: timing?.clockEpoch, snapshotClockEpoch: timing?.snapshotClockEpoch });
     if (ageRange) payload.snapshotAgeRangeMs = ageRange;
+    const captures = payload.playbackReadiness?.inputCaptures;
+    if (captures) {
+      const proxyAge = capture => capture?.validity === "valid" ? proxyInputAgeRange({
+        requestStartedAt,
+        responseReceivedAt,
+        requestReceivedAtProxy: timing?.requestReceivedAtProxyMs,
+        responsePreparedAtProxy: timing?.responsePreparedAtProxyMs,
+        requestClockEpoch: timing?.clockEpoch,
+        captureClockEpoch: capture.clockEpoch,
+        captureStartedAt: capture.startedAt,
+        captureCompletedAt: capture.completedAt
+      }) : null;
+      const browserAge = capture => capture?.validity === "valid" ? browserCaptureAgeRange({
+        requestStartedAt: requestStartedAtBrowser,
+        responseReceivedAt: responseReceivedAtBrowser,
+        clockEpoch: performance.timeOrigin,
+        captureClockEpoch: capture.clockEpoch,
+        captureStartedAt: capture.startedAt,
+        captureCompletedAt: capture.completedAt
+      }) : null;
+      payload.inputCaptureAgesMs = {
+        source: Array.isArray(captures.source) ? captures.source.map(item => ({ id: item.id,
+          age: proxyAge(item.capture), forecast: proxyAge(item.capture?.downloadForecast), rates: item.capture?.rateReadings ? {
+            recent: Object.fromEntries(Object.entries(item.capture.rateReadings.recent ?? {}).map(([kind, capture]) =>
+              [kind, Array.isArray(capture) ? capture.map(proxyAge) : proxyAge(capture)])),
+            tail: Object.fromEntries(Object.entries(item.capture.rateReadings.tail ?? {}).map(([kind, capture]) =>
+              [kind, Array.isArray(capture) ? capture.map(proxyAge) : proxyAge(capture)]))
+          } : null })) : [],
+        encoder: Array.isArray(captures.encoder) ? captures.encoder.map(item => ({ id: item.id,
+          age: proxyAge(item.capture), samples: item.capture?.samples?.map(proxyAge) ?? [] })) : [],
+        link: { age: browserAge(captures.link), readings: captures.link?.rateReadings?.map(browserAge) ?? [] },
+        buffer: browserAge(captures.buffer)
+      };
+    }
     return payload;
   } catch (error) {
     if (isAbortError(error)) {

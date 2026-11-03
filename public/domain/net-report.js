@@ -32,6 +32,7 @@ const REPORT_INTERVAL_MS = 1_500;
 // forecast receives every positive-duration transfer sample separately.
 const MIN_SAMPLE_MS = 50;
 const MIN_SAMPLES = 2;
+const browserNow = () => performance.timeOrigin + performance.now();
 
 /** @type {Array<{ mbps: number, at: number }>} */
 let samples = [];
@@ -44,8 +45,11 @@ let lastLinkMbps = null;
  * Newest raw transfer sample. Repeated reports keep its timestamp so the proxy
  * can distinguish a repeated value from a new measurement.
  */
-/** @type {{ mbps: number, at: number } | null} Newest measured transfer. */
+/** @type {{ mbps: number, at: number, startedAt: number, completedAt: number,
+ * clockEpoch: number, revision: number, actionId: string | null, generation: number | null } | null} Newest measured transfer. */
 let lastLinkReading = null;
+let linkSampleRevision = 0;
+let reportRevision = 0;
 
 /**
  * Record one completed segment transfer (called by the HLS loader).
@@ -62,10 +66,16 @@ export function recordNetSample(bytes, ms) {
   if (!Number.isFinite(bytes) || bytes <= 0 || !Number.isFinite(ms) || ms <= 0) {
     return;
   }
-  const now = Date.now();
+  const now = browserNow();
   const sample = {
     mbps: (bytes * 8) / (ms / 1000) / 1e6,
-    at: performance.timeOrigin + performance.now()
+    at: now,
+    startedAt: now - ms,
+    completedAt: now,
+    clockEpoch: performance.timeOrigin,
+    revision: ++linkSampleRevision,
+    actionId: active?.sessionId ?? null,
+    generation: typeof active?.getGeneration === "function" ? active.getGeneration() : null
   };
   lastLinkReading = sample;
   if (ms >= MIN_SAMPLE_MS) {
@@ -102,7 +112,8 @@ export function getEstimatedLinkMbps() {
  * Newest measured delivery sample, including its age source timestamp, for the
  * proxy's first playback forecast before session reporting can begin.
  *
- * @returns {{ mbps: number, at: number } | null}
+ * @returns {{ mbps: number, at: number, startedAt: number, completedAt: number,
+ * clockEpoch: number, revision: number, actionId: string | null, generation: number | null } | null}
  */
 export function getLatestLinkReading() {
   return lastLinkReading ? { ...lastLinkReading } : null;
@@ -137,7 +148,7 @@ function medianLinkMbps() {
  * @returns {{ mbps: number, at: number } | null}
  */
 function medianLinkReading() {
-  prune(Date.now());
+  prune(browserNow());
   if (samples.length < MIN_SAMPLES) {
     return null;
   }
@@ -176,6 +187,7 @@ export function startNetReporter({
   fragmentService.reset();
   const appendEpoch = crypto.randomUUID();
   const appendEpochStartedAt = performance.timeOrigin + performance.now();
+  reportRevision = 0;
   const abortController = new AbortController();
   let probing = false;
   let lastProbeAt = 0;
@@ -185,6 +197,7 @@ export function startNetReporter({
   // (`page-timings.js`, torrent-tv/meta#178).
   const send = () => timed("net-report:send", sendNow);
   const sendNow = () => {
+    const captureStartedAtBrowser = browserNow();
     // The last figure stands when nothing has been measured recently. A viewer
     // who has stopped the picture measures nothing by construction, and their
     // stopping is the fact this report exists to carry — skipping the report
@@ -330,8 +343,8 @@ export function startNetReporter({
     // the existing channel while startup waits, rather than extrapolating an
     // old transfer indefinitely. One probe at a time, at the existing sample
     // window cadence, and stop it with this report's session.
-    const now = Date.now();
-    const sampleAgeMs = Math.max(0, now - (linkSampleAt ?? 0));
+    const now = browserNow();
+    const sampleAgeMs = Number.isFinite(linkSampleAt) && linkSampleAt <= now ? now - linkSampleAt : null;
     if (waiting && !playing && sampleAgeMs >= SAMPLE_WINDOW_MS &&
       now - lastProbeAt >= SAMPLE_WINDOW_MS && !probing) {
       probing = true;
@@ -341,6 +354,7 @@ export function startNetReporter({
       });
     }
     const appendSnapshotNow = performance.now();
+    const captureCompletedAtBrowser = browserNow();
     const body = timed("net-report:body", () => JSON.stringify({
       bufferedAheadSec,
       ...(getBufferedRanges ? { bufferedRanges: getBufferedRanges() } : {}),
@@ -354,10 +368,22 @@ export function startNetReporter({
       ...(visiblePicture ? { visiblePicture } : {}),
       ...(consumerId ? { consumerId } : {}),
       ...(getGeneration ? { generation: getGeneration() } : {}),
+      captureClockEpoch: performance.timeOrigin,
+      captureEpoch: appendEpoch,
+      captureEpochStartedAtBrowser: appendEpochStartedAt,
+      captureRevision: ++reportRevision,
+      captureStartedAtBrowser,
+      captureCompletedAtBrowser,
       ...(linkMbps === null ? {} : { linkMbps }),
       ...(linkSampleMbps === null ? {} : { linkSampleMbps }),
       ...(linkSampleAt === null ? {} : { linkSampleAt }),
       ...(linkSampleAt === null ? {} : { linkSampleAgeMs: sampleAgeMs }),
+      ...(lastLinkReading ? { linkSampleStartedAtBrowser: lastLinkReading.startedAt,
+        linkSampleCompletedAtBrowser: lastLinkReading.completedAt,
+        linkSampleActionId: lastLinkReading.actionId,
+        linkSampleGeneration: lastLinkReading.generation } : {}),
+      ...(lastLinkReading ? { linkSampleClockEpoch: lastLinkReading.clockEpoch,
+        linkSampleRevision: lastLinkReading.revision } : {}),
       appendEpoch,
       appendEpochStartedAt,
       appendSnapshotAt: performance.timeOrigin + appendSnapshotNow,
@@ -376,7 +402,7 @@ export function startNetReporter({
     void Promise.resolve(sent).catch(() => undefined); // best-effort — next tick simply tries again
   };
   const timer = setInterval(send, REPORT_INTERVAL_MS);
-  active = { timer, send, abortController };
+  active = { timer, send, abortController, sessionId, getGeneration };
   send();
 }
 
