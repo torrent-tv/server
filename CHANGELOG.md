@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.34
 
 - **Chore**: Update dependencies: @fastify/static 10.1.8 → 10.1.9, @fastify/websocket 11.3.6 → 11.3.7; 6 package(s) changed in the lock file; 3 known vulnerabilities resolved.
 
