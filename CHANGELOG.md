@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: @fastify/static 10.1.8 → 10.1.9, @fastify/websocket 11.3.6 → 11.3.7; 6 package(s) changed in the lock file; 3 known vulnerabilities resolved.
+
 ## 0.66.33
 
 - **Fix**: Carry per-owner capture age and validity for forecast inputs, bounding browser facts on their clock and proxy facts through the same request's transit bounds.
