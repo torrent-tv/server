@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: 5 package(s) changed in the lock file.
+
 ## 0.66.35
 
 - **Chore**: Update dependencies: @biomejs/biome 2.6.4 → 2.6.5, @fastify/cors 11.4.0 → 11.4.1, @fastify/static 10.1.9 → 10.1.10; 14 package(s) changed in the lock file.
