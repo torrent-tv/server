@@ -79,6 +79,7 @@ export class Torrent extends StateDerivedView {
    * clearing and the start flow stay identical.
    */
   #onDemoClick = () => {
+    this.#clearFileError();
     this.#magnetInput.setCustomValidity("");
     this.#magnetInput.value = Torrent.DEMO_MAGNET;
     this.#form.requestSubmit();
@@ -96,6 +97,7 @@ export class Torrent extends StateDerivedView {
    * custom-validity message from a previous failed attempt.
    */
   #onMagnetInput = () => {
+    this.#clearFileError();
     this.#magnetInput.setCustomValidity("");
     if (Torrent.MAGNET_RE.test(this.#magnetInput.value.trim())) {
       this.#form.requestSubmit();
@@ -143,6 +145,7 @@ export class Torrent extends StateDerivedView {
     if (!(input instanceof HTMLInputElement)) {
       return;
     }
+    this.#clearFileError();
     // Allow selecting the same file again after cancel/reopen cycles.
     input.value = "";
   };
@@ -202,6 +205,7 @@ export class Torrent extends StateDerivedView {
     if (Torrent.MAGNET_RE.test(text)) {
       event.preventDefault();
       this.#magnetInput.value = text;
+      this.#clearFileError();
       this.#form.requestSubmit();
     }
   };
@@ -256,6 +260,7 @@ export class Torrent extends StateDerivedView {
       // back. Anything done in that window — a second refresh, a bookmark —
       // lost the torrent entirely.
       this.#magnetInput.value = magnet;
+      this.#clearFileError();
       this.#form.requestSubmit();
       return;
     }
@@ -302,6 +307,15 @@ export class Torrent extends StateDerivedView {
       throw new Error(Torrent.MESSAGES.missingDomNodes);
     }
 
+    // Every programmatic submit (paste, demo, ?magnet=, Enter) goes through
+    // here: an invalid file input would make the browser refuse it, so drop
+    // the file error first.
+    const submit = this.#form.requestSubmit.bind(this.#form);
+    this.#form.requestSubmit = (...args) => {
+      this.#clearFileError();
+      submit(...args);
+    };
+
     // iOS don't allow to select torrent file by with accept=".torrent,application/x-bittorrent"
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     if (isIOS) {
@@ -312,6 +326,9 @@ export class Torrent extends StateDerivedView {
   #setupEventHandlers() {
     this.#form.addEventListener("submit", this.#onFormSubmit);
     this.#magnetInput.addEventListener("input", this.#onMagnetInput);
+    // Enter needs the field focused; a click runs before the form validates.
+    this.#magnetInput.addEventListener("focus", this.#clearFileError);
+    this.#form.addEventListener("click", this.#onFormClick);
     this.#demoButton.addEventListener("click", this.#onDemoClick);
     this.#input.addEventListener("click", this.#onInputClick);
     this.#input.addEventListener("change", this.#onInputChange);
@@ -350,6 +367,22 @@ export class Torrent extends StateDerivedView {
   }
 
   /**
+   * Drop the file input's message when the viewer moves to another way to
+   * start: an invalid control blocks form.requestSubmit(), so a stale message
+   * would keep the magnet field and the demo button from starting anything.
+   */
+  #clearFileError = () => {
+    this.#input.setCustomValidity("");
+  };
+
+  /** @param {Event} event */
+  #onFormClick = (event) => {
+    if (event.target instanceof Element && event.target.closest("button")) {
+      this.#clearFileError();
+    }
+  };
+
+  /**
    * @param {FileList | File[]} files
    * @returns {Promise<void>}
    */
@@ -359,7 +392,7 @@ export class Torrent extends StateDerivedView {
       this.#reportFileError(Torrent.MESSAGES.wrongFileType);
       return;
     }
-    this.#input.setCustomValidity("");
+    this.#clearFileError();
 
     try {
       if (waitTrace.current?.startedAt !== startedAt) waitTrace.begin("torrent-file", startedAt);
