@@ -1,4 +1,4 @@
-import { APP_EVENTS, ERROR_EVENTS, TORRENT_EVENTS } from "../../shared/events.js";
+import { TORRENT_EVENTS } from "../../shared/events.js";
 import { parseTorrentBytes } from "../../domain/torrent-parser.js";
 import { waitTrace } from "../../domain/wait-trace.js";
 import { APP_VIEW, viewForState } from "../../domain/app-state.js";
@@ -40,6 +40,7 @@ export class Torrent extends StateDerivedView {
     missingDomNodes: "Torrent component DOM nodes are missing.",
     wrongFileType: "Only .torrent files are accepted.",
     parseFailed: "Could not parse torrent file.",
+    badAddressTorrent: "Could not decode torrent from URL.",
     invalidMagnet: "That does not look like a magnet link."
   };
 
@@ -279,13 +280,10 @@ export class Torrent extends StateDerivedView {
         return decoded;
       }, { process: "A0.0" });
     } catch {
-      // silent-ok: not silent at all — the viewer is shown the error screen
-      // below, which is the loudest answer this app has.
-      document.dispatchEvent(
-        new CustomEvent(ERROR_EVENTS.SHOW, {
-          detail: { title: "Error", description: "Could not decode torrent from URL.", backEvent: APP_EVENTS.RESET_TO_PICKER }
-        })
-      );
+      // silent-ok: the file input reports it to the viewer (constraint
+      // validation, like the magnet field); the app is in IDLE, which cannot
+      // show the error view.
+      this.#reportFileError(Torrent.MESSAGES.badAddressTorrent);
       return;
     }
 
@@ -345,6 +343,12 @@ export class Torrent extends StateDerivedView {
     return null;
   }
 
+  /** Inline message on the file input (Validation API), as the magnet field does. @param {string} message */
+  #reportFileError(message) {
+    this.#input.setCustomValidity(message);
+    this.#input.reportValidity();
+  }
+
   /**
    * @param {FileList | File[]} files
    * @returns {Promise<void>}
@@ -352,17 +356,10 @@ export class Torrent extends StateDerivedView {
   async #processIncomingFiles(files, startedAt = performance.now()) {
     const torrentFile = this.#pickFirstTorrentFile(files);
     if (!torrentFile) {
-      document.dispatchEvent(
-        new CustomEvent(ERROR_EVENTS.SHOW, {
-          detail: {
-            title: "Error",
-            description: Torrent.MESSAGES.wrongFileType,
-            backEvent: APP_EVENTS.RESET_TO_PICKER
-          }
-        })
-      );
+      this.#reportFileError(Torrent.MESSAGES.wrongFileType);
       return;
     }
+    this.#input.setCustomValidity("");
 
     try {
       if (waitTrace.current?.startedAt !== startedAt) waitTrace.begin("torrent-file", startedAt);
@@ -390,17 +387,8 @@ export class Torrent extends StateDerivedView {
       );
     } catch (_error) {
       waitTrace.finish("error", { phase: "torrent-parse", error: String(_error?.message ?? _error) });
-      // silent-ok: as above — the failure reaches the viewer as the error
-      // screen dispatched below.
-      document.dispatchEvent(
-        new CustomEvent(ERROR_EVENTS.SHOW, {
-          detail: {
-            title: "Error",
-            description: Torrent.MESSAGES.parseFailed,
-            backEvent: APP_EVENTS.RESET_TO_PICKER
-          }
-        })
-      );
+      // silent-ok: as above — the file input reports the failure to the viewer.
+      this.#reportFileError(Torrent.MESSAGES.parseFailed);
       return;
     }
   }
