@@ -15,7 +15,7 @@ This component owns the torrent file input dialog.
   - audio
   - subtitles
 - Emit `TORRENT:FILE_DETAILS_READY` with parsed torrent details and media groups.
-- Emit `ERROR:SHOW` when no valid torrent file is selected.
+- Report a wrong file, an unparsable torrent or a bad `?torrent=` address on the file input (constraint validation); the message is cleared when the viewer chooses another way to start.
 - Show by default on app start and on `APP:RESET_TO_PICKER`.
 
 ## State Machine

@@ -1,6 +1,6 @@
 ## Unreleased
 
-- **Fix**: A wrong file, a broken .torrent or a bad `?torrent=` address is now reported on the file input, the way the magnet field reports a bad link, instead of an error screen the picker could not show.
+- **Fix**: A wrong file, a broken .torrent or a bad `?torrent=` address is now reported on the file input, the way the magnet field reports a bad link, instead of an error screen the picker could not show; the message no longer blocks starting a magnet or the demo.
 
 ## 0.66.37
 
