@@ -2,7 +2,7 @@
  * @file WebRTC data channel transport to a proxy.
  *
  * Establishes a peer-to-peer connection through the server's signalling
- * endpoint (`/ws/browser-signal`) and exposes a fetch-like API so that all
+ * endpoint (see `transport/signalling-session.js`) and exposes a fetch-like API so that all
  * proxy calls — API requests and HLS video segments — travel over the data
  * channel without passing through the server.
  *
@@ -23,6 +23,7 @@
 import { CONNECT_TIMEOUT_MS } from "./connect-deadline.js";
 import { waitTrace } from "./wait-trace.js";
 import { ControlConnection } from "./transport/control-connection.js";
+import { SignallingSession } from "./transport/signalling-session.js";
 import {
   deliveryDueWithinMs,
   emptyArrivalEstimate,
@@ -134,10 +135,9 @@ export class WebRtcProxy {
   #transportSampler = null;
 
   /**
-   * Reliable control messages. Capability version 2 puts this channel on an
+   * Reliable control messages. This channel lives on an
    * independent SCTP association: different streams on one association still
    * share its send buffer and congestion window (r69, torrent-tv/meta#189).
-   * Legacy proxies retain their second channel on the media association.
    */
   #controlChannel = null;
   #controlLink = null;
@@ -242,8 +242,8 @@ export class WebRtcProxy {
   #deliveryCheck = null;
   /** True from a stall being called until the next message arrives. */
   #stalled = false;
-  /** @type {WebSocket | null} */
-  #ws = null;
+  /** @type {SignallingSession | null} */
+  #signalling = null;
   /**
    * How many remote candidates this connection has refused. Only the count is
    * kept: the lines themselves are capped, because one bad `sdpMid` refuses
@@ -257,14 +257,6 @@ export class WebRtcProxy {
    * @type {Map<string, PendingEntry>}
    */
   #pending = new Map();
-  /**
-   * ICE candidates received before the remote description was set.
-   * Drained immediately after setRemoteDescription completes.
-   * @type {Array<{candidate: string, sdpMid: string, sdpMLineIndex: number}>}
-   */
-  #pendingCandidates = [];
-  /** @type {boolean} */
-  #remoteDescriptionSet = false;
   /** @type {boolean} True once the data channel opened successfully. */
   #connected = false;
   #connectSettler = null;
@@ -430,9 +422,9 @@ export class WebRtcProxy {
     this.#traceSessionEnd = waitTrace.open("A2.2.websocket-session", {
       process: "A2.2.1", proxyId: this.#proxyId
     }, this.#traceContext);
-    const wsUrl = `${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`;
+    this.#signalling = this.#createSignalling();
     try {
-      this.#ws = new WebSocket(wsUrl);
+      this.#signalling.open();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.#traceSessionEnd?.({ outcome: "error", error: message });
@@ -476,161 +468,80 @@ export class WebRtcProxy {
       signal?.addEventListener("abort", aborted, { once: true });
       if (signal?.aborted) { aborted(); return; }
 
-      this.#ws.addEventListener("message", (event) => {
-        this.#onSignalMessage(event.data, settle);
-      });
-
-      this.#ws.addEventListener("error", () => {
-        settle(new Error("WebSocket error during WebRTC signalling."));
-      });
-
-      this.#ws.addEventListener("close", () => {
-        if (!settled) {
-          settle(new Error("WebSocket closed before data channel was established."));
-        }
-      });
     });
   }
 
   /**
-   * Handle a single message arriving on the signalling WebSocket.
-   *
-   * @param {string} raw
-   * @param {(err?: Error) => void} settle
+   * The media peer's signalling session. The settler is looked up when it is
+   * needed: it only exists while `connect()` is waiting.
    */
-  async #onSignalMessage(raw, settle) {
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch (error) {
-      // A signalling message that cannot be read is a step of the connect that
-      // silently did not happen, and the viewer meets it later as "no proxy
-      // answered". Say what arrived — truncated, because a malformed frame can
-      // be any size at all.
-      console.warn(
-        `[torrent-tv][signal] a signalling message could not be parsed (${error instanceof Error ? error.message : String(error)}): ` +
-        `${String(raw).slice(0, 200)}`
-      );
-      return;
-    }
-
-    if (this.#closedByUser) return;
-    if (msg.type === "session") {
-      this.#traceSessionEnd?.({ outcome: "session-received", connection: msg.sessionId });
-      this.#traceSessionEnd = null;
-      this.#traceSignalEnd = waitTrace.open("A2.2.signalling", { connection: msg.sessionId }, this.#traceContext);
-      // Record the session id and hand it to the log forwarder so browser logs
-      // can be joined to the proxy's `[webrtc] Session <id>` lines.
-      //
-      // Announced here AND again when the connection is adopted as the
-      // transport, last writer wins. Here, because the forwarder stamps whole
-      // batches every two seconds and the connect itself takes seconds — the
-      // signalling, ICE, DTLS and local-network phase is the part most often
-      // being diagnosed, and a connect that FAILS never reaches adoption at
-      // all, so leaving it to adoption alone left exactly those lines
-      // unstamped. Again at adoption, because with more than one connection
-      // this one may not be the one that carries the session.
-      this.#signalSessionId = typeof msg.sessionId === "string" ? msg.sessionId : null;
-      if (this.#signalSessionId) {
-        console.debug(`[ice] signalling session ${this.#signalSessionId}`);
-        try {
-          window.__ttvClientLogger?.setSignalSession?.(this.#signalSessionId);
-        } catch {
-          // silent-ok: the log forwarder is a debugging aid, and signalling must
-          // not fail because a diagnostic could not be tagged. Nothing is
-          // abandoned here — the session continues either way.
-        }
-      }
-      try {
-        await this.#createPeerConnection(msg.sessionId, settle);
-      } catch (err) {
-        settle(err instanceof Error ? err : new Error(String(err)));
-      }
-      return;
-    }
-
-    if (msg.type === "answer" && this.#pc) {
-      this.#traceAnswerEnd = waitTrace.open("A2.2.remote-description", {
-        process: "A2.2.3", connection: this.#signalSessionId
-      }, this.#traceContext);
-      try {
-        waitTrace.event("A2.media-answer", { connection: this.#signalSessionId }, this.#traceContext);
-        const pc = this.#pc;
-        await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
-        this.#traceAnswerEnd?.({ outcome: "applied" });
-        this.#traceAnswerEnd = null;
-        if (this.#closedByUser || this.#pc !== pc) return;
-        this.#remoteDescriptionSet = true;
-        // Drain buffered candidates so ICE checking can start.
-        for (const c of this.#pendingCandidates) {
-          const finishCandidate = waitTrace.open("A2.2.remote-candidate-application", {
-            process: "A2.2.4", connection: this.#signalSessionId, disposition: "buffered"
-          }, this.#traceContext);
+  #createSignalling() {
+    const settle = (error) => this.#connectSettler?.(error);
+    return new SignallingSession({
+      proxyId: this.#proxyId,
+      createPeer: (sessionId) => {
+        this.#traceSessionEnd?.({ outcome: "session-received", connection: sessionId });
+        this.#traceSessionEnd = null;
+        this.#traceSignalEnd = waitTrace.open("A2.2.signalling", { connection: sessionId }, this.#traceContext);
+        // Record the session id and hand it to the log forwarder so browser logs
+        // can be joined to the proxy's `[webrtc] Session <id>` lines.
+        //
+        // Announced here AND again when the connection is adopted as the
+        // transport, last writer wins. Here, because the forwarder stamps whole
+        // batches every two seconds and the connect itself takes seconds — the
+        // signalling, ICE, DTLS and local-network phase is the part most often
+        // being diagnosed, and a connect that FAILS never reaches adoption at
+        // all, so leaving it to adoption alone left exactly those lines
+        // unstamped. Again at adoption, because with more than one connection
+        // this one may not be the one that carries the session.
+        this.#signalSessionId = typeof sessionId === "string" ? sessionId : null;
+        if (this.#signalSessionId) {
+          console.debug(`[ice] signalling session ${this.#signalSessionId}`);
           try {
-            await pc.addIceCandidate(c);
-            finishCandidate({ outcome: "applied" });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            finishCandidate({ outcome: "rejected", error: message });
-            console.debug(`[torrent-tv][ice] buffered remote candidate refused (${message})`);
+            window.__ttvClientLogger?.setSignalSession?.(this.#signalSessionId);
+          } catch {
+            // silent-ok: the log forwarder is a debugging aid, and signalling must
+            // not fail because a diagnostic could not be tagged. Nothing is
+            // abandoned here — the session continues either way.
           }
         }
-        if (this.#closedByUser || this.#pc !== pc) return;
-        this.#pendingCandidates = [];
+        return this.#createPeerConnection(settle);
+      },
+      acceptCandidate: (candidate, disposition) => {
+        console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(candidate.candidate)}`);
+        waitTrace.event("A2.2.remote-candidate-received", { process: "A2.2.4", connection: this.#signalSessionId,
+          disposition }, this.#traceContext);
+        // Track the proxy's LAN address (for the local-network permission probe)
+        // and, in public-only mode, drop local-address candidates so the browser
+        // never touches the local network — and never asks for the permission.
+        const ip = WebRtcProxy.#extractCandidateIp(candidate.candidate);
+        if (ip && WebRtcProxy.#isLocalAddress(ip)) {
+          if (this.#lanProbeUrl === null && this.#proxyLocalPort && WebRtcProxy.#isPrivateIpv4(ip)) {
+            this.#lanProbeUrl = `http://${ip}:${this.#proxyLocalPort}/healthz`;
+          }
+          if (!this.#allowPrivateCandidates) {
+            console.debug("[ice] remote local candidate skipped (public-only attempt)");
+            return false;
+          }
+        }
+        return true;
+      },
+      trace: (step, info) => this.#traceHandshake(step, info),
+      onAnswered: () => {
         waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId }, this.#traceContext);
         this.#traceSignalEnd?.({ outcome: "answer-applied" });
         this.#traceSignalEnd = null;
         this.#traceJoinEnd = waitTrace.open("A2.J.ready-join", { connection: this.#signalSessionId }, this.#traceContext);
-        if (msg.separateControl === 2) {
-          this.#openSeparateControl(settle);
-        } else if (!this.#controlChannel) {
-          this.#openLegacyControl();
-        }
+        this.#openSeparateControl(settle);
         this.#controlNegotiated = true;
         this.#settleConnected(settle);
-      } catch (err) {
-        this.#traceAnswerEnd?.({ outcome: "error", error: String(err?.message ?? err) });
-        this.#traceAnswerEnd = null;
-        settle(err instanceof Error ? err : new Error(String(err)));
-      }
-      return;
-    }
-
-    if (msg.type === "candidate" && this.#pc) {
-      const c = {
-        candidate: msg.candidate,
-        sdpMid: msg.mid ?? "0",
-        sdpMLineIndex: 0
-      };
-      console.debug(`[ice] remote ${WebRtcProxy.#describeCandidate(c.candidate)}`);
-      waitTrace.event("A2.2.remote-candidate-received", { process: "A2.2.4", connection: this.#signalSessionId,
-        disposition: this.#remoteDescriptionSet ? "apply" : "buffer" }, this.#traceContext);
-      // Track the proxy's LAN address (for the local-network permission probe)
-      // and, in public-only mode, drop local-address candidates so the browser
-      // never touches the local network — and never asks for the permission.
-      const ip = WebRtcProxy.#extractCandidateIp(c.candidate);
-      if (ip && WebRtcProxy.#isLocalAddress(ip)) {
-        if (this.#lanProbeUrl === null && this.#proxyLocalPort && WebRtcProxy.#isPrivateIpv4(ip)) {
-          this.#lanProbeUrl = `http://${ip}:${this.#proxyLocalPort}/healthz`;
-        }
-        if (!this.#allowPrivateCandidates) {
-          console.debug("[ice] remote local candidate skipped (public-only attempt)");
+      },
+      onCandidateRefused: (error, candidate, disposition) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (disposition === "buffered") {
+          console.debug(`[torrent-tv][ice] buffered remote candidate refused (${message})`);
           return;
         }
-      }
-      if (!this.#remoteDescriptionSet) {
-        // Buffer until the answer is applied.
-        this.#pendingCandidates.push(c);
-        return;
-      }
-      const finishCandidate = waitTrace.open("A2.2.remote-candidate-application", {
-        process: "A2.2.4", connection: this.#signalSessionId, disposition: "trickled"
-      }, this.#traceContext);
-      try {
-        await this.#pc.addIceCandidate(c);
-        finishCandidate({ outcome: "applied" });
-      } catch (error) {
-        finishCandidate({ outcome: "rejected", error: String(error?.message ?? error) });
         // Usually stale or duplicate — but that is a guess, and a candidate
         // refused for some other reason is a path to the proxy that was never
         // tried. Name what was refused instead of asserting why.
@@ -648,23 +559,52 @@ export class WebRtcProxy {
         this.#candidateRefusals += 1;
         if (this.#candidateRefusals <= WebRtcProxy.#MAX_CANDIDATE_REFUSAL_LINES) {
           console.debug(
-            `[torrent-tv][ice] candidate refused (${error instanceof Error ? error.message : String(error)}): ` +
-            `${WebRtcProxy.#describeCandidate(c.candidate)}`
+            `[torrent-tv][ice] candidate refused (${message}): ` +
+            `${WebRtcProxy.#describeCandidate(candidate.candidate)}`
           );
         } else if (this.#candidateRefusals === WebRtcProxy.#MAX_CANDIDATE_REFUSAL_LINES + 1) {
           console.debug("[torrent-tv][ice] further candidate refusals on this connection are not being written");
         }
-      }
+      },
+      onUnreadable: (error, raw) => {
+        // A signalling message that cannot be read is a step of the connect that
+        // silently did not happen, and the viewer meets it later as "no proxy
+        // answered". Say what arrived — truncated, because a malformed frame can
+        // be any size at all.
+        console.warn(
+          `[torrent-tv][signal] a signalling message could not be parsed (${error instanceof Error ? error.message : String(error)}): ` +
+          `${String(raw).slice(0, 200)}`
+        );
+      },
+      onFail: settle,
+      onSocketClosed: () => settle(new Error("WebSocket closed before data channel was established.")),
+      onSocketError: () => settle(new Error("WebSocket error during WebRTC signalling."))
+    });
+  }
+
+  /** Record a handshake step in the wait trace; spans return their end function. */
+  #traceHandshake(step, info) {
+    const connection = this.#signalSessionId;
+    if (step === "offer") {
+      this.#traceOfferEnd = waitTrace.open("A2.2.offer-create-and-send", { process: "A2.2.2", connection }, this.#traceContext);
+      return result => { this.#traceOfferEnd?.(result); this.#traceOfferEnd = null; };
     }
+    if (step === "answer") {
+      this.#traceAnswerEnd = waitTrace.open("A2.2.remote-description", { process: "A2.2.3", connection }, this.#traceContext);
+      waitTrace.event("A2.media-answer", { connection }, this.#traceContext);
+      return result => { this.#traceAnswerEnd?.(result); this.#traceAnswerEnd = null; };
+    }
+    return waitTrace.open("A2.2.remote-candidate-application", { process: "A2.2.4", connection, ...info }, this.#traceContext);
   }
 
   /**
-   * Create the RTCPeerConnection, attach the data channel, and send the offer.
+   * Create the RTCPeerConnection and attach the data channels. The signalling
+   * session sends the offer.
    *
-   * @param {string} _sessionId - Assigned by the server (unused in browser, included for clarity).
    * @param {(err?: Error) => void} settle
+   * @returns {RTCPeerConnection}
    */
-  async #createPeerConnection(_sessionId, settle) {
+  #createPeerConnection(settle) {
     this.#traceMediaEnd = waitTrace.open("A2.2m.media-transport", { connection: this.#signalSessionId }, this.#traceContext);
     this.#traceGatherEnd = waitTrace.open("A2.2.ice-gathering", {
       process: "A2.2.5", connection: this.#signalSessionId
@@ -731,14 +671,7 @@ export class WebRtcProxy {
         this.#traceGatherEnd?.({ outcome: "complete" });
         this.#traceGatherEnd = null;
       }
-      if (event.candidate && this.#ws?.readyState === WebSocket.OPEN) {
-        this.#ws.send(JSON.stringify({
-          type: "candidate",
-          proxyId: this.#proxyId,
-          candidate: event.candidate.candidate,
-          mid: event.candidate.sdpMid ?? "0"
-        }));
-      }
+      if (event.candidate) this.#signalling?.sendCandidate(event.candidate);
     });
 
     // Diagnostics (temporary): ICE state transitions + the selected pair, so a
@@ -770,32 +703,7 @@ export class WebRtcProxy {
       }
     });
 
-    this.#traceOfferEnd = waitTrace.open("A2.2.offer-create-and-send", {
-      process: "A2.2.2", connection: this.#signalSessionId
-    }, this.#traceContext);
-    let offer;
-    try {
-      offer = await this.#pc.createOffer();
-      await this.#pc.setLocalDescription(offer);
-
-    // Strip `a=sctp-init` from the COPY of the offer sent to the proxy.
-    // Chromium 152+ embeds its SCTP INIT in the SDP (zero-RTT association).
-    // libdatachannel does not understand the attribute and ECHOES it verbatim
-    // in its answer — the browser then believes the (bogus, self-mirrored)
-    // zero-RTT association is established, no SCTP ever hits the wire, and the
-    // channel dies ~5 s after DTLS (confirmed via tcpdump + SDP capture).
-    // Without the attribute in the answer the browser falls back to the
-    // classic in-band INIT handshake, which works. Local description keeps it.
-      const sdpForProxy = offer.sdp.replace(/a=sctp-init:[^\r\n]*\r\n/g, "");
-
-      this.#ws?.send(JSON.stringify({ type: "offer", proxyId: this.#proxyId, sdp: sdpForProxy }));
-      this.#traceOfferEnd?.({ outcome: "sent" });
-      this.#traceOfferEnd = null;
-    } catch (error) {
-      this.#traceOfferEnd?.({ outcome: "error", error: String(error?.message ?? error) });
-      this.#traceOfferEnd = null;
-      throw error;
-    }
+    return this.#pc;
   }
 
   #settleConnected(settle) {
@@ -809,26 +717,6 @@ export class WebRtcProxy {
     }
     this.#connected = true;
     settle();
-  }
-
-  #openLegacyControl() {
-    this.#traceControlEnd = waitTrace.open("A2.2c.control-transport", { connection: this.#signalSessionId,
-      mode: "legacy" }, this.#traceContext);
-    const channel = this.#pc.createDataChannel("proxy-control", { ordered: true });
-    this.#controlChannel = channel;
-    channel.binaryType = "arraybuffer";
-    channel.addEventListener("message", event => this.#onChannelMessage(event.data, "proxy-control"));
-    channel.addEventListener("open", () => {
-      this.#traceControlEnd?.({ outcome: "open" });
-      this.#traceControlEnd = null;
-      this.#announceViewer();
-    });
-    const closed = () => {
-      this.#rejectChannel(channel, new Error("Control data channel closed."));
-      if (this.#controlChannel === channel) this.#controlChannel = null;
-    };
-    channel.addEventListener("close", closed);
-    channel.addEventListener("error", closed);
   }
 
   #openSeparateControl(settle) {
@@ -1409,7 +1297,7 @@ export class WebRtcProxy {
    *
    * Media paths use the original association. Other requests use independent
    * control when supported; fetch waits for it to reconnect rather than sending
-   * control back through a media queue. Only legacy proxies use that fallback.
+   * control back through a media queue.
    *
    * @returns {RTCDataChannel}
    */
@@ -1926,7 +1814,7 @@ export class WebRtcProxy {
       entry.reject(new DOMException("Proxy connection closed.", "AbortError"));
     }
     this.#pending.clear();
-    this.#ws?.close();
+    this.#signalling?.close();
     this.#controlLink?.close();
     this.#controlChannel?.close();
     this.#controlChannel = null;
@@ -1935,7 +1823,7 @@ export class WebRtcProxy {
     this.#stopTransportSampling();
     this.#channel?.close();
     this.#pc?.close();
-    this.#ws = null;
+    this.#signalling = null;
     this.#channel = null;
     this.#pc = null;
   }

@@ -1,4 +1,5 @@
 import { CONNECT_TIMEOUT_MS } from "../connect-deadline.js";
+import { SignallingSession } from "./signalling-session.js";
 import { deliveryDueWithinMs, emptyArrivalEstimate, noteProbeGap, silenceVerdict } from "./delivery-deadline.js";
 
 /** A control-only SCTP association with independently renewable signalling. */
@@ -14,7 +15,7 @@ export class ControlConnection {
   get channel() { return this.#current?.channel ?? null; }
   get peer() { return this.#current?.pc ?? null; }
   get connectionId() { return this.#current?.id ?? null; }
-  get signalSessionId() { return this.#current?.sessionId ?? null; }
+  get signalSessionId() { return this.#current?.signalling.sessionId ?? null; }
 
   wait(signal) {
     if (signal?.aborted) return Promise.reject(new DOMException("Control wait cancelled.", "AbortError"));
@@ -38,12 +39,10 @@ export class ControlConnection {
     if (this.#current) return this.#current.ready;
     let pc;
     let channel;
-    let ws;
     try {
       pc = new RTCPeerConnection({ iceServers: this.#options.iceServers });
       channel = pc.createDataChannel("proxy-control", { ordered: true });
       channel.binaryType = "arraybuffer";
-      ws = new WebSocket(`${location.protocol.replace("http", "ws")}//${location.host}/ws/browser-signal`);
     } catch (error) {
       channel?.close();
       pc?.close();
@@ -53,36 +52,40 @@ export class ControlConnection {
     let rejectReady;
     const ready = new Promise((yes, no) => { resolve = yes; rejectReady = no; });
     const current = {
-      id: crypto.randomUUID(), pc, channel, ws, ready, resolve, reject: rejectReady, sessionId: null,
-      opened: false, remoteSet: false, candidates: [], timer: null, deliveryTimer: null,
+      id: crypto.randomUUID(), pc, channel, signalling: null, ready, resolve, reject: rejectReady,
+      opened: false, timer: null, deliveryTimer: null,
       estimate: emptyArrivalEstimate(), probe: null, arrivalAt: performance.now(), handled: 0,
       stalled: false, candidateRefusals: 0
     };
-    this.#current = current;
     const reject = (error) => this.#reject(current, error);
-    current.timer = setTimeout(() => reject(new Error("Control connection timed out.")), CONNECT_TIMEOUT_MS);
-    ws.addEventListener("message", event => {
-      if (this.#current !== current) return;
-      try {
-        const signal = JSON.parse(event.data);
-        if (signal.type === "session") {
-          if (current.sessionId !== null) return;
-          current.sessionId = signal.sessionId;
-          console.debug(`[ice-control] session=${signal.sessionId} connectionId=${current.id}`);
-          void this.#sendOffer(current);
-        } else {
-          void this.handleSignal(signal);
-        }
-      } catch (error) { reject(error); }
-    });
     // Signalling can disappear during a server release after the data channel
     // is established. Keep that channel; its next replacement gets a new socket.
-    ws.addEventListener("close", () => {
-      if (!current.opened) reject(new Error("Control signalling closed before connection."));
+    current.signalling = new SignallingSession({
+      proxyId: this.#options.proxyId,
+      connectionId: current.id,
+      createPeer: sessionId => {
+        console.debug(`[ice-control] session=${sessionId} connectionId=${current.id}`);
+        return pc;
+      },
+      acceptCandidate: candidate => this.#options.acceptCandidate(candidate),
+      onCandidateRefused: error => {
+        // Cap the diagnostic and omit the candidate's private address.
+        if (++current.candidateRefusals <= 3) console.debug(`[ice-control] candidate refused (${error.name})`);
+      },
+      onUnreadable: reject,
+      onFail: reject,
+      onSocketClosed: () => { if (!current.opened) reject(new Error("Control signalling closed before connection.")); },
+      onSocketError: () => { if (!current.opened) reject(new Error("Control signalling failed.")); }
     });
-    ws.addEventListener("error", () => {
-      if (!current.opened) reject(new Error("Control signalling failed."));
-    });
+    try {
+      current.signalling.open();
+    } catch (error) {
+      channel.close();
+      pc.close();
+      return Promise.reject(error);
+    }
+    this.#current = current;
+    current.timer = setTimeout(() => reject(new Error("Control connection timed out.")), CONNECT_TIMEOUT_MS);
     channel.addEventListener("open", () => {
       if (this.#current !== current) return;
       clearTimeout(current.timer);
@@ -118,64 +121,12 @@ export class ControlConnection {
       if (pc.connectionState === "failed" || pc.connectionState === "closed") reject(new Error("Control peer connection failed."));
     });
     pc.addEventListener("icecandidate", event => {
-      if (this.#current === current && event.candidate) {
-        try {
-          this.#sendSignal(current, { type: "candidate",
-            candidate: event.candidate.candidate, mid: event.candidate.sdpMid ?? "0" });
-        } catch (error) { if (!current.opened) reject(error); }
+      if (this.#current !== current || !event.candidate) return;
+      if (!current.signalling.sendCandidate(event.candidate) && !current.opened) {
+        reject(new Error("Control signalling is not open."));
       }
     });
     return ready;
-  }
-
-  #sendSignal(current, signal) {
-    if (current.ws.readyState !== WebSocket.OPEN) throw new Error("Control signalling is not open.");
-    current.ws.send(JSON.stringify({ ...signal, connectionId: current.id, proxyId: this.#options.proxyId }));
-  }
-
-  async #sendOffer(current) {
-    try {
-      const pc = current.pc;
-      const offer = await pc.createOffer();
-      if (this.#current !== current) return;
-      await pc.setLocalDescription(offer);
-      if (this.#current !== current) return;
-      // Apply the same Chromium zero-RTT compatibility rule as the media offer.
-      const sdp = offer.sdp.replace(/a=sctp-init:[^\r\n]*\r\n/g, "");
-      this.#sendSignal(current, { type: "offer", sdp });
-    } catch (error) { this.#reject(current, error); }
-  }
-
-  async #addCandidate(current, candidate) {
-    if (this.#current !== current) return;
-    try {
-      await current.pc.addIceCandidate(candidate);
-    } catch (error) {
-      // A refused candidate does not invalidate other working paths. Cap the
-      // diagnostic and omit the candidate's private address.
-      if (++current.candidateRefusals <= 3) console.debug(`[ice-control] candidate refused (${error.name})`);
-    }
-  }
-
-  async handleSignal(signal) {
-    const current = this.#current;
-    if (!current || signal.connectionId !== current.id) return;
-    try {
-      if (signal.type === "answer") {
-        await current.pc.setRemoteDescription({ type: "answer", sdp: signal.sdp });
-        if (this.#current !== current) return;
-        current.remoteSet = true;
-        for (const candidate of current.candidates.splice(0)) await this.#addCandidate(current, candidate);
-      } else if (signal.type === "candidate") {
-        if (typeof signal.candidate !== "string") return;
-        const candidate = { candidate: signal.candidate, sdpMid: signal.mid ?? "0", sdpMLineIndex: 0 };
-        if (!this.#options.acceptCandidate(candidate)) return;
-        if (current.remoteSet) await this.#addCandidate(current, candidate);
-        else current.candidates.push(candidate);
-      }
-    } catch (error) {
-      this.#reject(current, error);
-    }
   }
 
   /** Keep silence detection separate from the association carrying the film. */
@@ -229,7 +180,7 @@ export class ControlConnection {
     clearTimeout(current.timer);
     clearTimeout(current.deliveryTimer);
     current.reject(error);
-    current.ws.close();
+    current.signalling.close();
     current.channel.close();
     current.pc.close();
     this.#options.onClosed(current.channel, error, current.opened);
