@@ -52,7 +52,6 @@ export class WaitingOverlay {
   #wasWaiting = false;
   #awaitingFirstPresentedFrame = false;
   #lastRenderedText = null;
-  #lastWaitEstimateTraceKey = null;
 
 
   /**
@@ -95,33 +94,7 @@ export class WaitingOverlay {
     const downloadStats = detail?.downloadStats ?? null;
     const transcodeProgress = detail?.transcodeProgress ?? null;
     const readiness = detail?.playbackReadiness;
-    const earlyWaitEstimate = downloadStats?.waitEstimate;
-    // Startup and seek polling publish the active action's estimate through the
-    // same event. A seek can begin after the startup wait has ended, so the
-    // overlay's startup-only flag cannot decide whether this answer is current.
-    const hasCurrentWaitEstimate = downloadStats && Object.hasOwn(downloadStats, "waitEstimate") &&
-      earlyWaitEstimate !== null && earlyWaitEstimate !== undefined;
-    const clearsCurrentWaitEstimate = downloadStats && Object.hasOwn(downloadStats, "waitEstimate") &&
-      earlyWaitEstimate === null;
-    const nestedWaitEstimate = readiness?.waitEstimate;
-    const traceKey = JSON.stringify([
-      this.#awaitingFirstPresentedFrame,
-      hasCurrentWaitEstimate ? earlyWaitEstimate?.waitId : null,
-      hasCurrentWaitEstimate ? earlyWaitEstimate?.revision : null,
-      nestedWaitEstimate?.waitId ?? null,
-      nestedWaitEstimate?.revision ?? null,
-      readiness?.reason ?? null
-    ]);
-    if (traceKey !== this.#lastWaitEstimateTraceKey) {
-      this.#lastWaitEstimateTraceKey = traceKey;
-      console.debug(`[wait-estimate-received] wait=${this.#waitSequence} awaiting=${this.#awaitingFirstPresentedFrame} ` +
-        `accepted=${Boolean(hasCurrentWaitEstimate)} ` +
-        `top=${earlyWaitEstimate?.waitId ?? "-"}:${earlyWaitEstimate?.revision ?? "-"} ` +
-        `nested=${nestedWaitEstimate?.waitId ?? "-"}:${nestedWaitEstimate?.revision ?? "-"} ` +
-        `reason=${readiness?.reason ?? "-"}`);
-    }
     const unified = this.#model.update({
-      ...(hasCurrentWaitEstimate || clearsCurrentWaitEstimate ? { waitEstimate: earlyWaitEstimate } : {}),
       ...(detail && Object.hasOwn(detail, "playbackReadiness") ? { playbackReadiness: readiness } : {}),
       bufferedAhead: this.#bufferedAhead ?? undefined
     });
@@ -252,7 +225,6 @@ export class WaitingOverlay {
     this.#waitFileIndex = fileIndex;
     this.#awaitingFirstPresentedFrame = true;
     this.#lastRenderedText = null;
-    this.#lastWaitEstimateTraceKey = null;
     console.debug(`[wait-start] wait=${this.#waitSequence} startedAt=${this.#waitStartedAt.toFixed(3)}ms ` +
       `fileIndex=${fileIndex ?? "-"}${detail?.originalOpen === true ? " originalOpen=true" : ""}`);
   };
