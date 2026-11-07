@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.37
 
 - **Chore**: Update dependencies: @biomejs/biome 2.6.5 → 2.6.6, knip 6.44.1 → 6.44.2; 34 package(s) changed in the lock file.
 
