@@ -122,7 +122,6 @@ export class Loading extends StateDerivedView {
 
   static MESSAGES = {
     missingDomNodes: "Loading component DOM nodes are missing.",
-    readingTorrentFile: (fileName) => fileName,
     readingMetadata: "Reading torrent metadata...",
     selectingProxy: "Selecting proxy...",
     connectingToProxy: "Connecting to proxy...",
@@ -516,7 +515,6 @@ export class Loading extends StateDerivedView {
 
   /** Same, for the transcode-progress polls. */
   #progressPollFailing = false;
-  /** Last wait estimate state logged by the progress poll. */
 
   /** Same, for the metadata poll under the waiting interface. */
   #metadataPollFailing = false;
@@ -2019,8 +2017,7 @@ export class Loading extends StateDerivedView {
   };
 
   /**
-   * The playlist drawer closed. If it was opened from here and the load is
-   * still the one that opened it, take the screen back.
+   * The playlist drawer closed; forget that it was opened from here.
    *
    * @returns {void}
    */
@@ -2029,8 +2026,6 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#playlistOpenedFromLoading = false;
-    if (this.#isProcessing) {
-    }
   };
 
   /**
@@ -5797,8 +5792,6 @@ export class Loading extends StateDerivedView {
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
       playbackReadiness: progress.playbackReadiness
     });
-    // Phase 1 fills its third by the SAME cushion % every other surface uses.
-
     // Proxy preparation does not measure the browser's playback buffer.
     if ((unified.cushionPercent ?? 0) <= 0) {
       this.setStatus("Preparing playback...");
@@ -6077,18 +6070,6 @@ export class Loading extends StateDerivedView {
     // Retained so the later transcode/pre-buffer screens can keep showing the
     // supply stage instead of dropping it the moment a session appears.
     this.#lastDownloadStats = statsForShared;
-    // The step is a NAME. Peers, rate and what is left are measurements and
-    // they reach the overlay on their own; composing them into the step here is
-    // what put the word "undefined" on screen when this call stopped returning
-    // text.
-
-    // How much of the WHOLE file has been downloaded is not a thing anyone is
-    // waiting for: the file is read as a stream, and playback starts on a
-    // cushion of seconds, not on a percentage of gigabytes. Shown beside the
-    // real figures it invited exactly the wrong question — "why is it still
-    // downloading if it is already transcoding" — about a number that was never
-    // going to reach 100 before the picture started.
-
     this.setStatus(Loading.MESSAGES.fetchingMetadata);
   }
 
