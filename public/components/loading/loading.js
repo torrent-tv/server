@@ -741,7 +741,7 @@ export class Loading extends StateDerivedView {
         log(name);
         const pauseCause = name === "pause" ? consumePauseCause(videoElement) : null;
         if (name === "error") this.#onMediaElementFailed(videoElement);
-        this.#onPlaybackEventForBuffering(name, pauseCause);
+        this.#onPlaybackSignalForBuffering(name, pauseCause);
         // Explicit controls own viewer intent; recovery preserves that decision.
         if (name === "playing") {
           this.#chapters.activate();
@@ -981,7 +981,7 @@ export class Loading extends StateDerivedView {
    * @param {string | null} [pauseCause] - Who caused a `pause` (`PAUSE_CAUSE`).
    * @returns {void}
    */
-  #onPlaybackEventForBuffering(name, pauseCause = null) {
+  #onPlaybackSignalForBuffering(name, pauseCause = null) {
     if (name === "waiting" || name === "stalled" || name === "seeking") {
       this.#scheduleBufferingCheck();
       return;

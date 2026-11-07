@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: A wrong file, a broken .torrent or a bad `?torrent=` address is now reported on the file input, the way the magnet field reports a bad link, instead of an error screen the picker could not show.
+
 ## 0.66.37
 
 - **Chore**: Update dependencies: @biomejs/biome 2.6.5 → 2.6.6, knip 6.44.1 → 6.44.2; 34 package(s) changed in the lock file.
