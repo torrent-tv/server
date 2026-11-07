@@ -52,15 +52,25 @@ async function mountPicker({ search = "" } = {}) {
     close() { this.removeAttribute("open"); }
   }
   class Form extends Node {
-    requestSubmit() { this.dispatchEvent(new Event("submit", { cancelable: true })); }
+    controls = [];
+    // HTML spec: requestSubmit() runs constraint validation (no novalidate on
+    // the form) and fires NO submit event while any control is invalid; it
+    // reports the first invalid control instead.
+    requestSubmit() {
+      const invalid = this.controls.find(control => control.validationMessage !== "");
+      if (invalid) { invalid.reportValidity(); return; }
+      this.dispatchEvent(new Event("submit", { cancelable: true }));
+    }
   }
   const dialog = new Dialog();
   const form = new Form();
   const fileInput = new Input();
   const magnetInput = new Input();
+  const demoButton = new Node();
+  form.controls.push(fileInput, magnetInput);
   const nodes = new Map([
     ["#torrent", dialog], ["#torrent form", form], ["#torrent__input", fileInput],
-    ["#torrent__magnet", magnetInput], ["#torrent__demo", new Node()]
+    ["#torrent__magnet", magnetInput], ["#torrent__demo", demoButton]
   ]);
   const document = Object.assign(new EventTarget(), {
     readyState: "complete",
@@ -93,13 +103,25 @@ async function mountPicker({ search = "" } = {}) {
     Object.defineProperty(event, "currentTarget", { value: fileInput });
     fileInput.dispatchEvent(event);
   };
+  const clickInput = () => {
+    const event = new Event("click");
+    Object.defineProperty(event, "currentTarget", { value: fileInput });
+    fileInput.dispatchEvent(event);
+  };
+  const clickDemo = () => demoButton.dispatchEvent(new Event("click"));
+  const paste = text => {
+    const event = new Event("paste", { cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { files: [], getData: () => text } });
+    Object.defineProperty(event, "target", { value: document });
+    document.dispatchEvent(event);
+  };
   const restore = () => {
     for (const key of keys) {
       if (saved[key]) Object.defineProperty(globalThis, key, saved[key]);
       else delete globalThis[key];
     }
   };
-  return { fileInput, magnetInput, form, seen, drop, choose, settle, restore };
+  return { fileInput, magnetInput, form, seen, drop, choose, clickInput, clickDemo, paste, settle, restore };
 }
 
 function assertReportedInline(picker, expectedMessage) {
@@ -193,6 +215,133 @@ test("the magnet field keeps its constraint validation", async () => {
     assert.equal(picker.seen.magnets.length, 1);
     assert.equal(picker.seen.magnets[0].magnetUri, MAGNET);
     assert.equal(picker.magnetInput.value, "");
+  } finally { picker.restore(); }
+});
+
+// The file input, magnet field, Play magnet and demo button share one form
+// without novalidate, so a stale error on the file input must not block them.
+const badFile = () => new File(["x"], "movie.mkv", { type: "video/x-matroska" });
+const brokenTorrent = () => new File(["this is not bencode"], "broken.torrent");
+const goodTorrent = () => new File([validTorrentBytes()], "a.torrent", { type: "application/x-bittorrent" });
+const BAD_FILES = [["a wrong file", badFile], ["a torrent that does not parse", brokenTorrent]];
+
+for (const [label, makeFile] of BAD_FILES) {
+  test(`after ${label}, a magnet typed into the field still starts`, async () => {
+    const picker = await mountPicker();
+    try {
+      picker.drop([makeFile()]);
+      await picker.settle();
+      assert.notEqual(picker.fileInput.validationMessage, "");
+      picker.magnetInput.value = MAGNET;
+      picker.magnetInput.dispatchEvent(new Event("input"));
+      await picker.settle();
+      assert.equal(picker.seen.magnets.length, 1, "MAGNET_READY is dispatched");
+      assert.equal(picker.seen.magnets[0].magnetUri, MAGNET);
+    } finally { picker.restore(); }
+  });
+
+  test(`after ${label}, pressing Enter / Play magnet in the field still submits`, async () => {
+    const picker = await mountPicker();
+    try {
+      picker.drop([makeFile()]);
+      await picker.settle();
+      picker.magnetInput.value = MAGNET;
+      picker.form.requestSubmit();
+      assert.equal(picker.seen.magnets.length, 1, "MAGNET_READY is dispatched");
+    } finally { picker.restore(); }
+  });
+
+  test(`after ${label}, a pasted magnet still starts`, async () => {
+    const picker = await mountPicker();
+    try {
+      picker.drop([makeFile()]);
+      await picker.settle();
+      picker.paste(MAGNET);
+      await picker.settle();
+      assert.equal(picker.seen.magnets.length, 1, "MAGNET_READY is dispatched");
+      assert.equal(picker.seen.magnets[0].magnetUri, MAGNET);
+    } finally { picker.restore(); }
+  });
+
+  test(`after ${label}, the demo button still starts the demo`, async () => {
+    const picker = await mountPicker();
+    try {
+      picker.drop([makeFile()]);
+      await picker.settle();
+      picker.clickDemo();
+      await picker.settle();
+      assert.equal(picker.seen.magnets.length, 1, "MAGNET_READY is dispatched");
+      assert.match(picker.seen.magnets[0].magnetUri, /^magnet:\?xt=urn:btih:08ada5a7/);
+    } finally { picker.restore(); }
+  });
+
+  test(`after ${label}, choosing a new .torrent via the dialog works`, async () => {
+    const picker = await mountPicker();
+    try {
+      picker.drop([makeFile()]);
+      await picker.settle();
+      picker.clickInput();
+      picker.choose([goodTorrent()]);
+      await picker.settle();
+      assert.equal(picker.seen.files.length, 1);
+      assert.equal(picker.fileInput.validationMessage, "");
+    } finally { picker.restore(); }
+  });
+}
+
+test("after a wrong file, dropping a new .torrent works", async () => {
+  const picker = await mountPicker();
+  try {
+    picker.drop([badFile()]);
+    await picker.settle();
+    picker.drop([goodTorrent()]);
+    await picker.settle();
+    assert.equal(picker.seen.files.length, 1);
+  } finally { picker.restore(); }
+});
+
+test("after a bad ?torrent=, a magnet typed into the field still starts", async () => {
+  const picker = await mountPicker({ search: "?torrent=%25%25not-base64%25%25" });
+  try {
+    await picker.settle();
+    assert.notEqual(picker.fileInput.validationMessage, "");
+    picker.magnetInput.value = MAGNET;
+    picker.magnetInput.dispatchEvent(new Event("input"));
+    await picker.settle();
+    assert.equal(picker.seen.magnets.length, 1);
+  } finally { picker.restore(); }
+});
+
+test("after a bad ?torrent=, the demo button still starts the demo", async () => {
+  const picker = await mountPicker({ search: "?torrent=%25%25not-base64%25%25" });
+  try {
+    await picker.settle();
+    picker.clickDemo();
+    await picker.settle();
+    assert.equal(picker.seen.magnets.length, 1);
+  } finally { picker.restore(); }
+});
+
+test("after a bad ?torrent=, choosing a new .torrent works", async () => {
+  const picker = await mountPicker({ search: "?torrent=%25%25not-base64%25%25" });
+  try {
+    await picker.settle();
+    picker.clickInput();
+    picker.choose([goodTorrent()]);
+    await picker.settle();
+    assert.equal(picker.seen.files.length, 1);
+  } finally { picker.restore(); }
+});
+
+test("a ?magnet= link starts through the form on a clean picker", async () => {
+  // Same requestSubmit path as paste/typing; the stale-error case for it is
+  // covered by the tests above (a ?magnet= link cannot follow a file error in
+  // the same page load, since it returns before ?torrent= is read).
+  const picker = await mountPicker({ search: `?magnet=${encodeURIComponent(MAGNET)}` });
+  try {
+    await picker.settle();
+    assert.equal(picker.seen.magnets.length, 1);
+    assert.equal(picker.seen.magnets[0].magnetUri, MAGNET);
   } finally { picker.restore(); }
 });
 
