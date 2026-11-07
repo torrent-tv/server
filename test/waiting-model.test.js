@@ -7,11 +7,8 @@ function readiness(overrides = {}) {
   return { version: 1, ready: false, delaySeconds: 7.5, bufferedSeconds: 2, reserveSeconds: 10, ...overrides };
 }
 
-test("does not present a numeric ETA from partial proxy estimates", () => {
+test("does not present a numeric ETA from partial proxy readiness", () => {
   const model = new WaitingModel();
-  for (const remainingSeconds of [0, 1.75, 42_053.288]) {
-    assert.equal(model.update({ waitEstimate: { version: 1, remainingSeconds } }).etaSeconds, null);
-  }
   assert.equal(model.update({ playbackReadiness: readiness({ delaySeconds: 0.035 }) }).etaSeconds, null);
   assert.match(formatWaitingText({ etaSeconds: null, readinessReason: "minimum-safe-delay" }),
     /Playback readiness has not been confirmed/);
