@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: The browser's WebRTC signalling handshake (socket, offer, answer, candidates) now runs through one session object shared by the media and control connections; the unused legacy control-channel path is removed. No visible change.
+
 ## 0.66.39
 
 - **Fix**: The file picker's message about a wrong file now shows at the .torrent title: the file input stays on screen, transparent over its label, instead of sitting above the page where the browser's message had nothing to point at.
