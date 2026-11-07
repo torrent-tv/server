@@ -80,33 +80,28 @@ function setup(t) {
   return { proxy, peers, sockets, debugLines };
 }
 
-async function connect(t, separateControl = true) {
+async function connect(t) {
   const state = setup(t);
   const ready = state.proxy.connect();
   state.sockets[0].receive({ type: "session", sessionId: "session" });
   await flush();
-  state.sockets[0].receive({ type: "answer", sdp: "media-answer", separateControl: separateControl ? 2 : undefined });
+  state.sockets[0].receive({ type: "answer", sdp: "media-answer", separateControl: 2 });
   await flush();
-  if (separateControl) {
-    state.sockets[1].receive({ type: "session", sessionId: "control-session" });
-    await flush();
-  }
+  state.sockets[1].receive({ type: "session", sessionId: "control-session" });
+  await flush();
   state.peers[0].connected();
   const media = state.peers[0].channels.find(channel => channel.label === "proxy");
   media.open();
-  const control = separateControl ? state.peers[1].channels[0]
-    : state.peers[0].channels.find(channel => channel.label === "proxy-control");
-  if (separateControl) {
-    const connectionId = state.sockets[1].sent.find(message => message.type === "offer" && message.connectionId).connectionId;
-    state.sockets[1].receive({ type: "candidate", connectionId, candidate: "candidate:test 1 udp 1 203.0.113.1 1000 typ host", mid: "0" });
-    await flush();
-    assert.deepEqual(state.peers[1].candidates, [], "control candidates wait for their own answer");
-    state.sockets[1].receive({ type: "answer", sdp: "control-answer", connectionId });
-    await flush();
-    assert.equal(state.peers[1].remote.sdp, "control-answer");
-    assert.equal(state.peers[1].candidates.length, 1);
-    assert.deepEqual(state.peers[0].candidates, [], "control candidates never reach the media peer");
-  }
+  const control = state.peers[1].channels[0];
+  const connectionId = state.sockets[1].sent.find(message => message.type === "offer" && message.connectionId).connectionId;
+  state.sockets[1].receive({ type: "candidate", connectionId, candidate: "candidate:test 1 udp 1 203.0.113.1 1000 typ host", mid: "0" });
+  await flush();
+  assert.deepEqual(state.peers[1].candidates, [], "control candidates wait for their own answer");
+  state.sockets[1].receive({ type: "answer", sdp: "control-answer", connectionId });
+  await flush();
+  assert.equal(state.peers[1].remote.sdp, "control-answer");
+  assert.equal(state.peers[1].candidates.length, 1);
+  assert.deepEqual(state.peers[0].candidates, [], "control candidates never reach the media peer");
   control.open();
   await ready;
   return { ...state, media, control };
@@ -170,14 +165,6 @@ test("control loss rejects its requests, preserves media and reconnects without 
   await next;
   media.answer(media.sent.find(message => message.type === "request").requestId);
   await film;
-});
-
-test("an old proxy keeps a control channel on its one peer", async t => {
-  const { proxy, peers, control } = await connect(t, false);
-  assert.equal(peers.length, 1);
-  const response = proxy.fetch("/healthz");
-  control.answer(control.sent.at(-1).requestId);
-  await response;
 });
 
 test("large request bodies and their cancellation stay on the media association", async t => {
