@@ -517,7 +517,6 @@ export class Loading extends StateDerivedView {
   /** Same, for the transcode-progress polls. */
   #progressPollFailing = false;
   /** Last wait estimate state logged by the progress poll. */
-  #lastProgressEstimateTraceKey = null;
 
   /** Same, for the metadata poll under the waiting interface. */
   #metadataPollFailing = false;
@@ -646,34 +645,15 @@ export class Loading extends StateDerivedView {
     // Cleared with it: otherwise the next stream's first stall compares against
     // the last stream's answer and is never reported to the machine.
     this.#bufferingSignalled = false;
-    if (typeof payload?.fileName === "string") {
-      this.setFileName(payload.fileName);
-    }
     if (typeof payload?.status === "string") {
       this.setStatus(payload.status);
     }
-    if (typeof payload?.progress === "number") {
-      this.setProgress(payload.progress);
-    }
-  };
-
-  /** @param {CustomEvent} event */
-  #onSetFileName = (event) => {
-    const payload = event instanceof CustomEvent ? event.detail : null;
-    this.setFileName(typeof payload?.value === "string" ? payload.value : "");
   };
 
   /** @param {CustomEvent} event */
   #onSetStatus = (event) => {
     const payload = event instanceof CustomEvent ? event.detail : null;
     this.setStatus(typeof payload?.value === "string" ? payload.value : "");
-  };
-
-  /** @param {CustomEvent} event */
-  #onSetProgress = (event) => {
-    const payload = event instanceof CustomEvent ? event.detail : null;
-    const value = typeof payload?.value === "number" ? payload.value : 0;
-    this.setProgress(value);
   };
 
   /** @param {CustomEvent} event */
@@ -1176,7 +1156,7 @@ export class Loading extends StateDerivedView {
       // model, this component from its own. Handing round conclusions is how
       // one of them came to be told what to display.
       document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-        detail: { downloadStats: withProgressWaitEstimate(downloadStats, transcodeProgress), transcodeProgress }
+        detail: { downloadStats, transcodeProgress }
       }));
     };
     await poll();
@@ -1378,14 +1358,11 @@ export class Loading extends StateDerivedView {
         seekHoldAnswer({ readiness, requestedAt, reportedAt }),
       { process: "S2.2" });
       if (answer === "stale") continue;
-      const { ahead, waitEstimate } = waitTrace.run("S2.3.read-buffer-and-estimate", () => {
+      const ahead = waitTrace.run("S2.3.read-buffer", () => {
         const video = this.#videoElement;
-        const ahead = video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
-        const waitEstimate = waitEstimateForProgress(progress);
-        return { ahead, waitEstimate };
+        return video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
       }, { process: "S2.3" });
       waitTrace.run("S2.4.update-browser-readiness", () => this.#waitingModel.update({
-        waitEstimate,
         playbackReadiness: readiness ?? null,
         bufferedAhead: ahead
       }), { process: "S2.4" });
@@ -1639,8 +1616,7 @@ export class Loading extends StateDerivedView {
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SHOW, {
         detail: {
-          status: Loading.MESSAGES.switchingToSelectedFile,
-          progress: 0
+          status: Loading.MESSAGES.switchingToSelectedFile
         }
       })
     );
@@ -1787,9 +1763,7 @@ export class Loading extends StateDerivedView {
     // paying for another ICE exchange first.
     this.#stopPlayback({ keepTransport: true });
     this.#resetSourceState();
-    this.setProgress(0);
     this.setStatus("");
-    this.setFileName("Waiting for a .torrent file...");
     this.#directPlaybackUnsupportedCache.clear();
   };
 
@@ -1914,9 +1888,7 @@ export class Loading extends StateDerivedView {
 
   #setupEventHandlers() {
     document.addEventListener(LOADING_EVENTS.SHOW, this.#onShow);
-    document.addEventListener(LOADING_EVENTS.SET_FILE_NAME, this.#onSetFileName);
     document.addEventListener(LOADING_EVENTS.SET_STATUS, this.#onSetStatus);
-    document.addEventListener(LOADING_EVENTS.SET_PROGRESS, this.#onSetProgress);
     document.addEventListener(LOADING_EVENTS.PROCESS_PLAYBACK, this.#onProcessPlayback);
     document.addEventListener(LOADING_EVENTS.PROCESS_MAGNET, this.#onProcessMagnet);
     document.addEventListener(MEDIA_INFO_EVENTS.CHANGED, this.#onMediaInfoChanged);
@@ -2043,7 +2015,6 @@ export class Loading extends StateDerivedView {
     // closed without a choice being made — and if a choice IS made, the new
     // attempt shows it again itself.
     this.#playlistOpenedFromLoading = true;
-    this.visible = false;
     document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
   };
 
@@ -2059,7 +2030,6 @@ export class Loading extends StateDerivedView {
     }
     this.#playlistOpenedFromLoading = false;
     if (this.#isProcessing) {
-      this.visible = true;
     }
   };
 
@@ -2101,69 +2071,17 @@ export class Loading extends StateDerivedView {
     }
     const videoCount = this.#session.current?.media?.video?.length ?? 0;
     if (videoCount > 1) {
-      this.visible = false;
       document.dispatchEvent(new CustomEvent(APP_EVENTS.BACK_TO_PLAYLIST));
       return;
     }
     document.dispatchEvent(new CustomEvent(APP_EVENTS.RESET_TO_PICKER));
   };
 
-  /**
-   * Nothing. The waiting interface lives inside the player now, and whether it
-   * is on screen is a function of the state, applied by `Player` from
-   * `isWaiting`. This component owns what that interface SAYS and never whether
-   * it is shown — which is the whole point of deriving outputs from the state.
-   *
-   * Kept as a no-op so the call sites that used to hide a dialog by hand are
-   * harmless rather than having to be found and unpicked one by one.
-   *
-   * @param {boolean} _value
-   */
-  set visible(_value) {}
-
-  /** @param {string} value */
-  /**
-   * Nothing on screen. The overlay carries one line of text and it says what is
-   * happening, not which file it is happening to — the file is named in the
-   * playlist and in the address bar, and repeating it here cost the status its
-   * own line.
-   *
-   * @param {string} _value
-   */
-  setFileName(_value) {}
-
   /** @param {string} value */
   setStatus(value) {
     document.dispatchEvent(
       new CustomEvent(WAITING_EVENTS.STEP, { detail: { value: typeof value === "string" ? value : "" } })
     );
-  }
-
-  /**
-   * Nothing. The progress bar is gone: a bar promises a known fraction of a
-   * known whole, and what the viewer waits for is a time, which is stated in
-   * words beside it. Kept as an accepted call so the pipeline's many progress
-   * reports need no unpicking.
-   *
-   * @param {number} _value
-   */
-  setProgress(_value) {}
-
-  /**
-   * Set the progress bar from a single phase's own 0–100% progress, mapped onto
-   * that phase's third of the bar. The pre-playback pipeline has three equal
-   * phases: 0 = download (metadata/header), 1 = transcode first segment,
-   * 2 = buffering. So each phase fills its 33.33% band.
-   *
-   * @param {0 | 1 | 2} phaseIndex
-   * @param {number} phasePercent - Progress within the phase, 0–100.
-   * @returns {void}
-   */
-  #setPhaseProgress(phaseIndex, phasePercent) {
-    const span = 100 / 3;
-    const pct = Number.isFinite(phasePercent) ? Math.max(0, Math.min(100, phasePercent)) : 0;
-    this.#logEvt(`progress phase=${phaseIndex} within=${pct.toFixed(1)}%`);
-    this.setProgress(phaseIndex * span + (pct / 100) * span);
   }
 
   /**
@@ -2221,10 +2139,7 @@ export class Loading extends StateDerivedView {
         ...addressed
       });
 
-      this.visible = true;
-      this.setFileName(Loading.MESSAGES.readingTorrentFile(file.name));
       this.setStatus(Loading.MESSAGES.startingTorrentProcessing);
-      this.setProgress(0);
       this.setStatus(Loading.MESSAGES.readingMetadata);
 
       // WHAT IS IN THIS TORRENT COMES FROM THE PROXY, for a dropped `.torrent`
@@ -2321,13 +2236,11 @@ export class Loading extends StateDerivedView {
         await this.#playVideoFile(sharedVideoFileIndex);
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
-        this.setProgress(100);
         document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOICE_READY));
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
         return;
       }
 
-      this.setProgress(100);
       waitTrace.event("C4.playback-ready", { process: "C4", phase: "end",
         viewerWantsPlayback: this.#viewerWantsPlayback() });
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
@@ -2733,9 +2646,6 @@ export class Loading extends StateDerivedView {
         // name, and the fallback is already in place.
       }
 
-      this.visible = true;
-      this.setFileName(displayName);
-      this.setProgress(0);
       this.setStatus(Loading.MESSAGES.fetchingMagnetMetadata);
       const mediaSelection = this.#announceMediaSelection(displayName === "Magnet link" ? [] : [displayName], null, addressed);
 
@@ -2762,7 +2672,6 @@ export class Loading extends StateDerivedView {
       current.name = name;
       current.files = files;
       current.isMultiFile = files.length > 1;
-      this.setFileName(name);
       this.#announceMediaContents(mediaSelection, contents, files, transport, sourceKey);
       this.#nameTheFilmInTheLog(name, contents?.infoHash);
 
@@ -2806,13 +2715,11 @@ export class Loading extends StateDerivedView {
         await this.#playVideoFile(sharedVideoFileIndex);
       } else {
         this.setStatus(Loading.MESSAGES.chooseVideoFile);
-        this.setProgress(100);
         document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOICE_READY));
         document.dispatchEvent(new CustomEvent(PLAYER_EVENTS.OPEN_PLAYLIST));
         return;
       }
 
-      this.setProgress(100);
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
           detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
         }));
@@ -2986,7 +2893,7 @@ export class Loading extends StateDerivedView {
       }
       // open-file: the torrent is already loaded, so only the file changes.
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.SHOW, {
-        detail: { status: Loading.MESSAGES.switchingToSelectedFile, progress: 0 }
+        detail: { status: Loading.MESSAGES.switchingToSelectedFile }
       }));
       await this.#runPlaybackTask(async () => {
         this.#pendingCurrentTime = currentTime;
@@ -3360,7 +3267,6 @@ export class Loading extends StateDerivedView {
       this.#session.releaseActiveTranscodeSessions({ reason: "switch-file" });
       this.setStatus(Loading.MESSAGES.switchingToSelectedFile);
       await this.#playVideoFile(fileIndex);
-      this.setProgress(100);
       document.dispatchEvent(new CustomEvent(LOADING_EVENTS.PLAYBACK_READY, {
           detail: { viewerWantsPlayback: this.#viewerWantsPlayback() }
         }));
@@ -3416,12 +3322,6 @@ export class Loading extends StateDerivedView {
     document.dispatchEvent(new CustomEvent(LOADING_EVENTS.FILE_CHOSEN, {
       detail: { fileIndex, startedAt: waitStartedAt }
     }));
-    if (!hasWebseed && file.waitEstimate) {
-      document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
-        detail: { downloadStats: { waitEstimate: file.waitEstimate } }
-      }));
-    }
-
     if (!hasWebseed) {
       await waitTrace.run("A9.capacity", () => this.#preferProxyFromFilename(fileIndex));
       this.#throwIfCancelled();
@@ -3429,7 +3329,6 @@ export class Loading extends StateDerivedView {
 
     if (hasWebseed) {
       this.setStatus(Loading.MESSAGES.startingDirectPlayback);
-      this.setProgress(70);
       await this.#session.streamFileToVideo(fileIndex, this.#videoElement);
       try {
         await this.#ensureVideoReady();
@@ -3459,7 +3358,6 @@ export class Loading extends StateDerivedView {
 
     this.setStatus(Loading.MESSAGES.selectingProxy);
     const metadataSelection = this.#mediaSelection;
-    this.#setPhaseProgress(0, 10); // phase 0 (download) — small floor before stats arrive
     // Cold-start timing (proxy-served flow): t0 = entry, filled through the
     // phases and logged once on a successful prebuffer.
     this.#coldStart = { t0: waitStartedAt };
@@ -3485,7 +3383,6 @@ export class Loading extends StateDerivedView {
     // the proxy pre-fetches file metadata (MOOV atom / EBML headers).
     // prepareProxyPlaybackPlan will reuse the cached sourceKey.
     this.setStatus(Loading.MESSAGES.fetchingMetadata);
-    this.#setPhaseProgress(0, 20); // phase 0 floor; header download % (stats poll) drives the rest
     let earlySourceKey;
     try {
       earlySourceKey = await waitTrace.run("A10.register", () => this.#session.registerSourceOnProxy(transport));
@@ -3550,7 +3447,6 @@ export class Loading extends StateDerivedView {
     void waitTrace.run("A13.container-metadata", () =>
       this.#announceContainerMetadata(metadataSelection, fileIndex, transport, earlySourceKey));
     this.setStatus(Loading.MESSAGES.checkingCompatibility);
-    this.#setPhaseProgress(0, 100); // header probed → phase 0 (download) complete
 
     // Track inventory of the active file (drives the audio menu and the
     // embedded-subtitle loading).
@@ -3707,8 +3603,7 @@ export class Loading extends StateDerivedView {
       directHint !== "unsupported"
     ) {
       const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
-        statusMessage: Loading.MESSAGES.probingDirectPlayback,
-        progress: 58
+        statusMessage: Loading.MESSAGES.probingDirectPlayback
       });
       if (directSucceeded) {
         this.#setDirectPlaybackHint(directHintKey, true);
@@ -3728,8 +3623,7 @@ export class Loading extends StateDerivedView {
         directHint !== "unsupported"
       ) {
         const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
-          statusMessage: Loading.MESSAGES.probingDirectPlayback,
-          progress: 58
+          statusMessage: Loading.MESSAGES.probingDirectPlayback
         });
         if (directSucceeded) {
           this.#setDirectPlaybackHint(directHintKey, true);
@@ -3773,8 +3667,7 @@ export class Loading extends StateDerivedView {
 
     if (canProbeDirectUrl) {
       const directSucceeded = await this.#tryPlayDirectUrl(prepared.directUrl, {
-        statusMessage: Loading.MESSAGES.startingDirectPlayback,
-        progress: 70
+        statusMessage: Loading.MESSAGES.startingDirectPlayback
       });
       if (directSucceeded) {
         this.#setDirectPlaybackHint(directHintKey, true);
@@ -4521,7 +4414,6 @@ export class Loading extends StateDerivedView {
   async #tryPlayDirectUrl(directUrl, options) {
     const endTrace = waitTrace.open("A17.direct-play");
     this.setStatus(options.statusMessage);
-    this.setProgress(options.progress);
     try {
       await this.#session.playFromUrl(this.#videoElement, directUrl);
       await this.#ensureVideoReady();
@@ -4875,7 +4767,7 @@ export class Loading extends StateDerivedView {
       this.#rememberAudioChoice();
       document.dispatchEvent(
         new CustomEvent(LOADING_EVENTS.SHOW, {
-          detail: { status: Loading.MESSAGES.switchingAudio, progress: 0 }
+          detail: { status: Loading.MESSAGES.switchingAudio }
         })
       );
       await this.#runPlaybackTask(async () => {
@@ -5009,7 +4901,7 @@ export class Loading extends StateDerivedView {
       if (!overlayShown) {
         document.dispatchEvent(
           new CustomEvent(LOADING_EVENTS.SHOW, {
-            detail: { status: Loading.MESSAGES.reconnecting, progress: 0 }
+            detail: { status: Loading.MESSAGES.reconnecting }
           })
         );
         overlayShown = true;
@@ -5379,7 +5271,7 @@ export class Loading extends StateDerivedView {
     }
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SHOW, {
-        detail: { status: Loading.MESSAGES.reconnecting, progress: 0 }
+        detail: { status: Loading.MESSAGES.reconnecting }
       })
     );
     // A manual retry starts a fresh connection — do not reuse the dead one.
@@ -5421,7 +5313,6 @@ export class Loading extends StateDerivedView {
         ? options.statusMessage
         : Loading.MESSAGES.preparingHls
     );
-    this.#setPhaseProgress(1, 0); // entering phase 1 (transcode first segment)
 
     // For WebRTC transport, HLS.js must route all requests through the data
     // channel. The loader takes the transport (not the raw proxy) so a seamless
@@ -5729,8 +5620,7 @@ export class Loading extends StateDerivedView {
       }, { process: "C1.2" });
       waitTrace.event("C1.gate", { ready: readiness?.ready, reason: readiness?.reason,
         subtitleHold, bufferedAhead: ahead });
-      const unified = waitTrace.run("C1.3.update-browser-readiness", () => this.#waitingModel.update({
-        ...(waitEstimateForProgress(cachedProgress) ? { waitEstimate: waitEstimateForProgress(cachedProgress) } : {}),
+      waitTrace.run("C1.3.update-browser-readiness", () => this.#waitingModel.update({
         playbackReadiness: readiness,
         bufferedAhead: ahead
       }), { process: "C1.3" });
@@ -5778,7 +5668,6 @@ export class Loading extends StateDerivedView {
         lastAhead = ahead;
         lastGrowthAt = Date.now();
       }
-      this.#setPhaseProgress(2, unified.cushionPercent ?? 0);
       // Renders on its own — its return value must NOT be fed back through
       // setStatus. Doing that stored the finished text as the STEP, and the
       // next render appended the supply, readiness and time rows to it: exactly
@@ -5790,7 +5679,7 @@ export class Loading extends StateDerivedView {
       // nobody read.
       waitTrace.run("C1.5.publish-current-readings", () => document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
         detail: {
-          downloadStats: withProgressWaitEstimate(this.#lastDownloadStats, cachedProgress),
+          downloadStats: this.#lastDownloadStats,
           transcodeProgress: cachedProgress,
           playbackReadiness: readiness ?? null,
           bufferLimitSeconds: this.#browserBufferLimitSeconds
@@ -5853,7 +5742,6 @@ export class Loading extends StateDerivedView {
    */
   #startTranscodeProgressPoll(onFailure) {
     let stopped = false;
-    this.#lastProgressEstimateTraceKey = null;
     const tick = async () => {
       while (!stopped) {
         try {
@@ -5900,28 +5788,16 @@ export class Loading extends StateDerivedView {
       return;
     }
     this.#assertTranscodeProgress(progress);
-    const waitEstimate = waitEstimateForProgress(progress);
     const ageRange = progress.snapshotAgeRangeMs;
     const snapshotAge = ageRange && Number.isFinite(ageRange.minimumAgeMs) && Number.isFinite(ageRange.maximumAgeMs)
       ? `${ageRange.minimumAgeMs.toFixed(1)}-${ageRange.maximumAgeMs.toFixed(1)}ms` : "unknown";
     console.debug(`[progress-snapshot-age] revision=${progress.playbackReadiness?.revision ?? "-"} ` +
       `ageMs=${snapshotAge}`);
-    const estimateTraceKey = waitEstimate
-      ? `${waitEstimate.waitId}:${waitEstimate.revision}`
-      : `missing:${progress.playbackReadiness?.reason ?? "no-readiness"}`;
-    if (estimateTraceKey !== this.#lastProgressEstimateTraceKey) {
-      this.#lastProgressEstimateTraceKey = estimateTraceKey;
-      console.debug(`[wait-estimate-source] ${waitEstimate
-        ? `waitId=${waitEstimate.waitId} revision=${waitEstimate.revision} remainingSeconds=${waitEstimate.remainingSeconds} ageMs=${waitEstimate.ageMs}`
-        : `estimate=missing readinessReason=${progress.playbackReadiness?.reason ?? "no-readiness"}`}`);
-    }
     const unified = this.#waitingModel.update({
       bufferedAhead: bufferedAheadSeconds(this.#videoElement),
-      ...(waitEstimate ? { waitEstimate } : {}),
       playbackReadiness: progress.playbackReadiness
     });
     // Phase 1 fills its third by the SAME cushion % every other surface uses.
-    this.#setPhaseProgress(1, unified.cushionPercent ?? 0);
 
     // Proxy preparation does not measure the browser's playback buffer.
     if ((unified.cushionPercent ?? 0) <= 0) {
@@ -5939,10 +5815,9 @@ export class Loading extends StateDerivedView {
    * @returns {void}
    */
   #publishTranscodeMeasurements(progress) {
-    const waitEstimate = waitEstimateForProgress(progress);
     document.dispatchEvent(new CustomEvent(PROXY_EVENTS.MEASURED, {
       detail: {
-        downloadStats: { ...(this.#lastDownloadStats ?? {}), waitEstimate: waitEstimate ?? null },
+        downloadStats: { ...this.#lastDownloadStats },
         transcodeProgress: progress,
         playbackReadiness: progress?.playbackReadiness ?? null
       }
@@ -6207,13 +6082,6 @@ export class Loading extends StateDerivedView {
     // what put the word "undefined" on screen when this call stopped returning
     // text.
 
-    if (headerBytes !== null && headerBytes > 0 && headerDownloadedBytes !== null) {
-      // The bar still advances on header progress; the text does not show this
-      // percent — the header is a handful of whole pieces, so it jumps
-      // 0 → 50 → 100 and reads as broken.
-      this.#setPhaseProgress(0, Math.max(0, Math.min(100, (headerDownloadedBytes / headerBytes) * 100)));
-    }
-
     // How much of the WHOLE file has been downloaded is not a thing anyone is
     // waiting for: the file is read as a stream, and playback starts on a
     // cushion of seconds, not on a percentage of gigabytes. Shown beside the
@@ -6223,8 +6091,6 @@ export class Loading extends StateDerivedView {
 
     this.setStatus(Loading.MESSAGES.fetchingMetadata);
   }
-
-
 
   /**
    * @param {{
@@ -6974,17 +6840,6 @@ const PREBUFFER_NUDGE_AFTER_MS = 4_000;
 const DIRECT_PLAYBACK_HINTS_STORAGE_KEY = "torrent-tv-direct-playback-hints-v1";
 const DIRECT_PLAYBACK_HINTS_MAX_ENTRIES = 400;
 const DIRECT_PLAYBACK_HINT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-function waitEstimateForProgress(progress) {
-  return progress?.waitEstimate ?? progress?.playbackReadiness?.waitEstimate ?? null;
-}
-
-function withProgressWaitEstimate(downloadStats, progress) {
-  const waitEstimate = waitEstimateForProgress(progress);
-  if (!waitEstimate) return downloadStats;
-  return { ...(downloadStats && typeof downloadStats === "object" ? downloadStats : {}),
-    waitEstimate };
-}
 
 function bootstrapLoading() {
   new Loading();

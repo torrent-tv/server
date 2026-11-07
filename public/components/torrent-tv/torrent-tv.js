@@ -132,7 +132,7 @@ class TorrentTV {
     // one that says so, and it answers on `SET_MEDIA_FILES` a moment later.
     this.#videoCount = 0;
     this.#openSource();
-    this.#setLoadingContent(file.name, TorrentTV.MESSAGES.playbackPreparing);
+    this.#setLoadingContent(TorrentTV.MESSAGES.playbackPreparing);
 
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PROCESS_PLAYBACK, {
@@ -162,7 +162,7 @@ class TorrentTV {
     // SET_MEDIA_FILES listener updates it then.
     this.#videoCount = 0;
     this.#openSource();
-    this.#setLoadingContent("Magnet link", TorrentTV.MESSAGES.playbackPreparing);
+    this.#setLoadingContent(TorrentTV.MESSAGES.playbackPreparing);
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.PROCESS_MAGNET, {
         detail: {
@@ -286,13 +286,9 @@ class TorrentTV {
    * Set what the waiting view says. Content only — whether it is on screen
    * follows from the state.
    *
-   * @param {string} fileName
    * @param {string} status
    */
-  #setLoadingContent(fileName, status) {
-    document.dispatchEvent(
-      new CustomEvent(LOADING_EVENTS.SET_FILE_NAME, { detail: { value: fileName } })
-    );
+  #setLoadingContent(status) {
     document.dispatchEvent(
       new CustomEvent(LOADING_EVENTS.SET_STATUS, { detail: { value: status } })
     );

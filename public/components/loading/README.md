@@ -15,9 +15,7 @@ This component renders processing progress while playback is being prepared and 
 - Validate decoded video frames before reporting playback ready.
 - Stop and release active playback/transcode sessions on reset, errors, and page close (`pagehide`/`beforeunload`).
 - Show loading dialog and update UI with:
-  - `LOADING:SET_FILE_NAME`
   - `LOADING:SET_STATUS`
-  - `LOADING:SET_PROGRESS`
 - Emit:
   - `LOADING:PLAYBACK_READY` when playback is ready,
   - `LOADING:PLAYBACK_FAILED` when preparation fails.
