@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.39
 
 - **Fix**: The file picker's message about a wrong file now shows at the .torrent title: the file input stays on screen, transparent over its label, instead of sitting above the page where the browser's message had nothing to point at.
 
