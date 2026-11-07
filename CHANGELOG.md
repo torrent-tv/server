@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Fix**: The file picker's message about a wrong file now shows at the .torrent title: the file input stays on screen, transparent over its label, instead of sitting above the page where the browser's message had nothing to point at.
+
 ## 0.66.38
 
 - **Fix**: A wrong file, a broken .torrent or a bad `?torrent=` address is now reported on the file input, the way the magnet field reports a bad link, instead of an error screen the picker could not show; the message no longer blocks starting a magnet or the demo.

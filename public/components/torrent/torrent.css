@@ -43,6 +43,7 @@
 
   #torrent__label {
     display: inline-block;
+    position: relative;
     text-decoration: underline;
     transition: color .2s;
     margin-block-end: 4vmin;
@@ -142,9 +143,15 @@
     }
   }
 
+  /* Transparent and stretched over the label, never parked off-screen: the
+     native validation bubble anchors to the input's box (torrent-tv/meta#290). */
   #torrent__input {
-    position: fixed;
-    top: -100vh;
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    opacity: 0;
+    cursor: pointer;
   }
 
   /* Visible action for the magnet field: Enter works too, but a button is
