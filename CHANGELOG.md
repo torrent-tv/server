@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: 1 package(s) changed in the lock file.
+
 ## 0.66.40
 
 - **Chore**: The browser's WebRTC signalling handshake (socket, offer, answer, candidates) now runs through one session object shared by the media and control connections; the unused legacy control-channel path is removed. No visible change.
