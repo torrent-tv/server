@@ -109,8 +109,8 @@ request without one. `CHANGELOG.md` is frozen at 0.66.47.
 `package.json` and `package-lock.json` hold `0.0.0-development` in git; never
 edit the version. On `main` the release job (the `release-plan` and
 `release-tag` actions of `torrent-tv/.github`) plans the version from the newest
-`v*` tag and the commits after it (`feat` minor; `fix`/`perf`/`revert` patch;
-anything else none), writes it into the workspace copies of the version files,
+`v*` tag and the commits after it (every conventional commit releases a patch;
+a `feat` or a breaking change releases a minor), writes it into the workspace copies of the version files,
 publishes `ghcr.io/torrent-tv/server:<version>` and `:latest` built from that
 workspace, tags the merged commit, creates the GitHub release from the
 changesets, and writes the image into `torrent-tv/infra`. Nothing is committed
