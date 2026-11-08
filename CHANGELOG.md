@@ -1,3 +1,5 @@
+Releases after 0.66.47 are described at https://github.com/torrent-tv/server/releases; this file is no longer updated. A pull request describes its change in `.changeset/` (see `AGENTS.md`, Changesets).
+
 ## 0.66.47
 
 - **Chore**: Repository guidance is shorter: `AGENTS.md` keeps the rules every change must keep, the browser app's file owners move to `docs/layout.md`, and the application state-machine graph now lives beside its code in `docs/app-state-machine.md`.
