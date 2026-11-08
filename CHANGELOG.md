@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Point repository rules to the shared contribution guide and remove stale release instructions.
+
 ## 0.66.41
 
 - **Chore**: Update dependencies: 1 package(s) changed in the lock file.
