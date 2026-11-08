@@ -32,3 +32,5 @@ jobs:
           github-token: ${{ github.token }}
           # The image is built from package-lock.json, so a lock-file update is released.
           ships-lockfile: "true"
+          # The update adds its own changeset; the release reads it.
+          changeset: "true"

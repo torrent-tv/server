@@ -1,9 +1,11 @@
 name: Main
 
-# Every push to main runs the checks and then the release. The release builds and
-# pushes the container image when the Conventional Commits since the last tag ask
-# for one, writes its version and digest into torrent-tv/infra (which deploys it
-# on the droplet), and waits until the live site reports the new version.
+# Every push to main runs the checks and then the release. The version is the newest
+# v* tag plus the step the Conventional Commits since it ask for; the release builds
+# and pushes the container image, tags the merged commit and creates the GitHub
+# release from the changesets (nothing is committed to main), writes the version and
+# digest into torrent-tv/infra (which deploys it on the droplet), and waits until the
+# live site reports the new version.
 
 on:
   push:
@@ -13,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Release step
+        description: Least release step (a feat still releases minor)
         type: choice
         options: [auto, patch, minor]
         default: auto
@@ -51,11 +53,8 @@ jobs:
         uses: torrent-tv/.github/actions/check-line-endings@main
       - name: Workflows are valid
         uses: torrent-tv/.github/actions/check-workflows@main
-      - name: Pending changes have a changelog entry
-        uses: torrent-tv/.github/actions/check-changelog@main
-        with:
-          changelog: CHANGELOG.md
-          version-file: package.json
+      - name: Pull request adds a changeset
+        uses: torrent-tv/.github/actions/check-changesets@main
       - name: Install dependencies
         run: npm ci
       - name: Lint and tests
@@ -81,7 +80,9 @@ jobs:
     environment:
       name: production
       url: ${{ env.SITE }}
-    # Every release runs, one at a time, in the order the runs reach the queue.
+    # Every release runs, one at a time, in the order the runs reach the queue. A later
+    # run sees the earlier tag and releases what came after it; a run whose commit a
+    # tag already holds only finishes what is missing.
     concurrency:
       group: release
       cancel-in-progress: false
@@ -97,11 +98,12 @@ jobs:
         with:
           node-version: 24
 
+      # The version is the newest v* tag plus the step the commits ask for; it is
+      # written into package.json and package-lock.json of this workspace only.
       - id: release
-        uses: torrent-tv/.github/actions/release-prepare@main
+        uses: torrent-tv/.github/actions/release-plan@main
         with:
           version-files: package.json,package-lock.json
-          changelog: CHANGELOG.md
           bump: ${{ inputs.bump || 'auto' }}
 
       - if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
@@ -117,6 +119,9 @@ jobs:
         if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
         uses: docker/build-push-action@v7
         with:
+          # The workspace, which holds the version release-plan wrote; the Git context
+          # would build 0.0.0-development, and that instance stands by behind the
+          # serving slot (services/instance-role.js decideOnPeer).
           context: .
           push: true
           tags: |
@@ -128,11 +133,9 @@ jobs:
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
 
       - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/.github/actions/release-finish@main
+        uses: torrent-tv/.github/actions/release-tag@main
         with:
           tag: ${{ steps.release.outputs.tag }}
-          changelog: CHANGELOG.md
-          version-files: package.json,package-lock.json
           notes-file: ${{ steps.release.outputs.notes-file }}
           github-token: ${{ github.token }}
 
@@ -143,7 +146,7 @@ jobs:
           BUILT: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          # A re-run of a published release built nothing; the registry knows the digest.
+          # A re-run of a tagged commit built nothing; the registry knows the digest.
           digest="$BUILT"
           if [ -z "$digest" ]; then
             digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
