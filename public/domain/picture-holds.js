@@ -73,26 +73,6 @@ function seekOwner(seq) {
 }
 
 /**
- * What one answer of the proxy's forecast means for a seek's hold.
- *
- * The forecast is the one the first start waits for (`playbackReadiness`):
- * production, delivery and the proxy's own stock for the viewer's position.
- * An answer to a request sent before the seek was reported may describe the
- * old position and is not read. A proxy that states no forecast releases the
- * hold, as a seek was released before there was one.
- *
- * @param {{ readiness: { version?: number, ready?: boolean } | null | undefined,
- *   requestedAt: number, reportedAt: number }} answer - When the request was
- *   sent and when the proxy was told of the seek, on one clock.
- * @returns {"release" | "wait" | "stale"}
- */
-export function seekHoldAnswer({ readiness, requestedAt, reportedAt }) {
-  if (!(requestedAt >= reportedAt)) return "stale";
-  if (readiness?.version !== 1) return "release";
-  return readiness.ready === true ? "release" : "wait";
-}
-
-/**
  * How long the hold waits before it asks the forecast again: until the moment
  * the forecast says the position may be ready, when that comes before the
  * start's own cadence, and the cadence otherwise. Asked only every 1.5 s, the

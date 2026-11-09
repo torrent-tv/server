@@ -51,7 +51,8 @@ import {
 } from "../../domain/torrent-parser.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
 import { bufferedAheadSeconds, bufferedEndSeconds } from "../../domain/buffer-metrics.js";
-import { PictureHolds, seekHoldAnswer, nextSeekHoldAsk } from "../../domain/picture-holds.js";
+import { PictureHolds, nextSeekHoldAsk } from "../../domain/picture-holds.js";
+import { readinessVerdict } from "../../domain/readiness-gate.js";
 import { startPageTimings, timed } from "../../domain/page-timings.js";
 import { requestSnapshotAgeRange } from "../../domain/progress-snapshot-age.js";
 import { mediaTrackLanguageInfo, trackLanguageTag, trackLanguageCode } from "../../domain/track-language.js";
@@ -1308,7 +1309,8 @@ export class Loading extends StateDerivedView {
    *
    * The seek takes the hold at once, so the frame arriving does not start the
    * picture, and a later seek takes it over: an earlier seek's answer releases
-   * nothing. A proxy that states no forecast releases it at once, as before.
+   * nothing. An answer without a forecast holds it, as at start; a timestamp
+   * gap fails playback, as at start (`readinessVerdict`).
    * The viewer's own pause is kept (`SWITCHING` decides where the hold ends).
    *
    * The hold is taken by `#moveToPosition` (`#holds.beginSeek()`); this
@@ -1352,10 +1354,10 @@ export class Loading extends StateDerivedView {
         continue;
       }
       const readiness = progress?.playbackReadiness;
-      const answer = waitTrace.run("S2.2.evaluate-readiness", () =>
-        seekHoldAnswer({ readiness, requestedAt, reportedAt }),
+      const { verdict, reason } = waitTrace.run("S2.2.evaluate-readiness", () =>
+        readinessVerdict({ readiness, requestedAt, reportedAt }),
       { process: "S2.2" });
-      if (answer === "stale") continue;
+      if (verdict === "stale") continue;
       const ahead = waitTrace.run("S2.3.read-buffer", () => {
         const video = this.#videoElement;
         return video instanceof HTMLVideoElement ? bufferedAheadSeconds(video) : 0;
@@ -1366,17 +1368,20 @@ export class Loading extends StateDerivedView {
       }), { process: "S2.4" });
       waitTrace.run("S2.5.publish-transcode-readings", () => this.#publishTranscodeMeasurements(progress),
         { process: "S2.5" });
-      if (answer === "release") {
-        this.#logEvt(readiness?.version === 1
-          ? `seek hold released: forecast ready ahead=${ahead.toFixed(1)}s reserve=${Number(readiness.reserveSeconds).toFixed(1)}s`
-          : "seek hold released: this proxy states no forecast");
+      if (verdict === "release") {
+        this.#logEvt(`seek hold released: forecast ready ahead=${ahead.toFixed(1)}s ` +
+          `reserve=${Number(readiness.reserveSeconds).toFixed(1)}s`);
         break;
       }
-      const reason = String(readiness.reason ?? "forecast-unavailable");
+      if (verdict === "fail") {
+        this.#logEvt("seek hold: media continuity unavailable");
+        this.#failWith(epoch, new Error("Prepared media contains a timestamp gap; playback cannot start."));
+        break;
+      }
       if (reason !== loggedReason) {
         loggedReason = reason;
         this.#logEvt(`seek hold: waiting ahead=${ahead.toFixed(1)}s ` +
-          `delay=${Number.isFinite(readiness.delaySeconds) ? `${readiness.delaySeconds.toFixed(2)}s` : "unknown"} reason=${reason}`);
+          `delay=${Number.isFinite(readiness?.delaySeconds) ? `${readiness.delaySeconds.toFixed(2)}s` : "unknown"} reason=${reason}`);
       }
       // Asked again when the forecast says it may be ready, or at the start's
       // own cadence for the same forecast (`#waitForPrebuffer`) — or at once
@@ -5583,15 +5588,16 @@ export class Loading extends StateDerivedView {
         throw error;
       }
       // The published reading, not a fresh one of our own — see the listener.
-      const { ahead, startSubtitle, subtitleHold, readiness } = waitTrace.run("C1.2.evaluate-readiness", () => {
+      const { ahead, startSubtitle, subtitleHold, readiness, verdict } = waitTrace.run("C1.2.evaluate-readiness", () => {
         const ahead = this.#lastBufferedAhead ?? bufferedAheadSeconds(videoElement);
         const proxyReadiness = cachedProgress?.playbackReadiness;
-        if (proxyReadiness?.reason === "media-continuity-unavailable") {
+        const first = readinessVerdict({ readiness: proxyReadiness });
+        if (first.verdict === "fail") {
           finishSubtitleHold("error");
           throw new Error("Prepared media contains a timestamp gap; playback cannot start.");
         }
         const startSubtitle = this.#subtitlePlayback.startSelection();
-        const subtitleHold = proxyReadiness?.version === 1 && proxyReadiness.ready === true
+        const subtitleHold = first.verdict === "release"
           ? subtitleStartHold(startSubtitle, proxyReadiness, cachedProgressRequestedAt)
           : null;
         if (subtitleHold === "proxy-unaware" && !saidProxyUnaware) {
@@ -5601,7 +5607,8 @@ export class Loading extends StateDerivedView {
               `has been read; starting without waiting for it`
           );
         }
-        const holdsForSubtitles = subtitleHold === "subtitles-pending";
+        const verdict = readinessVerdict({ readiness: proxyReadiness, subtitleHold });
+        const holdsForSubtitles = verdict.reason === "subtitles-pending";
         if (holdsForSubtitles && !endSubtitleHold) {
           endSubtitleHold = waitTrace.open("C3.subtitle-hold", { process: "C3",
             trackIndex: startSubtitle?.trackIndex ?? null, state: startSubtitle?.state ?? null });
@@ -5611,7 +5618,7 @@ export class Loading extends StateDerivedView {
         const readiness = holdsForSubtitles
           ? { ...proxyReadiness, ready: false, delaySeconds: null, reason: "subtitles-pending" }
           : proxyReadiness;
-        return { ahead, startSubtitle, subtitleHold, readiness };
+        return { ahead, startSubtitle, subtitleHold, readiness, verdict };
       }, { process: "C1.2" });
       waitTrace.event("C1.gate", { ready: readiness?.ready, reason: readiness?.reason,
         subtitleHold, bufferedAhead: ahead });
@@ -5619,7 +5626,7 @@ export class Loading extends StateDerivedView {
         playbackReadiness: readiness,
         bufferedAhead: ahead
       }), { process: "C1.3" });
-      if (readiness?.version === 1 && readiness.ready === true) {
+      if (verdict.verdict === "release") {
         const subtitles = readiness.subtitles;
         this.#logEvt(
           `prebuffer ready delay=${Number(readiness.delaySeconds).toFixed(2)}s ` +
@@ -5631,9 +5638,7 @@ export class Loading extends StateDerivedView {
         this.#logColdStart();
         return;
       }
-      const reason = readiness?.version === 1
-        ? String(readiness.reason ?? "forecast-unavailable")
-        : "proxy-forecast-unavailable";
+      const reason = verdict.reason;
       if (reason !== loggedReason) {
         loggedReason = reason;
         this.#logEvt(
