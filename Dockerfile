@@ -27,6 +27,11 @@ RUN mkdir -p /app/public-volume /app/cache && chown app:app /app/public-volume /
 
 USER app
 
+# The image checks itself: every module of the server is loaded and every
+# route registered, without listening, so an image that cannot load the server
+# fails to build.
+RUN node ./server.js --check
+
 ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
 
 EXPOSE 8080
