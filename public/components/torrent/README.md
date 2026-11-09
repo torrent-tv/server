@@ -22,6 +22,6 @@ This component owns the torrent file input dialog.
 
 Visibility is derived from the application state, not commanded: see
 `public/domain/app-state.js` for the machine and the outputs, and
-`research/state-machine-2026-08-08.md` in the meta repo for the graph and the
+[`docs/app-state-machine.md`](../../../docs/app-state-machine.md) for the graph and the
 reasoning. A per-component state diagram would only duplicate it, and the two
 would drift.
