@@ -2,6 +2,7 @@ import { APP_EVENTS, LOADING_EVENTS, PLAYER_EVENTS, PROXY_EVENTS, WAITING_EVENTS
 import { APP_STATE, isWaiting } from "../../domain/app-state.js";
 import { formatWaitingText } from "../../domain/waiting-text.js";
 import { WaitingModel } from "../../domain/waiting-model.js";
+import { readinessVerdict } from "../../domain/readiness-gate.js";
 
 /**
  * The waiting overlay's text.
@@ -119,8 +120,8 @@ export class WaitingOverlay {
       cushionRemainingSeconds: usable ? unified.cushionRemainingSeconds ?? undefined : undefined,
       etaSeconds: unified.etaSeconds ?? undefined,
       readinessReason: unified.reason,
-      readinessUnavailable: usable && readiness !== undefined && readiness !== null &&
-        readiness.version !== 1
+      readinessUnavailable: usable &&
+        readinessVerdict({ readiness }).reason === "forecast-version-unsupported"
     });
     this.#applyStep();
     this.#render();
