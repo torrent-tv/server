@@ -22,15 +22,16 @@ not from what the code happens to do. Four principles decide everything below.
 2. **Extended state machine** — promote something to a control state only when
    it changes what is legal or what is shown. Everything else stays a variable
    with guards. This is what stops the Cartesian explosion: N independent
-   booleans as states would need 2^N of them.
+   booleans as states would need 2^N of them. Never mirror another component's
+   state (`<video>.paused`) as a state.
 3. **Statechart hierarchy (Harel)** — an edge shared by several states is
    declared once on their superstate. In the replaced machine `-> IDLE` and
    `-> ERROR` were each written three times.
 4. **The transition relation is a graph** — it must be deterministic (one target
-   per state and event), total (every pair answered, including "ignore"), have
-   every state reachable and no dead ends. And the edges that are ABSENT are the
-   machine's real content: a near-complete digraph asserts nothing, which is
-   what the replaced table had become.
+   per state and event), total (every pair answered, including "ignore", never
+   a throw), have every state reachable and no dead ends. And the edges that
+   are ABSENT are the machine's real content: a near-complete digraph asserts
+   nothing, which is what the replaced table had become.
 
 ## The machine
 
@@ -58,12 +59,10 @@ stateDiagram-v2
         }
 
         LIVE --> SWITCHING : SWITCH_REQUESTED
-
-        OPENING --> OPENING : REBUILD_REQUIRED
-        LIVE --> OPENING : REBUILD_REQUIRED
     }
 
     IDLE --> OPENING : SOURCE_OPENED
+    OPEN --> OPENING : REBUILD_REQUIRED
     OPEN --> ERROR : FATAL_FAILURE
     OPEN --> IDLE : CLOSED
     ERROR --> OPENING : SOURCE_OPENED
