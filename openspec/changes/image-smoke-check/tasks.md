@@ -106,11 +106,11 @@ Boundary and deliberately not covered:
 
 ## 3. Implementation
 
-- [ ] 3.1 `server.js --check` as in design Decision 1
-- [ ] 3.2 `Dockerfile` final stage runs it
-- [ ] 3.3 CI `build` job; release needs it
-- [ ] 3.4 `CHANGELOG.md` `## Unreleased` entry
-- [ ] 3.5 `npm test` exits 0
+- [x] 3.1 `server.js --check` as in design Decision 1
+- [x] 3.2 `Dockerfile` final stage runs it
+- [x] 3.3 CI `build` job; release needs it
+- [x] 3.4 `CHANGELOG.md` `## Unreleased` entry
+- [x] 3.5 `npm test` exits 0
 
 ## 4. After merge (coordinator)
 
