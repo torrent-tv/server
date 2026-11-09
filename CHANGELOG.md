@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.45
 
 - **Chore**: Remove the unused tunnel request relay.
 
