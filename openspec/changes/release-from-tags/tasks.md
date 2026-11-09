@@ -26,8 +26,8 @@ runtime changes (design.md "Version at runtime"); the checks are CI runs
       `"version": "0.0.0-development"`. Use
       `npm version 0.0.0-development --no-git-tag-version --allow-same-version --ignore-scripts`;
       `git diff package.json package-lock.json` shows those three lines only.
-- [ ] 1.5 `CHANGELOG.md`: insert at the top, above `## 0.66.40`:
-      "Releases after 0.66.40 are described at
+- [ ] 1.5 `CHANGELOG.md`: insert at the top, above `## 0.66.47` (the newest entry when this pull request was rebased):
+      "Releases after 0.66.47 are described at
       https://github.com/torrent-tv/server/releases; this file is no longer
       updated. A pull request describes its change in `.changeset/` (see
       `AGENTS.md`, Changesets)." Add no `## Unreleased`.
@@ -94,13 +94,13 @@ runtime changes (design.md "Version at runtime"); the checks are CI runs
       .changeset/ci-ttv-336-release-from-tags.md`, and `Lint and tests`
       passes with `0.0.0-development` (record the run URL).
 - [ ] 3.2 Acceptance 1 after the merge: the `main.yml` push run is green;
-      `git fetch --tags && git log --format='%h %s' v0.66.40..origin/main`
-      shows no `chore(release)`; `git rev-parse v0.66.41^{commit}` equals
-      `origin/main` at the merge; `gh release view v0.66.41 -R
+      `git fetch --tags && git log --format='%h %s' v0.66.47..origin/main`
+      shows no `chore(release)`; `git rev-parse v0.66.48^{commit}` equals
+      `origin/main` at the merge; `gh release view v0.66.48 -R
       torrent-tv/server --json body -q .body` equals the changeset text;
-      `docker buildx imagetools inspect ghcr.io/torrent-tv/server:0.66.41`
+      `docker buildx imagetools inspect ghcr.io/torrent-tv/server:0.66.48`
       exists and its `org.opencontainers.image.revision` is that commit;
-      `curl -s https://webauth.courses/env.js` reports `version: "0.66.41"`
+      `curl -s https://webauth.courses/env.js` reports `version: "0.66.48"`
       (or later); the `infra-install-server` step ends green.
 - [ ] 3.3 Acceptance 4: two pull requests, each adding its own changeset
       (the next real ones, or two trivial `docs` fixes), are open together;
