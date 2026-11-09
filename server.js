@@ -316,6 +316,16 @@ function buildPortCandidates(startPort, maxAttempts = 51) {
   return ports;
 }
 
+// `--check` (the image's build check): every module is loaded and every
+// plugin and route registered, then the process exits without picking a port,
+// listening or taking the instance role.
+if (process.argv.includes("--check")) {
+  await app.ready();
+  console.log("[server] check: every module loaded; not listening");
+  await app.close();
+  process.exit(0);
+}
+
 try {
   const port = await getPort({
     port: buildPortCandidates(preferredPort)
