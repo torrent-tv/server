@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PictureHolds, nextSeekHoldAsk, seekHoldAnswer } from "../public/domain/picture-holds.js";
+import { PictureHolds, nextSeekHoldAsk } from "../public/domain/picture-holds.js";
 
 // Which change holds the picture, and when a seek's hold may end
-// (torrent-tv/meta#178).
+// (torrent-tv/meta#178). What one forecast answer means for the hold is the
+// readiness gate's, tested in readiness-gate.test.js (torrent-tv/meta#289).
 
 function recorder() {
   const signals = [];
@@ -39,19 +40,6 @@ test("releasing what is not held changes nothing", () => {
   holds.release("audio");
   holds.releaseSeek(7);
   assert.deepEqual(signals, []);
-});
-
-test("a seek's hold ends on the proxy's forecast for the position it was told of", () => {
-  const ready = { version: 1, ready: true };
-  const waiting = { version: 1, ready: false, reason: "minimum-safe-delay" };
-  assert.equal(seekHoldAnswer({ readiness: ready, requestedAt: 5, reportedAt: 10 }), "stale",
-    "asked before the seek was reported: may describe the old position");
-  assert.equal(seekHoldAnswer({ readiness: waiting, requestedAt: 10, reportedAt: 10 }), "wait");
-  assert.equal(seekHoldAnswer({ readiness: ready, requestedAt: 11, reportedAt: 10 }), "release");
-  assert.equal(seekHoldAnswer({ readiness: null, requestedAt: 11, reportedAt: 10 }), "release",
-    "a proxy that states no forecast releases the hold, as before");
-  assert.equal(seekHoldAnswer({ readiness: { version: 1, ready: false, bufferLimitReached: true }, requestedAt: 11, reportedAt: 10 }), "wait",
-    "a full browser buffer is not a reason to start (review)");
 });
 
 test("the hold asks again when the forecast says the position may be ready, or at the cadence", () => {
