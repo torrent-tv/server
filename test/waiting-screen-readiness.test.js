@@ -4,6 +4,10 @@ import test from "node:test";
 import { WaitingModel } from "../public/domain/waiting-model.js";
 import { formatWaitingText } from "../public/domain/waiting-text.js";
 
+// The overlay reads an unsupported forecast version through the readiness gate
+// (torrent-tv/meta#289); the handler is given it like its other imports.
+const { readinessVerdict } = await import("../public/domain/readiness-gate.js").catch(() => ({}));
+
 // What the viewer reads on the waiting screen comes from the proxy's
 // `playbackReadiness`, through `WaitingModel`, into `formatWaitingText`. The
 // production event handler runs here without a browser, for a cold start (the
@@ -17,7 +21,7 @@ class FakeCustomEvent { constructor(type, init) { this.type = type; this.detail 
 
 function overlay({ awaitingFirstPresentedFrame, waitSequence }) {
   const shown = [];
-  const Overlay = new Function("CustomEvent", "WaitingModel", "shown", `
+  const Overlay = new Function("CustomEvent", "WaitingModel", "readinessVerdict", "shown", `
     return class {
       #awaitingFirstPresentedFrame = ${awaitingFirstPresentedFrame};
       #waitSequence = ${waitSequence};
@@ -30,7 +34,7 @@ function overlay({ awaitingFirstPresentedFrame, waitSequence }) {
       ${handler}
       receive(event) { this.#onProxyMeasured(event); }
     };
-  `)(FakeCustomEvent, WaitingModel, shown);
+  `)(FakeCustomEvent, WaitingModel, readinessVerdict, shown);
   const instance = new Overlay();
   return { shown, receive: detail => instance.receive(new FakeCustomEvent("measured", { detail })) };
 }
