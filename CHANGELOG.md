@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Update dependencies: ws 8.22.1 → 8.22.2; 2 package(s) changed in the lock file.
+
 ## 0.66.42
 
 - **Chore**: Point repository rules to the shared contribution guide and remove stale release instructions.
