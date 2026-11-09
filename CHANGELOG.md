@@ -1,3 +1,7 @@
+## Unreleased
+
+- **Chore**: Repository guidance is shorter: `AGENTS.md` keeps the rules every change must keep, the browser app's file owners move to `docs/layout.md`, and the application state-machine graph now lives beside its code in `docs/app-state-machine.md`.
+
 ## 0.66.46
 
 - **Chore**: The server image now checks itself while it is built (`node server.js --check` loads every module and registers every route without listening), and a pull request whose image does not build fails its `Image build` check before the release.
