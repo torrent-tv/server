@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.46
 
 - **Chore**: The server image now checks itself while it is built (`node server.js --check` loads every module and registers every route without listening), and a pull request whose image does not build fails its `Image build` check before the release.
 
