@@ -7,7 +7,7 @@ when `Done`. Cross-repository and tooling sub-issues are listed in
 ## 1. Behaviour differs between copies
 
 - [ ] 1.1 #288 Remove the retired wait estimate and progress bar from the page
-- [ ] 1.2 #289 Read the proxy's playback forecast with one rule at start and after a seek (after #288)
+- [x] 1.2 #289 Read the proxy's playback forecast with one rule at start and after a seek (after #288)
 - [ ] 1.3 #290 Report picker input errors the way the magnet field does
 
 ## 2. Converge

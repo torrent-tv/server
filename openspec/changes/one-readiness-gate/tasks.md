@@ -110,7 +110,7 @@ timers (fake clock / injected `setTimeout` only).
 
 ## Steps
 
-- [ ] 1 Test commit `test(page): AC-1 AC-2 …` (fresh test writer)
-- [ ] 2 Implementation commit `fix(page): … #ttv-289` (fresh implementer from the test commit)
-- [ ] 3 Review (`torrent-tv-reviewer`), merge by rebase, release, deploy
-- [ ] 4 AC-3 field check on the HA host
+- [x] 1 Test commit `test(page): AC-1 AC-2 …` (fresh test writer)
+- [x] 2 Implementation commit `fix(page): … #ttv-289` (fresh implementer from the test commit)
+- [x] 3 Review (`torrent-tv-reviewer`), merge by rebase, release, deploy
+- [x] 4 AC-3 field check on the HA host
