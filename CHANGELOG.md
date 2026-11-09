@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.44
 
 - **Fix**: After a seek the picture is held until the proxy forecasts it can play on, as at start: an answer without a forecast no longer releases it early (followed by a stall), and a timestamp gap after a seek fails playback as it does at start.
 
