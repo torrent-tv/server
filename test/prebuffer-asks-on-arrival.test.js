@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { subtitleStartHold } from "../public/domain/subtitle-start.js";
 
+// The start reads the forecast through the readiness gate (torrent-tv/meta#289).
+const gate = await import("../public/domain/readiness-gate.js").catch(error => ({ missing: error }));
+const readinessVerdict = gate.readinessVerdict;
+const requireGate = () => assert.equal(gate.missing, undefined, `public/domain/readiness-gate.js does not load: ${gate.missing?.message}`);
+
 // The start waits for the proxy to say the trajectory is safe, and the piece
 // that makes it safe is one the page appends. Asked only every 1.5 s, the
 // answer came up to 1.5 s after that piece: r68 (torrent-tv/meta#178). The
@@ -24,9 +29,10 @@ const pageHelpers = [...source.matchAll(/^function \w*[wW]aitEstimate\w*\(.*?^}$
 class HTMLVideoElement { constructor() { this.paused = true; this.error = null; } }
 
 test("the page asks again as soon as a piece has arrived, after reporting it", async () => {
+  requireGate();
   const calls = [];
   const Component = new Function("HTMLVideoElement", "reportNow", "bufferedAheadSeconds", "bufferedEndSeconds",
-    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", "waitTrace", `${pageHelpers}
+    "pauseWithoutIntent", "subtitleStartHold", "readinessVerdict", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", "waitTrace", `${pageHelpers}
     return class {
     #playbackEpoch = 0; #coldStart = null; #lastBufferedAhead = 0; #lastDownloadStats = null;
     #browserBufferLimitSeconds = null; #progressPollFailing = false;
@@ -49,7 +55,7 @@ test("the page asks again as soon as a piece has arrived, after reporting it", a
     #assertTranscodeProgress() {}
     ${method("#waitForPrebuffer")}
     wait(video) { return this.#waitForPrebuffer(video); }
-  }`)(HTMLVideoElement, () => calls.push({ what: "report", at: Date.now() }), () => 0, () => 0, () => {}, subtitleStartHold,
+  }`)(HTMLVideoElement, () => calls.push({ what: "report", at: Date.now() }), () => 0, () => 0, () => {}, subtitleStartHold, readinessVerdict,
     { MEASURED: "measured" }, 60_000, { dispatchEvent() {} }, class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls, { event() {}, run(_name, action) { return action(); } });
   const component = new Component();
   const startedAt = Date.now();
@@ -62,12 +68,13 @@ test("the page asks again as soon as a piece has arrived, after reporting it", a
 });
 
 test("the supply row is read again with each answer the start waits on", async () => {
+  requireGate();
   // Home Assistant 2026-10-26 (torrent-tv/meta#239): read once while the file
   // opened, "1.7 MB/s • 0 B of 2 B needed" stood for a twelve-minute wait.
   const calls = [];
   const published = [];
   const Component = new Function("HTMLVideoElement", "reportNow", "bufferedAheadSeconds", "bufferedEndSeconds",
-    "pauseWithoutIntent", "subtitleStartHold", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", "waitTrace", `${pageHelpers}
+    "pauseWithoutIntent", "subtitleStartHold", "readinessVerdict", "PROXY_EVENTS", "PREBUFFER_NUDGE_AFTER_MS", "document", "CustomEvent", "calls", "waitTrace", `${pageHelpers}
     return class {
     #playbackEpoch = 0; #coldStart = null; #lastBufferedAhead = 0; #lastDownloadStats = { downloadSpeed: 1_700_000, resumeNeededBytes: 2, resumeDownloadedBytes: 0 };
     #browserBufferLimitSeconds = null; #progressPollFailing = false;
@@ -90,7 +97,7 @@ test("the supply row is read again with each answer the start waits on", async (
     #assertTranscodeProgress() {}
     ${method("#waitForPrebuffer")}
     wait(video) { return this.#waitForPrebuffer(video); }
-  }`)(HTMLVideoElement, () => {}, () => 0, () => 0, () => {}, subtitleStartHold,
+  }`)(HTMLVideoElement, () => {}, () => 0, () => 0, () => {}, subtitleStartHold, readinessVerdict,
     { MEASURED: "measured" }, 60_000, { dispatchEvent(event) { published.push(event.detail); } },
     class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, calls,
     { event() {}, run(_name, action) { return action(); } });
