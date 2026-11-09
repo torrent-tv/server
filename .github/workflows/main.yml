@@ -61,9 +61,21 @@ jobs:
       - name: Lint and tests
         run: npm test
 
+  # The image checks itself in its final stage (`server.js --check`), so a
+  # pull request whose image cannot load the server fails here, before the
+  # release pushes it.
+  build:
+    name: Image build
+    needs: checks
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image for amd64
+        run: docker build -t torrent-tv-server .
+
   release:
     name: Release
-    needs: checks
+    needs: [checks, build]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
     environment:
