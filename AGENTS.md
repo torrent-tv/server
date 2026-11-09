@@ -50,24 +50,10 @@ change, all three of:
 1. The machine — states, transition table, triggers, guards, and which view each
    state shows.
 2. The written graph, [`docs/app-state-machine.md`](docs/app-state-machine.md)
-   (mermaid): every real transition and what the absent edges assert. It
-   changes in the same commit as `public/domain/app-state.js`.
+   (mermaid): it changes in the same commit as `public/domain/app-state.js`.
+   The principles the machine's shape is derived from are stated there.
 3. Tests where they are worth writing: the rules are pure and importable, so
    `node --test` exercises them without a DOM (`test/app-state.test.js`).
-
-Its shape is derived from theory, never from what the code currently does:
-
-- **Moore** — outputs (which view, the waiting overlay, whether controls accept
-  input) are pure functions of the state, derived by each view. Never command a
-  view alongside a transition.
-- **Extended state machine** — a control state only when it changes what is
-  legal or what is shown; everything else is a variable with a guard. Never
-  mirror another component's state (`<video>.paused`) as a state.
-- **Statechart hierarchy** — an edge shared by several states belongs on their
-  superstate, declared once.
-- **Graph discipline** — deterministic (one target per state and event), total
-  (every pair answered, "ignore" included, never a throw), every state
-  reachable, no dead ends. Absent edges are the machine's content.
 
 ## What the viewer is told
 
