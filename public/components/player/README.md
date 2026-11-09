@@ -20,6 +20,7 @@ names the film or series; it does not name the selected panel.
 ## State Machine
 
 Visibility is derived from the application state, not commanded: see
-`public/domain/app-state.js` for the machine and `research/state-machine-2026-08-08.md`
-in the meta repo for the graph and reasoning. The side-panel selection is
+`public/domain/app-state.js` for the machine and
+[`docs/app-state-machine.md`](../../../docs/app-state-machine.md) for the graph
+and reasoning. The side-panel selection is
 presentation state and does not add an application control state.
