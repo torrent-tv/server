@@ -7,7 +7,6 @@
 !docker-entrypoint.sh
 !LICENSE
 !public
-!routes
 !services
 !store
 !utils
