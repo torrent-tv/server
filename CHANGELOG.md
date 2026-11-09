@@ -1,4 +1,4 @@
-## Unreleased
+## 0.66.47
 
 - **Chore**: Repository guidance is shorter: `AGENTS.md` keeps the rules every change must keep, the browser app's file owners move to `docs/layout.md`, and the application state-machine graph now lives beside its code in `docs/app-state-machine.md`.
 
