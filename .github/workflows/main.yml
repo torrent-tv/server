@@ -313,15 +313,25 @@ jobs:
       cancel-in-progress: false
       queue: max
     permissions:
-      contents: write
+      contents: read
       packages: write
     outputs:
       versions: ${{ steps.release.outputs.versions }}
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
+      # The version commit may change workflow files, and GitHub refuses a tag push that
+      # reaches such a commit from an App without `workflows` permission; GITHUB_TOKEN can
+      # never have it. The release App token carries it, and nothing more than the push of
+      # the tag and the Release need (torrent-tv/meta#336).
+      - id: token
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
       - uses: actions/checkout@v7.0.1
         with:
+          token: ${{ steps.token.outputs.token }}
           fetch-depth: 0
       - uses: actions/setup-node@v7.1.0
         with:
@@ -340,6 +350,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Build, tag and release every version that has no release
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         id: release
         run: |
           set -euo pipefail
@@ -408,7 +420,7 @@ jobs:
               npx --no-install changeset git-tag
               git switch --quiet --detach "$tip"
             fi
-            # Pushed with GITHUB_TOKEN: a tag push starts no workflow run.
+            # Pushed with the release App token (no workflow listens to tags, so no run starts).
             if ! git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
               git push origin "refs/tags/v$v"
               echo "pushed tag v$v on ${c:0:7}"
