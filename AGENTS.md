@@ -86,36 +86,43 @@ detail goes to the log (`public/domain/viewer-failure.js`).
 - `GET /env.js` (`routes/env/get.js`) serves `window.env.version` from
   `package.json`; `index.html` loads it before the app, so the deployed version
   is readable in the browser console.
-  The released image carries the released version; a source checkout reports
-  `0.0.0-development`.
+  The image carries the `package.json` version of the commit it was built from,
+  which is that commit's own release.
 
 ## Checks and release path
 
-`npm test` runs `biome lint .` and `node --test`. The shared flow is in the
-organization's
+`npm test` runs `biome lint .` and `node --test`. `scripts/check.sh` runs the
+same checks as CI one by one: `tools` (Node and npm are the versions of
+`.node-version` and `packageManager`), `pins` (every dependency is an exact
+version), `test`, `image` (`docker build`; the image runs `server.js --check`
+in its last stage) and `all`. The shared flow is in the organization's
 [`CONTRIBUTING.md`](https://github.com/torrent-tv/workflows/blob/main/CONTRIBUTING.md).
-`.github/workflows/main.yml` runs the shared checks, the tests and an image
-build on every pull request (the image runs `server.js --check` in its last
-stage).
+`.github/workflows/main.yml` runs the checks, the tests and an image build on
+every pull request; `npm ci --ignore-scripts` installs, and no dependency has an
+install script.
 
-Every pull request adds `.changeset/<branch with / as ->.md` (lower-case file
-name) holding one or two bullets for a viewer, each `- **New**: ...`,
-`- **Fix**: ...` or `- **Chore**: ...`. Continuation lines are indented by two
-spaces; there are no blank lines. Nothing else may live in `.changeset/`. A
-changeset is never edited after merge and never deleted: the release notes are
-the changesets added since the last tag. CI (`check-changesets`) refuses a pull
-request without one. `CHANGELOG.md` is frozen at 0.66.47.
+Every pull request adds a changeset in the standard `@changesets/cli` format
+(`npx changeset`, or a file `.changeset/<branch with / as ->.md`): front matter
+`"@torrent-tv/server": patch` (or `minor`; never `major`), then one sentence a
+viewer understands. CI (`changeset status --since=origin/main`) refuses a pull
+request without one. A commit never edits or renames a changeset an earlier
+commit added: the release replays each commit and would stop on it.
 
-`package.json` and `package-lock.json` hold `0.0.0-development` in git; never
-edit the version. On `main` the release job (the `release-plan` and
-`release-tag` actions of `torrent-tv/workflows`) plans the version from the newest
-`v*` tag and the commits after it (every conventional commit releases a patch;
-a `feat` or a breaking change releases a minor), writes it into the workspace copies of the version files,
-publishes `ghcr.io/torrent-tv/server:<version>` and `:latest` built from that
-workspace, tags the merged commit, creates the GitHub release from the
-changesets, and writes the image into `torrent-tv/infra`. Nothing is committed
-to `main`. Re-running a failed release job is safe: a tag holding the commit
-skips the build and only what is missing is done. The image is built from
-`package-lock.json`, so a lockfile update is shipped too (`fix(deps)`, with its
-own changeset). The browser cache can hide a change: hard-refresh when checking
-by hand.
+`package.json` and `package-lock.json` hold the released version; nobody edits
+it. After a merge to `main` the `version` job amends each commit that added a
+changeset with its version and its `CHANGELOG.md` entry (`changeset version`)
+and force-pushes `main` with a lease as the release App; three changeset
+commits give three versions. The next run checks the commits, builds the image
+and then, for each version, `publish` pushes `ghcr.io/torrent-tv/server:<version>`
+built from that version's commit, tags it (`changeset git-tag`) and creates the
+GitHub Release from the `CHANGELOG.md` section; `rebase-prs` rebases the open
+pull requests onto the rewritten `main`. The `install` job then writes the image
+into `torrent-tv/infra`'s `docker-compose.yml`, pushes
+`chore(deploy): run server <version> #ttv-388` there as the release App, and
+waits until `https://webauth.courses/env.js` reports the version. Re-running a
+failed job is safe: each step finishes only what is missing. `dependencies.yml`
+raises Dependabot alerts and minor updates daily, with a changeset per commit,
+and pushes the commits that passed (`fix(deps)` when the lock file changes what
+the image holds). The rules, the states of a commit and the blockers:
+[`openspec/changes/release-with-changesets/design.md`](openspec/changes/release-with-changesets/design.md).
+The browser cache can hide a change: hard-refresh when checking by hand.
