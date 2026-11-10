@@ -1,4 +1,40 @@
-Releases after 0.66.47 are described at https://github.com/torrent-tv/server/releases; this file is no longer updated. A pull request describes its change in `.changeset/` (see `AGENTS.md`, Changesets).
+# @torrent-tv/server
+
+## 0.66.53
+
+### Patch Changes
+
+- 1b0ea24: CI no longer scans commits for secrets itself; the repository relies on GitHub secret scanning with push protection, and its secret baseline and `pre-commit` hook are removed.
+
+## 0.66.52
+
+### Patch Changes
+
+- 070901f: CI calls the shared actions from their repository's new name, torrent-tv/workflows.
+
+## 0.66.51
+
+### Patch Changes
+
+- 9a852de: Update dependencies: 1 package(s) changed in the lock file.
+
+## 0.66.50
+
+### Patch Changes
+
+- 532706e: CI checks commit headers with the standard commitlint action, every commit included, and branch names inline; text files are stored with LF endings.
+
+## 0.66.49
+
+### Patch Changes
+
+- 8da0b41: CI rejects a pushed commit that contains a secret not listed in the audited `.secrets.baseline`, and a `pre-commit` hook makes the same check before a commit is made.
+
+## 0.66.48
+
+### Patch Changes
+
+- f8a4f07: Releases are now made from tags; release notes come from each pull request's changeset, and the version no longer appears in a commit on main.
 
 ## 0.66.47
 
