@@ -2,7 +2,7 @@
  * @file The server image checks itself in its final stage, and a CI `build`
  * job builds it before the release may run (torrent-tv/meta#302, AC-S3).
  *
- * `Dockerfile` and `.github/workflows/main.yml` are read as text. A
+ * `Dockerfile`, `scripts/check.sh` and `.github/workflows/main.yml` are read as text. A
  * Dockerfile instruction is its lines joined across trailing backslashes,
  * with comment lines dropped, as Docker reads it. Nothing is built or run.
  */
@@ -92,9 +92,10 @@ test("job build is named Image build and needs checks", () => {
 
 test("job build builds the image", () => {
   assert.ok(
-    jobLines("build").some((line) => /\bdocker build\b/.test(line)),
-    "job build runs no docker build"
+    jobLines("build").some((line) => /\bbash scripts\/check\.sh image\b/.test(line)),
+    "job build does not run scripts/check.sh image"
   );
+  assert.match(read("scripts/check.sh"), /^image\(\) \{[^}]*\bdocker build\b/m, "scripts/check.sh image runs no docker build");
 });
 
 test("release needs checks and build", () => {
