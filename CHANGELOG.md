@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.59
+
+### Patch Changes
+
+- A version whose commit changes a workflow file is tagged and released again: the release job now pushes its tag with a token that may touch workflow files.
+
 ## 0.66.58
 
 ### Patch Changes

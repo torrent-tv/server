@@ -83,12 +83,18 @@ without the second condition `publish` would fail on a tag that exists on anothe
   of versions that is unknown when the workflow is written, so the loop is shell.
 - The registry is asked first. Only "not found" starts a build; any other answer fails the job
   with that answer, because a rebuild would give a deployed tag another digest.
-- The tag (`changeset git-tag`, pushed with `GITHUB_TOKEN`, which starts no run) and the GitHub
+- The tag (`changeset git-tag`, pushed with the release App token) and the GitHub
   Release come after the image: a tag means the image exists. `latest` is a copy of the newest
   version of the run's list (`docker buildx imagetools create`, no rebuild). A re-run of the failed
   `publish` of an older run, after a newer run released, sets `latest` back to the older version;
   nothing reads `latest` in production (infra pins version and digest, and only
   `docker-compose.local.yml` names it), and the next release moves it forward again.
+- The checkout, the tag push and the Release use the release App token with `contents: write`
+  and `workflows: write`. A version commit may change workflow files, GitHub refuses a tag that
+  reaches one from an App without `workflows` permission, and `GITHUB_TOKEN` can never have it
+  (measured 2026-11-10: infra `v0.0.10` was refused, message in torrent-tv/meta#336). No
+  workflow listens to tags, so the push starts no run. The job's own `GITHUB_TOKEN` keeps
+  `contents: read` and `packages: write` for the registry login.
 - BuildKit runs from `moby/buildkit:v0.34.1` (`driver-opts` of `setup-buildx-action`); its default is
   the moving tag `moby/buildkit:buildx-stable-1` (Security rule 6). The `build` job and
   `scripts/check.sh image` use the runner's own docker daemon.
