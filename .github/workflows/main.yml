@@ -52,7 +52,7 @@ jobs:
       - name: Commit messages follow Conventional Commits
         uses: wagoid/commitlint-github-action@v6.2.1
       - name: No secrets in commits
-        uses: torrent-tv/.github/actions/check-secrets@main
+        uses: torrent-tv/workflows/actions/check-secrets@main
       - name: Branch name names a task
         if: github.event_name == 'pull_request'
         run: '[[ "$GITHUB_HEAD_REF" =~ ^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)/ttv-[1-9][0-9]*-[a-z0-9][a-z0-9.-]*$ ]]'
@@ -72,7 +72,7 @@ jobs:
             -ignore input\s.client-id.\sis\snot\sdefined\sin\saction\s.actions/create-github-app-token@
             -ignore missing\sinput\s.app-id.\swhich\sis\srequired\sby\saction\s.actions/create-github-app-token@
       - name: Pull request adds a changeset
-        uses: torrent-tv/.github/actions/check-changesets@main
+        uses: torrent-tv/workflows/actions/check-changesets@main
       - name: Install dependencies
         run: npm ci
       - name: Lint and tests
@@ -119,7 +119,7 @@ jobs:
       # The version is the newest v* tag plus the step the commits ask for; it is
       # written into package.json and package-lock.json of this workspace only.
       - id: release
-        uses: torrent-tv/.github/actions/release-plan@main
+        uses: torrent-tv/workflows/actions/release-plan@main
         with:
           version-files: package.json,package-lock.json
           bump: ${{ inputs.bump || 'auto' }}
@@ -151,7 +151,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
 
       - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/.github/actions/release-tag@main
+        uses: torrent-tv/workflows/actions/release-tag@main
         with:
           tag: ${{ steps.release.outputs.tag }}
           notes-file: ${{ steps.release.outputs.notes-file }}
@@ -184,7 +184,7 @@ jobs:
           permission-actions: read
 
       - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/.github/actions/infra-install-server@main
+        uses: torrent-tv/workflows/actions/infra-install-server@main
         with:
           github-token: ${{ steps.infra-token.outputs.token }}
           version: ${{ steps.release.outputs.version }}

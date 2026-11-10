@@ -2,7 +2,7 @@
 
 Parent: torrent-tv/meta#336, step 2 (server). Step 1 (the actions
 `check-changesets`, `release-plan`, `release-tag` and the `changeset` input of
-`update-dependencies`) is merged in `torrent-tv/.github` (`bc381ae`). The proxy
+`update-dependencies`) is merged in `torrent-tv/workflows` (`bc381ae`). The proxy
 makes the same switch in torrent-tv/proxy#48; this change mirrors it where it
 applies.
 
@@ -70,6 +70,6 @@ not change.
 - Changing `infra-install-server`, the two-slot handover or infra (issue
   step 7: infra stays).
 - Removing `release-prepare`, `release-finish`, `check-changelog` and their
-  scripts from `torrent-tv/.github`: step 4.
+  scripts from `torrent-tv/workflows`: step 4.
 - Treating `0.0.0-development` specially in `compareVersions` or anywhere else.
 - Rewriting the history in `CHANGELOG.md`.
