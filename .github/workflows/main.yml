@@ -1,11 +1,16 @@
 name: Main
 
-# Every push to main runs the checks and then the release. The version is the newest
-# v* tag plus the step the Conventional Commits since it ask for; the release builds
-# and pushes the container image, tags the merged commit and creates the GitHub
-# release from the changesets (nothing is committed to main), writes the version and
-# digest into torrent-tv/infra (which deploys it on the droplet), and waits until the
-# live site reports the new version.
+# Every push to main is versioned first, then checked, released and installed.
+#  1. `version` finds the commits that still hold a changeset file and rewrites
+#     each one with its version and changelog entry, in place, then force-pushes
+#     main with a lease. The push starts the next run, which finds nothing to
+#     version (state=current) and does the rest.
+#  2. `checks` checks the commit and `build` builds its image; `publish` builds and pushes
+#     ghcr.io/torrent-tv/server:<version> for every new version, then tags it and creates
+#     its GitHub Release, `rebase-prs` rebases the open pull requests onto the rewritten
+#     main, and `install` writes the image into torrent-tv/infra, which deploys it on the
+#     droplet, and waits until the live site reports the version.
+# The rules are in openspec/changes/release-with-changesets/design.md.
 
 on:
   push:
@@ -13,12 +18,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      bump:
-        description: Least release step (a feat still releases minor)
-        type: choice
-        options: [auto, patch, minor]
-        default: auto
 
 permissions:
   contents: read
@@ -28,9 +27,185 @@ env:
   SITE: https://webauth.courses
 
 jobs:
-  checks:
-    name: Checks
+  version:
+    name: Version
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
+    environment: production
+    # One rewrite at a time; a run waits for the one before it.
+    concurrency:
+      group: version
+      cancel-in-progress: false
+      queue: max
+    outputs:
+      state: ${{ steps.version.outputs.state }}
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          # The rewrite replays commits that may change workflow files.
+          permission-workflows: write
+      - uses: actions/checkout@v7.0.1
+        with:
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Node and npm are the pinned versions
+        run: bash scripts/check.sh tools
+      - run: npm ci --ignore-scripts
+      - name: Version every commit that holds a changeset
+        id: version
+        run: |
+          set -euo pipefail
+          git config user.name 'torrent-tv-release[bot]'
+          git config user.email '337444158+torrent-tv-release[bot]@users.noreply.github.com'
+          state() { echo "state=$1" >> "$GITHUB_OUTPUT"; }
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+            echo "main moved to $(git rev-parse --short origin/main); its run versions it"
+            state moved
+            exit 0
+          fi
+          # A changeset file left in the tree marks a commit not yet versioned.
+          pending=$(git ls-files .changeset | grep -vxE '\.changeset/(README\.md|config\.json)' || true)
+          if [ -z "$pending" ]; then
+            echo "no pending changesets"
+            state current
+            exit 0
+          fi
+          # shellcheck disable=SC2086
+          first=$(git log --reverse --format=%H --diff-filter=A -- $pending | head -n 1)
+          if ! git rev-parse --verify --quiet "$first^" > /dev/null; then
+            echo "::error::$first is the first commit; it cannot be versioned"
+            exit 1
+          fi
+          if [ -n "$(git rev-list --merges "$first^..HEAD")" ]; then
+            echo "::error::the range $first^..HEAD holds a merge commit: $(git rev-list --merges "$first^..HEAD" | tr '\n' ' ')"
+            exit 1
+          fi
+          for c in $(git rev-list "$first^..HEAD"); do
+            if [ -n "$(git tag --points-at "$c" --list 'v*')" ]; then
+              echo "::error::commit $c carries a release tag and cannot be rewritten"
+              exit 1
+            fi
+          done
+          old_tip=$(git rev-parse HEAD)
+          # Replayed for every commit of the range; only a commit that added a changeset is amended.
+          amend="$RUNNER_TEMP/amend.sh"
+          cat > "$amend" <<'AMEND'
+          set -e
+          added=$(git diff-tree --no-commit-id --no-renames --name-only --diff-filter=A -r HEAD -- .changeset | grep -vxE "\.changeset/(README\.md|config\.json)" || true)
+          if [ -z "$added" ]; then exit 0; fi
+          git reset --soft HEAD~1
+          npx --no-install changeset version
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          other=$(git diff --name-only ORIG_HEAD | grep -vxE "package\.json|package-lock\.json|CHANGELOG\.md|\.changeset/.+\.md" || true)
+          if [ -n "$other" ]; then
+            echo "::error::the version step changed paths it may not change: $other"
+            exit 1
+          fi
+          git add -A
+          git commit --quiet --no-verify -C ORIG_HEAD
+          AMEND
+          # A later commit that edits a line next to "version" in package.json conflicts with the
+          # rewritten parent. The rewritten parent differs from the original one only in the
+          # version fields, so the commit's own text is taken and the parent's version is set back.
+          resolve_conflict() {
+            local unmerged other parent_version
+            unmerged=$(git diff --name-only --diff-filter=U)
+            if [ -z "$unmerged" ]; then
+              echo "::error::rebase stopped at a failed step after $(git rev-parse --short HEAD)"
+              return 1
+            fi
+            other=$(printf '%s\n' "$unmerged" | grep -vxE 'package\.json|package-lock\.json' || true)
+            if [ -n "$other" ]; then
+              echo "::error::rebase stopped at $(git rev-parse --short REBASE_HEAD) with a conflict in: $(printf '%s' "$unmerged" | tr '\n' ' ')"
+              return 1
+            fi
+            parent_version=$(git show HEAD:package.json | jq -r .version)
+            for f in $unmerged; do git checkout --theirs -- "$f"; done
+            npm pkg set "version=$parent_version" > /dev/null
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+            git add package.json package-lock.json
+            GIT_EDITOR=true git rebase --continue || true
+          }
+          if ! git rebase --exec "bash $amend" "$first^"; then
+            if [ ! -d "$(git rev-parse --git-path rebase-merge)" ]; then
+              echo "::error::git rebase did not start"
+              exit 1
+            fi
+            until [ ! -d "$(git rev-parse --git-path rebase-merge)" ]; do
+              if ! resolve_conflict; then
+                git rebase --abort
+                exit 1
+              fi
+            done
+          fi
+          new_tip=$(git rev-parse HEAD)
+          if git push --force-with-lease="refs/heads/main:$GITHUB_SHA" origin HEAD:refs/heads/main; then
+            versions=''
+            previous=$(git show "$first^:package.json" | jq -r .version)
+            for c in $(git rev-list --reverse "$first^..HEAD"); do
+              v=$(git show "$c:package.json" | jq -r .version)
+              if [ "$v" != "$previous" ]; then versions="$versions $v"; previous=$v; fi
+            done
+            echo "versioned $(git rev-list --count "$first^..HEAD") commits: ${old_tip:0:7}..${new_tip:0:7}, versions:${versions:- none}"
+            state rewritten
+          else
+            git fetch --quiet origin main
+            if [ "$(git rev-parse origin/main)" = "$GITHUB_SHA" ]; then
+              echo "::error::the push failed and main did not move"
+              exit 1
+            fi
+            echo "main moved during versioning; the run of the new tip versions it"
+            state moved
+          fi
+
+  plan:
+    name: Plan checks
+    runs-on: ubuntu-26.04
+    # Every commit that adds a changeset becomes a published version, so a pull
+    # request runs the checks on each of those commits as well as on its head
+    # (merged with main, as before). A push has the one leg of the pushed commit.
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          legs='{"ref":"","head":true,"name":"Checks"}'
+          if [ -n "$HEAD_SHA" ]; then
+            for c in $(git log --reverse --format=%H "origin/main..$HEAD_SHA"); do
+              added=$(git diff-tree --no-commit-id --no-renames --name-only --diff-filter=A -r "$c" -- .changeset | grep -vxE '\.changeset/(README\.md|config\.json)' || true)
+              if [ -n "$added" ] && [ "$c" != "$HEAD_SHA" ]; then
+                legs="$legs,{\"ref\":\"$c\",\"head\":false,\"name\":\"Checks of ${c:0:7}\"}"
+              fi
+            done
+          fi
+          echo "matrix=[$legs]" >> "$GITHUB_OUTPUT"
+          echo "checks run on: [$legs]"
+
+  checks:
+    name: ${{ matrix.name }}
+    needs: [version, plan]
+    # A pull request has no version job. After a push, only the run that found
+    # nothing to version goes on; the others end in `version`.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.version.result == 'skipped' || needs.version.outputs.state == 'current') }}
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     # The commit check lists a pull request's commits through the API.
     permissions:
       contents: read
@@ -38,45 +213,75 @@ jobs:
     # A newer push to a pull request makes its older checks pointless; every push to
     # main gets a group of its own, so no check of main is ever replaced.
     concurrency:
-      group: ${{ github.event_name == 'pull_request' && format('checks-{0}', github.ref) || format('checks-{0}', github.run_id) }}
+      group: ${{ github.event_name == 'pull_request' && format('checks-{0}-{1}', github.ref, matrix.ref) || format('checks-{0}-{1}', github.run_id, matrix.ref) }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     # One step per check, so the run shows which check ran and which one failed.
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ matrix.ref }}
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .node-version
-          cache: npm
       - name: Node and npm are the pinned versions
         run: bash scripts/check.sh tools
+      - run: npm ci --ignore-scripts
       - name: Commit messages follow Conventional Commits
+        if: matrix.head
         uses: wagoid/commitlint-github-action@v6.2.1
       - name: Branch name names a task
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.head
         run: '[[ "$GITHUB_HEAD_REF" =~ ^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)/ttv-[1-9][0-9]*-[a-z0-9][a-z0-9.-]*$ ]]'
-      # actionlint 1.7.12 predates three documented things; drop each ignore once
+      # actionlint 1.7.12 predates four documented things; drop each ignore once
       # actionlint knows it: the `queue` key of `concurrency` (queue: max keeps every
       # pending run), the `ubuntu-26.04` runner label, and the `client-id` input of
-      # actions/create-github-app-token, which replaces `app-id`.
+      # actions/create-github-app-token, which replaces `app-id`, and the `vulnerability-alerts`
+      # permission scope that dependencies.yml needs to read Dependabot alerts.
       # The runner passes `args` to docker without shell quoting, so a space inside a
       # pattern is written `\s` and a quote `.` (each pattern is a regular expression).
       - name: Workflows are valid
+        if: matrix.head
         uses: docker://rhysd/actionlint:1.7.12
         with:
           args: >-
             -color
             -ignore unexpected\skey\s.queue.\sfor\s.concurrency.\ssection
             -ignore label\s.ubuntu-26\.04.\sis\sunknown
+            -ignore unknown\spermission\sscope\s.vulnerability-alerts.
             -ignore input\s.client-id.\sis\snot\sdefined\sin\saction\s.actions/create-github-app-token@
             -ignore missing\sinput\s.app-id.\swhich\sis\srequired\sby\saction\s.actions/create-github-app-token@
-      - name: Pull request adds a changeset
-        uses: torrent-tv/workflows/actions/check-changesets@main
       - name: Dependencies are pinned exactly
         run: bash scripts/check.sh pins
-      - name: Install dependencies
-        run: npm ci
+      - name: Pull request adds a changeset
+        if: github.event_name == 'pull_request' && matrix.head
+        run: npx --no-install changeset status --since=origin/main
+      - name: Pull request carries no copy of a commit on main
+        # A rewrite of main leaves a branch made before it with the old copies of the
+        # commits; a plain rebase onto main would bring their changesets back.
+        if: github.event_name == 'pull_request' && matrix.head
+        run: |
+          copies=$(comm -12 \
+            <(git log --format='%ae %at %s' "origin/main..$HEAD_SHA" | sort) \
+            <(git log --format='%ae %at %s' "$HEAD_SHA..origin/main" | sort))
+          if [ -n "$copies" ]; then
+            echo "::error::the pull request carries commits that main holds under other hashes:"
+            printf '%s\n' "$copies"
+            echo "Run: git fetch origin && git rebase --fork-point origin/main"
+            exit 1
+          fi
+      - name: Commits do not change an existing changeset
+        # The rewrite replays each commit onto a parent that already lost the
+        # changesets of the commits before it; a later edit of one would conflict.
+        if: github.event_name == 'pull_request' && matrix.head
+        run: |
+          edited=$(git log --format= --name-only --diff-filter=MR "origin/main..$HEAD_SHA" -- '.changeset/*.md' | grep -vxE '\.changeset/README\.md' || true)
+          if [ -n "$edited" ]; then
+            echo "::error::a commit of the pull request modifies or renames a changeset file: $edited"
+            exit 1
+          fi
       - name: Lint and tests
         run: bash scripts/check.sh test
 
@@ -86,97 +291,248 @@ jobs:
   build:
     name: Image build
     needs: checks
+    # On a pull request `version` is skipped, and a skipped job anywhere in the chain
+    # would skip this one without a status function.
+    if: ${{ !cancelled() && needs.checks.result == 'success' }}
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Build the image for amd64
         run: bash scripts/check.sh image
 
-  release:
-    name: Release
+  publish:
+    name: Publish
     needs: [checks, build]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
     environment:
       name: production
       url: ${{ env.SITE }}
-    # Every release runs, one at a time, in the order the runs reach the queue. A later
-    # run sees the earlier tag and releases what came after it; a run whose commit a
-    # tag already holds only finishes what is missing.
+    # One run publishes at a time, oldest version first, in the order the runs reach
+    # the queue. The image comes before the tag: a tag means the image exists.
     concurrency:
-      group: release
+      group: publish
       cancel-in-progress: false
       queue: max
     permissions:
       contents: write
       packages: write
+    outputs:
+      versions: ${{ steps.release.outputs.versions }}
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
-
-      # The version is the newest v* tag plus the step the commits ask for; it is
-      # written into package.json and package-lock.json of this workspace only.
-      - id: release
-        uses: torrent-tv/workflows/actions/release-plan@main
-        with:
-          version-files: package.json,package-lock.json
-          bump: ${{ inputs.bump || 'auto' }}
-
-      - if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
-        uses: docker/setup-buildx-action@v4
-      - if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
-        uses: docker/login-action@v4
+          node-version-file: .node-version
+      - name: Node and npm are the pinned versions
+        run: bash scripts/check.sh tools
+      - run: npm ci --ignore-scripts
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Build and push the image
-        id: build
-        if: steps.release.outputs.released == 'true' && steps.release.outputs.already != 'true'
-        uses: docker/build-push-action@v7
-        with:
-          # The workspace, which holds the version release-plan wrote; the Git context
-          # would build 0.0.0-development, and that instance stands by behind the
-          # serving slot (services/instance-role.js decideOnPeer).
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.release.outputs.version }}
-            ${{ env.IMAGE }}:latest
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.release.outputs.version }}
-
-      - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/workflows/actions/release-tag@main
-        with:
-          tag: ${{ steps.release.outputs.tag }}
-          notes-file: ${{ steps.release.outputs.notes-file }}
-          github-token: ${{ github.token }}
-
-      - name: The published image's digest
-        id: image
-        if: steps.release.outputs.released == 'true'
-        env:
-          BUILT: ${{ steps.build.outputs.digest }}
-          VERSION: ${{ steps.release.outputs.version }}
+      - name: Build, tag and release every version that has no release
+        id: release
         run: |
-          # A re-run of a tagged commit built nothing; the registry knows the digest.
-          digest="$BUILT"
-          if [ -z "$digest" ]; then
-            digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          set -euo pipefail
+          git config user.name 'torrent-tv-release[bot]'
+          git config user.email '337444158+torrent-tv-release[bot]@users.noreply.github.com'
+          tip=$(git rev-parse HEAD)
+          git fetch --quiet --tags origin
+          # A version is a commit that changed the version in package.json and added a
+          # "## <version>" heading to CHANGELOG.md. The range starts at the newest tag's own
+          # commit, so a run that failed after the tag was pushed finishes that release;
+          # versions before it were released earlier. Commits that only move released
+          # sections into CHANGELOG.md (the migration) change no version and are skipped.
+          last=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          range=(HEAD)
+          if [ -n "$last" ]; then range=("$last^..HEAD"); fi
+          candidates=$(git log -G'^## [0-9]' --format=%H --reverse "${range[@]}" -- CHANGELOG.md)
+          commits=''
+          for c in $candidates; do
+            parent=$(git rev-parse --verify --quiet "$c^" || true)
+            if [ -n "$parent" ] && [ "$(git show "$parent:package.json" | jq -r .version)" = "$(git show "$c:package.json" | jq -r .version)" ]; then
+              continue
+            fi
+            commits="$commits $c"
+          done
+          if [ -z "$commits" ]; then
+            echo "no version after ${last:-the first commit}; nothing to release"
+            echo 'versions=[]' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          entries='[]'
+          newest=''
+          for c in $commits; do
+            v=$(git show "$c:package.json" | jq -r .version)
+            if git rev-parse --verify --quiet "refs/tags/v$v" > /dev/null && [ "$(git rev-parse "refs/tags/v$v^{commit}")" != "$c" ]; then
+              echo "::error::tag v$v exists and does not point to ${c:0:7}, the commit that versioned it"
+              exit 1
+            fi
+            # The image, built from the version's own commit unless the registry has it. Only
+            # "not found" means it has none: any other answer is a failure to report, since a
+            # rebuild would give a tag that is already deployed another digest.
+            if inspected=$(docker buildx imagetools inspect "$IMAGE:$v" 2>&1); then
+              echo "image $IMAGE:$v exists already"
+            elif printf '%s' "$inspected" | grep -qi 'not found'; then
+              git switch --quiet --detach "$c"
+              docker buildx build --push \
+                --tag "$IMAGE:$v" \
+                --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+                --label "org.opencontainers.image.revision=$c" \
+                --label "org.opencontainers.image.version=$v" \
+                .
+              git switch --quiet --detach "$tip"
+              echo "pushed image $IMAGE:$v built from ${c:0:7}"
+            else
+              echo "::error::the registry did not say whether $IMAGE:$v exists: $inspected"
+              exit 1
+            fi
+            digest=$(docker buildx imagetools inspect "$IMAGE:$v" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::'$digest' is not an image digest"
+              exit 1
+            fi
+            if git rev-parse --verify --quiet "refs/tags/v$v" > /dev/null; then
+              echo "tag v$v is on ${c:0:7} already"
+            else
+              git switch --quiet --detach "$c"
+              npx --no-install changeset git-tag
+              git switch --quiet --detach "$tip"
+            fi
+            # Pushed with GITHUB_TOKEN: a tag push starts no workflow run.
+            if ! git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
+              git push origin "refs/tags/v$v"
+              echo "pushed tag v$v on ${c:0:7}"
+            fi
+            if gh release view "v$v" > /dev/null 2>&1; then
+              echo "GitHub Release v$v exists already"
+            else
+              git show "$c:CHANGELOG.md" | awk -v heading="## $v" '$0 == heading { keep = 1; next } /^## / { keep = 0 } keep' > "$RUNNER_TEMP/notes-$v.md"
+              gh release create "v$v" --verify-tag --title "v$v" --notes-file "$RUNNER_TEMP/notes-$v.md"
+              echo "created GitHub Release v$v"
+            fi
+            entries=$(jq -c --arg v "$v" --arg d "$digest" '. + [{version: $v, digest: $d}]' <<< "$entries")
+            newest=$v
+          done
+          # `latest` follows the newest version of this run (a copy of its manifest, no rebuild).
+          docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$newest"
+          echo "released: $entries"
+          echo "versions=$entries" >> "$GITHUB_OUTPUT"
 
-      - name: Token for infra only
-        id: infra-token
-        if: steps.release.outputs.released == 'true'
-        uses: actions/create-github-app-token@v3
+  rebase-prs:
+    name: Rebase pull requests
+    needs: version
+    if: github.event_name == 'push' && needs.version.outputs.state == 'current'
+    runs-on: ubuntu-26.04
+    environment: production
+    # The rewrite of main left the open pull requests on commits main no longer
+    # has. Each is rebased onto the new tip; one that conflicts is left to its author.
+    concurrency:
+      group: rebase-prs
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          # A pull request that changes a workflow file is rebased too.
+          permission-workflows: write
+      - uses: actions/checkout@v7.0.1
+        with:
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+      - name: Rebase each open pull request onto main
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'torrent-tv-release[bot]'
+          git config user.email '337444158+torrent-tv-release[bot]@users.noreply.github.com'
+          git fetch --quiet origin
+          main=$(git rev-parse origin/main)
+          echo "main is $(git rev-parse --short "$main"); rebasing the open pull requests of this repository onto it"
+          gh pr list --base main --state open --limit 1000 --json number,headRefName,headRefOid,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository | not) | [.number, .headRefName, .headRefOid] | @tsv' > "$RUNNER_TEMP/prs.tsv"
+          if [ ! -s "$RUNNER_TEMP/prs.tsv" ]; then
+            echo "no open pull request of this repository"
+            exit 0
+          fi
+          refused=0
+          while IFS=$'\t' read -r number branch head; do
+            if git merge-base --is-ancestor "$main" "$head"; then
+              echo "#$number is up to date"
+              continue
+            fi
+            # Commits of the pull request that main also holds, rewritten: same author e-mail,
+            # author time and subject. The newest of them is where the pull request's own commits
+            # start. With none, the merge base is that point.
+            copies=$(git log --format='%ae %at %s' "$head..$main")
+            fork=''
+            for c in $(git rev-list "$main..$head"); do
+              if printf '%s\n' "$copies" | grep -qxF -- "$(git log -1 --format='%ae %at %s' "$c")"; then
+                fork=$c
+                break
+              fi
+            done
+            fork=${fork:-$(git merge-base "$main" "$head")}
+            git switch --quiet --detach "$head"
+            if ! git rebase --quiet --onto "$main" "$fork"; then
+              paths=$(git diff --name-only --diff-filter=U | paste -sd, -)
+              stopped=$(git rev-parse --short REBASE_HEAD)
+              git rebase --abort
+              echo "#$number: rebase stopped at $stopped, conflict in $paths"
+              gh pr comment "$number" --body "Rebase onto main \`${main:0:7}\` stopped at \`$stopped\`: conflict in \`$paths\`. Rebase with \`git fetch origin && git rebase --fork-point origin/main\`."
+              continue
+            fi
+            new=$(git rev-parse HEAD)
+            if refusal=$(git push --quiet --force-with-lease="refs/heads/$branch:$head" origin "HEAD:refs/heads/$branch" 2>&1); then
+              echo "rebased #$number ${head:0:7} -> ${new:0:7}"
+            elif [ "$(git ls-remote origin "refs/heads/$branch" | cut -f1)" != "$head" ]; then
+              echo "#$number: $branch moved while it was rebased; the next change of main rebases it"
+            else
+              # The branch did not move, so git refused the push itself.
+              echo "::error::#$number: the push of $branch was refused: $refusal"
+              refused=1
+            fi
+          done < "$RUNNER_TEMP/prs.tsv"
+          exit "$refused"
+
+  install:
+    name: Install ${{ matrix.version }} in infra
+    needs: publish
+    if: needs.publish.outputs.versions != '[]'
+    runs-on: ubuntu-26.04
+    environment: production
+    # One version at a time, oldest first, and one run at a time: each version waits for
+    # the site to run it before the next one is written (the two server slots of infra).
+    concurrency:
+      group: install
+      cancel-in-progress: false
+      queue: max
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.publish.outputs.versions) }}
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ matrix.version }}
+      DIGEST: ${{ matrix.digest }}
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@v3.3.0
         with:
           client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
@@ -184,12 +540,122 @@ jobs:
           repositories: infra
           permission-contents: write
           permission-actions: read
-
-      - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/workflows/actions/infra-install-server@main
+      - name: yq and jq are the pinned versions
+        run: |
+          # The runner image provides both; a different version fails here, before any
+          # write, and the versions change only in a commit (Security rule 6).
+          echo "$(yq --version) / $(jq --version)"
+          [ "$(yq --version)" = 'yq (https://github.com/mikefarah/yq/) version v4.54.1' ] || { echo "::error::yq is not 4.54.1"; exit 1; }
+          [ "$(jq --version)" = 'jq-1.8.1' ] || { echo "::error::jq is not 1.8.1"; exit 1; }
+      - name: Which slot serves
+        id: serving
+        run: |
+          # /healthz names the slot and its state, and nginx takes the two slots in turn,
+          # so of two requests one reaches the serving slot; four allow for a request
+          # another client made in between. Unknown when nothing answers "serving".
+          serving=''
+          for i in 1 2 3 4; do
+            serving=$(curl -fsS -H 'Cache-Control: no-cache' "$SITE/healthz?slot=$i" | jq -r '.instance | select(.state == "serving") | .slot' || true)
+            if [ -n "$serving" ]; then break; fi
+          done
+          echo "the site says slot ${serving:-unknown} serves"
+          echo "slot=$serving" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7.0.1
         with:
-          github-token: ${{ steps.infra-token.outputs.token }}
-          version: ${{ steps.release.outputs.version }}
-          digest: ${{ steps.image.outputs.digest }}
-          task: "#ttv-388"
-          site: ${{ env.SITE }}
+          repository: torrent-tv/infra
+          token: ${{ steps.token.outputs.token }}
+          path: infra
+          fetch-depth: 0
+      - name: Write the image into the slot that does not serve
+        env:
+          SERVING: ${{ steps.serving.outputs.slot }}
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::'$DIGEST' is not an image digest"
+            exit 1
+          fi
+          git config user.name 'torrent-tv-release[bot]'
+          git config user.email '337444158+torrent-tv-release[bot]@users.noreply.github.com'
+          file=docker-compose.yml
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            # The service and version of every server slot, one "<service> <version>" line each.
+            slots=$(yq '.services | to_entries | .[] | select((.value.image // "") | test("^ghcr.io/torrent-tv/server:")) | .key + " " + (.value.image | sub("^ghcr.io/torrent-tv/server:"; "") | sub("@.*"; ""))' "$file")
+            if [ -z "$slots" ]; then
+              echo "::error::$file names no server image"
+              exit 1
+            fi
+            printf 'infra names:\n%s\n' "$slots"
+            newest=$(printf '%s\n' "$slots" | cut -d' ' -f2 | sort -V | tail -n 1)
+            if [ "$(printf '%s\n%s\n' "$newest" "$VERSION" | sort -V | tail -n 1)" = "$newest" ]; then
+              echo "infra already runs server $newest; nothing to write"
+              exit 0
+            fi
+            # The image goes into the slot that does not serve; when no slot is known to
+            # serve (or only one exists), into the slot that names the older version.
+            candidates=$(printf '%s\n' "$slots" | grep -v "^server-$SERVING " || true)
+            if [ -z "$SERVING" ] || [ -z "$candidates" ]; then candidates=$slots; fi
+            target=$(printf '%s\n' "$candidates" | sort -k2,2V | head -n 1 | cut -d' ' -f1)
+            # yq only reads. Its own write drops every blank line of the file (measured on
+            # this file in run 42841772677), so the one line yq read is replaced as plain text.
+            old=$(TARGET=$target yq '.services[strenv(TARGET)].image' "$file")
+            if [ "$(grep -cF -- "$old" "$file")" != 1 ]; then
+              echo "::error::'$old' is not on exactly one line of $file"
+              exit 1
+            fi
+            OLD=$old NEW="ghcr.io/torrent-tv/server:$VERSION@$DIGEST" awk '{ i = index($0, ENVIRON["OLD"]); if (i > 0) $0 = substr($0, 1, i - 1) ENVIRON["NEW"] substr($0, i + length(ENVIRON["OLD"])); print }' "$file" > "$RUNNER_TEMP/compose.yml"
+            cat "$RUNNER_TEMP/compose.yml" > "$file"
+            # The edit must be exactly the one image line.
+            if [ "$(git diff --numstat -- "$file")" != "$(printf '1\t1\t%s' "$file")" ]; then
+              echo "::error::the yq edit changed more than the image line of $file:"
+              git diff -- "$file"
+              exit 1
+            fi
+            package=$(jq -r .name package.json)
+            printf -- '---\n"%s": patch\n---\n\nRun server %s in %s.\n' "$package" "$VERSION" "$target" > ".changeset/run-server-$VERSION.md"
+            git add "$file" ".changeset/run-server-$VERSION.md"
+            git commit --quiet --no-verify -m "chore(deploy): run server $VERSION #ttv-388"
+            # The push starts infra's Main run, which versions this commit in place and deploys it.
+            if git push --quiet origin HEAD:refs/heads/main; then
+              echo "pushed $(git rev-parse --short HEAD) to infra: run server $VERSION in $target"
+              exit 0
+            fi
+            echo "infra main moved (attempt $attempt); comparing again"
+          done
+          echo "::error::infra main moved on each of 3 attempts"
+          exit 1
+      - name: Wait until the site runs this version
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -uo pipefail
+          # No event tells this job that the droplet runs the image, so it asks the site
+          # every 15 s. The limit of 20 minutes is a chosen constant (the wait of the
+          # action this step replaces); doco-cd pulled the image in 3.5 minutes once.
+          start=$(date +%s)
+          limit=1200
+          while [ $(( $(date +%s) - start )) -lt "$limit" ]; do
+            live=$(curl -fsS -H 'Cache-Control: no-cache' "$SITE/env.js?release=$(date +%s)" | sed -n 's/.*version: "\([^"]*\)".*/\1/p' || true)
+            if [ -n "$live" ] && [ "$(printf '%s\n%s\n' "$live" "$VERSION" | sort -V | tail -n 1)" = "$live" ]; then
+              echo "the site runs server $live"
+              echo "### The site runs server $live" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            # A failed infra run on the commit that installs this version is final.
+            git -C infra fetch --quiet origin main
+            sha=$(git -C infra log -1 --format=%H -S"server:$VERSION@" origin/main -- docker-compose.yml)
+            if [ -n "$sha" ]; then
+              conclusion=$(gh api "repos/torrent-tv/infra/actions/runs?head_sha=$sha&event=push" --jq '[.workflow_runs[] | select(.name == "Main")][0].conclusion // ""')
+              if [ "$conclusion" = failure ] || [ "$conclusion" = cancelled ]; then
+                echo "::error::the infra workflow on $sha ended $conclusion; see torrent-tv/infra Actions"
+                exit 1
+              fi
+            fi
+            echo "the site runs ${live:-nothing readable}; waiting for $VERSION ($(( $(date +%s) - start )) s of $limit s)"
+            sleep 15
+          done
+          echo "::error::the site did not run server $VERSION within $limit s"
+          exit 1

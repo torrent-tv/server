@@ -98,8 +98,8 @@ test("job build builds the image", () => {
   assert.match(read("scripts/check.sh"), /^image\(\) \{[^}]*\bdocker build\b/m, "scripts/check.sh image runs no docker build");
 });
 
-test("release needs checks and build", () => {
-  const needs = needsOf("release");
-  assert.ok(needs.includes("checks"), `release needs ${JSON.stringify(needs)}`);
-  assert.ok(needs.includes("build"), `release needs ${JSON.stringify(needs)}`);
+test("publish needs checks and build", () => {
+  const needs = needsOf("publish");
+  assert.ok(needs.includes("checks"), `publish needs ${JSON.stringify(needs)}`);
+  assert.ok(needs.includes("build"), `publish needs ${JSON.stringify(needs)}`);
 });
