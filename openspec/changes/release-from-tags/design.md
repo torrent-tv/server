@@ -1,6 +1,6 @@
 # Design: Release the server from tags and changesets
 
-Line numbers at server `36a900f` (0.66.40), `torrent-tv/.github` `bc381ae`.
+Line numbers at server `36a900f` (0.66.40), `torrent-tv/workflows` `bc381ae`.
 
 ## Facts
 
@@ -22,7 +22,7 @@ Line numbers at server `36a900f` (0.66.40), `torrent-tv/.github` `bc381ae`.
    the version written into the workspace.
 4. Every file under `.changeset/` that a pull request adds or changes must be a
    changeset: `isChangesetPath` = `^\.changeset/[a-z0-9][a-z0-9.-]*\.md$`
-   (`.github` `scripts/lib.mjs:264`), and `check-changesets.mjs` /
+   (`workflows` `scripts/lib.mjs:264`), and `check-changesets.mjs` /
    `changesetNotes` (`lib.mjs:307`) refuse any other path or any text that is
    not one or two `- **New|Fix|Chore**: …` bullets. A `.changeset/README.md`
    fails this pull request's check and the first release.
@@ -40,7 +40,7 @@ Line numbers at server `36a900f` (0.66.40), `torrent-tv/.github` `bc381ae`.
 - `GET /env.js` (`routes/env/get.js:14-20`, wired at `server.js:249`) renders
   `window.env = Object.assign({}, window.env, { version: "<version>" });`. The
   page's client log sends it (`public/shared/client-logger.js:422`), and
-  `infra-install-server` (`.github` `actions/infra-install-server/action.yml:91-92`)
+  `infra-install-server` (`workflows` `actions/infra-install-server/action.yml:91-92`)
   reads it with `sed` and compares it with `version-at-least.mjs` (`>=`).
 - `/health` and `/healthz` answer `version` (`server.js:243-245`,
   `routes/health/get.js:26,33`, `routes/healthz/get.js:18,25`), display only.
@@ -99,7 +99,7 @@ Consequences:
    `github.sha`, which is now also the tagged commit (before, the tag was on the
    `chore(release)` commit made on top of it).
 4. **`workflow_dispatch` `bump` is the least step**, not the step: a `feat`
-   still releases minor (`.github` `scripts/release-from-tags.mjs:46-49`). Its
+   still releases minor (`workflows` `scripts/release-from-tags.mjs:46-49`). Its
    description says so.
 5. **`.githooks/pre-push` is removed** (Fact 5): its only rule requires an
    `## Unreleased` entry, which the frozen changelog never gets. `commit-msg`
@@ -114,7 +114,7 @@ Replacing `main.yml:54-58`:
 
 ```yaml
       - name: Pull request adds a changeset
-        uses: torrent-tv/.github/actions/check-changesets@main
+        uses: torrent-tv/workflows/actions/check-changesets@main
 ```
 
 ## Release job
@@ -171,7 +171,7 @@ as today):
       # The version is the newest v* tag plus the step the commits ask for; it is
       # written into package.json and package-lock.json of this workspace only.
       - id: release
-        uses: torrent-tv/.github/actions/release-plan@main
+        uses: torrent-tv/workflows/actions/release-plan@main
         with:
           version-files: package.json,package-lock.json
           bump: ${{ inputs.bump || 'auto' }}
@@ -203,7 +203,7 @@ as today):
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
 
       - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/.github/actions/release-tag@main
+        uses: torrent-tv/workflows/actions/release-tag@main
         with:
           tag: ${{ steps.release.outputs.tag }}
           notes-file: ${{ steps.release.outputs.notes-file }}
@@ -236,7 +236,7 @@ as today):
           permission-actions: read
 
       - if: steps.release.outputs.released == 'true'
-        uses: torrent-tv/.github/actions/infra-install-server@main
+        uses: torrent-tv/workflows/actions/infra-install-server@main
         with:
           github-token: ${{ steps.infra-token.outputs.token }}
           version: ${{ steps.release.outputs.version }}

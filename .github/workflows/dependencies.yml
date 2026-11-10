@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: torrent-tv/.github/actions/update-dependencies@main
+      - uses: torrent-tv/workflows/actions/update-dependencies@main
         with:
           github-token: ${{ github.token }}
           # The image is built from package-lock.json, so a lock-file update is released.

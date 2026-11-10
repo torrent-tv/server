@@ -4,4 +4,4 @@ context: |
   Torrent TV server serves the web app and brokers signalling between browsers
   and proxies; media flows between browser and proxy, not through the server.
   Repository rules: AGENTS.md.
-  Shared commit and release rules: torrent-tv/.github/CONTRIBUTING.md.
+  Shared commit and release rules: torrent-tv/workflows/CONTRIBUTING.md.
