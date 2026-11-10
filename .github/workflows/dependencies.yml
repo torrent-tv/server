@@ -46,7 +46,6 @@ jobs:
       unfixed: ${{ steps.collect.outputs.unfixed }}
       failed: ${{ steps.collect.outputs.failed }}
     env:
-      GH_TOKEN: ${{ github.token }}
       RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -69,7 +68,9 @@ jobs:
           : > "$RUNNER_TEMP/unfixed.txt"
           : > "$RUNNER_TEMP/failed.txt"
           # Helpers of the steps below. `commit` makes one commit of the files a dependency
-          # update may write; `changeset` writes its standard changeset (a patch release).
+          # update may write, its body wrapped to 100 characters (`body-max-line-length` of
+          # commitlint's conventional config is an error above that, and the Checks run on the
+          # pushed commit); `changeset` writes its standard changeset (a patch release).
           cat > "$RUNNER_TEMP/lib.sh" <<'LIB'
           package=$(node -p 'require("./package.json").name')
           changeset() {
@@ -78,7 +79,7 @@ jobs:
           commit() {
             git add -A -- package.json package-lock.json .changeset
             if [ -n "${2:-}" ]; then
-              git commit --quiet --no-verify -m "$1" -m "$2"
+              git commit --quiet --no-verify -m "$1" -m "$(printf '%s\n' "$2" | fold -s -w 100)"
             else
               git commit --quiet --no-verify -m "$1"
             fi
@@ -87,6 +88,10 @@ jobs:
           LIB
 
       - name: Raise the packages that Dependabot alerts name
+        # The token that reads the alerts is given to this step only: the install scripts and
+        # tests of newly resolved packages run in the steps below, without it.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           . "$RUNNER_TEMP/lib.sh"
@@ -168,7 +173,7 @@ jobs:
             n=$(jq '.changes | length' "$RUNNER_TEMP/alerts-result.json")
             summary=$(jq -r '.changes | join("\n")' "$RUNNER_TEMP/alerts-result.json")
             changeset "deps-alerts-$RUN_KEY" "${summary:-Fix Dependabot alerts.}"
-            commit "fix(deps): fix $n Dependabot alert(s) #ttv-386" "$(jq -r '.changes[]' "$RUNNER_TEMP/alerts-result.json" | cut -c1-100)"
+            commit "fix(deps): fix $n Dependabot alert(s) #ttv-386" "$(jq -r '.changes[]' "$RUNNER_TEMP/alerts-result.json")"
           fi
 
       - name: Update dependencies within minor versions
