@@ -45,7 +45,7 @@ test("signalling-session.js exists and exports a session", async () => {
   assert.ok(Object.values(module).some(value => typeof value === "function"), "no exported class or function");
 });
 
-test("no caller passes and the session does not read the retired onAnswered option", { todo: "S4" }, () => {
+test("no caller passes and the session does not read the retired onAnswered option", () => {
   const found = matching("on" + "Answered");
   assert.equal(found.length, 0, `still present: ${where(found)}`);
 });

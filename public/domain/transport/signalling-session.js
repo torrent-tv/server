@@ -10,7 +10,10 @@
  * - `createPeer(sessionId)` returns the RTCPeerConnection to negotiate;
  * - `acceptCandidate(candidate, disposition)` is its remote-candidate filter;
  * - `trace(step, info)` records a step and may return a function that ends it;
- * - `onAnswered(message)` runs once the answer and the buffered candidates are applied.
+ *
+ * `answered` is a promise the owner may wait on: it resolves once the answer and
+ * the buffered candidates are applied, and never settles when the session fails
+ * or closes first.
  */
 
 export class SignallingSession {
@@ -21,6 +24,8 @@ export class SignallingSession {
   #remoteSet = false;
   #candidates = [];
   #sessionId = null;
+  #resolveAnswered;
+  #answered = new Promise(resolve => { this.#resolveAnswered = resolve; });
 
   /**
    * @param {{
@@ -29,7 +34,6 @@ export class SignallingSession {
    *   createPeer: (sessionId: string) => RTCPeerConnection,
    *   acceptCandidate: (candidate: object, disposition: "apply" | "buffer") => boolean,
    *   trace?: (step: string, info?: object) => ((result: object) => void) | void,
-   *   onAnswered?: (message: object) => void,
    *   onCandidateRefused?: (error: unknown, candidate: object, disposition: "buffered" | "trickled") => void,
    *   onUnreadable?: (error: unknown, raw: unknown) => void,
    *   onFail: (error: Error) => void,
@@ -42,6 +46,9 @@ export class SignallingSession {
   }
 
   get sessionId() { return this.#sessionId; }
+
+  /** Resolves with no value once the answer and the buffered candidates are applied. */
+  get answered() { return this.#answered; }
 
   /** Open the socket. Throws when the browser refuses to create it. */
   open() {
@@ -107,9 +114,15 @@ export class SignallingSession {
     const end = this.#options.trace?.("offer");
     try {
       const offer = await pc.createOffer();
-      if (this.#closed) return;
+      if (this.#closed) {
+        end?.({ outcome: "closed" });
+        return;
+      }
       await pc.setLocalDescription(offer);
-      if (this.#closed) return;
+      if (this.#closed) {
+        end?.({ outcome: "closed" });
+        return;
+      }
       // Chromium 152+ puts its SCTP INIT in the offer (zero-RTT association).
       // libdatachannel does not know the attribute and echoes it in its answer,
       // so the browser believes an association exists that never touched the
@@ -136,7 +149,7 @@ export class SignallingSession {
       for (const candidate of this.#candidates) await this.#applyCandidate(candidate, "buffered");
       if (this.#closed) return;
       this.#candidates = [];
-      this.#options.onAnswered?.(message);
+      this.#resolveAnswered();
     } catch (error) {
       end?.({ outcome: "error", error: String(error?.message ?? error) });
       // silent-ok: the failure goes to the peer's onFail hook.

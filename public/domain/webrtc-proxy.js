@@ -477,7 +477,7 @@ export class WebRtcProxy {
    */
   #createSignalling() {
     const settle = (error) => this.#connectSettler?.(error);
-    return new SignallingSession({
+    const session = new SignallingSession({
       proxyId: this.#proxyId,
       createPeer: (sessionId) => {
         this.#traceSessionEnd?.({ outcome: "session-received", connection: sessionId });
@@ -527,15 +527,6 @@ export class WebRtcProxy {
         return true;
       },
       trace: (step, info) => this.#traceHandshake(step, info),
-      onAnswered: () => {
-        waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId }, this.#traceContext);
-        this.#traceSignalEnd?.({ outcome: "answer-applied" });
-        this.#traceSignalEnd = null;
-        this.#traceJoinEnd = waitTrace.open("A2.J.ready-join", { connection: this.#signalSessionId }, this.#traceContext);
-        this.#openSeparateControl(settle);
-        this.#controlNegotiated = true;
-        this.#settleConnected(settle);
-      },
       onCandidateRefused: (error, candidate, disposition) => {
         const message = error instanceof Error ? error.message : String(error);
         if (disposition === "buffered") {
@@ -580,6 +571,16 @@ export class WebRtcProxy {
       onSocketClosed: () => settle(new Error("WebSocket closed before data channel was established.")),
       onSocketError: () => settle(new Error("WebSocket error during WebRTC signalling."))
     });
+    void session.answered.then(() => {
+      waitTrace.event("A2.media-answer-applied", { connection: this.#signalSessionId }, this.#traceContext);
+      this.#traceSignalEnd?.({ outcome: "answer-applied" });
+      this.#traceSignalEnd = null;
+      this.#traceJoinEnd = waitTrace.open("A2.J.ready-join", { connection: this.#signalSessionId }, this.#traceContext);
+      this.#openSeparateControl(settle);
+      this.#controlNegotiated = true;
+      this.#settleConnected(settle);
+    });
+    return session;
   }
 
   /** Record a handshake step in the wait trace; spans return their end function. */

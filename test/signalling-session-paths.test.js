@@ -243,7 +243,7 @@ test("[S3] a socket that closes while the offer is created ends its span once", 
 });
 
 test("a socket whose close the owner answers by closing the session ends the offer span once, while the offer is created",
-  { todo: "S3" }, async t => {
+  async t => {
     const gate = deferred();
     let owner;
     const { socket, calls, session: opened } = session(t, {
@@ -260,7 +260,7 @@ test("a socket whose close the owner answers by closing the session ends the off
   });
 
 test("a socket whose close the owner answers by closing the session ends the offer span once, while the local description is set",
-  { todo: "S3" }, async t => {
+  async t => {
     const gate = deferred();
     let owner;
     const { socket, calls, session: opened } = session(t, {
@@ -277,7 +277,7 @@ test("a socket whose close the owner answers by closing the session ends the off
   });
 
 test("a session closed by its owner while the offer is created ends the offer span once",
-  { todo: "S3" }, async t => {
+  async t => {
     const gate = deferred();
     const { socket, calls, session: opened } = session(t, {
       peer: () => ({ createOffer: () => gate.promise, setLocalDescription: async () => {} })
@@ -293,7 +293,7 @@ test("a session closed by its owner while the offer is created ends the offer sp
 // ---- S4: the retired `onAnswered` hook is not accepted ----
 
 test("the session does not call an onAnswered option when the answer is applied",
-  { todo: "S4" }, async t => {
+  async t => {
     const answered = [];
     const { socket, peers } = session(t, { extra: { onAnswered: message => answered.push(message) } });
     socket.receive({ type: "session", sessionId: "s1" });
