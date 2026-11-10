@@ -95,34 +95,27 @@ detail goes to the log (`public/domain/viewer-failure.js`).
 same checks as CI one by one: `tools` (Node and npm are the versions of
 `.node-version` and `packageManager`), `pins` (every dependency is an exact
 version), `test`, `image` (`docker build`; the image runs `server.js --check`
-in its last stage) and `all`. The shared flow is in the organization's
-[`CONTRIBUTING.md`](https://github.com/torrent-tv/workflows/blob/main/CONTRIBUTING.md).
+in its last stage) and `all`.
 `.github/workflows/main.yml` runs the checks, the tests and an image build on
 every pull request; `npm ci --ignore-scripts` installs, and no dependency has an
 install script.
 
-Every pull request adds a changeset in the standard `@changesets/cli` format
-(`npx changeset`, or a file `.changeset/<branch with / as ->.md`): front matter
-`"@torrent-tv/server": patch` (or `minor`; never `major`), then one sentence a
-viewer understands. CI (`changeset status --since=origin/main`) refuses a pull
-request without one. A commit never edits or renames a changeset an earlier
-commit added: the release replays each commit and would stop on it.
+Changesets, versions, the release and the daily dependency update are shared by
+every repository and are written once, in the organization's
+[`CONTRIBUTING.md`](https://github.com/torrent-tv/workflows/blob/main/CONTRIBUTING.md#versions-and-releases)
+("Versions and releases", "How a release reaches its users", "Dependencies").
+What is specific to the server:
 
-`package.json` and `package-lock.json` hold the released version; nobody edits
-it. After a merge to `main` the `version` job amends each commit that added a
-changeset with its version and its `CHANGELOG.md` entry (`changeset version`)
-and force-pushes `main` with a lease as the release App; three changeset
-commits give three versions. The next run checks the commits, builds the image
-and then, for each version, `publish` pushes `ghcr.io/torrent-tv/server:<version>`
-built from that version's commit, tags it (`changeset git-tag`) and creates the
-GitHub Release from the `CHANGELOG.md` section; `rebase-prs` rebases the open
-pull requests onto the rewritten `main`. The `install` job then writes the image
-into `torrent-tv/infra`'s `docker-compose.yml`, pushes
-`chore(deploy): run server <version> #ttv-388` there as the release App, and
-waits until `https://webauth.courses/env.js` reports the version. Re-running a
-failed job is safe: each step finishes only what is missing. `dependencies.yml`
-raises Dependabot alerts and minor updates daily, with a changeset per commit,
-and pushes the commits that passed (`fix(deps)` when the lock file changes what
-the image holds). The rules, the states of a commit and the blockers:
-[`openspec/changes/release-with-changesets/design.md`](openspec/changes/release-with-changesets/design.md).
+- The changeset front matter names `"@torrent-tv/server"`.
+- The release builds the image and, for each version, `publish` pushes
+  `ghcr.io/torrent-tv/server:<version>` built from that version's commit before
+  it tags it. The `install` job then writes the image into `torrent-tv/infra`'s
+  `docker-compose.yml`, pushes `chore(deploy): run server <version> #ttv-388`
+  there as the release App, and waits until `https://webauth.courses/env.js`
+  reports the version.
+- `dependencies.yml` pushes `fix(deps)` when the lock file changes what the image
+  holds.
+- The rules, the states of a commit and the blockers:
+  [`openspec/changes/release-with-changesets/design.md`](openspec/changes/release-with-changesets/design.md).
+
 The browser cache can hide a change: hard-refresh when checking by hand.
