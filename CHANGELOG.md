@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.57
+
+### Patch Changes
+
+- Project rules about releases, versions and dependencies are now written once in the shared contributing guide and linked from this repository's agent rules.
+
 ## 0.66.56
 
 ### Patch Changes
