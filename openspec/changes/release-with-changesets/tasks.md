@@ -64,3 +64,7 @@ Facts 3-6), and the first runs on `main`. `[x]` is done and shown; `[ ]` waits f
 - [ ] 2.12 Every commit on `main` after this change either matches a merged pull request commit or is by
       `torrent-tv-release[bot]` with a header ending in `#ttv-386` and only `package.json`,
       `package-lock.json` and `.changeset/*.md`, and every `force_push` has actor `torrent-tv-release[bot]`.
+- [x] 2.13 The copy check compares each commit of a pull request with the whole history of `main`,
+      and a changeset must be one plain sentence. Check: `bash scripts/check.sh changesets-selftest`
+      exits 0 (the earlier range comparison passes the copy, `copies` fails it; each format rule fails
+      its bad input), and the step "Changeset checks fail on bad input" passes in `Checks`.
