@@ -47,8 +47,10 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
+      - name: Node and npm are the pinned versions
+        run: bash scripts/check.sh tools
       - name: Commit messages follow Conventional Commits
         uses: wagoid/commitlint-github-action@v6.2.1
       - name: Branch name names a task
@@ -71,10 +73,12 @@ jobs:
             -ignore missing\sinput\s.app-id.\swhich\sis\srequired\sby\saction\s.actions/create-github-app-token@
       - name: Pull request adds a changeset
         uses: torrent-tv/workflows/actions/check-changesets@main
+      - name: Dependencies are pinned exactly
+        run: bash scripts/check.sh pins
       - name: Install dependencies
         run: npm ci
       - name: Lint and tests
-        run: npm test
+        run: bash scripts/check.sh test
 
   # The image checks itself in its final stage (`server.js --check`), so a
   # pull request whose image cannot load the server fails here, before the
@@ -86,7 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build the image for amd64
-        run: docker build -t torrent-tv-server .
+        run: bash scripts/check.sh image
 
   release:
     name: Release
