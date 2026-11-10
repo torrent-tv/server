@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.58
+
+### Patch Changes
+
+- A changeset that was already released can no longer come back through a pull request, and every changeset must now be one plain sentence.
+
 ## 0.66.57
 
 ### Patch Changes

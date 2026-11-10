@@ -95,7 +95,9 @@ detail goes to the log (`public/domain/viewer-failure.js`).
 same checks as CI one by one: `tools` (Node and npm are the versions of
 `.node-version` and `packageManager`), `pins` (every dependency is an exact
 version), `test`, `image` (`docker build`; the image runs `server.js --check`
-in its last stage) and `all`.
+in its last stage), `copies` and `changeset-format` (a pull request carries no
+copy of a commit on `main` and adds one plain-sentence changeset each),
+`changesets-selftest` (both on bad input) and `all`.
 `.github/workflows/main.yml` runs the checks, the tests and an image build on
 every pull request; `npm ci --ignore-scripts` installs, and no dependency has an
 install script.
