@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.60
+
+### Patch Changes
+
+- Update dependencies: knip 6.44.2 -> 6.45.0; 3 package(s) changed in the lock file.
+
 ## 0.66.59
 
 ### Patch Changes

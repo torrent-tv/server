@@ -1,6 +1,6 @@
 {
   "name": "@torrent-tv/server",
-  "version": "0.66.59",
+  "version": "0.66.60",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -35,7 +35,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
     "@changesets/cli": "3.0.3",
-    "knip": "6.44.2",
+    "knip": "6.45.0",
     "npm-check-updates": "23.1.1",
     "semver": "7.8.6"
   }
