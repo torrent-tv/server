@@ -34,3 +34,5 @@ jobs:
           ships-lockfile: "true"
           # The update adds its own changeset; the release reads it.
           changeset: "true"
+          # The standing task every dependency commit names (torrent-tv/meta#386).
+          task: "#ttv-386"

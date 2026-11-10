@@ -189,5 +189,5 @@ jobs:
           github-token: ${{ steps.infra-token.outputs.token }}
           version: ${{ steps.release.outputs.version }}
           digest: ${{ steps.image.outputs.digest }}
-          task: "#ttv-91"
+          task: "#ttv-388"
           site: ${{ env.SITE }}
