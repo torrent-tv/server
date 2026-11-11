@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.68
+
+### Patch Changes
+
+- Agent rules no longer link to the deleted workflows repository; shared release rules are in the project rules file.
+
 ## 0.66.67
 
 ### Patch Changes

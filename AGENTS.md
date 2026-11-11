@@ -108,9 +108,7 @@ every pull request; `npm ci --ignore-scripts` installs, and no dependency has an
 install script.
 
 Changesets, versions, the release and the daily dependency update are shared by
-every repository and are written once, in the organization's
-[`CONTRIBUTING.md`](https://github.com/torrent-tv/workflows/blob/main/CONTRIBUTING.md#versions-and-releases)
-("Versions and releases", "How a release reaches its users", "Dependencies").
+every repository and are written once, in [`../AGENTS.md`](../AGENTS.md) ("Process" rule 10).
 What is specific to the server:
 
 - The changeset front matter names `"@torrent-tv/server"`.
