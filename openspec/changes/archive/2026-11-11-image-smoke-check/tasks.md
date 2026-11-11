@@ -102,7 +102,9 @@ Boundary and deliberately not covered:
 
 ## 2. Tests (failing, one commit)
 
-- [ ] 2.1 Tests from the plan, committed failing: `test(server): …`
+- [x] 2.1 Tests from the plan, committed failing: `test(server): …`
+      Shown: plan 58dd4d4 and tests 687ef50 (`test/server-check.test.js`, `test/image-build.test.js`),
+      recorded on meta#302 (https://github.com/torrent-tv/meta/issues/302#issuecomment-6745593471); the AC-S2 test passes before the code, by design (plan 1.4).
 
 ## 3. Implementation
 
@@ -114,4 +116,6 @@ Boundary and deliberately not covered:
 
 ## 4. After merge (coordinator)
 
-- [ ] 4.1 Throwaway PR with a broken Dockerfile fails `Image build` (AC-S4)
+- [x] 4.1 Throwaway PR with a broken Dockerfile fails `Image build` (AC-S4)
+      Shown: server#22 (`.dockerignore` drops `routes/`; the final-stage `--check` fails, run 42665609761)
+      failed `Image build` while `Checks` passed, and was closed unmerged (https://github.com/torrent-tv/meta/issues/302#issuecomment-6746965370).

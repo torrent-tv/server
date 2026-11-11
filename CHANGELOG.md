@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.64
+
+### Patch Changes
+
+- The specifications of two finished changes, the image start-up check and the single readiness rule, are archived.
+
 ## 0.66.63
 
 ### Patch Changes

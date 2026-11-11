@@ -96,7 +96,7 @@ same checks as CI one by one: `tools` (Node and npm are the versions of
 `.node-version` and `packageManager`), `pins` (every dependency is an exact
 version), `test`, `image` (`docker build`; the image runs `server.js --check`
 in its last stage), `copies` and `changeset-format` (a pull request carries no
-copy of a commit on `main` and adds one plain-sentence changeset each),
+copy of a commit on `main` and adds a changeset of one short plain sentence or paragraph each),
 `changesets-selftest` (both on bad input), `workflow-pins` (every action, image, Node version and npm or docker install in a workflow is an exact
 version), `workflow-tokens` (the dependency job `update` gives no token to package code, and each job
 that pushes holds the App token with the permissions it needs, listed in `WORKFLOW_PUSHES`; it reads the
