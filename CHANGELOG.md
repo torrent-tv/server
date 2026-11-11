@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.65
+
+### Patch Changes
+
+- The dependency workflow now starts from the newest commit of main, so a run that waited in the queue no longer fails on a conflict with the run before it.
+
 ## 0.66.64
 
 ### Patch Changes

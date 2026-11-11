@@ -101,7 +101,8 @@ copy of a commit on `main` and adds a changeset of one short plain sentence or p
 version), `workflow-tokens` (the dependency job `update` gives no token to package code, and each job
 that pushes holds the App token with the permissions it needs, listed in `WORKFLOW_PUSHES`; it reads the
 workflows with yq 4.54.1), `commit-msg-bot` (the dependency job runs the commit-msg hook on each commit
-it prepares), `workflow-selftest` (all three on bad input) and `all`.
+it prepares), `workflow-refs` (the checkouts of the dependency job `update` are at `main`, so a run
+queued behind another starts from the tip of `main`), `workflow-selftest` (all four on bad input) and `all`.
 `.github/workflows/main.yml` runs the checks, the tests and an image build on
 every pull request; `npm ci --ignore-scripts` installs, and no dependency has an
 install script.
