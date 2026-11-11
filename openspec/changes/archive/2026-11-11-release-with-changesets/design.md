@@ -2,8 +2,9 @@
 
 Facts were read from the files and runs named, or measured; each says which. Analysis is
 marked. The steps `version`, `plan`, `checks`, `rebase-prs` and `dependencies.yml` are
-copies of infra's (torrent-tv/infra `main`, `openspec/changes/release-with-changesets/design.md`
-describes their rules); only what differs for the server is written out here.
+copies of infra's (torrent-tv/infra `main`,
+`openspec/changes/archive/2026-11-11-release-with-changesets/design.md` describes their
+rules); only what differs for the server is written out here.
 
 ## Facts
 

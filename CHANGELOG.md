@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.62
+
+### Patch Changes
+
+- The OpenSpec change for the release flow is archived.
+
 ## 0.66.61
 
 ### Patch Changes

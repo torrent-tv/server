@@ -122,6 +122,6 @@ What is specific to the server:
 - `dependencies.yml` pushes `fix(deps)` when the lock file changes what the image
   holds.
 - The rules, the states of a commit and the blockers:
-  [`openspec/changes/release-with-changesets/design.md`](openspec/changes/release-with-changesets/design.md).
+  [`openspec/changes/archive/2026-11-11-release-with-changesets/design.md`](openspec/changes/archive/2026-11-11-release-with-changesets/design.md).
 
 The browser cache can hide a change: hard-refresh when checking by hand.
