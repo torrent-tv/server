@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.63
+
+### Patch Changes
+
+- Update dependencies: guessit-js 4.8.0 -> 4.9.1, knip 6.45.0 -> 6.45.1; 3 package(s) changed in the lock file.
+
 ## 0.66.62
 
 ### Patch Changes
