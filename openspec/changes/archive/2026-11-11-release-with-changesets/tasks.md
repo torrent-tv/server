@@ -32,38 +32,76 @@ Facts 3-6), and the first runs on `main`. `[x]` is done and shown; `[ ]` waits f
       `bash scripts/check.sh pins`; `git grep -nE 'uses: [^ ]+@v[0-9]+$' -- .github` prints nothing.
       `pins` fails on `^7.8.6` and `tools` fails on a changed `.node-version` (run locally).
 - [x] 2.3 `npm test` and `npx changeset status --since=origin/main` pass here.
-- [ ] 2.3b The Checks run of the pull request passes, `Workflows are valid` included.
+- [x] 2.3b The Checks run of the pull request passes, `Workflows are valid` included.
+      Shown: Checks run 42845874931 of the pull request, success (meta#336 acceptance check,
+      comment 6781047118).
 - [x] 2.4 The yq/jq steps of `install` on the real compose file (design.md Fact 4): dry run on a
       GitHub runner, branch deleted, run 42841936053.
 - [x] 2.5 The dependency run's `update` job on a branch (design.md Fact 6, run 42842237072), and its
       steps on a clone of this change's history.
-- [ ] 2.6 After the merge: a `force_push` on `refs/heads/main` by `torrent-tv-release[bot]` follows
+- [x] 2.6 After the merge: a `force_push` on `refs/heads/main` by `torrent-tv-release[bot]` follows
       the `pr_merge`; this pull request's changeset commit is on `main` with its author, author time
       and header unchanged, `package.json` `0.66.54`, `## 0.66.54` in `CHANGELOG.md`, the changeset
       deleted, and no commit `chore(release)`. Check:
       `gh api "repos/torrent-tv/server/activity?ref=refs/heads/main"`, `git show --stat <sha>`.
-- [ ] 2.7 The run of that push: `version` logs `no pending changesets`; `checks` and `build` pass;
+      Shown: server#28 `pr_merge` 2026-11-10 15:37:21 UTC, `force_push` by
+      `torrent-tv-release[bot]` at 15:37:38; the changeset commit e1832c70 keeps its author
+      (Anton Nemtsev) and header, committer the release App, and changes `CHANGELOG.md` (`##
+      0.66.54`) and the version files; the changeset is gone and no `chore(release)` follows
+      (comment 6781047118, AC 2).
+- [x] 2.7 The run of that push: `version` logs `no pending changesets`; `checks` and `build` pass;
       `publish` pushes `ghcr.io/torrent-tv/server:0.66.54` with label `org.opencontainers.image.revision`
       equal to the rewritten commit, tag `v0.66.54` is on it and its GitHub Release body equals the
       `CHANGELOG.md` section. Check: run URL, `docker buildx imagetools inspect`, `git rev-list -n 1 v0.66.54`,
       `gh release view v0.66.54 --json body`.
-- [ ] 2.8 `install` logs `yq 4.54.1 / jq-1.8.1`, the serving slot and
+      Shown: run 42846321525: `version` logs `no pending changesets`, `checks` and `build` pass,
+      `publish` logs `pushed image ghcr.io/torrent-tv/server:0.66.54 built from e1832c7`; tag
+      `v0.66.54` is on e1832c70 and the GitHub Release body is the `CHANGELOG.md` section; the
+      image label `org.opencontainers.image.revision` read from GHCR equals e1832c701dc2...
+      (comment 6781047118, AC 2).
+- [x] 2.8 `install` logs `yq 4.54.1 / jq-1.8.1`, the serving slot and
       `pushed <sha7> to infra: run server 0.66.54 in server-<a|b>`; on infra `main` the commit
       `chore(deploy): run server 0.66.54 #ttv-388` is by `torrent-tv-release[bot]`, `git show --numstat`
       lists `1	1	docker-compose.yml` and the changeset, the written slot is the one `/healthz` did not name
       as serving, and infra's `deploy` is green; the job ends with `the site runs server 0.66.54`;
       `curl https://webauth.courses/env.js` reports `0.66.54`.
-- [ ] 2.9 Re-running `install` logs `infra already runs server <v>; nothing to write` and pushes nothing.
-- [ ] 2.10 Window: the time from `pr_merge` to `force_push`, with the `version` job's step times, is
+      Shown: run 42846321525 `install` job: `yq (https://github.com/mikefarah/yq/) version
+      v4.54.1 / jq-1.8.1`, `the site says slot b serves`, `pushed a207c28 to infra: run server
+      0.66.54 in server-a`, `the site runs server 0.66.54`; on infra `main` 02f0987b
+      `chore(deploy): run server 0.66.54 #ttv-388` is by the release App and `--numstat` lists
+      `1 1 docker-compose.yml` among the version files; infra run 42846814329 `Deploy` success;
+      `https://webauth.courses/env.js` reported the new version (0.66.61 on 2026-11-11, the
+      newest tag) (comment 6781047118, AC 2).
+- [x] 2.9 Re-running `install` logs `infra already runs server <v>; nothing to write` and pushes nothing.
+      Shown: run 42894661263, job 130105657559 logged `infra already runs server 0.66.54;
+      nothing to write` and pushed nothing (comment 6781047118, AC 2).
+- [x] 2.10 Window: the time from `pr_merge` to `force_push`, with the `version` job's step times, is
       recorded on torrent-tv/meta#336.
-- [ ] 2.11 The first `Dependencies` run after the merge ends in one of two ways: it logs
+      Shown: `pr_merge` 15:37:21, `force_push` 15:37:38 (17 s); `version` job from 15:37:29: app
+      token 1 s, checkout 2 s, setup-node 0 s, `npm ci` 3 s, version 2 s (15:37:36-15:37:38);
+      recorded on torrent-tv/meta#336 as "Version window (AC 15)" (comment 6781047118).
+- [x] 2.11 The first `Dependencies` run after the merge ends in one of two ways: it logs
       `no updates` and `0 open Dependabot alerts` and pushes nothing, or it pushes its commits as
       the release App with the headers of infra's design.md, each versioned, built and installed.
       `update` has only `contents: read` and `vulnerability-alerts: read`, no environment and no
       `secrets.`; `push` has no `npm`, `npx` or test command.
-- [ ] 2.12 Every commit on `main` after this change either matches a merged pull request commit or is by
+      Shown: `Dependencies` run 42925424010 (`workflow_dispatch`, 2026-11-10 23:41 UTC) logged
+      `0 open Dependabot alerts`, `committed: fix(deps): update dependencies #ttv-386`, `tests
+      827 pass 827` and `pushed 1 commits 06a995c..a7a1663`; the release App force-pushed it as
+      aa95e19 (`## 0.66.60`, tag and Release `v0.66.60`), and its `Main` run 42925596725 passed
+      including `Install 0.66.60 in infra`. A second dispatch, run 42925616082, logged `no
+      updates` and pushed nothing (comment 6782567095, AC 9(a) and 9(d)). `update` has only
+      `contents: read` and `vulnerability-alerts: read`, no environment and no `secrets.`;
+      `push` has no `npm`, `npx` or test command (comment 6781047118, AC 9(b)).
+- [x] 2.12 Every commit on `main` after this change either matches a merged pull request commit or is by
       `torrent-tv-release[bot]` with a header ending in `#ttv-386` and only `package.json`,
       `package-lock.json` and `.changeset/*.md`, and every `force_push` has actor `torrent-tv-release[bot]`.
+      Shown: on 2026-11-11 every commit after 1b0ea24 is a merged pull request commit or the
+      release App's `fix(deps): update dependencies #ttv-386` (aa95e19: `package.json`,
+      `package-lock.json`, `CHANGELOG.md`); all 8 `force_push` entries since the switch merge
+      (server#28, 2026-11-10 15:37:21 UTC) have actor `torrent-tv-release[bot]`, the others are
+      7 `pr_merge` by the coordinator and one `push` by the release App (comment 6781047118, AC
+      5, checked again against `origin/main` 3a1fb97).
 - [x] 2.13 The copy check compares each commit of a pull request with the whole history of `main`,
       and a changeset must be one plain sentence. Check: `bash scripts/check.sh changesets-selftest`
       exits 0 (the earlier range comparison passes the copy, `copies` fails it; each format rule fails

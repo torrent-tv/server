@@ -10,7 +10,7 @@ name: Main
 #     its GitHub Release, `rebase-prs` rebases the open pull requests onto the rewritten
 #     main, and `install` writes the image into torrent-tv/infra, which deploys it on the
 #     droplet, and waits until the live site reports the version.
-# The rules are in openspec/changes/release-with-changesets/design.md.
+# The rules are in openspec/changes/archive/2026-11-11-release-with-changesets/design.md.
 
 on:
   push:
