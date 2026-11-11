@@ -97,7 +97,11 @@ same checks as CI one by one: `tools` (Node and npm are the versions of
 version), `test`, `image` (`docker build`; the image runs `server.js --check`
 in its last stage), `copies` and `changeset-format` (a pull request carries no
 copy of a commit on `main` and adds one plain-sentence changeset each),
-`changesets-selftest` (both on bad input) and `all`.
+`changesets-selftest` (both on bad input), `workflow-pins` (every action, image, Node version and npm or docker install in a workflow is an exact
+version), `workflow-tokens` (the dependency job `update` gives no token to package code, and each job
+that pushes holds the App token with the permissions it needs, listed in `WORKFLOW_PUSHES`; it reads the
+workflows with yq 4.54.1), `commit-msg-bot` (the dependency job runs the commit-msg hook on each commit
+it prepares), `workflow-selftest` (all three on bad input) and `all`.
 `.github/workflows/main.yml` runs the checks, the tests and an image build on
 every pull request; `npm ci --ignore-scripts` installs, and no dependency has an
 install script.
