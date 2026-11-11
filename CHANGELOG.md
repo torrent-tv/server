@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.66
+
+### Patch Changes
+
+- A pull request now has one required check that fails unless every check job passed.
+
 ## 0.66.65
 
 ### Patch Changes
