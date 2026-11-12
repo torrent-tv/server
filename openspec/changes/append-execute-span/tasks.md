@@ -14,7 +14,7 @@ server (lint plus `node --test`).
 ## Tasks
 
 1. [ ] Test writer (fresh): test plan below, tests for S-AC-1, S-AC-2 marked `todo`, failing for their reason; commit `test(append): S-AC-1 S-AC-2 append execute span #ttv-260`.
-2. [ ] Implementer (fresh): design; S-AC-3; `npm test` exits 0.
+2. [x] Implementer (fresh): design; S-AC-3; `npm test` exits 0.
 3. [ ] Reviewer approves; CI green; merge by rebase after the add-on with the paired proxy is released.
 
 ## Test plan
