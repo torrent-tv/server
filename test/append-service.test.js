@@ -146,3 +146,101 @@ test("different parts of one media fragment keep distinct service identities", (
   assert.equal(samples.length, 2);
   assert.notEqual(samples[0].fragmentId, samples[1].fragmentId);
 });
+
+const APPEND_EVENTS = { BUFFER_CODECS: "codecs", BUFFER_APPENDING: "appending", BUFFER_APPENDED: "appended",
+  DESTROYING: "destroying" };
+
+/** One media append observed from its appending event at 100 to its appended event at 130. */
+function observedAppend(appended, type = "video") {
+  const service = new AppendService();
+  const instance = new Events();
+  let at = 100;
+  observeHlsAppendService(instance, APPEND_EVENTS, service, () => at);
+  instance.emit("appending", { type, parent: "main", frag: { type: "main", cc: 0, level: 1, sn: 5, start: 20 },
+    data: new Uint8Array(32) });
+  at = 130;
+  instance.emit("appended", { type, parent: "main", ...appended });
+  return service.snapshot(130)[type].media.samples;
+}
+
+test("an appended event's execute span is recorded as executeMs beside the unchanged elapsed time",
+  { todo: "S-AC-1" }, () => {
+    const samples = observedAppend({ chunkMeta: { buffering: { video: { executeStart: 105, executeEnd: 125 } } } });
+
+    assert.deepEqual(samples, [{ bytes: 32, elapsedMs: 30, ageMs: 0, fragmentId: "main:0:1:5:20:",
+      fragmentSequence: 5, partIndex: null, fragmentStartSeconds: 20, executeMs: 20 }]);
+  });
+
+test("the execute span is read from the buffer the append went to", { todo: "S-AC-1" }, () => {
+  const samples = observedAppend({ chunkMeta: { buffering: {
+    audio: { executeStart: 200, executeEnd: 213 }, video: { executeStart: 1, executeEnd: 999 } } } }, "audio");
+
+  assert.equal(samples[0].executeMs, 13);
+});
+
+test("an append that executed in no measurable time has an execute span of zero", { todo: "S-AC-1" }, () => {
+  const samples = observedAppend({ chunkMeta: { buffering: { video: { executeStart: 110, executeEnd: 110 } } } });
+
+  assert.equal(samples[0].executeMs, 0);
+});
+
+test("a recorded execute span is returned on its sample", { todo: "S-AC-1" }, () => {
+  const service = new AppendService();
+  assert.equal(service.record({ track: "video", kind: "media", bytes: 64, elapsedMs: 9, completedAt: 50,
+    executeMs: 7 }), true);
+
+  assert.equal(service.snapshot(50).video.media.samples[0].executeMs, 7);
+});
+
+test("an appended event without chunkMeta records the sample with executeMs null", { todo: "S-AC-2" }, () => {
+  const samples = observedAppend({});
+
+  assert.equal(samples.length, 1, "the sample is still recorded");
+  assert.equal(samples[0].elapsedMs, 30);
+  assert.equal(samples[0].executeMs, null);
+});
+
+test("an appended event without a buffering entry for its buffer records executeMs null",
+  { todo: "S-AC-2" }, () => {
+    const samples = observedAppend({ chunkMeta: { buffering: { audio: { executeStart: 105, executeEnd: 125 } } } });
+
+    assert.equal(samples.length, 1, "the sample is still recorded");
+    assert.equal(samples[0].executeMs, null);
+  });
+
+test("an execute span that never started (executeStart 0) records executeMs null", { todo: "S-AC-2" }, () => {
+  const samples = observedAppend({ chunkMeta: { buffering: { video: { executeStart: 0, executeEnd: 125 } } } });
+
+  assert.equal(samples.length, 1, "the sample is still recorded");
+  assert.equal(samples[0].executeMs, null);
+});
+
+test("non-finite execute marks record executeMs null", { todo: "S-AC-2" }, () => {
+  for (const marks of [{ executeEnd: 125 }, { executeStart: 105 }, { executeStart: Number.NaN, executeEnd: 125 },
+    { executeStart: 105, executeEnd: Number.POSITIVE_INFINITY }, { executeStart: "105", executeEnd: "125" }]) {
+    const samples = observedAppend({ chunkMeta: { buffering: { video: marks } } });
+
+    assert.equal(samples.length, 1, `the sample is still recorded for ${JSON.stringify(marks)}`);
+    assert.equal(samples[0].executeMs, null, JSON.stringify(marks));
+  }
+});
+
+test("an execute span that ends before it starts records executeMs null", { todo: "S-AC-2" }, () => {
+  const samples = observedAppend({ chunkMeta: { buffering: { video: { executeStart: 125, executeEnd: 124 } } } });
+
+  assert.equal(samples.length, 1, "the sample is still recorded");
+  assert.equal(samples[0].executeMs, null);
+});
+
+test("record stores a negative, non-finite or absent executeMs as null and keeps the sample",
+  { todo: "S-AC-2" }, () => {
+    for (const executeMs of [-1, Number.NaN, Number.POSITIVE_INFINITY, undefined, null]) {
+      const service = new AppendService();
+      assert.equal(service.record({ track: "video", kind: "media", bytes: 64, elapsedMs: 9, completedAt: 50,
+        executeMs }), true, String(executeMs));
+
+      const [sample] = service.snapshot(50).video.media.samples;
+      assert.equal(sample.elapsedMs, 9, String(executeMs));
+      assert.equal(sample.executeMs, null, String(executeMs));
+    }
+  });
