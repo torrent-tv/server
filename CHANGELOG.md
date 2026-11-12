@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.69
+
+### Patch Changes
+
+- Update dependencies: guessit-js 4.9.1 -> 4.10.0, @biomejs/biome 2.6.6 -> 2.6.7; 13 package(s) changed in the lock file.
+
 ## 0.66.68
 
 ### Patch Changes
