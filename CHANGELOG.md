@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.70
+
+### Patch Changes
+
+- Update dependencies: @fastify/cors 11.4.1 -> 11.4.3, media-chrome 4.19.4 -> 4.19.5, ws 8.22.2 -> 8.23.0; 5 package(s) changed in the lock file.
+
 ## 0.66.69
 
 ### Patch Changes
