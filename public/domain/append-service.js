@@ -1,4 +1,7 @@
-/** Bytes and elapsed request-to-acknowledgement time for browser buffer appends. */
+/**
+ * Bytes and elapsed request-to-acknowledgement time for browser buffer appends, and per sample the
+ * time the append itself executed (`executeMs`, hls.js `chunkMeta.buffering[type]` execute marks).
+ */
 
 const TRACKS = ["video", "audio"];
 const KINDS = ["init", "media"];
@@ -19,7 +22,7 @@ export class AppendService {
   }
 
   record({ track, kind, bytes, elapsedMs, completedAt, fragmentId = null, fragmentSequence = null,
-    partIndex = null, fragmentStartSeconds = null }) {
+    partIndex = null, fragmentStartSeconds = null, executeMs = null }) {
     if (!TRACKS.includes(track) || !KINDS.includes(kind) || !Number.isSafeInteger(bytes) || bytes <= 0 ||
         !Number.isFinite(elapsedMs) || elapsedMs <= 0 || !Number.isFinite(completedAt) || completedAt < 0) return false;
     const total = this.#totals[track][kind];
@@ -33,7 +36,10 @@ export class AppendService {
     total.elapsedMs = nextElapsedMs;
     total.operations = nextOperations;
     const samples = this.#samples[track][kind];
-    samples.push({ bytes, elapsedMs, completedAt, fragmentId, fragmentSequence, partIndex, fragmentStartSeconds });
+    // An unusable execute span is not a fact about the append; the sample's other facts still stand.
+    const execute = Number.isFinite(executeMs) && executeMs >= 0 ? executeMs : null;
+    samples.push({ bytes, elapsedMs, completedAt, fragmentId, fragmentSequence, partIndex, fragmentStartSeconds,
+      executeMs: execute });
     const cutoff = completedAt - SAMPLE_WINDOW_MS;
     while (samples.length > 0 && samples[0].completedAt < cutoff) samples.shift();
     return true;
@@ -44,9 +50,10 @@ export class AppendService {
       const totals = this.#totals[track][kind];
       const samples = this.#samples[track][kind]
         .filter(sample => sample.completedAt >= at - SAMPLE_WINDOW_MS && sample.completedAt <= at)
-        .map(({ bytes, elapsedMs, completedAt, fragmentId, fragmentSequence, partIndex, fragmentStartSeconds }) => ({
+        .map(({ bytes, elapsedMs, completedAt, fragmentId, fragmentSequence, partIndex, fragmentStartSeconds,
+          executeMs }) => ({
           bytes, elapsedMs, ageMs: Math.max(0, at - completedAt), fragmentId, fragmentSequence, partIndex,
-          fragmentStartSeconds }));
+          fragmentStartSeconds, executeMs }));
       return [kind, { ...totals, samples }];
     }))]));
   }
@@ -98,7 +105,12 @@ export function observeHlsAppendService(instance, Events, service = appendServic
     const append = queue?.shift();
     if (!queue?.length) pending.delete(track);
     const completedAt = now();
-    if (append) service.record({ ...append, elapsedMs: completedAt - append.startedAt, completedAt });
+    // The append's own work, without its wait in the queue or behind the picture: hls.js sets
+    // executeStart when the operation starts executing and executeEnd at its updateend.
+    const stats = data?.chunkMeta?.buffering?.[data?.type];
+    const executeMs = Number.isFinite(stats?.executeStart) && Number.isFinite(stats?.executeEnd) &&
+      stats.executeStart > 0 && stats.executeEnd >= stats.executeStart ? stats.executeEnd - stats.executeStart : null;
+    if (append) service.record({ ...append, elapsedMs: completedAt - append.startedAt, completedAt, executeMs });
   };
   const cleanup = () => {
     pending.clear();
