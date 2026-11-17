@@ -101,13 +101,13 @@ function pathWithout(dir, without) {
   return tools;
 }
 
-test("the pinned version is 4.54.1 and its SHA-256 is committed in check.sh", { todo: "AC-1" }, () => {
+test("the pinned version is 4.54.1 and its SHA-256 is committed in check.sh", () => {
   const script = sourceOf("scripts/check.sh");
   assert.match(script, /^YQ_VERSION=4\.54\.1$/m, "YQ_VERSION is 4.54.1");
   assert.match(script, new RegExp(`^YQ_SHA256=${COMMITTED_SHA256}$`, "m"), "YQ_SHA256 is the digest of yq_linux_amd64 v4.54.1");
 });
 
-test("yq-install installs the downloaded binary when its digest matches the pinned one", { todo: "AC-1" }, () => {
+test("yq-install installs the downloaded binary when its digest matches the pinned one", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ) });
   const { status, output, bin } = runYqInstall(dir);
   assert.equal(status, 0, output);
@@ -116,7 +116,7 @@ test("yq-install installs the downloaded binary when its digest matches the pinn
   assert.ok(output.includes(VERSION_LINE), `the version line of the installed yq is printed: ${output}`);
 });
 
-test("yq-install appends the bin directory to GITHUB_PATH when it is set", { todo: "AC-1" }, () => {
+test("yq-install appends the bin directory to GITHUB_PATH when it is set", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ) });
   const githubPath = path.join(dir, "github-path");
   writeFileSync(githubPath, "/already/there\n");
@@ -125,7 +125,7 @@ test("yq-install appends the bin directory to GITHUB_PATH when it is set", { tod
   assert.equal(readFileSync(githubPath, "utf8"), `/already/there\n${bin}\n`);
 });
 
-test("yq-install installs yq under RUNNER_TEMP when YQ_BIN_DIR is not set", { todo: "AC-1" }, () => {
+test("yq-install installs yq under RUNNER_TEMP when YQ_BIN_DIR is not set", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ) });
   const runnerTemp = path.join(dir, "runner-temp");
   mkdirSync(runnerTemp);
@@ -135,7 +135,7 @@ test("yq-install installs yq under RUNNER_TEMP when YQ_BIN_DIR is not set", { to
   accessSync(path.join(runnerTemp, "yq-bin", "yq"), constants.X_OK);
 });
 
-test("yq-install refuses a binary with another digest, names the error and leaves no yq", { todo: "AC-2" }, () => {
+test("yq-install refuses a binary with another digest, names the error and leaves no yq", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ), binary: `${FAKE_YQ}# tampered\n` });
   const githubPath = path.join(dir, "github-path");
   const { status, output, bin } = runYqInstall(dir, { extraEnv: { GITHUB_PATH: githubPath } });
@@ -145,7 +145,7 @@ test("yq-install refuses a binary with another digest, names the error and leave
   assert.equal(existsSync(githubPath), false, "the bin directory is not added to GITHUB_PATH");
 });
 
-test("yq-install refuses an empty download as a digest mismatch", { todo: "AC-2" }, () => {
+test("yq-install refuses an empty download as a digest mismatch", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ), binary: "" });
   const { status, output, bin } = runYqInstall(dir);
   assert.notEqual(status, 0);
@@ -153,7 +153,7 @@ test("yq-install refuses an empty download as a digest mismatch", { todo: "AC-2"
   assert.deepEqual(binFiles(bin), []);
 });
 
-test("yq-install fails when the release has no yq_linux_amd64, installs nothing and does not call it a mismatch", { todo: "AC-2" }, () => {
+test("yq-install fails when the release has no yq_linux_amd64, installs nothing and does not call it a mismatch", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ), binary: null });
   const { status, output, bin } = runYqInstall(dir);
   assert.notEqual(status, 0, "a download failure fails the install");
@@ -163,7 +163,7 @@ test("yq-install fails when the release has no yq_linux_amd64, installs nothing 
   assert.deepEqual(binFiles(bin), []);
 });
 
-test("yq-install downloads the pinned version only: a release of another version is not used", { todo: "AC-2" }, () => {
+test("yq-install downloads the pinned version only: a release of another version is not used", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ), releaseVersion: "4.54.3" });
   const { status, output, bin } = runYqInstall(dir);
   assert.notEqual(status, 0);
@@ -172,7 +172,7 @@ test("yq-install downloads the pinned version only: a release of another version
   assert.deepEqual(binFiles(bin), [], "the 4.54.3 binary was not installed");
 });
 
-test("yq-install fails and installs nothing when curl is missing", { todo: "AC-2" }, () => {
+test("yq-install fails and installs nothing when curl is missing", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ) });
   const { status, output, bin } = runYqInstall(dir, { pathValue: pathWithout(dir, ["curl"]) });
   assert.notEqual(status, 0);
@@ -181,7 +181,7 @@ test("yq-install fails and installs nothing when curl is missing", { todo: "AC-2
   assert.deepEqual(binFiles(bin), []);
 });
 
-test("yq-install fails and installs nothing when sha256sum is missing", { todo: "AC-2" }, () => {
+test("yq-install fails and installs nothing when sha256sum is missing", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ) });
   const { status, output, bin } = runYqInstall(dir, { pathValue: pathWithout(dir, ["sha256sum", "shasum"]) });
   assert.notEqual(status, 0);
@@ -190,7 +190,7 @@ test("yq-install fails and installs nothing when sha256sum is missing", { todo: 
   assert.deepEqual(binFiles(bin), []);
 });
 
-test("yq-install overwrites an older yq in the bin directory only with a verified one", { todo: "AC-2" }, () => {
+test("yq-install overwrites an older yq in the bin directory only with a verified one", () => {
   const dir = scratchRepository({ digest: sha256(FAKE_YQ), binary: "not yq\n" });
   const bin = path.join(dir, "bin");
   mkdirSync(bin);
@@ -216,7 +216,7 @@ function stepText(text, name) {
   return text.slice(start, next === -1 ? undefined : start + 1 + next);
 }
 
-test("main.yml job checks installs yq before the first step that reads the workflows", { todo: "AC-1" }, () => {
+test("main.yml job checks installs yq before the first step that reads the workflows", () => {
   const main = sourceOf(".github/workflows/main.yml");
   const jobStart = main.indexOf("\n  checks:\n");
   const jobEnd = main.indexOf("\n  build:\n");
@@ -227,7 +227,7 @@ test("main.yml job checks installs yq before the first step that reads the workf
   assert.match(stepText(main, "yq is the pinned version"), /run: bash scripts\/check\.sh yq-install\s*$/);
 });
 
-test("dependencies.yml job update installs yq before the step that runs check.sh all", { todo: "AC-1" }, () => {
+test("dependencies.yml job update installs yq before the step that runs check.sh all", () => {
   const dependencies = sourceOf(".github/workflows/dependencies.yml");
   const jobStart = dependencies.indexOf("\n  update:\n");
   const jobEnd = dependencies.indexOf("\n  push:\n");
@@ -248,7 +248,7 @@ function installJob() {
   return end === -1 ? rest : rest.slice(0, end + 1);
 }
 
-test("job install installs yq at the pinned version after a checkout of this repository and before the step that edits infra", { todo: "AC-5" }, () => {
+test("job install installs yq at the pinned version after a checkout of this repository and before the step that edits infra", () => {
   const job = installJob();
   const checkout = job.indexOf("- uses: actions/checkout@");
   const install = stepIndex(job, "yq is the pinned version");
@@ -259,26 +259,27 @@ test("job install installs yq at the pinned version after a checkout of this rep
   assert.match(stepText(job, "yq is the pinned version"), /run: bash scripts\/check\.sh yq-install\s*$/);
 });
 
-test("job install gives the checkout that provides check.sh no token and keeps no credentials", { todo: "AC-5" }, () => {
+test("job install checks out this repository with the App token after the token step and keeps no credentials", () => {
   const job = installJob();
   const install = stepIndex(job, "yq is the pinned version");
   assert.notEqual(install, -1, "job install has the step `yq is the pinned version`");
   const before = job.slice(0, install);
   const checkout = before.slice(before.lastIndexOf("- uses: actions/checkout@"));
   assert.ok(checkout.startsWith("- uses: actions/checkout@"), "a checkout precedes the step");
+  assert.ok(before.indexOf("id: token") !== -1 && before.indexOf("id: token") < before.lastIndexOf("- uses: actions/checkout@"), "the token step runs before the checkout");
   assert.doesNotMatch(checkout, /repository:/, "it is the checkout of this repository, not of infra");
-  assert.doesNotMatch(checkout, /token:/, "it passes no token");
+  assert.match(checkout, /token: \$\{\{ steps\.token\.outputs\.token \}\}/, "it uses the App token, as workflow-tokens requires");
   assert.match(checkout, /persist-credentials: false/, "it keeps no credentials in .git");
 });
 
-test("job install no longer compares yq with a version of the runner image and still compares jq", { todo: "AC-5" }, () => {
+test("job install no longer compares yq with a version of the runner image and still compares jq", () => {
   const job = installJob();
   assert.doesNotMatch(job, /4\.54\.\d+/, "job install names no yq version");
   assert.doesNotMatch(job, /yq --version/, "job install does not read the yq of the runner image");
   assert.match(job, /jq-1\.8\.1/, "the jq comparison stays (out of scope of meta#472)");
 });
 
-test("the yq install steps hold no token, secret or env", { todo: "AC-1" }, () => {
+test("the yq install steps hold no token, secret or env", () => {
   const sources = [
     [".github/workflows/main.yml", sourceOf(".github/workflows/main.yml")],
     [".github/workflows/dependencies.yml", sourceOf(".github/workflows/dependencies.yml")],
@@ -290,13 +291,13 @@ test("the yq install steps hold no token, secret or env", { todo: "AC-1" }, () =
   }
 });
 
-test("no workflow repeats the yq version: the pin has one owner, check.sh", { todo: "AC-1" }, () => {
+test("no workflow repeats the yq version: the pin has one owner, check.sh", () => {
   for (const file of [".github/workflows/main.yml", ".github/workflows/dependencies.yml"]) {
     assert.doesNotMatch(sourceOf(file), /4\.54\.\d+/, `${file} names no yq version`);
   }
 });
 
-test("no statement says that yq comes from the runner image", { todo: "AC-6" }, () => {
+test("no statement says that yq comes from the runner image", () => {
   const files = [".github/workflows/main.yml", ".github/workflows/dependencies.yml", "AGENTS.md", "scripts/check.sh"];
   for (const file of files) {
     const lines = sourceOf(file).split("\n");
@@ -311,12 +312,12 @@ test("no statement says that yq comes from the runner image", { todo: "AC-6" }, 
   }
 });
 
-test("AGENTS.md says the workflow checks use the yq that check.sh yq-install installs", { todo: "AC-6" }, () => {
+test("AGENTS.md says the workflow checks use the yq that check.sh yq-install installs", () => {
   assert.match(sourceOf("AGENTS.md").replace(/\s+/g, " "), /yq-install/);
   assert.doesNotMatch(sourceOf("AGENTS.md"), /reads the\s+workflows with yq 4\.54\.1/);
 });
 
-test("check.sh lists yq-install in its usage line", { todo: "AC-1" }, () => {
+test("check.sh lists yq-install in its usage line", () => {
   const result = spawnSync("/bin/bash", [path.join(SERVER, "scripts/check.sh"), "no-such-subcommand"], { cwd: SERVER, encoding: "utf8", timeout: 30_000 });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /\byq-install\b/);

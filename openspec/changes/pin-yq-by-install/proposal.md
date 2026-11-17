@@ -25,9 +25,13 @@ compares the `yq` of the GitHub runner image with `YQ_VERSION=4.54.1`. The image
   calls yq. The step holds no token. No workflow names the version.
 - `main.yml` job `install` (server only) compared `yq --version` with `v4.54.1` in the step
   `yq and jq are the pinned versions`, before any checkout. It gets a checkout of this repository
-  (no token, `persist-credentials: false`; the step that follows writes into `infra`, checked out
-  with the App token under `path: infra`), the step `yq is the pinned version`, and the step that
-  remains compares only `jq` with `jq-1.8.1` (jq is out of scope).
+  that uses the job's App token (`token: ${{ steps.token.outputs.token }}`, as the shared
+  `workflow-tokens` check requires of every checkout in a pushing job; the token step `id: token`
+  is the first step of the job, so it already runs before the checkout), with
+  `persist-credentials: false` and no `repository:` override (the token is scoped to
+  `repositories: infra`; this repository is public, so reading works). Then the step
+  `yq is the pinned version`; the step that remains compares only `jq` with `jq-1.8.1` (jq is out
+  of scope). The infra checkout (`path: infra`) stays after them.
 - `AGENTS.md` and the `main.yml` comments (job `checks`, job `install`) no longer say that yq comes from the runner image.
 - `workflow-selftest` gains the proofs of the digest, the missing file and the matching file.
 

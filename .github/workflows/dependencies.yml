@@ -62,6 +62,8 @@ jobs:
       - name: Node and npm are the pinned versions
         run: bash scripts/check.sh tools
       - run: npm ci --ignore-scripts
+      - name: yq is the pinned version
+        run: bash scripts/check.sh yq-install
       - name: Record the base and the helpers
         id: base
         run: |
