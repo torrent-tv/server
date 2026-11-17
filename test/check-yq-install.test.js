@@ -259,15 +259,16 @@ test("job install installs yq at the pinned version after a checkout of this rep
   assert.match(stepText(job, "yq is the pinned version"), /run: bash scripts\/check\.sh yq-install\s*$/);
 });
 
-test("job install gives the checkout that provides check.sh no token and keeps no credentials", { todo: "AC-5" }, () => {
+test("job install checks out this repository with the App token after the token step and keeps no credentials", { todo: "AC-5" }, () => {
   const job = installJob();
   const install = stepIndex(job, "yq is the pinned version");
   assert.notEqual(install, -1, "job install has the step `yq is the pinned version`");
   const before = job.slice(0, install);
   const checkout = before.slice(before.lastIndexOf("- uses: actions/checkout@"));
   assert.ok(checkout.startsWith("- uses: actions/checkout@"), "a checkout precedes the step");
+  assert.ok(before.indexOf("id: token") !== -1 && before.indexOf("id: token") < before.lastIndexOf("- uses: actions/checkout@"), "the token step runs before the checkout");
   assert.doesNotMatch(checkout, /repository:/, "it is the checkout of this repository, not of infra");
-  assert.doesNotMatch(checkout, /token:/, "it passes no token");
+  assert.match(checkout, /token: \$\{\{ steps\.token\.outputs\.token \}\}/, "it uses the App token, as workflow-tokens requires");
   assert.match(checkout, /persist-credentials: false/, "it keeps no credentials in .git");
 });
 
