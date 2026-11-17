@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.72
+
+### Patch Changes
+
+- Update dependencies: @fastify/static 10.1.10 -> 10.1.11, @biomejs/biome 2.6.7 -> 2.6.8; 19 package(s) changed in the lock file.
+
 ## 0.66.71
 
 ### Patch Changes

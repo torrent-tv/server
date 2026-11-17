@@ -1,6 +1,6 @@
 {
   "name": "@torrent-tv/server",
-  "version": "0.66.71",
+  "version": "0.66.72",
   "private": true,
   "license": "UNLICENSED",
   "repository": {
@@ -22,7 +22,7 @@
   "dependencies": {
     "@fastify/cors": "11.4.3",
     "@fastify/helmet": "13.2.0",
-    "@fastify/static": "10.1.10",
+    "@fastify/static": "10.1.11",
     "@fastify/websocket": "11.3.7",
     "anitomy": "0.0.35",
     "fastify": "5.12.8",
@@ -33,7 +33,7 @@
     "ws": "8.23.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
+    "@biomejs/biome": "2.6.8",
     "@changesets/cli": "3.0.3",
     "knip": "6.45.1",
     "npm-check-updates": "23.1.1",
