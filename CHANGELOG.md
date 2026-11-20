@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.75
+
+### Patch Changes
+
+- Update dependencies: @fastify/static 10.1.11 -> 10.1.12, knip 6.46.1 -> 6.47.0; 3 package(s) changed in the lock file.
+
 ## 0.66.74
 
 ### Patch Changes
