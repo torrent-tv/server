@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.77
+
+### Patch Changes
+
+- Update dependencies: guessit-js 4.10.0 -> 4.11.0; 3 package(s) changed in the lock file.
+
 ## 0.66.76
 
 ### Patch Changes
