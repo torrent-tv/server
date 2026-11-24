@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.79
+
+### Patch Changes
+
+- Update dependencies: none directly; 1 package(s) changed in the lock file.
+
 ## 0.66.78
 
 ### Patch Changes
