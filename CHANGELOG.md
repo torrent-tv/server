@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.80
+
+### Patch Changes
+
+- Update dependencies: @biomejs/biome 2.6.8 -> 2.6.9; 13 package(s) changed in the lock file.
+
 ## 0.66.79
 
 ### Patch Changes
