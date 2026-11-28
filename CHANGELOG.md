@@ -1,5 +1,11 @@
 # @torrent-tv/server
 
+## 0.66.82
+
+### Patch Changes
+
+- Update dependencies: ws 8.23.0 -> 8.23.1, @changesets/cli 3.0.3 -> 3.1.0, knip 6.48.0 -> 6.49.0; 40 package(s) changed in the lock file.
+
 ## 0.66.81
 
 ### Patch Changes
